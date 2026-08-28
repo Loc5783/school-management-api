@@ -1,20 +1,52 @@
+import { useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import Icon from './Icon';
+import api from '../api/axiosConfig';
 
-const navItems = [
-  { to: '/dashboard', label: 'Tổng quan', icon: 'grid' },
-  { to: '/attendance', label: 'Điểm danh', icon: 'attendance' },
-  { to: '/timekeeping', label: 'Chấm công thủ công', icon: 'clock' },
-  { to: '/smart-attendance', label: 'Điểm danh tự động', icon: 'camera' },
-  { to: '#students', label: 'Học sinh', icon: 'students', disabled: true },
-  { to: '#classes', label: 'Lớp học', icon: 'classes', disabled: true },
-  { to: '#reports', label: 'Báo cáo', icon: 'chart', disabled: true },
+const allNavItems = [
+  { to: '/dashboard', label: 'Tổng quan', icon: 'grid', permission: 'report.read' },
+  { to: '/attendance', label: 'Điểm danh', icon: 'attendance', permission: 'attendance.manage' },
+  { to: '/timekeeping', label: 'Làm đơn chấm công bù', icon: 'clock', permission: 'attendance.correction' },
+  { to: '/smart-attendance', label: 'Điểm danh tự động', icon: 'camera', permission: 'attendance.manage' },
+  { to: '/timekeeping-management', label: 'Quản lý chấm công', icon: 'users', permission: 'attendance.correction' },
+  { to: '/students', label: 'Học sinh', icon: 'students', permission: 'student.read' },
+  { to: '/classrooms', label: 'Lớp học', icon: 'classes', permission: 'classroom.read' },
+  { to: '/finance', label: 'Tài chính', icon: 'money', permission: 'tuition.read' },
+  { to: '/reports', label: 'Báo cáo', icon: 'chart', permission: 'report.read' },
 ];
 
 export default function AppShell({ title, subtitle, actions, children }) {
   const navigate = useNavigate();
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
-  const displayName = user.profile?.fullName || user.username || 'Quản trị viên';
+  const [user, setUser] = useState(null);
+  const [permissions, setPermissions] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchUser = async () => {
+      try {
+        const res = await api.get('/auth/me');
+        setUser(res.data);
+        setPermissions(res.data.permissions || []);
+      } catch (err) {
+        console.error('Lỗi lấy user:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchUser();
+  }, []);
+
+  if (loading) return <div className="page-loader"><span className="loading-orb" /></div>;
+
+  const displayName = user?.profile?.fullName || user?.username || 'Quản trị viên';
+  const isAdmin = user?.role === 'admin';
+
+  // Lọc menu dựa trên permissions
+  const navItems = allNavItems.filter(item => {
+    if (isAdmin) return true;
+    if (!item.permission) return false;
+    return permissions.includes(item.permission);
+  });
 
   const logout = () => {
     localStorage.removeItem('token');
@@ -31,27 +63,33 @@ export default function AppShell({ title, subtitle, actions, children }) {
         </NavLink>
         <nav className="sidebar-nav" aria-label="Điều hướng chính">
           <p className="nav-label">QUẢN LÝ</p>
-          {navItems.map((item) => item.disabled ? (
-            <span className="nav-link is-disabled" key={item.label}><Icon name={item.icon} />{item.label}<small>Sắp có</small></span>
-          ) : (
-            <NavLink to={item.to} key={item.to} className="nav-link"><Icon name={item.icon} />{item.label}</NavLink>
+          {navItems.map((item) => (
+            <NavLink to={item.to} key={item.to} className="nav-link">
+              <Icon name={item.icon} />{item.label}
+            </NavLink>
           ))}
         </nav>
         <div className="sidebar-bottom">
           <span className="nav-link is-disabled"><Icon name="settings" />Cài đặt</span>
           <button className="account-card" onClick={logout} title="Đăng xuất">
             <span className="avatar">{displayName.charAt(0).toUpperCase()}</span>
-            <span><strong>{displayName}</strong><small>{user.role || 'admin'}</small></span>
+            <span><strong>{displayName}</strong><small>{user?.role || 'admin'}</small></span>
             <Icon name="logout" size={18} />
           </button>
         </div>
       </aside>
       <main className="main-content">
         <header className="topbar">
-          <div><p className="eyebrow">HỆ THỐNG QUẢN LÝ TRƯỜNG</p><h1>{title}</h1>{subtitle && <p className="page-subtitle">{subtitle}</p>}</div>
+          <div>
+            <p className="eyebrow">HỆ THỐNG QUẢN LÝ TRƯỜNG</p>
+            <h1>{title}</h1>
+            {subtitle && <p className="page-subtitle">{subtitle}</p>}
+          </div>
           <div className="topbar-actions">
             {actions}
-            <button className="icon-button" aria-label="Thông báo"><Icon name="bell" /><span className="notification-dot" /></button>
+            <button className="icon-button" aria-label="Thông báo">
+              <Icon name="bell" /><span className="notification-dot" />
+            </button>
           </div>
         </header>
         <div className="page-content">{children}</div>

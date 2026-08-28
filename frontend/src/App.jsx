@@ -5,6 +5,7 @@ import AttendanceClassList from './pages/AttendanceClassList';
 import AttendanceDetail from './pages/AttendanceDetail';
 import SmartAttendance from './pages/SmartAttendance';
 import ManualTimekeeping from './pages/ManualTimekeeping';
+import TimekeepingManagement from './pages/TimekeepingManagement'; // THÊM DÒNG NÀY
 
 function App() {
   const isAuthenticated = !!localStorage.getItem('token');
@@ -32,6 +33,11 @@ function App() {
         <Route
           path="/timekeeping"
           element={isAuthenticated ? <ManualTimekeeping /> : <Navigate to="/login" />}
+        />
+        {/* THÊM ROUTE MỚI */}
+        <Route
+          path="/timekeeping-management"
+          element={isAuthenticated ? <TimekeepingManagement /> : <Navigate to="/login" />}
         />
         <Route path="*" element={<Navigate to="/dashboard" />} />
       </Routes>
