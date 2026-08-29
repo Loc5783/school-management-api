@@ -6,7 +6,19 @@ const connectDB = require('./src/config/database');
 dotenv.config();
 const app = express();
 
-app.use(cors());
+const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+app.use(cors({
+    origin(origin, callback) {
+        if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+        return callback(new Error('Origin không được phép truy cập API'));
+    },
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    allowedHeaders: ['Authorization', 'Content-Type', 'X-Device-Api-Key']
+}));
 app.use(express.json());
 
 connectDB();
@@ -20,6 +32,7 @@ const financeRoutes = require('./src/routes/financeRoutes');
 const reportRoutes = require('./src/routes/reportRoutes');
 const procurementRoutes = require('./src/routes/procurementRoutes');
 const timekeepingRoutes = require('./src/routes/timekeepingRoutes');
+const systemUserRoutes = require('./src/routes/systemUserRoutes');
 const { startTimekeepingSync } = require('./src/services/timekeepingSyncService');
 
 app.use('/api/auth', authRoutes);
@@ -30,6 +43,7 @@ app.use('/api/finance', financeRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/procurement', procurementRoutes);
 app.use('/api/timekeeping', timekeepingRoutes);
+app.use('/api/system', systemUserRoutes);
 
 app.get('/api/health', (req, res) => {
     res.status(200).json({ status: 'OK', message: 'Server đang chạy!' });

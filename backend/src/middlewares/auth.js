@@ -5,15 +5,14 @@ const auth = async (req, res, next) => {
     try {
         const token = req.header('Authorization')?.replace('Bearer ', '');
         if (!token) {
-            throw new Error();
+            return res.status(401).json({ message: 'Vui lòng đăng nhập để tiếp tục' });
         }
         const decoded = verifyToken(token);
-        const user = await User.findById(decoded.id).select('-passwordHash');
-        if (!user) {
-            throw new Error();
+        const user = await User.findById(decoded.sub).select('-passwordHash');
+        if (!user || user.status !== 'active' || decoded.authVersion !== (user.authVersion || 0)) {
+            return res.status(401).json({ message: 'Phiên đăng nhập không còn hiệu lực' });
         }
         req.user = user;
-        req.token = token;
         next();
     } catch (err) {
         res.status(401).json({ message: 'Vui lòng đăng nhập để tiếp tục' });

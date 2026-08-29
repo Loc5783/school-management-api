@@ -3,10 +3,30 @@ const Permission = require('../models/zone1_system/Permission');
 const { hashPassword, comparePassword } = require('../utils/passwordHash');
 const { generateToken } = require('../utils/jwt');
 
-// Đăng ký
+const USERNAME_PATTERN = /^[a-zA-Z0-9._-]{3,50}$/;
+
+const validatePublicRegistration = ({ username, password, profile }) => {
+  if (!USERNAME_PATTERN.test(String(username || ''))) {
+    return 'Tên đăng nhập chỉ gồm chữ, số, dấu chấm, gạch dưới hoặc gạch ngang (3-50 ký tự)';
+  }
+  if (typeof password !== 'string' || password.length < 8 || password.length > 72) {
+    return 'Mật khẩu phải có từ 8 đến 72 ký tự';
+  }
+  if (!profile?.fullName || !String(profile.fullName).trim()) {
+    return 'Vui lòng nhập họ tên phụ huynh';
+  }
+  return null;
+};
+
+// Public registration is intentionally limited to pending parent accounts.
 const register = async (req, res) => {
   try {
-    const { username, password, role, profile, permissions } = req.body;
+    const { username, password, profile } = req.body;
+    if (Object.hasOwn(req.body, 'role') || Object.hasOwn(req.body, 'permissions')) {
+      return res.status(400).json({ message: 'Đăng ký công khai không cho phép chọn vai trò hoặc quyền' });
+    }
+    const validationError = validatePublicRegistration({ username, password, profile });
+    if (validationError) return res.status(400).json({ message: validationError });
 
     // Kiểm tra username đã tồn tại
     const existingUser = await User.findOne({ username });
@@ -17,41 +37,30 @@ const register = async (req, res) => {
     // Hash password
     const hashedPassword = await hashPassword(password);
 
-    // Xử lý permissions nếu có
-    let permissionIds = [];
-    if (permissions && permissions.length > 0) {
-      const foundPerms = await Permission.find({ name: { $in: permissions } });
-      permissionIds = foundPerms.map(p => p._id);
-    }
-
-    // Tạo user mới
+    // Principal activates the account and links children after verification.
     const user = new User({
-      username,
+      username: username.trim(),
       passwordHash: hashedPassword,
-      role: role || 'parent',
-      profile,
-      permissions: permissionIds
+      role: 'parent',
+      profile: {
+        fullName: profile.fullName.trim(),
+        phone: profile.phone?.trim(),
+        email: profile.email?.trim().toLowerCase(),
+        address: profile.address?.trim()
+      },
+      permissions: [],
+      status: 'inactive'
     });
 
     await user.save();
 
-    // Populate permissions để trả về
-    await user.populate('permissions', 'name');
-
-    // Tạo token
-    const token = generateToken(user);
-
-    // Trả về thông tin (không trả password)
-    const userResponse = user.toObject();
-    delete userResponse.passwordHash;
-
     res.status(201).json({
-      message: 'Đăng ký thành công',
-      user: userResponse,
-      token
+      message: 'Đã gửi đăng ký. Nhà trường sẽ kích hoạt tài khoản sau khi xác minh.',
+      data: { id: user._id, username: user.username, role: user.role, status: user.status }
     });
   } catch (err) {
-    console.error(err);
+    if (err?.code === 11000) return res.status(400).json({ message: 'Tên đăng nhập đã tồn tại' });
+    console.error('Public registration failed:', err.message);
     res.status(500).json({ message: 'Lỗi server' });
   }
 };
@@ -67,18 +76,13 @@ const login = async (req, res) => {
       return res.status(401).json({ message: 'Tên đăng nhập hoặc mật khẩu không đúng' });
     }
 
-    // Kiểm tra trạng thái
-    if (user.status === 'locked') {
-      return res.status(403).json({ message: 'Tài khoản đã bị khóa' });
-    }
-    if (user.status === 'inactive') {
-      return res.status(403).json({ message: 'Tài khoản chưa được kích hoạt' });
-    }
-
     // So sánh password
     const isMatch = await comparePassword(password, user.passwordHash);
     if (!isMatch) {
       return res.status(401).json({ message: 'Tên đăng nhập hoặc mật khẩu không đúng' });
+    }
+    if (user.status !== 'active') {
+      return res.status(403).json({ message: 'Tài khoản chưa được kích hoạt hoặc đang tạm ngưng' });
     }
 
     // Cập nhật lần đăng nhập cuối
@@ -101,7 +105,7 @@ const login = async (req, res) => {
       token
     });
   } catch (err) {
-    console.error(err);
+    console.error('Login failed:', err.message);
     res.status(500).json({ message: 'Lỗi server' });
   }
 };

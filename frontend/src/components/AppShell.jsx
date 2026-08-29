@@ -9,6 +9,7 @@ const allNavItems = [
   { to: '/timekeeping', label: 'Làm đơn chấm công bù', icon: 'clock', permission: 'attendance.correction' },
   { to: '/smart-attendance', label: 'Điểm danh tự động', icon: 'camera', permission: 'attendance.manage' },
   { to: '/timekeeping-management', label: 'Quản lý chấm công', icon: 'users', permission: 'attendance.correction' },
+  { to: '/parent-accounts', label: 'Duyệt phụ huynh', icon: 'users', roles: ['admin', 'principal'] },
   { to: '/students', label: 'Học sinh', icon: 'students', permission: 'student.read' },
   { to: '/classrooms', label: 'Lớp học', icon: 'classes', permission: 'classroom.read' },
   { to: '/finance', label: 'Tài chính', icon: 'money', permission: 'tuition.read' },
@@ -43,6 +44,7 @@ export default function AppShell({ title, subtitle, actions, children }) {
 
   // Lọc menu dựa trên permissions
   const navItems = allNavItems.filter(item => {
+    if (item.roles?.includes(user?.role)) return true;
     if (isAdmin) return true;
     if (!item.permission) return false;
     return permissions.includes(item.permission);

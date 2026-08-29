@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import api from '../api/axiosConfig';
 import Icon from '../components/Icon';
 
@@ -16,13 +16,10 @@ export default function Login() {
     setError('');
 
     try {
-      console.log('🔐 Đang đăng nhập với:', { username, password });
       const res = await api.post('/auth/login', { username, password });
-      console.log('✅ Response:', res.data);
 
       // Kiểm tra token
       if (!res.data.token) {
-        console.error('❌ Không có token trong response');
         setError('Không nhận được token từ server');
         setLoading(false);
         return;
@@ -31,14 +28,8 @@ export default function Login() {
       // Lưu token và user
       localStorage.setItem('token', res.data.token);
       localStorage.setItem('user', JSON.stringify(res.data.user));
-      console.log('✅ Đã lưu token và user');
-
-      // Chuyển hướng
       navigate('/dashboard');
-      console.log('✅ Đã chuyển hướng đến dashboard');
     } catch (err) {
-      console.error('❌ Lỗi đăng nhập:', err);
-      console.error('Response error:', err.response?.data);
       setError(err.response?.data?.message || 'Đăng nhập thất bại. Vui lòng thử lại.');
     } finally {
       setLoading(false);
@@ -100,7 +91,8 @@ export default function Login() {
               {loading ? 'Đang xác thực...' : <>Đăng nhập <Icon name="chevronRight" size={18} /></>}
             </button>
           </form>
-          <p className="login-help">Cần hỗ trợ? Liên hệ quản trị viên nhà trường.</p>
+          <p className="login-help">Chưa có tài khoản phụ huynh? <Link to="/register">Đăng ký tại đây</Link></p>
+          <p className="login-help">Cần hỗ trợ? Liên hệ Ban giám hiệu nhà trường.</p>
         </div>
       </section>
     </main>

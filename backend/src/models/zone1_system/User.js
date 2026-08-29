@@ -48,10 +48,15 @@ const UserSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['active', 'inactive', 'locked'],
+    enum: ['active', 'inactive', 'suspended', 'locked'],
     default: 'active'
   },
-  lastLogin: Date
+  lastLogin: Date,
+  // Incremented when a security-sensitive change must invalidate old tokens.
+  authVersion: {
+    type: Number,
+    default: 0
+  }
 }, {
   timestamps: true
 });
