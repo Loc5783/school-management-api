@@ -24,6 +24,13 @@ const StudentAttendanceSchema = new mongoose.Schema({
         required: true,
         default: () => new Date().setHours(0, 0, 0, 0)
     },
+    // Ngày học theo timezone của trường, dùng để chống tạo trùng một học sinh/ngày.
+    // Không bắt buộc ở schema để dữ liệu lịch sử chưa migrate vẫn đọc được.
+    attendanceDateKey: {
+        type: String,
+        trim: true,
+        match: /^\d{4}-\d{2}-\d{2}$/
+    },
     status: {
         type: String,
         enum: ['present', 'absent', 'late', 'absent_permission'],
@@ -53,6 +60,10 @@ const StudentAttendanceSchema = new mongoose.Schema({
 
 // Indexes để truy vấn nhanh
 StudentAttendanceSchema.index({ studentId: 1, attendDate: 1 });
+StudentAttendanceSchema.index(
+    { studentId: 1, attendanceDateKey: 1 },
+    { unique: true, partialFilterExpression: { attendanceDateKey: { $exists: true } } }
+);
 StudentAttendanceSchema.index({ classroomId: 1, attendDate: 1 });
 StudentAttendanceSchema.index({ attendDate: 1 });
 

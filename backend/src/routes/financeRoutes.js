@@ -18,12 +18,12 @@ router.use(auth);
 // Hóa đơn
 router.post('/tuition', roleCheck(['admin', 'principal', 'accountant']), createTuitionFee);
 router.post('/tuition/bulk', roleCheck(['admin', 'principal', 'accountant']), createBulkTuitionFees);
-router.get('/tuition/student/:studentId', getTuitionByStudent);
-router.get('/tuition/class/:classroomId', getTuitionByClass);
+router.get('/tuition/student/:studentId', roleCheck(['admin', 'principal', 'accountant', 'parent']), getTuitionByStudent);
+router.get('/tuition/class/:classroomId', roleCheck(['admin', 'principal', 'accountant']), getTuitionByClass);
 router.put('/tuition/cancel/:id', roleCheck(['admin', 'principal']), cancelTuitionFee);
 
 // Thanh toán
 router.post('/payment', roleCheck(['admin', 'principal', 'accountant']), makePayment);
-router.get('/payment/invoice/:invoiceId', getPaymentsByInvoice);
+router.get('/payment/invoice/:invoiceId', roleCheck(['admin', 'principal', 'accountant']), getPaymentsByInvoice);
 
 module.exports = router;

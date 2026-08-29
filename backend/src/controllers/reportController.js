@@ -4,71 +4,50 @@ const Classroom = require('../models/zone3_school/Classroom');
 const StudentAttendance = require('../models/zone3_school/StudentAttendance');
 const TuitionFee = require('../models/zone4_finance/TuitionFee');
 const Payment = require('../models/zone4_finance/Payment');
+const { canAccessClassroom } = require('../services/schoolDataAccessService');
 
 // ==============================
 // 1. Báo cáo tổng quan trường
 // ==============================
 const getDashboardStats = async (req, res) => {
     try {
-        // Số lượng học sinh đang học
-        const totalStudents = await Student.countDocuments({ status: 'enrolled' });
-
-        // Số lượng lớp học đang hoạt động
-        const totalClasses = await Classroom.countDocuments({ status: 'active' });
-
-        // Số lượng giáo viên (user có role teacher)
-        const User = require('../models/zone1_system/User');
-        const totalTeachers = await User.countDocuments({ role: 'teacher', status: 'active' });
-
-        // Số học sinh theo giới tính
-        const maleCount = await Student.countDocuments({ status: 'enrolled', gender: 'male' });
-        const femaleCount = await Student.countDocuments({ status: 'enrolled', gender: 'female' });
-
-        // Học sinh mới trong tháng này
-        const startOfMonth = new Date();
-        startOfMonth.setDate(1);
-        startOfMonth.setHours(0, 0, 0, 0);
-        const newStudentsThisMonth = await Student.countDocuments({
-            createdAt: { $gte: startOfMonth }
-        });
-
-        // Doanh thu học phí tháng này (đã thanh toán)
-        const paymentsThisMonth = await Payment.aggregate([
-            {
-                $match: {
-                    paidAt: { $gte: startOfMonth }
-                }
-            },
-            {
-                $group: {
-                    _id: null,
-                    total: { $sum: '$amount' }
-                }
-            }
-        ]);
-        const revenueThisMonth = paymentsThisMonth.length > 0 ? paymentsThisMonth[0].total : 0;
-
-        // Học sinh đến lớp hôm nay (có điểm danh present)
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const tomorrow = new Date(today);
         tomorrow.setDate(tomorrow.getDate() + 1);
-        const attendedToday = await StudentAttendance.countDocuments({
-            attendDate: { $gte: today, $lt: tomorrow },
-            status: 'present'
-        });
+
+        const User = require('../models/zone1_system/User');
+        const [totalStudents, totalClassrooms, totalTeachers, todayRevenue, attendedToday, recentAttendance] = await Promise.all([
+            Student.countDocuments({ status: 'enrolled' }),
+            Classroom.countDocuments({ status: 'active' }),
+            User.countDocuments({ role: 'teacher', status: 'active' }),
+            Payment.aggregate([
+                { $match: { paidAt: { $gte: today, $lt: tomorrow } } },
+                { $group: { _id: null, total: { $sum: '$amount' } } }
+            ]),
+            StudentAttendance.countDocuments({
+                attendDate: { $gte: today, $lt: tomorrow },
+                status: 'present'
+            }),
+            StudentAttendance.find({ attendDate: { $gte: today, $lt: tomorrow } })
+                .sort({ checkInTime: -1, createdAt: -1 })
+                .limit(6)
+                .select('studentName status checkInTime')
+                .lean()
+        ]);
 
         res.json({
             message: 'Lấy thống kê tổng quan thành công',
             data: {
-                totalStudents,
-                totalClasses,
-                totalTeachers,
-                genderStats: { male: maleCount, female: femaleCount },
-                newStudentsThisMonth,
-                revenueThisMonth,
-                attendedToday,
-                attendanceRate: totalStudents > 0 ? Math.round((attendedToday / totalStudents) * 100) : 0
+                summary: {
+                    totalStudents,
+                    totalClassrooms,
+                    totalTeachers,
+                    todayRevenue: todayRevenue[0]?.total || 0,
+                    attendedToday,
+                    attendanceRate: totalStudents > 0 ? Math.round((attendedToday / totalStudents) * 100) : 0
+                },
+                recentAttendance
             }
         });
     } catch (err) {
@@ -84,6 +63,10 @@ const getClassReport = async (req, res) => {
     try {
         const { classroomId } = req.params;
         const { date } = req.query; // ngày cụ thể, nếu không có thì lấy hôm nay
+
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, classroomId)) {
+            return res.status(403).json({ message: 'Bạn không có quyền xem báo cáo lớp này' });
+        }
 
         // Kiểm tra lớp tồn tại
         const classroom = await Classroom.findById(classroomId);

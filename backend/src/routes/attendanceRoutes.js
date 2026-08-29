@@ -25,8 +25,9 @@ router.post('/check-in', roleCheck(['teacher', 'admin', 'principal', 'guard']), 
 router.get('/student/:studentId', getAttendanceByStudent);
 router.get('/class/:classroomId', getAttendanceByClass);
 
-// Cập nhật / xóa (chỉ admin, principal)
-router.put('/:id', roleCheck(['admin', 'principal']), updateAttendance);
+// Giáo viên chỉ được cập nhật bản ghi thuộc lớp được phân công (controller kiểm tra scope).
+// Xóa vẫn chỉ dành cho admin/principal để tránh mất lịch sử điểm danh.
+router.put('/:id', roleCheck(['admin', 'principal', 'teacher']), updateAttendance);
 router.delete('/:id', roleCheck(['admin', 'principal']), deleteAttendance);
 
 module.exports = router;

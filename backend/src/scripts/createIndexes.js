@@ -17,7 +17,6 @@ const models = {
   Payroll: require('../models/zone2_hr/Payroll'),
   AdvancePayment: require('../models/zone2_hr/AdvancePayment'),
   DisciplineRecord: require('../models/zone2_hr/DisciplineRecord'),
-  TeacherClass: require('../models/zone2_hr/TeacherClass'),
   RawAttendance: require('../models/zone2_hr/RawAttendance'),
   RawAttendanceEvent: require('../models/zone2_hr/RawAttendanceEvent'),
   TimekeepingCorrectionRequest: require('../models/zone2_hr/TimekeepingCorrectionRequest'),
@@ -76,7 +75,6 @@ const specs = [
   ['Payroll', { employeeId: 1, period: 1 }],
   ['AdvancePayment', { employeeId: 1, requestDate: 1 }],
   ['DisciplineRecord', { employeeId: 1 }],
-  ['TeacherClass', { teacherId: 1, classroomId: 1 }, { unique: true }],
   ['RawAttendance', { userId: 1, workDate: 1 }, { unique: true }],
   ['RawAttendanceEvent', { deviceId: 1, externalEventId: 1 }, { unique: true }],
   ['RawAttendanceEvent', { userId: 1, occurredAt: 1 }],
@@ -99,6 +97,10 @@ const specs = [
   ['Student', { classroomId: 1, status: 1 }],
   ['Student', { fullName: 'text' }],
   ['StudentAttendance', { studentId: 1, attendDate: 1 }],
+  ['StudentAttendance', { studentId: 1, attendanceDateKey: 1 }, {
+    unique: true,
+    partialFilterExpression: { attendanceDateKey: { $exists: true } }
+  }],
   ['StudentAttendance', { classroomId: 1, attendDate: 1 }],
   ['HealthRecord', { studentId: 1, recordDate: 1 }],
   ['AcademicReport', { studentId: 1, semester: 1 }],

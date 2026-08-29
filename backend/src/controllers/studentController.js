@@ -1,5 +1,16 @@
 const Student = require('../models/zone3_school/Student');
 const Classroom = require('../models/zone3_school/Classroom');
+const {
+    applyStudentListScope,
+    canAccessStudent,
+    isParent,
+    isValidStudentId
+} = require('../services/studentAccessService');
+const {
+    canAccessClassroom,
+    getTeacherClassroomIds,
+    hasSchoolWideReadAccess
+} = require('../services/schoolDataAccessService');
 
 // Tạo học sinh mới
 const createStudent = async (req, res) => {
@@ -36,9 +47,26 @@ const createStudent = async (req, res) => {
 const getAllStudents = async (req, res) => {
     try {
         const { classroomId } = req.query;
-        const filter = { status: 'enrolled' };
+        let filter = { status: 'enrolled' };
         if (classroomId) {
             filter.classroomId = classroomId;
+        }
+
+        if (isParent(req.user)) {
+            // Scope is applied after client filters so a parent can narrow results,
+            // but can never remove the linked-student condition.
+            filter = applyStudentListScope(req.user, filter);
+        } else if (req.user.role === 'teacher') {
+            const classroomIds = await getTeacherClassroomIds(req.user);
+            if (classroomId) {
+                filter.classroomId = classroomIds.includes(classroomId.toString())
+                    ? classroomId
+                    : { $in: [] };
+            } else {
+                filter.classroomId = { $in: classroomIds };
+            }
+        } else if (!hasSchoolWideReadAccess(req.user)) {
+            return res.status(403).json({ message: 'Bạn không có quyền xem dữ liệu học sinh' });
         }
 
         const students = await Student.find(filter)
@@ -57,10 +85,27 @@ const getAllStudents = async (req, res) => {
 // Lấy chi tiết học sinh
 const getStudentById = async (req, res) => {
     try {
+        if (!isValidStudentId(req.params.id)) {
+            return res.status(400).json({ message: 'ID học sinh không hợp lệ' });
+        }
+
         const student = await Student.findById(req.params.id);
         if (!student) {
             return res.status(404).json({ message: 'Không tìm thấy học sinh' });
         }
+
+        if (isParent(req.user) && !canAccessStudent(req.user, student._id)) {
+            return res.status(403).json({ message: 'Bạn không có quyền xem thông tin học sinh này' });
+        }
+
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, student.classroomId)) {
+            return res.status(403).json({ message: 'Bạn không có quyền xem thông tin học sinh này' });
+        }
+
+        if (!isParent(req.user) && req.user.role !== 'teacher' && !hasSchoolWideReadAccess(req.user)) {
+            return res.status(403).json({ message: 'Bạn không có quyền xem dữ liệu học sinh' });
+        }
+
         res.json({
             message: 'Lấy chi tiết học sinh thành công',
             data: student

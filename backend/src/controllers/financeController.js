@@ -3,6 +3,7 @@ const Payment = require('../models/zone4_finance/Payment');
 const Student = require('../models/zone3_school/Student');
 const Classroom = require('../models/zone3_school/Classroom');
 const mongoose = require('mongoose');
+const { canAccessStudent, isParent, isValidStudentId } = require('../services/studentAccessService');
 
 // ==============================
 // 1. Tạo hóa đơn học phí
@@ -173,6 +174,14 @@ const makePayment = async (req, res) => {
 const getTuitionByStudent = async (req, res) => {
     try {
         const { studentId } = req.params;
+        if (!isValidStudentId(studentId)) {
+            return res.status(400).json({ message: 'ID học sinh không hợp lệ' });
+        }
+
+        if (isParent(req.user) && !canAccessStudent(req.user, studentId)) {
+            return res.status(403).json({ message: 'Bạn không có quyền xem học phí của học sinh này' });
+        }
+
         const fees = await TuitionFee.find({ studentId }).sort({ period: -1 });
         res.json({
             message: 'Lấy danh sách hóa đơn thành công',
