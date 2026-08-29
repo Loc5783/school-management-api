@@ -12,24 +12,51 @@ const {
     hasSchoolWideReadAccess
 } = require('../services/schoolDataAccessService');
 
+const STUDENT_MUTABLE_FIELDS = [
+    'fullName',
+    'birthDate',
+    'gender',
+    'address',
+    'classroomId',
+    'schoolYear',
+    'parents',
+    'authorizedPickers',
+    'allergies',
+    'disease',
+    'emergencyContact'
+];
+
+const pickStudentFields = (payload = {}) => Object.fromEntries(
+    STUDENT_MUTABLE_FIELDS
+        .filter((field) => Object.hasOwn(payload, field))
+        .map((field) => [field, payload[field]])
+);
+
 // Tạo học sinh mới
 const createStudent = async (req, res) => {
     try {
-        // Kiểm tra lớp học tồn tại
-        const classroom = await Classroom.findById(req.body.classroomId);
+        const studentPayload = pickStudentFields(req.body);
+        if (!isValidStudentId(studentPayload.classroomId)) {
+            return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
+        }
+
+        const classroom = await Classroom.findOne({ _id: studentPayload.classroomId, status: 'active' });
         if (!classroom) {
             return res.status(404).json({ message: 'Không tìm thấy lớp học' });
         }
 
-        // Tự động gán className
-        req.body.className = classroom.name;
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, classroom._id)) {
+            return res.status(403).json({ message: 'Bạn không có quyền thêm học sinh vào lớp này' });
+        }
 
-        const student = new Student(req.body);
+        studentPayload.className = classroom.name;
+
+        const student = new Student(studentPayload);
         await student.save();
 
         // Cập nhật số lượng học sinh trong lớp
         await Classroom.findByIdAndUpdate(
-            req.body.classroomId,
+            classroom._id,
             { $inc: { 'statistics.currentStudents': 1 } }
         );
 
@@ -119,14 +146,55 @@ const getStudentById = async (req, res) => {
 // Cập nhật thông tin học sinh
 const updateStudent = async (req, res) => {
     try {
-        const student = await Student.findByIdAndUpdate(
-            req.params.id,
-            req.body,
-            { new: true, runValidators: true }
-        );
-        if (!student) {
+        if (!isValidStudentId(req.params.id)) {
+            return res.status(400).json({ message: 'ID học sinh không hợp lệ' });
+        }
+
+        const currentStudent = await Student.findById(req.params.id);
+        if (!currentStudent) {
             return res.status(404).json({ message: 'Không tìm thấy học sinh' });
         }
+
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, currentStudent.classroomId)) {
+            return res.status(403).json({ message: 'Bạn không có quyền cập nhật học sinh này' });
+        }
+
+        const updates = pickStudentFields(req.body);
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({ message: 'Không có trường học sinh hợp lệ để cập nhật' });
+        }
+
+        let targetClassroom = null;
+        if (Object.hasOwn(updates, 'classroomId')) {
+            if (!isValidStudentId(updates.classroomId)) {
+                return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
+            }
+
+            targetClassroom = await Classroom.findOne({ _id: updates.classroomId, status: 'active' });
+            if (!targetClassroom) {
+                return res.status(404).json({ message: 'Không tìm thấy lớp học' });
+            }
+
+            if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, targetClassroom._id)) {
+                return res.status(403).json({ message: 'Bạn không có quyền chuyển học sinh sang lớp này' });
+            }
+
+            updates.className = targetClassroom.name;
+        }
+
+        const student = await Student.findByIdAndUpdate(
+            currentStudent._id,
+            { $set: updates },
+            { returnDocument: 'after', runValidators: true }
+        );
+
+        if (targetClassroom && currentStudent.classroomId.toString() !== targetClassroom._id.toString()) {
+            await Classroom.bulkWrite([
+                { updateOne: { filter: { _id: currentStudent.classroomId }, update: { $inc: { 'statistics.currentStudents': -1 } } } },
+                { updateOne: { filter: { _id: targetClassroom._id }, update: { $inc: { 'statistics.currentStudents': 1 } } } }
+            ]);
+        }
+
         res.json({
             message: 'Cập nhật học sinh thành công',
             data: student
@@ -140,10 +208,14 @@ const updateStudent = async (req, res) => {
 // Xóa học sinh (chuyển sang withdrawn)
 const deleteStudent = async (req, res) => {
     try {
+        if (!isValidStudentId(req.params.id)) {
+            return res.status(400).json({ message: 'ID học sinh không hợp lệ' });
+        }
+
         const student = await Student.findByIdAndUpdate(
             req.params.id,
             { status: 'withdrawn' },
-            { new: true }
+            { returnDocument: 'after' }
         );
         if (!student) {
             return res.status(404).json({ message: 'Không tìm thấy học sinh' });

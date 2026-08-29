@@ -10,56 +10,31 @@ const {
     canAccessClassroom,
     hasSchoolWideReadAccess
 } = require('../services/schoolDataAccessService');
+const { isValidObjectId } = require('../utils/idValidation');
+const {
+    DEFAULT_SCHOOL_TIMEZONE,
+    getWorkDate,
+    getWorkDateRange,
+    isValidWorkDate
+} = require('../utils/dateHelpers');
 
-const getTodayRange = () => {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
-    return { start, end };
-};
+const getTodayRange = () => getWorkDateRange(
+    getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE),
+    DEFAULT_SCHOOL_TIMEZONE
+);
 
-const parseQueryDate = (value) => {
+const parseWorkDate = (value) => {
     if (typeof value !== 'string' || !value.trim()) return null;
-
-    const dateOnlyMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (dateOnlyMatch) {
-        const [, year, month, day] = dateOnlyMatch.map(Number);
-        const parsed = new Date(Date.UTC(year, month - 1, day));
-        if (
-            parsed.getUTCFullYear() !== year ||
-            parsed.getUTCMonth() !== month - 1 ||
-            parsed.getUTCDate() !== day
-        ) {
-            return null;
-        }
-        return parsed;
-    }
+    if (isValidWorkDate(value)) return value;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
 
     const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
+    return Number.isNaN(parsed.getTime())
+        ? null
+        : getWorkDate(parsed, DEFAULT_SCHOOL_TIMEZONE);
 };
 
-const getStartOfDay = (value) => {
-    const date = value ? parseQueryDate(String(value)) : new Date();
-    if (!date) return null;
-
-    date.setHours(0, 0, 0, 0);
-    return date;
-};
-
-const getEndOfDay = (start) => {
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
-    return end;
-};
-
-const toAttendanceDateKey = (date) => {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-};
+const isDuplicateKeyError = (error) => error?.code === 11000;
 
 // Check-in tự động bằng mã thẻ hoặc mã hồ sơ khuôn mặt từ thiết bị/dịch vụ nhận diện.
 const automaticCheckIn = async (req, res) => {
@@ -76,7 +51,8 @@ const automaticCheckIn = async (req, res) => {
             return res.status(404).json({ message: 'Không tìm thấy học sinh đã đăng ký thông tin điểm danh này' });
         }
 
-        const { start, end } = getTodayRange();
+        const workDate = getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE);
+        const { start, end } = getWorkDateRange(workDate, DEFAULT_SCHOOL_TIMEZONE);
         const existing = await StudentAttendance.findOne({
             studentId: student._id,
             attendDate: { $gte: start, $lt: end }
@@ -100,7 +76,7 @@ const automaticCheckIn = async (req, res) => {
             classroomId: student.classroomId,
             className: classroom.name,
             attendDate: start,
-            attendanceDateKey: toAttendanceDateKey(start),
+            attendanceDateKey: workDate,
             status: 'present',
             checkInTime: new Date(),
             attendanceMethod: method,
@@ -114,6 +90,9 @@ const automaticCheckIn = async (req, res) => {
             data: attendance
         });
     } catch (err) {
+        if (isDuplicateKeyError(err)) {
+            return res.status(409).json({ message: 'Học sinh đã có bản ghi điểm danh trong ngày' });
+        }
         console.error(err);
         return res.status(500).json({ message: 'Không thể xử lý điểm danh tự động' });
     }
@@ -123,6 +102,10 @@ const automaticCheckIn = async (req, res) => {
 const createAttendance = async (req, res) => {
     try {
         const { studentId, status, checkInTime, checkOutTime, pickerName, note } = req.body;
+
+        if (!isValidStudentId(studentId)) {
+            return res.status(400).json({ message: 'ID học sinh không hợp lệ' });
+        }
 
         // Kiểm tra học sinh tồn tại
         const student = await Student.findById(studentId);
@@ -140,7 +123,8 @@ const createAttendance = async (req, res) => {
             return res.status(404).json({ message: 'Không tìm thấy lớp học' });
         }
 
-        const { start, end } = getTodayRange();
+        const workDate = getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE);
+        const { start, end } = getWorkDateRange(workDate, DEFAULT_SCHOOL_TIMEZONE);
         const existing = await StudentAttendance.findOne({
             studentId: student._id,
             attendDate: { $gte: start, $lt: end }
@@ -156,7 +140,7 @@ const createAttendance = async (req, res) => {
             classroomId: student.classroomId,
             className: classroom.name,
             attendDate: start,
-            attendanceDateKey: toAttendanceDateKey(start),
+            attendanceDateKey: workDate,
             status: status || 'present',
             checkInTime,
             attendanceMethod: 'manual',
@@ -174,6 +158,9 @@ const createAttendance = async (req, res) => {
             data: attendance
         });
     } catch (err) {
+        if (isDuplicateKeyError(err)) {
+            return res.status(409).json({ message: 'Học sinh đã có bản ghi điểm danh trong ngày' });
+        }
         console.error(err);
         res.status(500).json({ message: 'Lỗi server' });
     }
@@ -189,9 +176,15 @@ const createBulkAttendance = async (req, res) => {
             return res.status(400).json({ message: 'Cần gửi ít nhất một bản ghi điểm danh' });
         }
 
-        const workDate = getStartOfDay(attendDate);
+        const workDate = attendDate
+            ? parseWorkDate(String(attendDate))
+            : getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE);
         if (!workDate) {
             return res.status(400).json({ message: 'Ngày điểm danh không hợp lệ' });
+        }
+
+        if (!isValidObjectId(classroomId)) {
+            return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
         }
 
         // Kiểm tra lớp
@@ -224,9 +217,10 @@ const createBulkAttendance = async (req, res) => {
             return res.status(400).json({ message: 'Mỗi học sinh phải đang theo học và thuộc đúng lớp được điểm danh' });
         }
 
+        const { start: workDateStart, end: workDateEnd } = getWorkDateRange(workDate, DEFAULT_SCHOOL_TIMEZONE);
         const existingRecords = await StudentAttendance.find({
             studentId: { $in: uniqueStudentIds },
-            attendDate: { $gte: workDate, $lt: getEndOfDay(workDate) }
+            attendDate: { $gte: workDateStart, $lt: workDateEnd }
         }).select('studentId');
         const existingStudentIds = new Set(existingRecords.map((record) => record.studentId.toString()));
         const studentsById = new Map(students.map((student) => [student._id.toString(), student]));
@@ -239,8 +233,8 @@ const createBulkAttendance = async (req, res) => {
                     studentName: student.fullName,
                     classroomId: student.classroomId,
                     className: classroom.name,
-                    attendDate: workDate,
-                    attendanceDateKey: toAttendanceDateKey(workDate),
+                    attendDate: workDateStart,
+                    attendanceDateKey: workDate,
                     status: record.status || 'present',
                     checkInTime: record.checkInTime,
                     note: record.note,
@@ -260,6 +254,9 @@ const createBulkAttendance = async (req, res) => {
             data: result
         });
     } catch (err) {
+        if (isDuplicateKeyError(err)) {
+            return res.status(409).json({ message: 'Bản ghi điểm danh đã được tạo bởi một yêu cầu khác' });
+        }
         console.error(err);
         res.status(500).json({ message: 'Lỗi server' });
     }
@@ -289,17 +286,17 @@ const getAttendanceByStudent = async (req, res) => {
             return res.status(403).json({ message: 'Bạn không có quyền xem dữ liệu điểm danh' });
         }
 
-        const start = startDate ? parseQueryDate(startDate) : null;
-        const end = endDate ? parseQueryDate(endDate) : null;
-        if ((startDate && !start) || (endDate && !end) || (start && end && start > end)) {
+        const startWorkDate = startDate ? parseWorkDate(startDate) : null;
+        const endWorkDate = endDate ? parseWorkDate(endDate) : null;
+        if ((startDate && !startWorkDate) || (endDate && !endWorkDate) || (startWorkDate && endWorkDate && startWorkDate > endWorkDate)) {
             return res.status(400).json({ message: 'startDate và endDate phải là ngày hợp lệ' });
         }
 
         const filter = { studentId };
-        if (start || end) {
+        if (startWorkDate || endWorkDate) {
             filter.attendDate = {};
-            if (start) filter.attendDate.$gte = start;
-            if (end) filter.attendDate.$lte = end;
+            if (startWorkDate) filter.attendDate.$gte = getWorkDateRange(startWorkDate, DEFAULT_SCHOOL_TIMEZONE).start;
+            if (endWorkDate) filter.attendDate.$lt = getWorkDateRange(endWorkDate, DEFAULT_SCHOOL_TIMEZONE).end;
         }
 
         const records = await StudentAttendance.find(filter)
@@ -326,6 +323,10 @@ const getAttendanceByClass = async (req, res) => {
         const { classroomId } = req.params;
         const { date } = req.query;
 
+        if (!isValidObjectId(classroomId)) {
+            return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
+        }
+
         if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, classroomId)) {
             return res.status(403).json({ message: 'Bạn không có quyền xem điểm danh lớp này' });
         }
@@ -336,18 +337,15 @@ const getAttendanceByClass = async (req, res) => {
 
         const filter = { classroomId };
         if (date) {
-            const start = getStartOfDay(date);
-            if (!start) {
+            const workDate = parseWorkDate(date);
+            if (!workDate) {
                 return res.status(400).json({ message: 'Ngày điểm danh không hợp lệ' });
             }
-            filter.attendDate = { $gte: start, $lt: getEndOfDay(start) };
+            const { start, end } = getWorkDateRange(workDate, DEFAULT_SCHOOL_TIMEZONE);
+            filter.attendDate = { $gte: start, $lt: end };
         } else {
-            // Mặc định lấy hôm nay
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            const tomorrow = new Date(today);
-            tomorrow.setDate(tomorrow.getDate() + 1);
-            filter.attendDate = { $gte: today, $lt: tomorrow };
+            const { start, end } = getTodayRange();
+            filter.attendDate = { $gte: start, $lt: end };
         }
 
         const records = await StudentAttendance.find(filter)
@@ -367,6 +365,9 @@ const getAttendanceByClass = async (req, res) => {
 const updateAttendance = async (req, res) => {
     try {
         const { id } = req.params;
+        if (!isValidObjectId(id)) {
+            return res.status(400).json({ message: 'ID không hợp lệ' });
+        }
         const record = await StudentAttendance.findById(id);
         if (!record) {
             return res.status(404).json({ message: 'Không tìm thấy bản ghi điểm danh' });
@@ -407,6 +408,9 @@ const updateAttendance = async (req, res) => {
 const deleteAttendance = async (req, res) => {
     try {
         const { id } = req.params;
+        if (!isValidObjectId(id)) {
+            return res.status(400).json({ message: 'ID không hợp lệ' });
+        }
         const record = await StudentAttendance.findByIdAndDelete(id);
         if (!record) {
             return res.status(404).json({ message: 'Không tìm thấy bản ghi điểm danh' });

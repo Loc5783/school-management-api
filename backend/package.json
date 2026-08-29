@@ -9,6 +9,7 @@
     "seed:attendance": "node src/scripts/seedAttendance.js",
     "db:create-indexes": "node src/scripts/createIndexes.js",
     "migrate:timekeeping-v2": "node src/scripts/migrateTimekeepingV2.js",
+    "migrate:student-attendance-date-keys": "node src/scripts/migrateStudentAttendanceDateKeys.js",
     "test": "jest --runInBand"
   },
   "keywords": [],

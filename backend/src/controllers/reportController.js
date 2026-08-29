@@ -5,16 +5,30 @@ const StudentAttendance = require('../models/zone3_school/StudentAttendance');
 const TuitionFee = require('../models/zone4_finance/TuitionFee');
 const Payment = require('../models/zone4_finance/Payment');
 const { canAccessClassroom } = require('../services/schoolDataAccessService');
+const { isValidObjectId } = require('../utils/idValidation');
+const {
+    DEFAULT_SCHOOL_TIMEZONE,
+    getWorkDate,
+    getWorkDateRange,
+    isValidWorkDate
+} = require('../utils/dateHelpers');
+
+const resolveWorkDate = (value) => {
+    if (!value) return getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE);
+    if (isValidWorkDate(value)) return value;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : getWorkDate(parsed, DEFAULT_SCHOOL_TIMEZONE);
+};
 
 // ==============================
 // 1. Báo cáo tổng quan trường
 // ==============================
 const getDashboardStats = async (req, res) => {
     try {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const tomorrow = new Date(today);
-        tomorrow.setDate(tomorrow.getDate() + 1);
+        const { start: today, end: tomorrow } = getWorkDateRange(
+            getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE),
+            DEFAULT_SCHOOL_TIMEZONE
+        );
 
         const User = require('../models/zone1_system/User');
         const [totalStudents, totalClassrooms, totalTeachers, todayRevenue, attendedToday, recentAttendance] = await Promise.all([
@@ -64,6 +78,10 @@ const getClassReport = async (req, res) => {
         const { classroomId } = req.params;
         const { date } = req.query; // ngày cụ thể, nếu không có thì lấy hôm nay
 
+        if (!isValidObjectId(classroomId)) {
+            return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
+        }
+
         if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, classroomId)) {
             return res.status(403).json({ message: 'Bạn không có quyền xem báo cáo lớp này' });
         }
@@ -77,14 +95,11 @@ const getClassReport = async (req, res) => {
         // Lấy danh sách học sinh trong lớp
         const students = await Student.find({ classroomId, status: 'enrolled' });
 
-        // Lấy điểm danh của ngày
-        let targetDate = new Date();
-        if (date) {
-            targetDate = new Date(date);
+        const workDate = resolveWorkDate(date);
+        if (!workDate) {
+            return res.status(400).json({ message: 'Ngày báo cáo không hợp lệ' });
         }
-        targetDate.setHours(0, 0, 0, 0);
-        const nextDate = new Date(targetDate);
-        nextDate.setDate(nextDate.getDate() + 1);
+        const { start: targetDate, end: nextDate } = getWorkDateRange(workDate, DEFAULT_SCHOOL_TIMEZONE);
 
         const attendances = await StudentAttendance.find({
             classroomId,
@@ -238,6 +253,9 @@ const getReports = async (req, res) => {
 const getReportById = async (req, res) => {
     try {
         const { id } = req.params;
+        if (!isValidObjectId(id)) {
+            return res.status(400).json({ message: 'ID báo cáo không hợp lệ' });
+        }
         const report = await Report.findById(id);
         if (!report) {
             return res.status(404).json({ message: 'Không tìm thấy báo cáo' });
@@ -258,10 +276,13 @@ const getReportById = async (req, res) => {
 const publishReport = async (req, res) => {
     try {
         const { id } = req.params;
+        if (!isValidObjectId(id)) {
+            return res.status(400).json({ message: 'ID báo cáo không hợp lệ' });
+        }
         const report = await Report.findByIdAndUpdate(
             id,
             { status: 'published' },
-            { new: true }
+            { returnDocument: 'after' }
         );
         if (!report) {
             return res.status(404).json({ message: 'Không tìm thấy báo cáo' });

@@ -2,8 +2,8 @@ const TuitionFee = require('../models/zone4_finance/TuitionFee');
 const Payment = require('../models/zone4_finance/Payment');
 const Student = require('../models/zone3_school/Student');
 const Classroom = require('../models/zone3_school/Classroom');
-const mongoose = require('mongoose');
 const { canAccessStudent, isParent, isValidStudentId } = require('../services/studentAccessService');
+const { isValidObjectId } = require('../utils/idValidation');
 
 // ==============================
 // 1. Tạo hóa đơn học phí
@@ -11,6 +11,10 @@ const { canAccessStudent, isParent, isValidStudentId } = require('../services/st
 const createTuitionFee = async (req, res) => {
     try {
         const { studentId, period, tuitionBase, mealFee, busFee, extraFee, discount, dueDate, note } = req.body;
+
+        if (!isValidStudentId(studentId)) {
+            return res.status(400).json({ message: 'ID học sinh không hợp lệ' });
+        }
 
         // Kiểm tra học sinh
         const student = await Student.findById(studentId);
@@ -67,6 +71,10 @@ const createBulkTuitionFees = async (req, res) => {
     try {
         const { classroomId, period, tuitionBase, mealFee, busFee, extraFee, discount, dueDate } = req.body;
 
+        if (!isValidObjectId(classroomId)) {
+            return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
+        }
+
         const students = await Student.find({ classroomId, status: 'enrolled' });
         if (students.length === 0) {
             return res.status(404).json({ message: 'Không có học sinh nào trong lớp' });
@@ -109,6 +117,10 @@ const createBulkTuitionFees = async (req, res) => {
 const makePayment = async (req, res) => {
     try {
         const { invoiceId, amount, method, txnRef, note } = req.body;
+
+        if (!isValidObjectId(invoiceId)) {
+            return res.status(400).json({ message: 'ID hóa đơn không hợp lệ' });
+        }
 
         // Tìm hóa đơn
         const invoice = await TuitionFee.findById(invoiceId);
@@ -200,6 +212,9 @@ const getTuitionByClass = async (req, res) => {
     try {
         const { classroomId } = req.params;
         const { period } = req.query;
+        if (!isValidObjectId(classroomId)) {
+            return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
+        }
         const filter = { classroomId };
         if (period) filter.period = period;
 
@@ -220,6 +235,9 @@ const getTuitionByClass = async (req, res) => {
 const getPaymentsByInvoice = async (req, res) => {
     try {
         const { invoiceId } = req.params;
+        if (!isValidObjectId(invoiceId)) {
+            return res.status(400).json({ message: 'ID hóa đơn không hợp lệ' });
+        }
         const payments = await Payment.find({ invoiceId }).sort({ paidAt: -1 });
         res.json({
             message: 'Lấy lịch sử thanh toán thành công',
@@ -237,10 +255,13 @@ const getPaymentsByInvoice = async (req, res) => {
 const cancelTuitionFee = async (req, res) => {
     try {
         const { id } = req.params;
+        if (!isValidObjectId(id)) {
+            return res.status(400).json({ message: 'ID hóa đơn không hợp lệ' });
+        }
         const fee = await TuitionFee.findByIdAndUpdate(
             id,
             { status: 'cancelled' },
-            { new: true }
+            { returnDocument: 'after' }
         );
         if (!fee) {
             return res.status(404).json({ message: 'Không tìm thấy hóa đơn' });

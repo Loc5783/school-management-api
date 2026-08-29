@@ -264,6 +264,27 @@ describe('parent student data scope', () => {
             .expect(400);
     });
 
+    test('includes the complete end date when querying attendance history', async () => {
+        await StudentAttendance.create({
+            studentId: studentA._id,
+            studentName: studentA.fullName,
+            classroomId: classroomA,
+            className: 'Lớp A',
+            attendDate: new Date('2026-08-31T16:00:00.000Z'),
+            status: 'late',
+            recordedBy: admin._id,
+            recordedByName: 'Quản trị viên'
+        });
+
+        const response = await request(app)
+            .get(`/api/attendance/student/${studentA._id}?startDate=2026-08-31&endDate=2026-08-31`)
+            .set(authHeader(parentOne))
+            .expect(200);
+
+        expect(response.body.data).toHaveLength(1);
+        expect(response.body.data[0].status).toBe('late');
+    });
+
     test('denies parent access to attendance by classroom', async () => {
         const response = await request(app)
             .get(`/api/attendance/class/${classroomA}`)
@@ -314,6 +335,39 @@ describe('parent student data scope', () => {
         await request(app)
             .get(`/api/students/${studentB._id}`)
             .set(authHeader(teacher))
+            .expect(403);
+    });
+
+    test('allows a teacher to create a student only in an assigned classroom', async () => {
+        const ownClassResponse = await request(app)
+            .post('/api/students')
+            .set(authHeader(teacher))
+            .send({ fullName: 'Bé Dũng', birthDate: '2021-01-01', gender: 'male', classroomId: classroomA })
+            .expect(201);
+        expect(ownClassResponse.body.data.classroomId).toBe(classroomA.toString());
+
+        await request(app)
+            .post('/api/students')
+            .set(authHeader(teacher))
+            .send({ fullName: 'Bé Dương', birthDate: '2021-01-01', gender: 'female', classroomId: classroomB })
+            .expect(403);
+    });
+
+    test('scopes teacher updates and ignores student fields outside the allowlist', async () => {
+        const response = await request(app)
+            .put(`/api/students/${studentA._id}`)
+            .set(authHeader(teacher))
+            .send({ fullName: 'Bé An đã cập nhật', status: 'withdrawn', attendanceCardId: 'UNAUTHORIZED-CARD' })
+            .expect(200);
+
+        expect(response.body.data.fullName).toBe('Bé An đã cập nhật');
+        expect(response.body.data.status).toBe('enrolled');
+        expect(response.body.data.attendanceCardId).toBeUndefined();
+
+        await request(app)
+            .put(`/api/students/${studentA._id}`)
+            .set(authHeader(teacher))
+            .send({ classroomId: classroomB })
             .expect(403);
     });
 
@@ -418,6 +472,30 @@ describe('parent student data scope', () => {
             .get(`/api/students/${studentA._id}`)
             .set(authHeader(accountant))
             .expect(403);
+    });
+
+    test('returns 400 instead of a CastError for malformed IDs', async () => {
+        await request(app)
+            .post('/api/attendance/bulk')
+            .set(authHeader(teacher))
+            .send({ classroomId: 'invalid-id', records: [{ studentId: studentA._id, status: 'present' }] })
+            .expect(400);
+
+        await request(app)
+            .put('/api/attendance/not-an-object-id')
+            .set(authHeader(teacher))
+            .send({ status: 'late' })
+            .expect(400);
+
+        await request(app)
+            .get('/api/finance/tuition/class/not-an-object-id')
+            .set(authHeader(accountant))
+            .expect(400);
+
+        await request(app)
+            .get('/api/reports/not-an-object-id')
+            .set(authHeader(admin))
+            .expect(400);
     });
 
     test('denies parents from tuition by classroom and reporting endpoints', async () => {

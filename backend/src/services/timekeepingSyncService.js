@@ -7,6 +7,7 @@ const { enqueueUsersForWorkDate, processQueuedRecalculations } = require('./atte
 const { DEFAULT_SCHOOL_TIMEZONE, addWorkDays, getWorkDate, startOfWorkDate } = require('../utils/dateHelpers');
 
 const workerId = `${process.env.HOSTNAME || 'timekeeping'}-${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
+let schedulerStarted = false;
 
 const acquireJobLock = async (key, leaseMs = 55 * 60 * 1000) => {
   const now = new Date();
@@ -74,6 +75,12 @@ const runDailyTimekeepingSync = async () => {
 const runQueuedRecalculations = async () => processQueuedRecalculations({ workerId, maxItems: 100 });
 
 function startTimekeepingSync() {
+  if (schedulerStarted) {
+    console.warn('Attendance scheduler was already started; skipping duplicate initialization.');
+    return;
+  }
+  schedulerStarted = true;
+
   cron.schedule('0 0 * * *', () => {
     runDailyTimekeepingSync().catch((error) => console.error('Midnight attendance sync failed:', error));
   }, { timezone: DEFAULT_SCHOOL_TIMEZONE });

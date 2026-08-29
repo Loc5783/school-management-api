@@ -1,8 +1,8 @@
-const mongoose = require('mongoose');
+const { isValidObjectId } = require('../utils/idValidation');
 
 const isParent = (user) => user?.role === 'parent';
 
-const isValidStudentId = (studentId) => mongoose.isValidObjectId(studentId);
+const isValidStudentId = (studentId) => isValidObjectId(studentId);
 
 const getLinkedStudentIds = (user) => {
     const uniqueIds = new Set();
