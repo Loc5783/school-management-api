@@ -20,6 +20,8 @@ const paths = {
   users: <><circle cx="9" cy="8" r="3" /><path d="M3 20a6 6 0 0 1 12 0M17 11a3 3 0 1 0 0-6M17 14a5 5 0 0 1 4 4.8" /></>,
   money: <><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M7 15h.01M17 9h.01M12 9v6M10 11.2c.4-.8 1.1-1.2 2-1.2 1.1 0 2 .6 2 1.5 0 2.2-4 1-4 3.2 0 .9.9 1.5 2 1.5.9 0 1.6-.4 2-1.1" /></>,
   menu: <><path d="M4 7h16M4 12h16M4 17h16" /></>,
+  utensils: <><path d="M18 2v6a3 3 0 0 1-3 3 3 3 0 0 1-3-3V2M15 2v10M15 12v10M5 2v8a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2V2M8 2v20" /></>,
+  alertCircle: <><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></>,
 };
 
 export default function Icon({ name, size = 20, stroke = 1.8, className = '' }) {

@@ -34,6 +34,10 @@ const allPermissions = [
   { name: 'menu.manage', module: 'nutrition', resource: 'menu', action: 'manage', description: 'Quản lý thực đơn' },
   { name: 'inventory.manage', module: 'nutrition', resource: 'inventory', action: 'manage', description: 'Quản lý kho bếp' },
   { name: 'ingredient.manage', module: 'nutrition', resource: 'ingredient', action: 'manage', description: 'Quản lý nguyên liệu' },
+  { name: 'foodsample.manage', module: 'nutrition', resource: 'foodsample', action: 'manage', description: 'Quản lý lưu mẫu thức ăn và kiểm thực' },
+  { name: 'kitchen.equipment', module: 'nutrition', resource: 'equipment', action: 'manage', description: 'Quản lý thiết bị bếp' },
+  { name: 'kitchen.staff', module: 'nutrition', resource: 'staff', action: 'manage', description: 'Quản lý nhân viên bếp' },
+  { name: 'kitchen.financial', module: 'nutrition', resource: 'financial', action: 'read', description: 'Báo cáo tài chính suất ăn' },
 
   // ===== PROCUREMENT =====
   { name: 'procurement.manage', module: 'procurement', resource: 'procurement', action: 'manage', description: 'Quản lý mua sắm' },
@@ -70,7 +74,8 @@ const rolePermissions = {
   ],
 
   chef: [
-    'menu.manage', 'inventory.manage', 'ingredient.manage'
+    'menu.manage', 'inventory.manage', 'ingredient.manage',
+    'foodsample.manage', 'kitchen.equipment', 'kitchen.staff', 'kitchen.financial'
   ],
 
   guard: [

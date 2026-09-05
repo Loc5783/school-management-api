@@ -7,7 +7,8 @@ import AttendanceClassList from './pages/AttendanceClassList';
 import AttendanceDetail from './pages/AttendanceDetail';
 import SmartAttendance from './pages/SmartAttendance';
 import ManualTimekeeping from './pages/ManualTimekeeping';
-import TimekeepingManagement from './pages/TimekeepingManagement'; // THÊM DÒNG NÀY
+import TimekeepingManagement from './pages/TimekeepingManagement';
+import NutritionManagement from './pages/NutritionManagement';
 
 function ProtectedRoute({ children }) {
   return localStorage.getItem('token') ? children : <Navigate to="/login" replace />;
@@ -40,10 +41,13 @@ function App() {
           path="/timekeeping"
           element={<ProtectedRoute><ManualTimekeeping /></ProtectedRoute>}
         />
-        {/* THÊM ROUTE MỚI */}
         <Route
           path="/timekeeping-management"
           element={<ProtectedRoute><TimekeepingManagement /></ProtectedRoute>}
+        />
+        <Route
+          path="/nutrition"
+          element={<ProtectedRoute><NutritionManagement /></ProtectedRoute>}
         />
         <Route path="*" element={<Navigate to="/dashboard" />} />
       </Routes>
