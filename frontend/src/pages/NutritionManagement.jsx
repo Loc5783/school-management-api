@@ -353,16 +353,6 @@ export default function NutritionManagement() {
   const auditLotPagination = paginate(auditLots, auditLotPage);
   const reconciliationPagination = paginate(reconciliations, reconciliationPage);
   const disposalTransactions = inventoryTransactions.filter((item) => item.type === 'spoilage');
-  const exportTransactions = inventoryTransactions.filter((item) => item.type === 'export');
-  const selectedReturnExport = exportTransactions.find((item) => item._id === returnFoodForm.sourceExportTransactionId);
-  const returnableLots = (selectedReturnExport?.lotAllocations || []).map((allocation) => {
-    const returnedQuantity = inventoryTransactions
-      .filter((item) => item.type === 'return'
-        && item.sourceExportTransactionId === selectedReturnExport._id
-        && item.sourceInventoryId === allocation.inventoryId)
-      .reduce((total, item) => total + Number(item.quantity || 0), 0);
-    return { ...allocation, remainingQuantity: Number(allocation.quantity || 0) - returnedQuantity };
-  }).filter((allocation) => allocation.remainingQuantity > 0);
   const disposalPagination = paginate(disposalTransactions, disposalPage);
   const reportTransactions = inventoryTransactions;
   const dailyTransactionPagination = paginate(reportTransactions, dailyTransactionPage);
@@ -425,6 +415,16 @@ export default function NutritionManagement() {
   const [disposeReason, setDisposeReason] = useState('Hàng hết hạn');
   const [returnFoodForm, setReturnFoodForm] = useState({ sourceExportTransactionId: '', inventoryId: '', quantity: '', reason: 'Nguyên liệu chưa dùng sau khi chuẩn bị bếp', rawAndSafe: false });
   const [reconcileForm, setReconcileForm] = useState({ actualQuantity: '', notes: '' });
+  const exportTransactions = inventoryTransactions.filter((item) => item.type === 'export');
+  const selectedReturnExport = exportTransactions.find((item) => item._id === returnFoodForm.sourceExportTransactionId);
+  const returnableLots = (selectedReturnExport?.lotAllocations || []).map((allocation) => {
+    const returnedQuantity = inventoryTransactions
+      .filter((item) => item.type === 'return'
+        && item.sourceExportTransactionId === selectedReturnExport._id
+        && item.sourceInventoryId === allocation.inventoryId)
+      .reduce((total, item) => total + Number(item.quantity || 0), 0);
+    return { ...allocation, remainingQuantity: Number(allocation.quantity || 0) - returnedQuantity };
+  }).filter((allocation) => allocation.remainingQuantity > 0);
 
   const [newSampleForm, setNewSampleForm] = useState(() => ({
     sampleCode: `MAU-${Date.now().toString().slice(-6)}`,
