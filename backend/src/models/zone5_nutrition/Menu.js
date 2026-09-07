@@ -123,7 +123,7 @@ const MenuSchema = new mongoose.Schema({
     }],
     status: {
         type: String,
-        enum: ['draft', 'published', 'archived'],
+        enum: ['draft', 'pending_approval', 'published', 'archived'],
         default: 'draft'
     },
     createdBy: {
@@ -136,6 +136,26 @@ const MenuSchema = new mongoose.Schema({
         ref: 'User'
     },
     approvedByName: String
+    ,
+    approvalNote: {
+        type: String,
+        trim: true,
+        maxlength: 500,
+        default: ''
+    },
+    auditTrail: [{
+        action: {
+            type: String,
+            enum: ['created', 'updated', 'submitted', 'approved', 'returned', 'archived'],
+            required: true
+        },
+        actorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+        actorName: { type: String, required: true },
+        fromStatus: String,
+        toStatus: String,
+        reason: { type: String, trim: true, maxlength: 500, default: '' },
+        occurredAt: { type: Date, default: Date.now, required: true }
+    }]
 }, {
     timestamps: true
 });

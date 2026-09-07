@@ -21,6 +21,9 @@ const {
     normalizeAllergen
 } = require('../services/nutritionService');
 const { addWorkDays, getWorkDate, isValidWorkDate, startOfWorkDate } = require('../utils/dateHelpers');
+const { isValidObjectId } = require('../utils/idValidation');
+const { canAccessClassroom, getTeacherClassroomIds } = require('../services/schoolDataAccessService');
+const { getLinkedStudentIds } = require('../services/studentAccessService');
 
 const MENU_DAY_OFFSETS = {
     monday: 0,
@@ -62,6 +65,99 @@ const getLunchItems = (lunch = {}, collectionKey, legacyKey) => (
         ? lunch[collectionKey]
         : (lunch[legacyKey]?.dishId ? [lunch[legacyKey]] : [])
 );
+
+const isSchoolWideNutritionReader = (user) => ['admin', 'principal', 'chef'].includes(user?.role);
+
+const getParentClassroomIds = async (user) => {
+    const studentIds = getLinkedStudentIds(user);
+    if (!studentIds.length) return [];
+    const classroomIds = await Student.distinct('classroomId', {
+        _id: { $in: studentIds },
+        status: 'enrolled',
+        classroomId: { $ne: null }
+    });
+    return classroomIds.map(String);
+};
+
+const getReadableClassroomIds = async (user) => {
+    if (isSchoolWideNutritionReader(user)) return null;
+    if (user?.role === 'teacher') return getTeacherClassroomIds(user);
+    if (user?.role === 'parent') return getParentClassroomIds(user);
+    return [];
+};
+
+const assertValidObjectId = (value, label) => {
+    if (!isValidObjectId(value)) {
+        const error = new Error(`${label} không hợp lệ`);
+        error.statusCode = 400;
+        throw error;
+    }
+};
+
+const assertReadableMenu = async (user, menu) => {
+    if (isSchoolWideNutritionReader(user)) return;
+    const readableClassroomIds = await getReadableClassroomIds(user);
+    if (!readableClassroomIds.includes(String(menu.classroomId))) {
+        const error = new Error('Bạn không có quyền xem thực đơn của lớp này');
+        error.statusCode = 403;
+        throw error;
+    }
+    if (user?.role === 'parent' && menu.status !== 'published') {
+        const error = new Error('Phụ huynh chỉ có thể xem thực đơn đã công bố');
+        error.statusCode = 403;
+        throw error;
+    }
+};
+
+const serializeMenuForParent = (menu) => {
+    const raw = typeof menu.toObject === 'function' ? menu.toObject() : menu;
+    const {
+        allergyWarnings,
+        medicalNotes,
+        allergensExcluded,
+        auditTrail,
+        approvedBy,
+        approvedByName,
+        approvalNote,
+        createdBy,
+        createdByName,
+        ...safeMenu
+    } = raw;
+    return safeMenu;
+};
+
+const getActorName = (user) => user?.profile?.fullName || user?.username || 'Người dùng';
+const appendMenuAudit = (menu, user, action, fromStatus, toStatus, reason = '') => {
+    menu.auditTrail.push({
+        action,
+        actorId: user._id,
+        actorName: getActorName(user),
+        fromStatus,
+        toStatus,
+        reason
+    });
+};
+
+const validatePublishReadiness = (menu) => {
+    const requiredDays = Object.keys(MENU_DAY_OFFSETS);
+    const hasCompletePlan = requiredDays.every((dayName) => {
+        const day = menu.days.find((entry) => entry.dayOfWeek === dayName);
+        return getMealItems(day?.breakfast).length && getMealItems(day?.morningSnack).length
+            && getLunchItems(day?.lunch, 'mainDishes', 'mainDish').length
+            && getLunchItems(day?.lunch, 'soupDishes', 'soupDish').length
+            && getMealItems(day?.afternoonSnack).length;
+    });
+    if (!hasCompletePlan) {
+        const error = new Error('Chỉ được gửi duyệt khi đã hoàn thiện đủ bữa phục vụ từ Thứ Hai đến Thứ Sáu');
+        error.statusCode = 422;
+        throw error;
+    }
+    if (menu.allergyWarnings.some((warning) => !warning.resolved)) {
+        const error = new Error('Không thể gửi duyệt thực đơn khi còn cảnh báo dị ứng chưa được xử lý');
+        error.statusCode = 422;
+        throw error;
+    }
+};
 
 /**
  * Server-side source of truth for a menu: the client only selects dish IDs.
@@ -166,10 +262,17 @@ const getMenus = async (req, res) => {
     try {
         const { classroomId, weekNumber, schoolYear, status, startDate } = req.query;
         const query = {};
+        if (classroomId) assertValidObjectId(classroomId, 'ID lớp học');
+        const readableClassroomIds = await getReadableClassroomIds(req.user);
+        if (classroomId && readableClassroomIds && !readableClassroomIds.includes(String(classroomId))) {
+            return res.status(403).json({ message: 'Bạn không có quyền xem thực đơn của lớp này' });
+        }
         if (classroomId) query.classroomId = classroomId;
+        else if (readableClassroomIds) query.classroomId = { $in: readableClassroomIds };
         if (weekNumber) query.weekNumber = Number(weekNumber);
         if (schoolYear) query.schoolYear = schoolYear;
-        if (status) query.status = status;
+        if (status && req.user.role !== 'parent') query.status = status;
+        if (req.user.role === 'parent') query.status = 'published';
         if (startDate && isValidWorkDate(startDate)) {
             query.startDate = {
                 $gte: startOfWorkDate(startDate),
@@ -178,20 +281,23 @@ const getMenus = async (req, res) => {
         }
 
         const menus = await Menu.find(query).sort({ weekNumber: -1, classroomId: 1 });
-        res.json({ success: true, count: menus.length, data: menus });
+        const data = req.user.role === 'parent' ? menus.map(serializeMenuForParent) : menus;
+        res.json({ success: true, count: data.length, data });
     } catch (err) {
         console.error('Lỗi getMenus:', err);
-        res.status(500).json({ message: 'Không thể tải danh sách thực đơn' });
+        res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Không thể tải danh sách thực đơn' });
     }
 };
 
 const getMenuById = async (req, res) => {
     try {
+        assertValidObjectId(req.params.id, 'ID thực đơn');
         const menu = await Menu.findById(req.params.id);
         if (!menu) return res.status(404).json({ message: 'Không tìm thấy thực đơn' });
-        res.json({ success: true, data: menu });
+        await assertReadableMenu(req.user, menu);
+        res.json({ success: true, data: req.user.role === 'parent' ? serializeMenuForParent(menu) : menu });
     } catch (err) {
-        res.status(500).json({ message: 'Lỗi server khi lấy chi tiết thực đơn' });
+        res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Lỗi server khi lấy chi tiết thực đơn' });
     }
 };
 
@@ -199,6 +305,10 @@ const getMenuById = async (req, res) => {
 // Không dùng endpoint danh sách học sinh chung để tránh lộ thêm hồ sơ cá nhân.
 const getClassroomDietaryAlerts = async (req, res) => {
     try {
+        assertValidObjectId(req.params.id, 'ID lớp học');
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, req.params.id)) {
+            return res.status(403).json({ message: 'Bạn không có quyền xem cảnh báo dinh dưỡng của lớp này' });
+        }
         const classroom = await Classroom.findById(req.params.id).select('name');
         if (!classroom) return res.status(404).json({ message: 'Không tìm thấy lớp học' });
 
@@ -225,7 +335,7 @@ const getClassroomDietaryAlerts = async (req, res) => {
 
         res.json({ success: true, classroomName: classroom.name, count: alerts.length, data: alerts });
     } catch (err) {
-        res.status(500).json({ message: 'Không thể tải cảnh báo dinh dưỡng của lớp' });
+        res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Không thể tải cảnh báo dinh dưỡng của lớp' });
     }
 };
 
@@ -239,6 +349,7 @@ const createMenu = async (req, res) => {
             return res.status(400).json({ message: 'Ngày hiệu lực phải là Thứ Hai theo lịch của trường' });
         }
 
+        assertValidObjectId(classroomId, 'ID lớp học');
         const classroom = await Classroom.findById(classroomId);
         if (!classroom) return res.status(404).json({ message: 'Không tìm thấy lớp học' });
 
@@ -268,7 +379,13 @@ const createMenu = async (req, res) => {
             allergyWarnings,
             status: 'draft',
             createdBy: req.user._id,
-            createdByName: req.user.profile?.fullName || req.user.username
+            createdByName: req.user.profile?.fullName || req.user.username,
+            auditTrail: [{
+                action: 'created',
+                actorId: req.user._id,
+                actorName: getActorName(req.user),
+                toStatus: 'draft'
+            }]
         });
 
         res.status(201).json({
@@ -286,8 +403,18 @@ const createMenu = async (req, res) => {
 const updateMenu = async (req, res) => {
     try {
         const { days, dietaryType, medicalNotes, allergensExcluded, status } = req.body;
+        assertValidObjectId(req.params.id, 'ID thực đơn');
         const menu = await Menu.findById(req.params.id);
         if (!menu) return res.status(404).json({ message: 'Không tìm thấy thực đơn' });
+        if (menu.status === 'published') {
+            return res.status(409).json({ message: 'Thực đơn đã công bố là bản ghi bất biến. Hãy tạo thực đơn mới hoặc lưu trữ thực đơn này.' });
+        }
+        if (menu.status !== 'draft') {
+            return res.status(409).json({ message: 'Chỉ được chỉnh sửa thực đơn ở trạng thái bản nháp' });
+        }
+        if (status !== undefined) {
+            return res.status(400).json({ message: 'Không được đổi trạng thái bằng API cập nhật. Hãy dùng quy trình gửi duyệt hoặc duyệt thực đơn.' });
+        }
 
         if (days) {
             const startDate = getWorkDate(menu.startDate);
@@ -300,23 +427,7 @@ const updateMenu = async (req, res) => {
         if (allergensExcluded) {
             menu.allergensExcluded = [...new Set(allergensExcluded.map(normalizeAllergen).filter((allergen) => ALLERGEN_CODES.includes(allergen)))];
         }
-        if (status === 'published') {
-            const requiredDays = Object.keys(MENU_DAY_OFFSETS);
-            const hasCompletePlan = requiredDays.every((dayName) => {
-                const day = menu.days.find((entry) => entry.dayOfWeek === dayName);
-                return getMealItems(day?.breakfast).length && getMealItems(day?.morningSnack).length
-                    && getLunchItems(day?.lunch, 'mainDishes', 'mainDish').length
-                    && getLunchItems(day?.lunch, 'soupDishes', 'soupDish').length
-                    && getMealItems(day?.afternoonSnack).length;
-            });
-            if (!hasCompletePlan) {
-                return res.status(422).json({ message: 'Chỉ được công bố khi đã hoàn thiện đủ bữa phục vụ từ Thứ Hai đến Thứ Sáu' });
-            }
-            if (menu.allergyWarnings.some((warning) => !warning.resolved)) {
-                return res.status(422).json({ message: 'Không thể công bố thực đơn khi còn cảnh báo dị ứng chưa được xử lý' });
-            }
-        }
-        if (status) menu.status = status;
+        appendMenuAudit(menu, req.user, 'updated', 'draft', 'draft');
 
         await menu.save();
 
@@ -333,6 +444,82 @@ const updateMenu = async (req, res) => {
         res.status(expectedDataError ? 422 : 500).json({
             message: expectedDataError ? err.message : 'Không thể cập nhật thực đơn'
         });
+    }
+};
+
+const getMenuForWorkflow = async (id) => {
+    assertValidObjectId(id, 'ID thực đơn');
+    const menu = await Menu.findById(id);
+    if (!menu) {
+        const error = new Error('Không tìm thấy thực đơn');
+        error.statusCode = 404;
+        throw error;
+    }
+    return menu;
+};
+
+const submitMenuForApproval = async (req, res) => {
+    try {
+        const menu = await getMenuForWorkflow(req.params.id);
+        if (menu.status !== 'draft') return res.status(409).json({ message: 'Chỉ bản nháp mới có thể gửi duyệt' });
+        validatePublishReadiness(menu);
+        menu.status = 'pending_approval';
+        menu.approvalNote = '';
+        appendMenuAudit(menu, req.user, 'submitted', 'draft', 'pending_approval', req.body.note || '');
+        await menu.save();
+        res.json({ success: true, message: 'Đã gửi thực đơn chờ phê duyệt', data: menu });
+    } catch (err) {
+        res.status(err.statusCode || 500).json({ message: err.message || 'Không thể gửi duyệt thực đơn' });
+    }
+};
+
+const approveMenu = async (req, res) => {
+    try {
+        const menu = await getMenuForWorkflow(req.params.id);
+        if (menu.status !== 'pending_approval') return res.status(409).json({ message: 'Chỉ thực đơn đang chờ duyệt mới có thể được công bố' });
+        if (String(menu.createdBy) === String(req.user._id)) {
+            return res.status(403).json({ message: 'Người lập thực đơn không thể tự phê duyệt thực đơn của mình' });
+        }
+        validatePublishReadiness(menu);
+        menu.status = 'published';
+        menu.approvedBy = req.user._id;
+        menu.approvedByName = getActorName(req.user);
+        menu.approvalNote = String(req.body.note || '').trim();
+        appendMenuAudit(menu, req.user, 'approved', 'pending_approval', 'published', menu.approvalNote);
+        await menu.save();
+        res.json({ success: true, message: 'Đã phê duyệt và công bố thực đơn', data: menu });
+    } catch (err) {
+        res.status(err.statusCode || 500).json({ message: err.message || 'Không thể phê duyệt thực đơn' });
+    }
+};
+
+const returnMenuForRevision = async (req, res) => {
+    try {
+        const reason = String(req.body.reason || '').trim();
+        if (!reason) return res.status(400).json({ message: 'Vui lòng nêu lý do trả thực đơn để chỉnh sửa' });
+        const menu = await getMenuForWorkflow(req.params.id);
+        if (menu.status !== 'pending_approval') return res.status(409).json({ message: 'Chỉ thực đơn đang chờ duyệt mới có thể trả lại' });
+        menu.status = 'draft';
+        menu.approvalNote = reason;
+        appendMenuAudit(menu, req.user, 'returned', 'pending_approval', 'draft', reason);
+        await menu.save();
+        res.json({ success: true, message: 'Đã trả thực đơn về bản nháp để chỉnh sửa', data: menu });
+    } catch (err) {
+        res.status(err.statusCode || 500).json({ message: err.message || 'Không thể trả thực đơn' });
+    }
+};
+
+const archiveMenu = async (req, res) => {
+    try {
+        const menu = await getMenuForWorkflow(req.params.id);
+        if (menu.status === 'archived') return res.status(409).json({ message: 'Thực đơn này đã được lưu trữ' });
+        const fromStatus = menu.status;
+        menu.status = 'archived';
+        appendMenuAudit(menu, req.user, 'archived', fromStatus, 'archived', req.body.reason || '');
+        await menu.save();
+        res.json({ success: true, message: 'Đã lưu trữ thực đơn', data: menu });
+    } catch (err) {
+        res.status(err.statusCode || 500).json({ message: err.message || 'Không thể lưu trữ thực đơn' });
     }
 };
 
@@ -367,10 +554,14 @@ const cloneMenu = async (req, res) => {
 const checkAllergiesDryRun = async (req, res) => {
     try {
         const { classroomId, days } = req.body;
+        assertValidObjectId(classroomId, 'ID lớp học');
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, classroomId)) {
+            return res.status(403).json({ message: 'Bạn không có quyền kiểm tra dị ứng của lớp này' });
+        }
         const warnings = await checkAllergyAndDiseaseConflicts(classroomId, days);
         res.json({ success: true, count: warnings.length, warnings });
     } catch (err) {
-        res.status(500).json({ message: 'Không thể kiểm tra xung đột dị ứng' });
+        res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Không thể kiểm tra xung đột dị ứng' });
     }
 };
 
@@ -1197,6 +1388,10 @@ module.exports = {
     getClassroomDietaryAlerts,
     createMenu,
     updateMenu,
+    submitMenuForApproval,
+    approveMenu,
+    returnMenuForRevision,
+    archiveMenu,
     cloneMenu,
     checkAllergiesDryRun,
     // Dishes & Ingredients

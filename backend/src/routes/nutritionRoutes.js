@@ -9,6 +9,10 @@ const {
     getClassroomDietaryAlerts,
     createMenu,
     updateMenu,
+    submitMenuForApproval,
+    approveMenu,
+    returnMenuForRevision,
+    archiveMenu,
     cloneMenu,
     checkAllergiesDryRun,
     // Dishes & Ingredients
@@ -59,10 +63,14 @@ router.use(auth);
 
 // ===== THỰC ĐƠN TUẦN THEO LỚP & DỊ ỨNG =====
 router.get('/menus', roleCheck(['admin', 'principal', 'chef', 'teacher', 'parent']), getMenus);
-router.get('/classrooms/:id/dietary-alerts', roleCheck(['admin', 'principal', 'chef']), getClassroomDietaryAlerts);
+router.get('/classrooms/:id/dietary-alerts', roleCheck(['admin', 'principal', 'chef', 'teacher']), getClassroomDietaryAlerts);
 router.get('/menus/:id', roleCheck(['admin', 'principal', 'chef', 'teacher', 'parent']), getMenuById);
 router.post('/menus', roleCheck(['admin', 'principal', 'chef']), createMenu);
 router.put('/menus/:id', roleCheck(['admin', 'principal', 'chef']), updateMenu);
+router.post('/menus/:id/submit', roleCheck(['admin', 'principal', 'chef']), submitMenuForApproval);
+router.post('/menus/:id/approve', roleCheck(['admin', 'principal']), approveMenu);
+router.post('/menus/:id/return', roleCheck(['admin', 'principal']), returnMenuForRevision);
+router.post('/menus/:id/archive', roleCheck(['admin', 'principal']), archiveMenu);
 router.post('/menus/clone', roleCheck(['admin', 'principal', 'chef']), cloneMenu);
 router.post('/menus/check-allergies', roleCheck(['admin', 'principal', 'chef', 'teacher']), checkAllergiesDryRun);
 

@@ -321,6 +321,128 @@ describe('Module Quản lý Nhà ăn & Dinh dưỡng (Nutrition & Kitchen)', () 
             expect(cloneRes.body.data.className).toBe('Lớp Chồi 2');
             expect(cloneRes.body.data.status).toBe('draft');
         });
+
+        it('giới hạn thực đơn và dữ liệu dị ứng theo lớp của phụ huynh, giáo viên', async () => {
+            const parentUser = await User.create({
+                username: 'parent_nutrition_test',
+                passwordHash: 'hash',
+                role: 'parent',
+                profile: { fullName: 'Phụ huynh Bảo' },
+                parentInfo: { studentIds: [studentAllergic._id] },
+                status: 'active'
+            });
+            classroom1.teachers = [{ teacherId: teacherUser._id, teacherName: 'Cô Giáo B', role: 'homeroom' }];
+            await classroom1.save();
+
+            const visibleMenu = await Menu.create({
+                classroomId: classroom1._id,
+                className: classroom1.name,
+                schoolYear: '2026-2027',
+                weekNumber: 37,
+                startDate: new Date('2026-09-07'),
+                endDate: new Date('2026-09-11'),
+                status: 'published',
+                medicalNotes: 'Chỉ dùng nội bộ bếp',
+                allergensExcluded: ['milk'],
+                allergyWarnings: [{ studentId: studentAllergic._id, studentName: studentAllergic.fullName, allergenMatched: 'tôm' }]
+            });
+            await Menu.create({
+                classroomId: classroom2._id,
+                className: classroom2.name,
+                schoolYear: '2026-2027',
+                weekNumber: 37,
+                startDate: new Date('2026-09-07'),
+                endDate: new Date('2026-09-11'),
+                status: 'published'
+            });
+            await Menu.create({
+                classroomId: classroom1._id,
+                className: classroom1.name,
+                schoolYear: '2026-2027',
+                weekNumber: 38,
+                startDate: new Date('2026-09-14'),
+                endDate: new Date('2026-09-18'),
+                status: 'draft'
+            });
+
+            const parentMenus = await request(app)
+                .get('/api/nutrition/menus')
+                .set(authHeader(parentUser))
+                .expect(200);
+            expect(parentMenus.body.data).toHaveLength(1);
+            expect(parentMenus.body.data[0]._id).toBe(visibleMenu._id.toString());
+            expect(parentMenus.body.data[0]).not.toHaveProperty('allergyWarnings');
+            expect(parentMenus.body.data[0]).not.toHaveProperty('medicalNotes');
+            expect(parentMenus.body.data[0]).not.toHaveProperty('allergensExcluded');
+
+            await request(app)
+                .get(`/api/nutrition/menus?classroomId=${classroom2._id}`)
+                .set(authHeader(parentUser))
+                .expect(403);
+            await request(app)
+                .get(`/api/nutrition/menus/${visibleMenu._id}`)
+                .set(authHeader(parentUser))
+                .expect(200);
+            await request(app)
+                .get(`/api/nutrition/classrooms/${classroom2._id}/dietary-alerts`)
+                .set(authHeader(teacherUser))
+                .expect(403);
+            await request(app)
+                .post('/api/nutrition/menus/check-allergies')
+                .set(authHeader(teacherUser))
+                .send({ classroomId: classroom2._id, days: [] })
+                .expect(403);
+            await request(app)
+                .get('/api/nutrition/menus/not-an-object-id')
+                .set(authHeader(parentUser))
+                .expect(400);
+        });
+
+        it('chỉ công bố thực đơn qua quy trình gửi duyệt, duyệt và khóa bản công bố', async () => {
+            const dish = await Dish.create({ name: 'Món kiểm thử quy trình', category: 'main_course', calories: 120 });
+            const makeItems = () => ({ items: [{ dishId: dish._id }] });
+            const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'].map((dayOfWeek) => ({
+                dayOfWeek,
+                breakfast: makeItems(),
+                morningSnack: makeItems(),
+                lunch: { mainDishes: [{ dishId: dish._id }], soupDishes: [{ dishId: dish._id }] },
+                afternoonSnack: makeItems()
+            }));
+            const menuResponse = await request(app)
+                .post('/api/nutrition/menus')
+                .set(authHeader(chefUser))
+                .send({ classroomId: classroom1._id, startDate: '2026-09-07', days })
+                .expect(201);
+            const menuId = menuResponse.body.data._id;
+
+            await request(app)
+                .put(`/api/nutrition/menus/${menuId}`)
+                .set(authHeader(chefUser))
+                .send({ status: 'published' })
+                .expect(400);
+
+            const submitted = await request(app)
+                .post(`/api/nutrition/menus/${menuId}/submit`)
+                .set(authHeader(chefUser))
+                .send({ note: 'Đã hoàn thiện thực đơn tuần' })
+                .expect(200);
+            expect(submitted.body.data.status).toBe('pending_approval');
+
+            const approved = await request(app)
+                .post(`/api/nutrition/menus/${menuId}/approve`)
+                .set(authHeader(adminUser))
+                .send({ note: 'Đạt yêu cầu dinh dưỡng' })
+                .expect(200);
+            expect(approved.body.data.status).toBe('published');
+            expect(approved.body.data.auditTrail.map((entry) => entry.action))
+                .toEqual(expect.arrayContaining(['created', 'submitted', 'approved']));
+
+            await request(app)
+                .put(`/api/nutrition/menus/${menuId}`)
+                .set(authHeader(chefUser))
+                .send({ medicalNotes: 'Không được ghi đè' })
+                .expect(409);
+        });
     });
 
     describe('3. Quản lý Nhà cung cấp và Kho thực phẩm', () => {
