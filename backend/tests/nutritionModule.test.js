@@ -3,7 +3,7 @@ process.env.JWT_ISSUER = 'school-management-api';
 process.env.JWT_AUDIENCE = 'school-management-web';
 
 const mongoose = require('mongoose');
-const { MongoMemoryServer } = require('mongodb-memory-server');
+const { MongoMemoryReplSet } = require('mongodb-memory-server');
 const request = require('supertest');
 const createApp = require('../app');
 const { generateToken } = require('../src/utils/jwt');
@@ -16,6 +16,8 @@ const StudentAttendance = require('../src/models/zone3_school/StudentAttendance'
 const Dish = require('../src/models/zone5_nutrition/Dish');
 const IngredientMaster = require('../src/models/zone5_nutrition/IngredientMaster');
 const Inventory = require('../src/models/zone5_nutrition/Inventory');
+const InventoryTransaction = require('../src/models/zone5_nutrition/InventoryTransaction');
+const InventoryReconciliation = require('../src/models/zone5_nutrition/InventoryReconciliation');
 const Supplier = require('../src/models/zone5_nutrition/Supplier');
 const Menu = require('../src/models/zone5_nutrition/Menu');
 const FoodSample = require('../src/models/zone5_nutrition/FoodSample');
@@ -38,7 +40,7 @@ let studentAllergic;
 const authHeader = (user) => ({ Authorization: `Bearer ${generateToken(user)}` });
 
 beforeAll(async () => {
-    mongoServer = await MongoMemoryServer.create();
+    mongoServer = await MongoMemoryReplSet.create({ replSet: { count: 1, storageEngine: 'wiredTiger' } });
     await mongoose.connect(mongoServer.getUri());
 });
 
@@ -57,6 +59,8 @@ beforeEach(async () => {
         Dish.deleteMany({}),
         IngredientMaster.deleteMany({}),
         Inventory.deleteMany({}),
+        InventoryTransaction.deleteMany({}),
+        InventoryReconciliation.deleteMany({}),
         Supplier.deleteMany({}),
         Menu.deleteMany({}),
         FoodSample.deleteMany({}),
@@ -534,9 +538,22 @@ describe('Module Quản lý Nhà ăn & Dinh dưỡng (Nutrition & Kitchen)', () 
             const returnRes = await request(app)
                 .post(`/api/nutrition/inventory/${lot._id}/return`)
                 .set(authHeader(chefUser))
-                .send({ quantity: 2, rawAndSafe: true, reason: 'Nguyên liệu chưa sơ chế còn nguyên trạng' });
+                .send({
+                    quantity: 2,
+                    rawAndSafe: true,
+                    sourceExportTransactionId: exportRes.body.data._id,
+                    reason: 'Nguyên liệu chưa sơ chế còn nguyên trạng'
+                });
             expect(returnRes.status).toBe(200);
             expect(returnRes.body.data.quantity).toBe(17);
+            expect(returnRes.body.transaction.sourceExportTransactionId).toBe(exportRes.body.data._id);
+            expect(exportRes.body.data.lotAllocations).toHaveLength(1);
+
+            await request(app)
+                .post(`/api/nutrition/inventory/${lot._id}/return`)
+                .set(authHeader(chefUser))
+                .send({ quantity: 4, rawAndSafe: true, sourceExportTransactionId: exportRes.body.data._id })
+                .expect(422);
 
             const reconcileRes = await request(app)
                 .post(`/api/nutrition/inventory/${lot._id}/reconcile`)
@@ -568,6 +585,35 @@ describe('Module Quản lý Nhà ăn & Dinh dưỡng (Nutrition & Kitchen)', () 
                 .set(authHeader(chefUser));
             expect(deactivateIngredientRes.status).toBe(200);
             expect(deactivateIngredientRes.body.action).toBe('deactivated');
+        });
+
+        it('không cho xuất vượt tồn khi hai yêu cầu xuất chạy đồng thời và lưu vết lô FEFO', async () => {
+            const ingredient = await IngredientMaster.create({
+                name: 'Bí đỏ kiểm thử đồng thời', code: 'NL_BI_DO_CONCURRENT', category: 'vegetable', unit: 'kg'
+            });
+            const [olderLot, newerLot] = await Inventory.create([
+                {
+                    ingredientId: ingredient._id, ingredientName: ingredient.name, batchNumber: 'LOT-FEFO-OLD',
+                    quantity: 4, unit: 'kg', costPerUnit: 10000, expiryDate: new Date('2026-09-10'), status: 'available'
+                },
+                {
+                    ingredientId: ingredient._id, ingredientName: ingredient.name, batchNumber: 'LOT-FEFO-NEW',
+                    quantity: 6, unit: 'kg', costPerUnit: 12000, expiryDate: new Date('2026-09-12'), status: 'available'
+                }
+            ]);
+            const payload = { ingredientId: ingredient._id, quantity: 7, mealType: 'lunch' };
+            const responses = await Promise.all([
+                request(app).post('/api/nutrition/inventory/export').set(authHeader(chefUser)).send(payload),
+                request(app).post('/api/nutrition/inventory/export').set(authHeader(chefUser)).send(payload)
+            ]);
+            expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+            const successfulExport = responses.find((response) => response.status === 200).body.data;
+            expect(successfulExport.lotAllocations.map((allocation) => allocation.batchNumber))
+                .toEqual([olderLot.batchNumber, newerLot.batchNumber]);
+            expect(successfulExport.lotAllocations.map((allocation) => allocation.quantity)).toEqual([4, 3]);
+            const remaining = await Inventory.find({ ingredientId: ingredient._id });
+            expect(remaining.reduce((sum, lot) => sum + lot.quantity, 0)).toBe(3);
+            expect(await InventoryTransaction.countDocuments({ ingredientId: ingredient._id, type: 'export' })).toBe(1);
         });
     });
 

@@ -24,6 +24,11 @@ const { addWorkDays, getWorkDate, isValidWorkDate, startOfWorkDate } = require('
 const { isValidObjectId } = require('../utils/idValidation');
 const { canAccessClassroom, getTeacherClassroomIds } = require('../services/schoolDataAccessService');
 const { getLinkedStudentIds } = require('../services/studentAccessService');
+const {
+    importInventory,
+    exportInventoryFEFO,
+    returnUnusedInventory
+} = require('../services/inventoryTransactionService');
 
 const MENU_DAY_OFFSETS = {
     monday: 0,
@@ -831,42 +836,10 @@ const disposeInventoryLot = async (req, res) => {
 
 const returnUnusedFood = async (req, res) => {
     try {
-        const { quantity, reason, rawAndSafe } = req.body;
-        const returnQuantity = Number(quantity);
-        if (!Number.isFinite(returnQuantity) || returnQuantity <= 0) {
-            return res.status(400).json({ message: 'Số lượng hoàn trả phải lớn hơn 0' });
-        }
-        if (rawAndSafe !== true) {
-            return res.status(400).json({ message: 'Chỉ hoàn trả nguyên liệu chưa chế biến, còn nguyên trạng và bảo đảm an toàn' });
-        }
-        const lot = await Inventory.findById(req.params.id);
-        if (!lot) return res.status(404).json({ message: 'Không tìm thấy lô hàng' });
-        if (lot.expiryDate < getTodayStart()) {
-            return res.status(422).json({ message: 'Không thể hoàn trả lô hàng đã hết hạn' });
-        }
-        if (lot.status === 'disposed') {
-            return res.status(422).json({ message: 'Không thể hoàn trả lô hàng đã xử lý hủy' });
-        }
-
-        lot.quantity += returnQuantity;
-        lot.status = 'available';
-        await lot.save();
-        await InventoryTransaction.create({
-            type: 'return',
-            ingredientId: lot.ingredientId,
-            ingredientName: lot.ingredientName,
-            batchNumber: lot.batchNumber,
-            quantity: returnQuantity,
-            unit: lot.unit,
-            costPerUnit: lot.costPerUnit || 0,
-            totalAmount: returnQuantity * (lot.costPerUnit || 0),
-            reason: String(reason || 'Hoàn trả nguyên liệu chưa sử dụng').trim(),
-            performedBy: req.user._id,
-            performedByName: req.user.profile?.fullName || req.user.username
-        });
-        res.json({ success: true, message: 'Đã cộng lại lượng nguyên liệu chưa sử dụng vào tồn kho.', data: lot });
+        const result = await returnUnusedInventory(req.params.id, req.body, req.user);
+        res.json({ success: true, message: 'Đã cộng lại lượng nguyên liệu chưa sử dụng vào tồn kho.', data: result.inventory, transaction: result.transaction });
     } catch (err) {
-        res.status(400).json({ message: err.message || 'Không thể hoàn trả nguyên liệu' });
+        res.status(err.statusCode || 400).json({ message: err.message || 'Không thể hoàn trả nguyên liệu' });
     }
 };
 
@@ -927,142 +900,24 @@ const getInventoryReconciliations = async (req, res) => {
 
 const importStock = async (req, res) => {
     try {
-        const { ingredientId, batchNumber, quantity, unit, costPerUnit, expiryDate, supplierId, supplierName, storageLocation } = req.body;
-        const importQuantity = Number(quantity);
-        const unitCost = Number(costPerUnit || 0);
-        if (!ingredientId || quantity === undefined || quantity === null || !expiryDate || !String(supplierName || '').trim()) {
-            return res.status(400).json({ message: 'Thiếu thông tin nhập kho nguyên liệu' });
-        }
-        if (!Number.isFinite(importQuantity) || importQuantity <= 0) {
-            return res.status(400).json({ message: 'Số lượng nhập phải là một số lớn hơn 0' });
-        }
-        if (!Number.isFinite(unitCost) || unitCost < 0) {
-            return res.status(400).json({ message: 'Đơn giá nhập không được âm' });
-        }
-        if (!String(storageLocation || '').trim()) {
-            return res.status(400).json({ message: 'Vui lòng chọn vị trí bảo quản cho lô hàng' });
-        }
-
-        const ingredient = await IngredientMaster.findById(ingredientId);
-        if (!ingredient) return res.status(404).json({ message: 'Không tìm thấy nguyên liệu' });
-        const resolvedBatchNumber = String(batchNumber || createImportBatchNumber(ingredientId)).trim();
-        const resolvedSupplierName = String(supplierName).trim();
-        const resolvedStorageLocation = String(storageLocation).trim();
-
-        let inv = await Inventory.findOne({ ingredientId, batchNumber: resolvedBatchNumber });
-        if (inv) {
-            inv.quantity += importQuantity;
-            inv.costPerUnit = unitCost || inv.costPerUnit;
-            inv.supplierId = supplierId || inv.supplierId;
-            inv.supplierName = resolvedSupplierName;
-            inv.storageLocation = resolvedStorageLocation;
-            inv.status = 'available';
-            await inv.save();
-        } else {
-            inv = await Inventory.create({
-                ingredientId,
-                ingredientName: ingredient.name,
-                batchNumber: resolvedBatchNumber,
-                quantity: importQuantity,
-                unit: unit || ingredient.unit,
-                costPerUnit: unitCost,
-                expiryDate: new Date(expiryDate),
-                supplierId,
-                supplierName: resolvedSupplierName,
-                storageLocation: resolvedStorageLocation,
-                status: 'available'
-            });
-        }
-
-        const totalAmount = importQuantity * unitCost;
-
-        // Tạo giao dịch kho
-        await InventoryTransaction.create({
-            type: 'import',
-            ingredientId,
-            ingredientName: ingredient.name,
-            batchNumber: resolvedBatchNumber,
-            quantity: importQuantity,
-            unit: unit || ingredient.unit,
-            costPerUnit: unitCost,
-            totalAmount,
-            supplierId,
-            supplierName: resolvedSupplierName,
-            storageLocation: resolvedStorageLocation,
-            reason: 'Nhập kho từ nhà cung cấp',
-            performedBy: req.user._id,
-            performedByName: req.user.profile?.fullName || req.user.username
-        });
-
-        res.status(201).json({ success: true, message: 'Đã nhập kho thành công', data: inv });
+        const result = await importInventory(req.body, req.user, createImportBatchNumber);
+        res.status(201).json({ success: true, message: 'Đã nhập kho thành công', data: result.inventory, transaction: result.transaction });
     } catch (err) {
-        res.status(400).json({ message: err.message || 'Lỗi nhập kho' });
+        res.status(err.statusCode || 400).json({ message: err.message || 'Lỗi nhập kho' });
     }
 };
 
 const exportStock = async (req, res) => {
     try {
-        const { ingredientId, quantity, classroomId, className, mealDate, mealType, reason } = req.body;
-        if (!ingredientId || !quantity || quantity <= 0) {
-            return res.status(400).json({ message: 'Cần gửi mã nguyên liệu và số lượng xuất dương' });
-        }
-
-        const ingredient = await IngredientMaster.findById(ingredientId);
-        if (!ingredient) return res.status(404).json({ message: 'Không tìm thấy nguyên liệu' });
-
-        // Tìm các lô còn hàng sắp xếp theo hạn sử dụng sớm nhất (FEFO)
-        const availableLots = await Inventory.find({
-            ingredientId,
-            quantity: { $gt: 0 },
-            status: { $in: ['available', 'near_expiry'] },
-            expiryDate: { $gte: getTodayStart() }
-        }).sort({ expiryDate: 1 });
-
-        const totalAvailable = availableLots.reduce((sum, lot) => sum + lot.quantity, 0);
-        if (totalAvailable < Number(quantity)) {
-            return res.status(400).json({
-                message: `Tồn kho không đủ để xuất! Hiện còn ${totalAvailable} ${ingredient.unit}, yêu cầu xuất ${quantity} ${ingredient.unit}`
-            });
-        }
-
-        let remainingToExport = Number(quantity);
-        let totalExportValue = 0;
-
-        for (const lot of availableLots) {
-            if (remainingToExport <= 0) break;
-            const deduct = Math.min(lot.quantity, remainingToExport);
-            lot.quantity -= deduct;
-            if (lot.quantity === 0) lot.status = 'depleted';
-            await lot.save();
-
-            remainingToExport -= deduct;
-            totalExportValue += deduct * (lot.costPerUnit || 0);
-        }
-
-        const transaction = await InventoryTransaction.create({
-            type: 'export',
-            ingredientId,
-            ingredientName: ingredient.name,
-            quantity: Number(quantity),
-            unit: ingredient.unit,
-            costPerUnit: totalExportValue / Number(quantity),
-            totalAmount: totalExportValue,
-            classroomId,
-            className: className || '',
-            mealDate: mealDate ? new Date(mealDate) : new Date(),
-            mealType: mealType || 'lunch',
-            reason: reason || 'Xuất chế biến bữa ăn học sinh',
-            performedBy: req.user._id,
-            performedByName: req.user.profile?.fullName || req.user.username
-        });
+        const transaction = await exportInventoryFEFO(req.body, req.user);
 
         res.json({
             success: true,
-            message: `Đã xuất kho ${quantity} ${ingredient.unit} ${ingredient.name}`,
+            message: `Đã xuất kho ${transaction.quantity} ${transaction.unit} ${transaction.ingredientName}`,
             data: transaction
         });
     } catch (err) {
-        res.status(500).json({ message: err.message || 'Lỗi xuất kho' });
+        res.status(err.statusCode || 500).json({ message: err.message || 'Lỗi xuất kho' });
     }
 };
 
