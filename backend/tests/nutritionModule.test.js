@@ -376,7 +376,8 @@ describe('Module Quản lý Nhà ăn & Dinh dưỡng (Nutrition & Kitchen)', () 
                     costPerUnit: 24000,
                     expiryDate: '2026-09-12',
                     supplierId: supRes.body.data._id,
-                    supplierName: supRes.body.data.name
+                    supplierName: supRes.body.data.name,
+                    storageLocation: 'Kho lạnh 01'
                 });
 
             expect(importRes.status).toBe(201);
@@ -407,6 +408,38 @@ describe('Module Quản lý Nhà ăn & Dinh dưỡng (Nutrition & Kitchen)', () 
 
             const lot = invListRes.body.data.find(i => i.batchNumber === importRes.body.data.batchNumber);
             expect(lot.quantity).toBe(15);
+
+            const returnRes = await request(app)
+                .post(`/api/nutrition/inventory/${lot._id}/return`)
+                .set(authHeader(chefUser))
+                .send({ quantity: 2, rawAndSafe: true, reason: 'Nguyên liệu chưa sơ chế còn nguyên trạng' });
+            expect(returnRes.status).toBe(200);
+            expect(returnRes.body.data.quantity).toBe(17);
+
+            const reconcileRes = await request(app)
+                .post(`/api/nutrition/inventory/${lot._id}/reconcile`)
+                .set(authHeader(adminUser))
+                .send({ actualQuantity: 16, notes: 'Hao hụt khi cân thực tế' });
+            expect(reconcileRes.status).toBe(200);
+            expect(reconcileRes.body.data.difference).toBe(-1);
+
+            const expiredLot = await Inventory.create({
+                ingredientId: ing._id,
+                ingredientName: ing.name,
+                batchNumber: 'LOT_EXPIRED_TEST',
+                quantity: 3,
+                unit: 'kg',
+                costPerUnit: 24000,
+                expiryDate: new Date('2020-01-01'),
+                status: 'expired'
+            });
+            const disposeRes = await request(app)
+                .post(`/api/nutrition/inventory/${expiredLot._id}/dispose`)
+                .set(authHeader(chefUser))
+                .send({ reason: 'Hết hạn sử dụng' });
+            expect(disposeRes.status).toBe(200);
+            expect(disposeRes.body.data.status).toBe('disposed');
+            expect(disposeRes.body.data.quantity).toBe(0);
 
             const deactivateIngredientRes = await request(app)
                 .delete(`/api/nutrition/ingredients/${ing._id}`)
@@ -547,13 +580,21 @@ describe('Module Quản lý Nhà ăn & Dinh dưỡng (Nutrition & Kitchen)', () 
                 recordedByName: 'Quản trị viên'
             });
 
-            const finRes = await request(app)
+            const chefFinRes = await request(app)
                 .get(`/api/nutrition/financials/daily?date=${new Date().toISOString()}`)
                 .set(authHeader(chefUser));
+
+            expect(chefFinRes.status).toBe(403);
+
+            const finRes = await request(app)
+                .get(`/api/nutrition/financials/daily?date=${new Date().toISOString()}`)
+                .set(authHeader(adminUser));
 
             expect(finRes.status).toBe(200);
             expect(finRes.body.data.totalStudentsPresent).toBe(1);
             expect(finRes.body.data.totalMealRevenueBudget).toBe(35000);
+            expect(finRes.body.data).toHaveProperty('budgetUtilizationPercent');
+            expect(finRes.body.data).toHaveProperty('recentExpenseTransactions');
         });
 
         it('Tạo đề xuất mua sắm cho nhà bếp và Ban giám hiệu duyệt', async () => {

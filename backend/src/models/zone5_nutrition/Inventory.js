@@ -48,7 +48,7 @@ const InventorySchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['available', 'near_expiry', 'expired', 'depleted'],
+        enum: ['available', 'near_expiry', 'expired', 'depleted', 'disposed'],
         default: 'available'
     }
 }, {
@@ -60,4 +60,3 @@ InventorySchema.index({ expiryDate: 1 });
 InventorySchema.index({ status: 1 });
 
 module.exports = mongoose.model('Inventory', InventorySchema);
-

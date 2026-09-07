@@ -21,7 +21,12 @@ export const deleteIngredient = (id) => api.delete(`/nutrition/ingredients/${id}
 export const getInventory = () => api.get('/nutrition/inventory');
 export const importInventoryStock = (data) => api.post('/nutrition/inventory/import', data);
 export const exportInventoryStock = (data) => api.post('/nutrition/inventory/export', data);
+export const disposeInventoryLot = (id, data) => api.post(`/nutrition/inventory/${id}/dispose`, data);
+export const returnUnusedFood = (id, data) => api.post(`/nutrition/inventory/${id}/return`, data);
+export const reconcileInventoryLot = (id, data) => api.post(`/nutrition/inventory/${id}/reconcile`, data);
+export const getInventoryReconciliations = () => api.get('/nutrition/inventory/reconciliations');
 export const getInventoryAlerts = () => api.get('/nutrition/inventory/alerts');
+export const getInventoryTransactions = (params) => api.get('/nutrition/inventory/transactions', { params });
 
 export const getSuppliers = () => api.get('/nutrition/suppliers');
 export const createSupplier = (data) => api.post('/nutrition/suppliers', data);

@@ -19,13 +19,14 @@ import {
   getInventory,
   importInventoryStock,
   exportInventoryStock,
+  disposeInventoryLot,
+  returnUnusedFood,
+  reconcileInventoryLot,
+  getInventoryReconciliations,
   getInventoryAlerts,
-  getSuppliers,
+  getInventoryTransactions,
   getEquipments,
-  getFoodSamples,
   createFoodSample,
-  disposeFoodSample,
-  getFoodInspections,
   getDailyMealFinancials,
   getKitchenRequests,
   createKitchenRequest,
@@ -63,6 +64,15 @@ const DISH_CATEGORY_LABELS = {
   side_dish: 'Món kèm'
 };
 
+const MEAL_TYPE_LABELS = {
+  breakfast: 'Bữa sáng',
+  morningSnack: 'Bữa phụ sáng',
+  lunch: 'Bữa trưa',
+  afternoonSnack: 'Bữa xế',
+  dinner: 'Bữa tối',
+  general: 'Chi phí chung'
+};
+
 const createEmptyDishForm = () => ({
   name: '',
   category: 'main_course',
@@ -73,6 +83,14 @@ const createEmptyDishForm = () => ({
   servingSizeGram: 100,
   allergens: []
 });
+
+const getSessionRole = () => {
+  try {
+    return JSON.parse(localStorage.getItem('user') || '{}').role || '';
+  } catch {
+    return '';
+  }
+};
 
 const dateToInput = (date) => {
   const year = date.getFullYear();
@@ -157,9 +175,12 @@ const getLunchDishNames = (lunch, collectionKey, legacyKey) => {
 };
 
 const summarizeAvailableInventory = (inventoryLots = []) => Object.values(inventoryLots
-  .filter((lot) => Number(lot.quantity) > 0)
+  .filter((lot) => Number(lot.quantity) > 0 && ['available', 'near_expiry'].includes(lot.status))
   .reduce((summary, lot) => {
-    const key = String(lot.ingredientId || lot.ingredientName);
+    const ingredientId = typeof lot.ingredientId === 'object'
+      ? lot.ingredientId?._id
+      : lot.ingredientId;
+    const key = String(ingredientId || lot.ingredientName);
     if (!summary[key]) {
       summary[key] = {
         key,
@@ -181,6 +202,28 @@ const summarizeAvailableInventory = (inventoryLots = []) => Object.values(invent
   }, {}))
   .map((item) => ({ ...item, locations: [...item.locations].join(', ') }))
   .sort((left, right) => left.ingredientName.localeCompare(right.ingredientName, 'vi'));
+
+const PAGE_SIZE = 10;
+
+const paginate = (items, requestedPage) => {
+  const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const page = Math.min(Math.max(requestedPage, 1), totalPages);
+  return { page, totalPages, rows: items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) };
+};
+
+function PaginationControls({ pagination, total, onPageChange }) {
+  if (total <= PAGE_SIZE) return null;
+  return (
+    <div className="nutrition-pagination">
+      <span>Hiển thị {(pagination.page - 1) * PAGE_SIZE + 1}–{Math.min(pagination.page * PAGE_SIZE, total)} / {total} dòng</span>
+      <div>
+        <button type="button" disabled={pagination.page === 1} onClick={() => onPageChange(pagination.page - 1)}>‹ Trước</button>
+        <span>Trang {pagination.page}/{pagination.totalPages}</span>
+        <button type="button" disabled={pagination.page === pagination.totalPages} onClick={() => onPageChange(pagination.page + 1)}>Sau ›</button>
+      </div>
+    </div>
+  );
+}
 
 const getSelectedMealDishIds = (meal) => (
   Array.isArray(meal?.items) && meal.items.length
@@ -261,7 +304,10 @@ function ClassroomDietaryAlertPanel({ alerts }) {
 }
 
 export default function NutritionManagement() {
-  const [activeTab, setActiveTab] = useState('menus'); // menus | dishes | inventory | equipment | safety | finance
+  const [activeTab, setActiveTab] = useState('menus'); // menus | dishes | inventory | equipment | dailyKitchenReport | finance
+  const canReconcileInventory = ['admin', 'principal'].includes(getSessionRole());
+  const canApproveKitchenRequest = ['admin', 'principal', 'accountant'].includes(getSessionRole());
+  const canViewFinance = ['admin', 'principal'].includes(getSessionRole());
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
 
@@ -275,14 +321,42 @@ export default function NutritionManagement() {
   const [ingredients, setIngredients] = useState([]);
   const [inventories, setInventories] = useState([]);
   const [inventoryAlerts, setInventoryAlerts] = useState({ expiringItems: [], lowStockAlerts: [] });
-  const [suppliers, setSuppliers] = useState([]);
+  const [reconciliations, setReconciliations] = useState([]);
+  const [inventoryTransactions, setInventoryTransactions] = useState([]);
   const [equipments, setEquipments] = useState([]);
-  const [foodSamples, setFoodSamples] = useState([]);
-  const [foodInspections, setFoodInspections] = useState([]);
   const [financialReport, setFinancialReport] = useState(null);
   const [kitchenRequests, setKitchenRequests] = useState([]);
   const [classroomDietaryAlerts, setClassroomDietaryAlerts] = useState([]);
+  const [inventoryPage, setInventoryPage] = useState(1);
+  const [auditLotPage, setAuditLotPage] = useState(1);
+  const [reconciliationPage, setReconciliationPage] = useState(1);
+  const [disposalPage, setDisposalPage] = useState(1);
+  const [dailyTransactionPage, setDailyTransactionPage] = useState(1);
+  const [dailyStockPage, setDailyStockPage] = useState(1);
+  const [stockSummaryPage, setStockSummaryPage] = useState(1);
+  const [dishPage, setDishPage] = useState(1);
+  const [equipmentPage, setEquipmentPage] = useState(1);
+  const [equipmentRequestPage, setEquipmentRequestPage] = useState(1);
+  const [dailyReportRange, setDailyReportRange] = useState(() => {
+    const today = dateToInput(new Date());
+    return { startDate: today, endDate: today };
+  });
   const availableStockItems = summarizeAvailableInventory(inventories);
+  const visibleInventoryLots = inventories.filter((lot) => Number(lot.quantity) > 0 && lot.status !== 'disposed');
+  const inventoryPagination = paginate(visibleInventoryLots, inventoryPage);
+  const auditLots = visibleInventoryLots;
+  const auditLotPagination = paginate(auditLots, auditLotPage);
+  const reconciliationPagination = paginate(reconciliations, reconciliationPage);
+  const disposalTransactions = inventoryTransactions.filter((item) => item.type === 'spoilage');
+  const disposalPagination = paginate(disposalTransactions, disposalPage);
+  const reportTransactions = inventoryTransactions;
+  const dailyTransactionPagination = paginate(reportTransactions, dailyTransactionPage);
+  const dailyStockPagination = paginate(availableStockItems, dailyStockPage);
+  const stockSummaryPagination = paginate(availableStockItems, stockSummaryPage);
+  const dishPagination = paginate(dishes, dishPage);
+  const equipmentPagination = paginate(equipments, equipmentPage);
+  const equipmentRequests = kitchenRequests.filter((request) => ['equipment_new', 'equipment_repair'].includes(request.requestType));
+  const equipmentRequestPagination = paginate(equipmentRequests, equipmentRequestPage);
 
   // Modals / Form toggles
   const [showNewMenuModal, setShowNewMenuModal] = useState(false);
@@ -291,8 +365,12 @@ export default function NutritionManagement() {
   const [showNewIngredientModal, setShowNewIngredientModal] = useState(false);
   const [showIngredientManager, setShowIngredientManager] = useState(false);
   const [showExportStockModal, setShowExportStockModal] = useState(false);
+  const [showDisposeLotModal, setShowDisposeLotModal] = useState(false);
+  const [showReturnLotModal, setShowReturnLotModal] = useState(false);
+  const [showReconcileLotModal, setShowReconcileLotModal] = useState(false);
   const [showNewSampleModal, setShowNewSampleModal] = useState(false);
   const [showNewRequestModal, setShowNewRequestModal] = useState(false);
+  const [requestApproval, setRequestApproval] = useState(null);
   const [showEditDayModal, setShowEditDayModal] = useState(false);
   const [editingDayIndex, setEditingDayIndex] = useState(null);
   const [dailyMenuForm, setDailyMenuForm] = useState(null);
@@ -309,7 +387,8 @@ export default function NutritionManagement() {
     quantity: '',
     costPerUnit: '',
     expiryDate: '',
-    storageLocation: 'Kho lạnh 01'
+    storageLocation: '',
+    customStorageLocation: ''
   });
 
   const [newIngredientForm, setNewIngredientForm] = useState({
@@ -327,6 +406,10 @@ export default function NutritionManagement() {
     mealType: 'lunch',
     reason: 'Nấu ăn bán trú trưa'
   });
+  const [selectedInventoryLot, setSelectedInventoryLot] = useState(null);
+  const [disposeReason, setDisposeReason] = useState('Hàng hết hạn');
+  const [returnFoodForm, setReturnFoodForm] = useState({ inventoryId: '', quantity: '', reason: 'Nguyên liệu chưa dùng sau khi chuẩn bị bếp', rawAndSafe: false });
+  const [reconcileForm, setReconcileForm] = useState({ actualQuantity: '', notes: '' });
 
   const [newSampleForm, setNewSampleForm] = useState(() => ({
     sampleCode: `MAU-${Date.now().toString().slice(-6)}`,
@@ -341,13 +424,24 @@ export default function NutritionManagement() {
     requestCode: `YC-${Date.now().toString().slice(-6)}`,
     requestType: 'ingredient_purchase',
     title: '',
-    priority: 'medium',
     items: [{ name: '', quantity: 1, unit: 'kg', estimatedCost: 0 }]
   }));
 
   const showFeedback = (type, text) => {
     setMessage({ type, text });
     setTimeout(() => setMessage({ type: '', text: '' }), 4000);
+  };
+
+  const changeDailyReportRange = (nextRange) => {
+    setDailyTransactionPage(1);
+    setDailyReportRange(nextRange);
+  };
+
+  const showLastThreeDays = () => {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - 2);
+    changeDailyReportRange({ startDate: dateToInput(start), endDate: dateToInput(end) });
   };
 
   // 1. Tải danh sách lớp học
@@ -383,33 +477,36 @@ export default function NutritionManagement() {
         const [dRes, iRes] = await Promise.all([getDishes(), getIngredients()]);
         setDishes(dRes.data.data || []);
         setIngredients(iRes.data.data || []);
-      } else if (activeTab === 'inventory') {
-        const [invRes, alertRes, ingRes] = await Promise.all([
+      } else if (activeTab === 'inventory' || activeTab === 'inventoryAudit') {
+        const requests = [
           getInventory(),
           getInventoryAlerts(),
-          getIngredients()
+          getIngredients(),
+          canReconcileInventory ? getInventoryReconciliations() : Promise.resolve({ data: { data: [] } }),
+          canReconcileInventory ? getInventoryTransactions() : Promise.resolve({ data: { data: [] } })
+        ];
+        const [invRes, alertRes, ingRes, reconciliationRes, transactionRes] = await Promise.all(requests);
+        setInventories(invRes.data.data || []);
+        setInventoryAlerts(alertRes.data.data || { expiredItems: [], expiringItems: [], lowStockAlerts: [] });
+        setIngredients(ingRes.data.data || []);
+        setReconciliations(reconciliationRes.data.data || []);
+        setInventoryTransactions(transactionRes.data.data || []);
+      } else if (activeTab === 'equipment') {
+        const [eqRes, reqRes] = await Promise.all([getEquipments(), getKitchenRequests()]);
+        setEquipments(eqRes.data.data || []);
+        setKitchenRequests(reqRes.data.data || []);
+      } else if (activeTab === 'dailyKitchenReport') {
+        const [invRes, transactionRes, reconciliationRes] = await Promise.all([
+          getInventory(),
+          getInventoryTransactions(dailyReportRange),
+          canReconcileInventory ? getInventoryReconciliations() : Promise.resolve({ data: { data: [] } })
         ]);
         setInventories(invRes.data.data || []);
-        setInventoryAlerts(alertRes.data.data || { expiringItems: [], lowStockAlerts: [] });
-        setIngredients(ingRes.data.data || []);
-      } else if (activeTab === 'equipment') {
-        const [eqRes, supRes] = await Promise.all([getEquipments(), getSuppliers()]);
-        setEquipments(eqRes.data.data || []);
-        setSuppliers(supRes.data.data || []);
-      } else if (activeTab === 'safety') {
-        const [sampleRes, inspRes] = await Promise.all([
-          getFoodSamples(),
-          getFoodInspections()
-        ]);
-        setFoodSamples(sampleRes.data.data || []);
-        setFoodInspections(inspRes.data.data || []);
+        setInventoryTransactions(transactionRes.data.data || []);
+        setReconciliations(reconciliationRes.data.data || []);
       } else if (activeTab === 'finance') {
-        const [finRes, reqRes] = await Promise.all([
-          getDailyMealFinancials(new Date().toISOString()),
-          getKitchenRequests()
-        ]);
+        const finRes = await getDailyMealFinancials(new Date().toISOString());
         setFinancialReport(finRes.data.data || null);
-        setKitchenRequests(reqRes.data.data || []);
       }
     } catch (err) {
       console.error('Lỗi tải dữ liệu tab:', err);
@@ -417,7 +514,7 @@ export default function NutritionManagement() {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, selectedClassId, selectedWeekStart]);
+  }, [activeTab, selectedClassId, selectedWeekStart, canReconcileInventory, dailyReportRange]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => loadTabData(), 0);
@@ -607,8 +704,15 @@ export default function NutritionManagement() {
       showFeedback('error', 'Số lượng nhập phải lớn hơn 0.');
       return;
     }
+    const storageLocation = importStockForm.storageLocation === 'other'
+      ? importStockForm.customStorageLocation.trim()
+      : importStockForm.storageLocation;
+    if (!storageLocation) {
+      showFeedback('error', 'Vui lòng chọn hoặc nhập vị trí bảo quản cho lô hàng.');
+      return;
+    }
     try {
-      await importInventoryStock({ ...importStockForm, quantity });
+      await importInventoryStock({ ...importStockForm, storageLocation, quantity });
       showFeedback('success', 'Nhập kho thực phẩm thành công!');
       setShowImportStockModal(false);
       loadTabData();
@@ -683,6 +787,57 @@ export default function NutritionManagement() {
     }
   };
 
+  const handleDisposeLot = async (e) => {
+    e.preventDefault();
+    if (!selectedInventoryLot) return;
+    try {
+      await disposeInventoryLot(selectedInventoryLot._id, { reason: disposeReason });
+      showFeedback('success', 'Đã xử lý lô hàng và ghi nhận hao hụt/hủy kho.');
+      setShowDisposeLotModal(false);
+      setSelectedInventoryLot(null);
+      loadTabData();
+    } catch (err) {
+      showFeedback('error', err.response?.data?.message || 'Không thể xử lý lô hàng');
+    }
+  };
+
+  const handleReturnUnusedFood = async (e) => {
+    e.preventDefault();
+    const lot = inventories.find((item) => item._id === returnFoodForm.inventoryId);
+    if (!lot) return showFeedback('error', 'Vui lòng chọn lô nguyên liệu cần hoàn trả.');
+    try {
+      await returnUnusedFood(lot._id, {
+        quantity: Number(returnFoodForm.quantity),
+        reason: returnFoodForm.reason,
+        rawAndSafe: returnFoodForm.rawAndSafe
+      });
+      showFeedback('success', 'Đã cộng lại nguyên liệu chưa dùng vào tồn kho.');
+      setShowReturnLotModal(false);
+      setReturnFoodForm({ inventoryId: '', quantity: '', reason: 'Nguyên liệu chưa dùng sau khi chuẩn bị bếp', rawAndSafe: false });
+      loadTabData();
+    } catch (err) {
+      showFeedback('error', err.response?.data?.message || 'Không thể hoàn trả nguyên liệu');
+    }
+  };
+
+  const handleReconcileLot = async (e) => {
+    e.preventDefault();
+    if (!selectedInventoryLot) return;
+    try {
+      await reconcileInventoryLot(selectedInventoryLot._id, {
+        actualQuantity: Number(reconcileForm.actualQuantity),
+        notes: reconcileForm.notes
+      });
+      showFeedback('success', 'Đã ghi nhận kiểm kê và điều chỉnh tồn kho.');
+      setShowReconcileLotModal(false);
+      setSelectedInventoryLot(null);
+      setReconcileForm({ actualQuantity: '', notes: '' });
+      loadTabData();
+    } catch (err) {
+      showFeedback('error', err.response?.data?.message || 'Không thể kiểm kê lô hàng');
+    }
+  };
+
   // Handler lưu mẫu thức ăn
   const handleCreateSample = async (e) => {
     e.preventDefault();
@@ -696,23 +851,40 @@ export default function NutritionManagement() {
     }
   };
 
-  // Handler hủy mẫu thức ăn
-  const handleDisposeSample = async (sampleId) => {
-    if (!confirm('Xác nhận đã qua 24h lưu trữ an toàn và tiến hành hủy mẫu?')) return;
-    try {
-      await disposeFoodSample(sampleId, { status: 'disposed_normal', notes: 'Hủy mẫu định kỳ an toàn' });
-      showFeedback('success', 'Đã ghi nhận hủy mẫu an toàn!');
-      loadTabData();
-    } catch {
-      showFeedback('error', 'Lỗi hủy mẫu thức ăn');
-    }
+  const resetRequestForm = (requestType = 'ingredient_purchase') => {
+    const isEquipment = ['equipment_new', 'equipment_repair'].includes(requestType);
+    setNewRequestForm({
+      requestCode: `YC-${Date.now().toString().slice(-6)}`,
+      requestType,
+      title: '',
+      items: [{ name: '', quantity: 1, unit: isEquipment ? 'cái' : 'kg', estimatedCost: 0 }]
+    });
   };
 
-  // Handler duyệt đề xuất nhà bếp
-  const handleApproveRequest = async (requestId, status) => {
+  const openNewRequestModal = (requestType = 'ingredient_purchase') => {
+    resetRequestForm(requestType);
+    setShowNewRequestModal(true);
+  };
+
+  const openRequestApproval = (request, status) => {
+    setRequestApproval({ request, status, approvalNotes: '' });
+  };
+
+  // Handler duyệt/từ chối đề xuất nhà bếp
+  const handleApproveRequest = async (e) => {
+    e.preventDefault();
+    if (!requestApproval) return;
+
+    const { request, status, approvalNotes } = requestApproval;
+    if (status === 'rejected' && !approvalNotes.trim()) {
+      showFeedback('error', 'Vui lòng nhập lý do từ chối đề xuất.');
+      return;
+    }
+
     try {
-      await approveKitchenRequest(requestId, { status, approvalNotes: 'Đã xem xét và duyệt chi' });
+      await approveKitchenRequest(request._id, { status, approvalNotes: approvalNotes.trim() });
       showFeedback('success', `Đã ${status === 'approved' ? 'duyệt' : 'từ chối'} đề xuất!`);
+      setRequestApproval(null);
       loadTabData();
     } catch {
       showFeedback('error', 'Lỗi cập nhật phiếu đề xuất');
@@ -740,13 +912,7 @@ export default function NutritionManagement() {
       await createKitchenRequest({ ...newRequestForm, items });
       showFeedback('success', 'Đã gửi đề xuất cho bộ phận phê duyệt!');
       setShowNewRequestModal(false);
-      setNewRequestForm({
-        requestCode: `YC-${Date.now().toString().slice(-6)}`,
-        requestType: 'ingredient_purchase',
-        title: '',
-        priority: 'medium',
-        items: [{ name: '', quantity: 1, unit: 'kg', estimatedCost: 0 }]
-      });
+      resetRequestForm();
       loadTabData();
     } catch (err) {
       showFeedback('error', err.response?.data?.message || 'Lỗi gửi đề xuất');
@@ -756,7 +922,7 @@ export default function NutritionManagement() {
   return (
     <AppShell
       title="Bếp Ăn & Dinh Dưỡng Bán Trú"
-      subtitle="Quản lý thực đơn theo lớp, cảnh báo dị ứng/bệnh lý học sinh, kho thực phẩm, sổ kiểm thực 3 bước và tài chính suất ăn"
+      subtitle="Quản lý thực đơn theo lớp, cảnh báo dị ứng/bệnh lý học sinh, kho thực phẩm, thiết bị bếp và tài chính suất ăn"
       actions={
         <div className="flex gap-2">
           {activeTab === 'menus' && (
@@ -780,12 +946,10 @@ export default function NutritionManagement() {
               <button className="btn-secondary" onClick={() => setShowExportStockModal(true)}>
                 Xuất Cho Bếp
               </button>
+              <button className="btn-secondary" onClick={() => setShowReturnLotModal(true)}>
+                Báo Cáo Chưa Dùng
+              </button>
             </div>
-          )}
-          {activeTab === 'safety' && (
-            <button className="btn-primary" onClick={() => setShowNewSampleModal(true)}>
-              <Icon name="shield" size={16} /> Lưu Mẫu Thức Ăn 24h
-            </button>
           )}
         </div>
       }
@@ -794,7 +958,7 @@ export default function NutritionManagement() {
       {/* Alert Banner */}
       {message.text && (
         <div
-          className={`mb-4 p-3 rounded-lg flex items-center justify-between text-sm ${
+          className={`nutrition-feedback p-3 rounded-lg flex items-center justify-between text-sm ${
             message.type === 'success'
               ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
               : 'bg-rose-50 text-rose-800 border border-rose-200'
@@ -811,9 +975,10 @@ export default function NutritionManagement() {
           { key: 'menus', label: 'Thực Đơn Theo Lớp', icon: 'menu' },
           { key: 'dishes', label: 'Món Ăn & Dinh Dưỡng', icon: 'utensils' },
           { key: 'inventory', label: 'Kho Thực Phẩm & Date', icon: 'grid' },
-          { key: 'equipment', label: 'Thiết Bị & Nhà Cung Cấp', icon: 'settings' },
-          { key: 'safety', label: 'An Toàn & Kiểm Thực 3 Bước', icon: 'shield' },
-          { key: 'finance', label: 'Tài Chính & Suất Ăn', icon: 'money' }
+          ...(canReconcileInventory ? [{ key: 'inventoryAudit', label: 'Kiểm Kê Kho', icon: 'grid' }] : []),
+          { key: 'equipment', label: 'Thiết Bị & Đề Xuất Mua Sắm', icon: 'settings' },
+          { key: 'dailyKitchenReport', label: 'Báo Cáo Kho Hằng Ngày', icon: 'chart' },
+          ...(canViewFinance ? [{ key: 'finance', label: 'Tài Chính & Suất Ăn', icon: 'money' }] : [])
         ].map((tab) => (
           <button
             key={tab.key}
@@ -986,7 +1151,7 @@ export default function NutritionManagement() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {dishes.map((dish) => (
+                  {dishPagination.rows.map((dish) => (
                     <tr key={dish._id} className="hover:bg-gray-50/50">
                       <td className="p-3 font-semibold text-gray-800">{dish.name}</td>
                       <td className="p-3">
@@ -1023,6 +1188,7 @@ export default function NutritionManagement() {
                 </tbody>
               </table>
             </div>
+            <PaginationControls pagination={dishPagination} total={dishes.length} onPageChange={setDishPage} />
           </div>
         </div>
       )}
@@ -1033,7 +1199,19 @@ export default function NutritionManagement() {
       {activeTab === 'inventory' && !loading && (
         <div className="space-y-6">
           {/* Thẻ Cảnh báo Hạn dùng & Hết hàng */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="p-4 rounded-xl bg-rose-50 border border-rose-200">
+              <h4 className="font-bold text-rose-900 text-sm mb-1">Hàng Đã Hết Hạn — Cần Xử Lý</h4>
+              <p className="text-xs text-rose-700 mb-2">
+                Có <strong>{inventoryAlerts.expiredItems?.length || 0}</strong> lô phải hủy hoặc lập biên bản hao hụt:
+              </p>
+              <ul className="text-xs space-y-1 text-rose-800">
+                {inventoryAlerts.expiredItems?.slice(0, 3).map((it) => (
+                  <li key={it._id}>• {it.ingredientName} — HSD: {new Date(it.expiryDate).toLocaleDateString('vi-VN')}</li>
+                ))}
+                {!inventoryAlerts.expiredItems?.length && <li>• Không có lô hàng hết hạn cần xử lý.</li>}
+              </ul>
+            </div>
             <div className="p-4 rounded-xl bg-rose-50 border border-rose-200">
               <h4 className="font-bold text-rose-900 text-sm mb-1">Cảnh Báo Cận Hạn Sử Dụng (≤ 3 ngày)</h4>
               <p className="text-xs text-rose-700 mb-2">
@@ -1084,7 +1262,7 @@ export default function NutritionManagement() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {availableStockItems.map((item) => (
+                  {stockSummaryPagination.rows.map((item) => (
                     <tr key={item.key} className="hover:bg-gray-50/50">
                       <td className="p-3 font-semibold text-gray-800">{item.ingredientName}</td>
                       <td className="p-3 font-bold text-indigo-700">{item.quantity} {item.unit}</td>
@@ -1099,12 +1277,13 @@ export default function NutritionManagement() {
                 </tbody>
               </table>
             </div>
+            <PaginationControls pagination={stockSummaryPagination} total={availableStockItems.length} onPageChange={setStockSummaryPage} />
           </div>
 
           {/* Bảng chi tiết theo từng lô */}
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs">
             <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-              <h3 className="font-bold text-gray-800 text-sm">Chi Tiết Lô Hàng Trong Kho ({inventories.length})</h3>
+              <h3 className="font-bold text-gray-800 text-sm">Chi Tiết Lô Hàng Trong Kho ({visibleInventoryLots.length})</h3>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
@@ -1115,12 +1294,14 @@ export default function NutritionManagement() {
                     <th className="p-3">Số Lượng Tồn</th>
                     <th className="p-3">Đơn Giá Nhập</th>
                     <th className="p-3">Hạn Sử Dụng</th>
+                    <th className="p-3">Nhà Cung Cấp</th>
                     <th className="p-3">Vị Trí Bảo Quản</th>
                     <th className="p-3">Trạng Thái</th>
+                    <th className="p-3">Xử Lý</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {inventories.map((inv) => (
+                  {inventoryPagination.rows.map((inv) => (
                     <tr key={inv._id} className="hover:bg-gray-50/50">
                       <td className="p-3 font-semibold text-gray-800">{inv.ingredientName}</td>
                       <td className="p-3 font-mono text-xs">{inv.batchNumber}</td>
@@ -1129,32 +1310,134 @@ export default function NutritionManagement() {
                       <td className="p-3 text-xs font-medium">
                         {new Date(inv.expiryDate).toLocaleDateString('vi-VN')}
                       </td>
+                      <td className="p-3 text-xs text-gray-600">{inv.supplierName || 'Chưa ghi nhận'}</td>
                       <td className="p-3 text-xs text-gray-500">{inv.storageLocation}</td>
                       <td className="p-3">
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                            inv.status === 'available'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-rose-100 text-rose-800'
-                          }`}
-                        >
-                          {inv.status === 'available' ? 'Sẵn sàng' : 'Cận hạn / Hết'}
-                        </span>
+                        {inv.status === 'disposed' ? (
+                          <span className="nutrition-disposed-badge">✓ Đã hủy</span>
+                        ) : (
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                              inv.status === 'available'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-rose-100 text-rose-800'
+                            }`}
+                          >
+                            {inv.status === 'available' ? 'Sẵn sàng'
+                              : inv.status === 'near_expiry' ? 'Cận hạn'
+                              : inv.status === 'expired' ? 'Hết hạn'
+                              : 'Đã hết tồn'}
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-3">
+                        <div className="flex gap-2">
+                          {inv.status === 'expired' && inv.quantity > 0 && (
+                            <button type="button" className="text-xs font-semibold text-rose-600 hover:text-rose-800" onClick={() => { setSelectedInventoryLot(inv); setDisposeReason('Hàng hết hạn'); setShowDisposeLotModal(true); }}>Xử lý hủy</button>
+                          )}
+                          {canReconcileInventory && inv.status !== 'disposed' && (
+                            <button type="button" className="text-xs font-semibold text-indigo-600 hover:text-indigo-800" onClick={() => { setSelectedInventoryLot(inv); setReconcileForm({ actualQuantity: inv.quantity, notes: '' }); setShowReconcileLotModal(true); }}>Kiểm kê</button>
+                          )}
+                          {!canReconcileInventory && inv.status !== 'expired' && <span className="text-xs text-gray-400">—</span>}
+                        </div>
                       </td>
                     </tr>
                   ))}
-                  {!inventories.length && (
-                    <tr><td colSpan="7" className="p-4 text-center text-xs text-gray-500">Chưa có lô hàng nào được nhập kho.</td></tr>
+                  {!visibleInventoryLots.length && (
+                    <tr><td colSpan="9" className="p-4 text-center text-xs text-gray-500">Chưa có lô hàng nào được nhập kho.</td></tr>
                   )}
                 </tbody>
               </table>
             </div>
+            <PaginationControls pagination={inventoryPagination} total={visibleInventoryLots.length} onPageChange={setInventoryPage} />
           </div>
         </div>
       )}
 
       {/* ========================================== */}
-      {/* TAB 4: THIẾT BỊ BẾP & NHÀ CUNG CẤP */}
+      {/* TAB: KIỂM KÊ KHO (ADMIN / PRINCIPAL) */}
+      {/* ========================================== */}
+      {activeTab === 'inventoryAudit' && !loading && canReconcileInventory && (
+        <div className="space-y-6">
+          <div className="bg-indigo-50/70 border border-indigo-100 rounded-xl p-4">
+            <h3 className="font-bold text-indigo-900 text-sm">Kiểm Kê Kho Thực Phẩm</h3>
+            <p className="text-xs text-indigo-800 mt-1">Nhập số lượng thực tế theo từng lô. Mọi chênh lệch được lưu thành biên bản và giao dịch điều chỉnh; không sửa trực tiếp số tồn.</p>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs">
+            <div className="p-4 border-b border-gray-200">
+              <h3 className="font-bold text-gray-800 text-sm">Danh Sách Lô Cần Đối Chiếu</h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-gray-50 text-gray-600 text-xs uppercase"><tr><th className="p-3">Nguyên Liệu</th><th className="p-3">Lô</th><th className="p-3">Số Sổ Kho</th><th className="p-3">Hạn Dùng</th><th className="p-3">Thao Tác</th></tr></thead>
+                <tbody className="divide-y divide-gray-200">
+                  {auditLotPagination.rows.map((lot) => (
+                    <tr key={lot._id} className="hover:bg-gray-50/50">
+                      <td className="p-3 font-semibold text-gray-800">{lot.ingredientName}</td>
+                      <td className="p-3 text-xs font-mono">{lot.batchNumber}</td>
+                      <td className="p-3 font-bold text-indigo-700">{lot.quantity} {lot.unit}</td>
+                      <td className="p-3 text-xs">{new Date(lot.expiryDate).toLocaleDateString('vi-VN')}</td>
+                      <td className="p-3"><button type="button" className="text-xs font-semibold text-indigo-600 hover:text-indigo-800" onClick={() => { setSelectedInventoryLot(lot); setReconcileForm({ actualQuantity: lot.quantity, notes: '' }); setShowReconcileLotModal(true); }}>Ghi kiểm kê</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <PaginationControls pagination={auditLotPagination} total={auditLots.length} onPageChange={setAuditLotPage} />
+          </div>
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs">
+            <div className="p-4 border-b border-gray-200"><h3 className="font-bold text-gray-800 text-sm">Biên Bản Kiểm Kê Gần Đây</h3></div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-gray-50 text-gray-600 text-xs uppercase"><tr><th className="p-3">Thời Gian</th><th className="p-3">Nguyên Liệu / Lô</th><th className="p-3">Sổ Kho</th><th className="p-3">Thực Tế</th><th className="p-3">Chênh Lệch</th><th className="p-3">Người Kiểm</th></tr></thead>
+                <tbody className="divide-y divide-gray-200">
+                  {reconciliationPagination.rows.map((record) => (
+                    <tr key={record._id} className="hover:bg-gray-50/50">
+                      <td className="p-3 text-xs">{new Date(record.createdAt).toLocaleString('vi-VN')}</td>
+                      <td className="p-3 text-xs"><strong>{record.ingredientName}</strong><br />{record.batchNumber}</td>
+                      <td className="p-3 text-xs">{record.systemQuantity} {record.unit}</td>
+                      <td className="p-3 text-xs">{record.actualQuantity} {record.unit}</td>
+                      <td className={`p-3 text-xs font-bold ${record.difference === 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{record.difference > 0 ? '+' : ''}{record.difference} {record.unit}</td>
+                      <td className="p-3 text-xs">{record.countedByName}</td>
+                    </tr>
+                  ))}
+                  {!reconciliations.length && <tr><td colSpan="6" className="p-4 text-center text-xs text-gray-500">Chưa có biên bản kiểm kê.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+            <PaginationControls pagination={reconciliationPagination} total={reconciliations.length} onPageChange={setReconciliationPage} />
+          </div>
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs">
+            <div className="p-4 border-b border-gray-200">
+              <h3 className="font-bold text-gray-800 text-sm">Lịch Sử Hủy / Hao Hụt Kho</h3>
+              <p className="text-xs text-gray-500 mt-1">Mỗi lần xử lý lô hết hạn hoặc hư hỏng được lưu tại đây, kèm số lượng, lý do và người thực hiện.</p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-gray-50 text-gray-600 text-xs uppercase"><tr><th className="p-3">Thời Gian</th><th className="p-3">Nguyên Liệu / Lô</th><th className="p-3">Số Lượng Hủy</th><th className="p-3">Nhà Cung Cấp</th><th className="p-3">Vị Trí</th><th className="p-3">Lý Do</th><th className="p-3">Người Xử Lý</th></tr></thead>
+                <tbody className="divide-y divide-gray-200">
+                  {disposalPagination.rows.map((record) => (
+                    <tr key={record._id} className="hover:bg-gray-50/50">
+                      <td className="p-3 text-xs">{new Date(record.createdAt).toLocaleString('vi-VN')}</td>
+                      <td className="p-3 text-xs"><strong>{record.ingredientName}</strong><br />{record.batchNumber}</td>
+                      <td className="p-3 text-xs font-bold text-rose-700">{Math.abs(record.quantity)} {record.unit}</td>
+                      <td className="p-3 text-xs">{record.supplierName || 'Chưa ghi nhận'}</td>
+                      <td className="p-3 text-xs">{record.storageLocation || 'Chưa ghi nhận'}</td>
+                      <td className="p-3 text-xs text-gray-600">{record.reason}</td>
+                      <td className="p-3 text-xs">{record.performedByName}</td>
+                    </tr>
+                  ))}
+                  {!disposalTransactions.length && <tr><td colSpan="7" className="p-4 text-center text-xs text-gray-500">Chưa có lịch sử hủy hoặc hao hụt.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+            <PaginationControls pagination={disposalPagination} total={disposalTransactions.length} onPageChange={setDisposalPage} />
+          </div>
+        </div>
+      )}
+
+      {/* ========================================== */}
+      {/* TAB 4: THIẾT BỊ BẾP & ĐỀ XUẤT MUA SẮM */}
       {/* ========================================== */}
       {activeTab === 'equipment' && !loading && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -1164,7 +1447,7 @@ export default function NutritionManagement() {
               <h3 className="font-bold text-gray-800 text-sm">Thiết Bị Chung Nhà Bếp ({equipments.length})</h3>
             </div>
             <div className="divide-y divide-gray-200">
-              {equipments.map((eq) => (
+              {equipmentPagination.rows.map((eq) => (
                 <div key={eq._id} className="p-4 flex items-center justify-between">
                   <div>
                     <h5 className="font-bold text-gray-800 text-sm">{eq.name}</h5>
@@ -1184,236 +1467,216 @@ export default function NutritionManagement() {
                   </span>
                 </div>
               ))}
+              {!equipments.length && (
+                <div className="p-6 text-center">
+                  <p className="text-sm font-medium text-gray-600">Chưa có thiết bị được ghi nhận.</p>
+                  <p className="text-xs text-gray-500 mt-1">Khi cần mua mới hoặc sửa chữa, hãy lập đề xuất ở khối bên phải.</p>
+                </div>
+              )}
             </div>
+            <PaginationControls pagination={equipmentPagination} total={equipments.length} onPageChange={setEquipmentPage} />
           </div>
 
-          {/* Nhà cung cấp thực phẩm */}
+          {/* Đề xuất mua dụng cụ và thiết bị */}
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs">
             <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-              <h3 className="font-bold text-gray-800 text-sm">Nhà Cung Cấp Thực Phẩm & VSATTP ({suppliers.length})</h3>
+              <div>
+                <h3 className="font-bold text-gray-800 text-sm">Đề Xuất Mua Sắm Dụng Cụ & Thiết Bị</h3>
+                <p className="text-xs text-gray-500 mt-1">Theo dõi duyệt mua mới hoặc sửa chữa thiết bị bếp.</p>
+              </div>
+              <button className="btn-primary text-xs" onClick={() => openNewRequestModal('equipment_new')}>
+                <Icon name="plus" size={14} /> Tạo đề xuất
+              </button>
             </div>
             <div className="divide-y divide-gray-200">
-              {suppliers.map((sup) => (
-                <div key={sup._id} className="p-4">
-                  <div className="flex justify-between items-start">
+              {equipmentRequestPagination.rows.map((request) => (
+                <div key={request._id} className="p-4">
+                  <div className="flex flex-wrap justify-between items-start gap-3">
                     <div>
-                      <h5 className="font-bold text-gray-800 text-sm">{sup.name}</h5>
-                      <p className="text-xs text-gray-500">Mã: {sup.code} | SĐT: {sup.phone}</p>
-                      <p className="text-xs text-emerald-700 font-medium mt-1">
-                        Chứng nhận ATTP: {sup.foodSafetyCert?.certNumber || 'Đang cập nhật'}
+                      <h5 className="font-bold text-gray-800 text-sm">{request.title}</h5>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {request.requestType === 'equipment_new' ? 'Mua mới' : 'Sửa chữa'} · {request.requestCode} · {request.requestedByName}
                       </p>
+                      <p className="text-xs text-indigo-700 font-semibold mt-1">
+                        {request.items?.map((item) => `${item.name} (${item.quantity} ${item.unit})`).join(', ') || 'Chưa có hạng mục'} · Ước tính {request.totalEstimatedCost?.toLocaleString('vi-VN')} đ
+                      </p>
+                      {request.status !== 'pending' && (
+                        <p className="text-xs text-gray-600 mt-2">
+                          <strong>{request.status === 'approved' ? 'Lý do duyệt' : 'Lý do từ chối'}:</strong> {request.approvalNotes || 'Không ghi chú'}
+                        </p>
+                      )}
                     </div>
-                    <span className="text-xs px-2 py-0.5 bg-indigo-50 text-indigo-700 font-semibold rounded">
-                      ⭐ {sup.rating}/5
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs px-2 py-1 rounded font-semibold ${request.status === 'approved' ? 'bg-emerald-100 text-emerald-800' : request.status === 'rejected' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'}`}>
+                        {request.status === 'approved' ? 'Đã duyệt' : request.status === 'rejected' ? 'Từ chối' : request.status === 'completed' ? 'Đã hoàn tất' : 'Chờ duyệt'}
+                      </span>
+                      {canApproveKitchenRequest && request.status === 'pending' && (
+                        <div className="flex gap-1">
+                          <button onClick={() => openRequestApproval(request, 'approved')} className="px-2 py-1 bg-emerald-600 text-white rounded text-xs font-medium hover:bg-emerald-700">Duyệt</button>
+                          <button onClick={() => openRequestApproval(request, 'rejected')} className="px-2 py-1 bg-gray-200 text-gray-700 rounded text-xs font-medium hover:bg-gray-300">Từ chối</button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))}
+              {!equipmentRequests.length && (
+                <div className="p-6 text-center text-sm text-gray-500">Chưa có đề xuất mua dụng cụ hoặc thiết bị.</div>
+              )}
             </div>
+            <PaginationControls pagination={equipmentRequestPagination} total={equipmentRequests.length} onPageChange={setEquipmentRequestPage} />
           </div>
         </div>
       )}
 
       {/* ========================================== */}
-      {/* TAB 5: AN TOÀN THỰC PHẨM & KIỂM THỰC 3 BƯỚC */}
+      {/* TAB 5: BÁO CÁO KHO HẰNG NGÀY */}
       {/* ========================================== */}
-      {activeTab === 'safety' && !loading && (
+      {activeTab === 'dailyKitchenReport' && !loading && (
         <div className="space-y-6">
-          {/* Sổ lưu mẫu thức ăn 24h */}
+          <div className="nutrition-report-filter">
+            <div>
+              <strong>Tra cứu nhật ký kho</strong>
+              <span>Chọn ngày để xem chính xác đã nhập, xuất, hoàn trả, hủy hoặc điều chỉnh những gì.</span>
+            </div>
+            <label>Từ ngày<input type="date" value={dailyReportRange.startDate} onChange={(e) => changeDailyReportRange({ ...dailyReportRange, startDate: e.target.value })} /></label>
+            <label>Đến ngày<input type="date" value={dailyReportRange.endDate} min={dailyReportRange.startDate} onChange={(e) => changeDailyReportRange({ ...dailyReportRange, endDate: e.target.value })} /></label>
+            <button type="button" onClick={() => { const today = dateToInput(new Date()); changeDailyReportRange({ startDate: today, endDate: today }); }}>Hôm nay</button>
+            <button type="button" onClick={showLastThreeDays}>3 ngày gần nhất</button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-xs">
+              <span className="text-xs text-gray-500 font-semibold block mb-1">MẶT HÀNG CÒN KHẢ DỤNG</span>
+              <span className="text-2xl font-bold text-emerald-700">{summarizeAvailableInventory(inventories).length}</span>
+              <p className="text-xs text-gray-400 mt-1">Không tính lô hết hạn, đã hủy hoặc hết tồn</p>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-xs">
+              <span className="text-xs text-gray-500 font-semibold block mb-1">PHIẾU NHẬP TRONG KHOẢNG CHỌN</span>
+              <span className="text-2xl font-bold text-emerald-700">{reportTransactions.filter((item) => item.type === 'import').length}</span>
+              <p className="text-xs text-gray-400 mt-1">Bao gồm từng lần nhập theo lô</p>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-xs">
+              <span className="text-xs text-gray-500 font-semibold block mb-1">TỔNG GIAO DỊCH TRONG KHOẢNG CHỌN</span>
+              <span className="text-2xl font-bold text-amber-700">{reportTransactions.length}</span>
+              <p className="text-xs text-gray-400 mt-1">Bao gồm nhập, xuất, hoàn trả, hủy và điều chỉnh</p>
+            </div>
+          </div>
+
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center">
+            <div className="p-4 border-b border-gray-200">
               <div>
-                <h3 className="font-bold text-gray-800 text-sm">Sổ Lưu Mẫu Thức Ăn 24 Giờ (Quy chuẩn Bộ Y tế)</h3>
-                <p className="text-xs text-gray-500">Nhiệt độ lưu trữ: 2-8°C | Định lượng: ≥100g thức ăn đặc, ≥150ml chất lỏng</p>
+                <h3 className="font-bold text-gray-800 text-sm">Nhật Ký Nhập Xuất Kho</h3>
+                <p className="text-xs text-gray-500">Từ {new Date(`${dailyReportRange.startDate}T00:00:00`).toLocaleDateString('vi-VN')} đến {new Date(`${dailyReportRange.endDate}T00:00:00`).toLocaleDateString('vi-VN')}.</p>
               </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead className="bg-gray-50 text-gray-600 text-xs uppercase">
                   <tr>
-                    <th className="p-3">Mã Mẫu</th>
-                    <th className="p-3">Món Ăn</th>
-                    <th className="p-3">Bữa Ăn</th>
-                    <th className="p-3">Khối Lượng</th>
-                    <th className="p-3">Nhiệt Độ Lưu</th>
-                    <th className="p-3">Người Lưu</th>
-                    <th className="p-3">Trạng Thái</th>
-                    <th className="p-3">Hành Động</th>
+                    <th className="p-3">Thời Gian</th><th className="p-3">Nghiệp Vụ</th><th className="p-3">Nguyên Liệu / Lô</th><th className="p-3">Số Lượng</th><th className="p-3">Người Ghi Nhận</th><th className="p-3">Ghi Chú</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {foodSamples.map((s) => (
-                    <tr key={s._id} className="hover:bg-gray-50/50">
-                      <td className="p-3 font-mono text-xs">{s.sampleCode}</td>
-                      <td className="p-3 font-semibold text-gray-800">{s.dishName}</td>
-                      <td className="p-3 text-xs">{s.mealType}</td>
-                      <td className="p-3 text-xs">{s.sampleWeightGram}g</td>
-                      <td className="p-3 text-xs font-semibold text-indigo-600">{s.storageTemperature}°C</td>
-                      <td className="p-3 text-xs text-gray-500">{s.storedByName}</td>
-                      <td className="p-3">
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                            s.status === 'stored'
-                              ? 'bg-amber-100 text-amber-800'
-                              : 'bg-gray-100 text-gray-700'
-                          }`}
-                        >
-                          {s.status === 'stored' ? 'Đang lưu 24h' : 'Đã hủy an toàn'}
-                        </span>
-                      </td>
-                      <td className="p-3">
-                        {s.status === 'stored' && (
-                          <button
-                            onClick={() => handleDisposeSample(s._id)}
-                            className="text-xs text-rose-600 hover:text-rose-800 font-semibold"
-                          >
-                            Hủy mẫu (Hết 24h)
-                          </button>
-                        )}
-                      </td>
+                  {dailyTransactionPagination.rows.map((item) => (
+                    <tr key={item._id} className="hover:bg-gray-50/50">
+                      <td className="p-3 text-xs">{new Date(item.createdAt).toLocaleString('vi-VN')}</td>
+                      <td className="p-3 text-xs font-semibold">{{ import: 'Nhập kho', export: 'Xuất cho bếp', return: 'Hoàn trả chưa dùng', spoilage: 'Hủy / hao hụt', adjustment: 'Điều chỉnh kiểm kê' }[item.type] || item.type}</td>
+                      <td className="p-3 text-xs"><strong>{item.ingredientName}</strong><br />{item.batchNumber || '—'}</td>
+                      <td className={`p-3 text-xs font-bold ${item.quantity > 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{item.quantity > 0 ? '+' : ''}{item.quantity} {item.unit}</td>
+                      <td className="p-3 text-xs">{item.performedByName}</td>
+                      <td className="p-3 text-xs text-gray-500">{item.reason || '—'}</td>
                     </tr>
                   ))}
+                  {!reportTransactions.length && <tr><td colSpan="6" className="p-4 text-center text-xs text-gray-500">Không có giao dịch kho trong khoảng ngày đã chọn.</td></tr>}
                 </tbody>
               </table>
             </div>
+            <PaginationControls pagination={dailyTransactionPagination} total={reportTransactions.length} onPageChange={setDailyTransactionPage} />
           </div>
 
-          {/* Sổ kiểm thực 3 bước */}
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs">
             <div className="p-4 border-b border-gray-200">
-              <h3 className="font-bold text-gray-800 text-sm">Sổ Kiểm Thực 3 Bước (QĐ 1246/QĐ-BYT)</h3>
-              <p className="text-xs text-gray-500">Bước 1: Nhập nguyên liệu | Bước 2: Chế biến | Bước 3: Trước khi ăn</p>
+              <h3 className="font-bold text-gray-800 text-sm">Tổng Số Lượng Mặt Hàng Hiện Có Trong Kho</h3>
+              <p className="text-xs text-gray-500">Tổng hợp theo nguyên liệu, chỉ tính lô còn hạn và khả dụng.</p>
             </div>
-            <div className="divide-y divide-gray-200">
-              {foodInspections.map((insp) => (
-                <div key={insp._id} className="p-4 text-xs space-y-2">
-                  <div className="flex justify-between font-bold text-sm text-gray-800">
-                    <span>Ngày kiểm tra: {new Date(insp.mealDate).toLocaleDateString('vi-VN')} ({insp.mealType})</span>
-                    <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                      Người kiểm tra: {insp.inspectorName}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mt-2">
-                    <div className="bg-gray-50 p-2 rounded">
-                      <strong className="block text-gray-700 mb-1">Bước 1: Nguyên Liệu Đầu Vào</strong>
-                      <p>Số mặt hàng: {insp.step1_rawIngredients?.length || 0}</p>
-                      <p className="text-emerald-600 font-medium">Đạt cảm quan & nguồn gốc</p>
-                    </div>
-                    <div className="bg-gray-50 p-2 rounded">
-                      <strong className="block text-gray-700 mb-1">Bước 2: Trong Chế Biến</strong>
-                      <p>Vệ sinh bếp: {insp.step2_processing?.kitchenHygiene}</p>
-                      <p>Bảo hộ nhân viên: {insp.step2_processing?.staffHygiene}</p>
-                    </div>
-                    <div className="bg-gray-50 p-2 rounded">
-                      <strong className="block text-gray-700 mb-1">Bước 3: Trước Khi Ăn</strong>
-                      <p>Lưu mẫu: {insp.step3_serving?.foodSampleStored ? 'Đã lưu mẫu' : 'Chưa lưu'}</p>
-                      <p className="font-bold text-indigo-700">Quyết định: Cho phép ăn</p>
-                    </div>
-                  </div>
-                </div>
-              ))}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm"><thead className="bg-gray-50 text-gray-600 text-xs uppercase"><tr><th className="p-3">Nguyên Liệu</th><th className="p-3">Tổng Tồn</th><th className="p-3">Số Lô</th><th className="p-3">Hạn Gần Nhất</th><th className="p-3">Vị Trí</th></tr></thead><tbody className="divide-y divide-gray-200">
+                {dailyStockPagination.rows.map((item) => <tr key={item.key}><td className="p-3 font-semibold text-gray-800">{item.ingredientName}</td><td className="p-3 font-bold text-emerald-700">{item.quantity} {item.unit}</td><td className="p-3 text-xs">{item.lots}</td><td className="p-3 text-xs">{new Date(item.nearestExpiryDate).toLocaleDateString('vi-VN')}</td><td className="p-3 text-xs text-gray-500">{item.locations}</td></tr>)}
+                {!summarizeAvailableInventory(inventories).length && <tr><td colSpan="5" className="p-4 text-center text-xs text-gray-500">Chưa có hàng tồn khả dụng.</td></tr>}
+              </tbody></table>
             </div>
+            <PaginationControls pagination={dailyStockPagination} total={availableStockItems.length} onPageChange={setDailyStockPage} />
           </div>
         </div>
       )}
 
       {/* ========================================== */}
-      {/* TAB 6: TÀI CHÍNH NHÀ ĂN & ĐỀ XUẤT MUA SẮM */}
+      {/* TAB 6: TÀI CHÍNH & SUẤT ĂN — CHỈ ADMIN/HIỆU TRƯỞNG */}
       {/* ========================================== */}
-      {activeTab === 'finance' && !loading && (
-        <div className="space-y-6">
-          {/* Báo cáo tài chính hôm nay */}
-          {financialReport && (
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-xs">
-                <span className="text-xs text-gray-500 font-semibold block mb-1">HỌC SINH CÓ MẶT THỰC TẾ</span>
-                <span className="text-2xl font-bold text-indigo-700">{financialReport.totalStudentsPresent}</span>
-                <p className="text-xs text-gray-400 mt-1">Từ dữ liệu điểm danh hôm nay</p>
-              </div>
-
-              <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-xs">
-                <span className="text-xs text-gray-500 font-semibold block mb-1">ĐỊNH MỨC THU TIỀN ĂN</span>
-                <span className="text-2xl font-bold text-gray-800">
-                  {financialReport.standardMealRatePerStudent?.toLocaleString('vi-VN')} đ
-                </span>
-                <p className="text-xs text-gray-400 mt-1">35.000 đ / học sinh / ngày</p>
-              </div>
-
-              <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-xs">
-                <span className="text-xs text-gray-500 font-semibold block mb-1">CHI PHÍ NGUYÊN LIỆU THỰC TẾ</span>
-                <span className="text-2xl font-bold text-rose-600">
-                  {financialReport.totalIngredientCost?.toLocaleString('vi-VN')} đ
-                </span>
-                <p className="text-xs text-gray-400 mt-1">{financialReport.exportTransactionsCount} lần xuất kho</p>
-              </div>
-
-              <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-xs">
-                <span className="text-xs text-gray-500 font-semibold block mb-1">CHÊNH LỆCH NGÂN SÁCH</span>
-                <span
-                  className={`text-2xl font-bold ${
-                    financialReport.balance >= 0 ? 'text-emerald-600' : 'text-rose-600'
-                  }`}
-                >
-                  {financialReport.balance?.toLocaleString('vi-VN')} đ
-                </span>
-                <p className="text-xs text-gray-400 mt-1">Doanh thu suất ăn - Chi phí mua</p>
-              </div>
+      {activeTab === 'finance' && !loading && canViewFinance && financialReport && (
+        <div className="nutrition-finance-dashboard">
+          <section className="nutrition-finance-hero">
+            <div>
+              <p>TRUNG TÂM ĐIỀU HÀNH SUẤT ĂN</p>
+              <h3>Tổng quan tài chính ngày {new Date(financialReport.date).toLocaleDateString('vi-VN')}</h3>
+              <span>Chỉ dành cho Admin và Hiệu trưởng · Số liệu chi phí lấy từ phiếu xuất kho đã ghi nhận.</span>
             </div>
-          )}
+            <div className={financialReport.balance >= 0 ? 'nutrition-finance-health is-positive' : 'nutrition-finance-health is-negative'}>
+              <small>TRẠNG THÁI NGÂN SÁCH</small>
+              <strong>{financialReport.balance >= 0 ? 'Đang trong định mức' : 'Vượt định mức'}</strong>
+            </div>
+          </section>
 
-          {/* Đề xuất mua sắm & Duyệt kinh phí */}
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-              <h3 className="font-bold text-gray-800 text-sm">Đề Xuất Mua Sắm & Dự Trù Chi Phí Bếp</h3>
-              <button className="btn-primary text-xs" onClick={() => setShowNewRequestModal(true)}>
-                <Icon name="plus" size={14} /> Tạo Đề Xuất Mới
-              </button>
-            </div>
-            <div className="divide-y divide-gray-200">
-              {kitchenRequests.map((req) => (
-                <div key={req._id} className="p-4 flex flex-wrap justify-between items-center gap-2 text-sm">
-                  <div>
-                    <h5 className="font-bold text-gray-800">{req.title}</h5>
-                    <p className="text-xs text-gray-500">
-                      Mã: {req.requestCode} | Người đề xuất: {req.requestedByName} | Ước tính:{' '}
-                      <span className="font-bold text-indigo-600">
-                        {req.totalEstimatedCost?.toLocaleString('vi-VN')} đ
-                      </span>
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                        req.status === 'approved'
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : req.status === 'rejected'
-                          ? 'bg-rose-100 text-rose-800'
-                          : 'bg-amber-100 text-amber-800'
-                      }`}
-                    >
-                      {req.status === 'approved' ? 'Đã duyệt' : req.status === 'rejected' ? 'Từ chối' : 'Chờ duyệt'}
-                    </span>
-                    {req.status === 'pending' && (
-                      <div className="flex gap-1">
-                        <button
-                          onClick={() => handleApproveRequest(req._id, 'approved')}
-                          className="px-2 py-1 bg-emerald-600 text-white rounded text-xs font-medium hover:bg-emerald-700"
-                        >
-                          Duyệt
-                        </button>
-                        <button
-                          onClick={() => handleApproveRequest(req._id, 'rejected')}
-                          className="px-2 py-1 bg-gray-200 text-gray-700 rounded text-xs font-medium hover:bg-gray-300"
-                        >
-                          Từ chối
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+          <section className="nutrition-finance-kpis">
+            <article><span>HỌC SINH CÓ MẶT</span><strong>{financialReport.totalStudentsPresent}</strong><small>Từ điểm danh thực tế</small></article>
+            <article><span>NGÂN SÁCH SUẤT ĂN</span><strong>{financialReport.totalMealRevenueBudget?.toLocaleString('vi-VN')} đ</strong><small>{financialReport.standardMealRatePerStudent?.toLocaleString('vi-VN')} đ / trẻ / ngày</small></article>
+            <article className="is-expense"><span>CHI PHÍ ĐÃ XUẤT KHO</span><strong>{financialReport.totalIngredientCost?.toLocaleString('vi-VN')} đ</strong><small>{financialReport.exportTransactionsCount} phiếu xuất nguyên liệu</small></article>
+            <article className={financialReport.balance >= 0 ? 'is-positive' : 'is-negative'}><span>CÒN LẠI / CHÊNH LỆCH</span><strong>{financialReport.balance?.toLocaleString('vi-VN')} đ</strong><small>{financialReport.balance >= 0 ? 'Còn trong ngân sách' : 'Cần rà soát ngay'}</small></article>
+          </section>
+
+          <section className="nutrition-finance-grid">
+            <article className="nutrition-finance-panel">
+              <h4>Hiệu quả sử dụng ngân sách</h4>
+              <p className="nutrition-finance-muted">Chi phí nguyên liệu thực tế trên mỗi học sinh có mặt.</p>
+              <div className="nutrition-finance-cost-row"><span>Chi phí / học sinh</span><strong>{financialReport.actualCostPerStudent?.toLocaleString('vi-VN')} đ</strong></div>
+              <div className="nutrition-finance-cost-row"><span>Tỷ lệ đã sử dụng</span><strong>{financialReport.budgetUtilizationPercent || 0}%</strong></div>
+              <div className="nutrition-finance-progress"><span style={{ width: `${Math.min(financialReport.budgetUtilizationPercent || 0, 100)}%` }} /></div>
+              <p className={financialReport.budgetUtilizationPercent > 100 ? 'nutrition-finance-warning' : 'nutrition-finance-ok'}>
+                {financialReport.budgetUtilizationPercent > 100 ? 'Chi phí xuất kho đã vượt ngân sách suất ăn.' : 'Chi phí đang nằm trong hạn mức thu suất ăn.'}
+              </p>
+            </article>
+
+            <article className="nutrition-finance-panel">
+              <h4>Chi phí theo bữa ăn</h4>
+              <p className="nutrition-finance-muted">Tổng hợp từ các phiếu xuất kho trong ngày.</p>
+              <div className="nutrition-finance-breakdown">
+                {(financialReport.mealCostBreakdown || []).map((item) => (
+                  <div key={item.mealType}><span>{MEAL_TYPE_LABELS[item.mealType] || item.mealType} <small>{item.transactions} phiếu</small></span><strong>{item.cost.toLocaleString('vi-VN')} đ</strong></div>
+                ))}
+                {!financialReport.mealCostBreakdown?.length && <p className="nutrition-finance-empty">Chưa có phiếu xuất kho trong ngày.</p>}
+              </div>
+            </article>
+          </section>
+
+          <section className="nutrition-finance-grid">
+            <article className="nutrition-finance-panel nutrition-finance-table-panel">
+              <h4>Dự toán suất ăn theo lớp</h4>
+              <p className="nutrition-finance-muted">Phân bổ ngân sách dựa trên số học sinh có mặt thực tế.</p>
+              <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr><th>Lớp</th><th>Có mặt</th><th>Ngân sách dự kiến</th></tr></thead><tbody>
+                {(financialReport.classBreakdown || []).map((item) => <tr key={item.classroomId}><td>{item.className}</td><td className="nutrition-finance-number">{item.actualPresentStudents}</td><td className="nutrition-finance-number">{(item.actualPresentStudents * financialReport.standardMealRatePerStudent).toLocaleString('vi-VN')} đ</td></tr>)}
+                {!financialReport.classBreakdown?.length && <tr><td colSpan="3" className="nutrition-finance-empty">Chưa có học sinh được điểm danh có mặt hôm nay.</td></tr>}
+              </tbody></table></div>
+            </article>
+
+            <article className="nutrition-finance-panel nutrition-finance-table-panel">
+              <h4>Phiếu xuất kho gần đây</h4>
+              <p className="nutrition-finance-muted">10 giao dịch mới nhất ảnh hưởng đến chi phí suất ăn.</p>
+              <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr><th>Nguyên liệu</th><th>Bữa</th><th>Chi phí</th></tr></thead><tbody>
+                {(financialReport.recentExpenseTransactions || []).map((item) => <tr key={item._id}><td><strong>{item.ingredientName}</strong><small>{item.quantity} {item.unit} · {item.performedByName || '—'}</small></td><td>{MEAL_TYPE_LABELS[item.mealType] || item.mealType}</td><td className="nutrition-finance-number is-expense">{item.totalAmount?.toLocaleString('vi-VN')} đ</td></tr>)}
+                {!financialReport.recentExpenseTransactions?.length && <tr><td colSpan="3" className="nutrition-finance-empty">Chưa phát sinh chi phí xuất kho trong ngày.</td></tr>}
+              </tbody></table></div>
+            </article>
+          </section>
         </div>
       )}
 
@@ -1838,10 +2101,108 @@ export default function NutritionManagement() {
                 </div>
               </div>
 
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">VỊ TRÍ BẢO QUẢN</label>
+                <select
+                  value={importStockForm.storageLocation}
+                  onChange={(e) => setImportStockForm({ ...importStockForm, storageLocation: e.target.value, customStorageLocation: e.target.value === 'other' ? importStockForm.customStorageLocation : '' })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  required
+                >
+                  <option value="">-- Chọn vị trí đặt lô hàng --</option>
+                  <option value="Kho lạnh 01">Kho lạnh 01</option>
+                  <option value="Kho lạnh 02">Kho lạnh 02</option>
+                  <option value="Kho mát">Kho mát</option>
+                  <option value="Kho khô">Kho khô</option>
+                  <option value="Khu sơ chế">Khu sơ chế</option>
+                  <option value="other">Vị trí khác…</option>
+                </select>
+                {importStockForm.storageLocation === 'other' && (
+                  <input
+                    type="text"
+                    value={importStockForm.customStorageLocation}
+                    onChange={(e) => setImportStockForm({ ...importStockForm, customStorageLocation: e.target.value })}
+                    placeholder="Ví dụ: Giá kệ B2, tầng 3"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg mt-2"
+                    required
+                  />
+                )}
+                <p className="text-[11px] text-gray-400 mt-1">Mỗi lô bắt buộc có vị trí riêng để tìm, kiểm kê và truy xuất chính xác.</p>
+              </div>
+
               <div className="flex justify-end gap-2 pt-4 border-t">
                 <button type="button" onClick={() => setShowImportStockModal(false)} className="btn-secondary">Hủy</button>
                 <button type="submit" className="btn-primary">Nhập Kho</button>
               </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================== */}
+      {/* MODAL: BÁO CÁO NGUYÊN LIỆU CHƯA DÙNG */}
+      {/* ========================================== */}
+      {showReturnLotModal && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
+            <h3 className="font-bold text-gray-900 text-lg mb-2">Báo Cáo Nguyên Liệu Chưa Dùng</h3>
+            <p className="nutrition-modal-note">Chỉ hoàn trả nguyên liệu còn nguyên trạng, chưa chế biến và còn hạn sử dụng. Thức ăn đã nấu không được cộng lại kho.</p>
+            <form onSubmit={handleReturnUnusedFood} className="space-y-4 text-sm">
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">LÔ NGUYÊN LIỆU HOÀN TRẢ</label>
+                <select value={returnFoodForm.inventoryId} onChange={(e) => setReturnFoodForm({ ...returnFoodForm, inventoryId: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" required>
+                  <option value="">-- Chọn lô còn hạn --</option>
+                  {inventories.filter((lot) => ['available', 'near_expiry', 'depleted'].includes(lot.status)).map((lot) => (
+                    <option key={lot._id} value={lot._id}>{lot.ingredientName} — {lot.batchNumber} (đang có {lot.quantity} {lot.unit})</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">SỐ LƯỢNG CÒN LẠI</label>
+                <input type="number" min="0.001" step="0.001" value={returnFoodForm.quantity} onChange={(e) => setReturnFoodForm({ ...returnFoodForm, quantity: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" required />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">GHI CHÚ</label>
+                <textarea rows="2" value={returnFoodForm.reason} onChange={(e) => setReturnFoodForm({ ...returnFoodForm, reason: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
+              </div>
+              <label className="flex items-start gap-2 text-xs text-gray-700">
+                <input type="checkbox" checked={returnFoodForm.rawAndSafe} onChange={(e) => setReturnFoodForm({ ...returnFoodForm, rawAndSafe: e.target.checked })} />
+                Tôi xác nhận nguyên liệu chưa chế biến, còn nguyên trạng, bảo quản đúng quy định và còn hạn sử dụng.
+              </label>
+              <div className="flex justify-end gap-2 pt-4 border-t"><button type="button" onClick={() => setShowReturnLotModal(false)} className="btn-secondary">Hủy</button><button type="submit" className="btn-primary">Cộng Lại Kho</button></div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================== */}
+      {/* MODAL: XỬ LÝ HÀNG HẾT HẠN */}
+      {/* ========================================== */}
+      {showDisposeLotModal && selectedInventoryLot && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
+            <h3 className="font-bold text-gray-900 text-lg mb-2">Xử Lý Lô Hàng</h3>
+            <p className="nutrition-modal-note"><strong>{selectedInventoryLot.ingredientName}</strong> — {selectedInventoryLot.quantity} {selectedInventoryLot.unit}. Thao tác này lập biên bản hao hụt/hủy và đưa số lượng lô về 0.</p>
+            <form onSubmit={handleDisposeLot} className="space-y-4 text-sm">
+              <div><label className="block text-xs font-semibold text-gray-600 mb-1">LÝ DO XỬ LÝ</label><textarea rows="3" value={disposeReason} onChange={(e) => setDisposeReason(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg" required /></div>
+              <div className="flex justify-end gap-2 pt-4 border-t"><button type="button" onClick={() => { setShowDisposeLotModal(false); setSelectedInventoryLot(null); }} className="btn-secondary">Hủy</button><button type="submit" className="btn-primary">Xác Nhận Xử Lý</button></div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================== */}
+      {/* MODAL: KIỂM KÊ LÔ HÀNG */}
+      {/* ========================================== */}
+      {showReconcileLotModal && selectedInventoryLot && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
+            <h3 className="font-bold text-gray-900 text-lg mb-2">Kiểm Kê Lô Hàng</h3>
+            <p className="nutrition-modal-note"><strong>{selectedInventoryLot.ingredientName}</strong> — lô {selectedInventoryLot.batchNumber}. Sổ kho hiện có: <strong>{selectedInventoryLot.quantity} {selectedInventoryLot.unit}</strong>.</p>
+            <form onSubmit={handleReconcileLot} className="space-y-4 text-sm">
+              <div><label className="block text-xs font-semibold text-gray-600 mb-1">SỐ LƯỢNG THỰC TẾ</label><input type="number" min="0" step="0.001" value={reconcileForm.actualQuantity} onChange={(e) => setReconcileForm({ ...reconcileForm, actualQuantity: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" required /></div>
+              <div><label className="block text-xs font-semibold text-gray-600 mb-1">GHI CHÚ KIỂM KÊ</label><textarea rows="3" value={reconcileForm.notes} onChange={(e) => setReconcileForm({ ...reconcileForm, notes: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" placeholder="Ví dụ: chênh lệch do hao hụt sơ chế" /></div>
+              <div className="flex justify-end gap-2 pt-4 border-t"><button type="button" onClick={() => { setShowReconcileLotModal(false); setSelectedInventoryLot(null); }} className="btn-secondary">Hủy</button><button type="submit" className="btn-primary">Lưu Biên Bản</button></div>
             </form>
           </div>
         </div>
@@ -1970,34 +2331,19 @@ export default function NutritionManagement() {
             </div>
 
             <form onSubmit={handleCreateRequest} className="space-y-4 text-sm">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1">LOẠI ĐỀ XUẤT</label>
-                  <select
-                    value={newRequestForm.requestType}
-                    onChange={(e) => setNewRequestForm({ ...newRequestForm, requestType: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  >
-                    <option value="ingredient_purchase">Mua nguyên liệu</option>
-                    <option value="equipment_repair">Sửa thiết bị</option>
-                    <option value="equipment_new">Mua thiết bị mới</option>
-                    <option value="special_diet">Suất ăn đặc biệt</option>
-                    <option value="cleaning_supplies">Vật tư vệ sinh</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1">MỨC ĐỘ ƯU TIÊN</label>
-                  <select
-                    value={newRequestForm.priority}
-                    onChange={(e) => setNewRequestForm({ ...newRequestForm, priority: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  >
-                    <option value="low">Thấp</option>
-                    <option value="medium">Trung bình</option>
-                    <option value="high">Cao</option>
-                    <option value="urgent">Khẩn cấp</option>
-                  </select>
-                </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">LOẠI ĐỀ XUẤT</label>
+                <select
+                  value={newRequestForm.requestType}
+                  onChange={(e) => setNewRequestForm({ ...newRequestForm, requestType: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                >
+                  <option value="ingredient_purchase">Mua nguyên liệu</option>
+                  <option value="equipment_repair">Sửa thiết bị</option>
+                  <option value="equipment_new">Mua thiết bị mới</option>
+                  <option value="special_diet">Suất ăn đặc biệt</option>
+                  <option value="cleaning_supplies">Vật tư vệ sinh</option>
+                </select>
               </div>
 
               <div>
@@ -2020,7 +2366,12 @@ export default function NutritionManagement() {
                     className="text-xs font-semibold text-indigo-600 hover:text-indigo-800"
                     onClick={() => setNewRequestForm({
                       ...newRequestForm,
-                      items: [...newRequestForm.items, { name: '', quantity: 1, unit: 'kg', estimatedCost: 0 }]
+                      items: [...newRequestForm.items, {
+                        name: '',
+                        quantity: 1,
+                        unit: ['equipment_new', 'equipment_repair'].includes(newRequestForm.requestType) ? 'cái' : 'kg',
+                        estimatedCost: 0
+                      }]
                     })}
                   >
                     + Thêm dòng
@@ -2028,8 +2379,11 @@ export default function NutritionManagement() {
                 </div>
                 <div className="space-y-2">
                   {newRequestForm.items.map((item, index) => (
-                    <div key={`request-item-${index}`} className="grid grid-cols-[1fr_72px_72px_32px] gap-2">
-                      <input
+                    <div key={`request-item-${index}`} className="nutrition-request-item">
+                      <div className="nutrition-request-field nutrition-request-name">
+                        <label htmlFor={`request-name-${index}`}>Tên dụng cụ / mặt hàng</label>
+                        <input
+                          id={`request-name-${index}`}
                         type="text"
                         value={item.name}
                         onChange={(e) => setNewRequestForm({
@@ -2039,10 +2393,14 @@ export default function NutritionManagement() {
                         placeholder="Tên mặt hàng"
                         className="px-3 py-2 border border-gray-300 rounded-lg"
                         required={index === 0}
-                      />
-                      <input
+                        />
+                      </div>
+                      <div className="nutrition-request-field">
+                        <label htmlFor={`request-quantity-${index}`}>Số lượng</label>
+                        <input
+                          id={`request-quantity-${index}`}
                         type="number"
-                        min="0"
+                        min="1"
                         value={item.quantity}
                         onChange={(e) => setNewRequestForm({
                           ...newRequestForm,
@@ -2050,8 +2408,13 @@ export default function NutritionManagement() {
                         })}
                         placeholder="SL"
                         className="px-2 py-2 border border-gray-300 rounded-lg"
-                      />
-                      <input
+                        required={index === 0}
+                        />
+                      </div>
+                      <div className="nutrition-request-field">
+                        <label htmlFor={`request-unit-${index}`}>Đơn vị tính</label>
+                        <input
+                          id={`request-unit-${index}`}
                         type="text"
                         value={item.unit}
                         onChange={(e) => setNewRequestForm({
@@ -2060,14 +2423,32 @@ export default function NutritionManagement() {
                         })}
                         placeholder="ĐVT"
                         className="px-2 py-2 border border-gray-300 rounded-lg"
-                      />
+                        required={index === 0}
+                        />
+                      </div>
+                      <div className="nutrition-request-field">
+                        <label htmlFor={`request-cost-${index}`}>Giá dự kiến (VNĐ)</label>
+                        <input
+                          id={`request-cost-${index}`}
+                        type="number"
+                        min="0"
+                        value={item.estimatedCost}
+                        onChange={(e) => setNewRequestForm({
+                          ...newRequestForm,
+                          items: newRequestForm.items.map((current, itemIndex) => itemIndex === index ? { ...current, estimatedCost: e.target.value } : current)
+                        })}
+                        placeholder="Giá dự kiến"
+                        className="px-2 py-2 border border-gray-300 rounded-lg"
+                        aria-label="Chi phí dự kiến"
+                        />
+                      </div>
                       <button
                         type="button"
                         onClick={() => setNewRequestForm({
                           ...newRequestForm,
                           items: newRequestForm.items.length > 1 ? newRequestForm.items.filter((_, itemIndex) => itemIndex !== index) : newRequestForm.items
                         })}
-                        className="text-gray-400 hover:text-rose-600 text-lg"
+                        className="nutrition-request-remove text-gray-400 hover:text-rose-600 text-lg"
                         aria-label="Xóa dòng"
                       >
                         ×
@@ -2075,12 +2456,45 @@ export default function NutritionManagement() {
                     </div>
                   ))}
                 </div>
-                <p className="text-[11px] text-gray-400 mt-2">Nhập số lượng và đơn vị; chi phí có thể bổ sung khi duyệt.</p>
+                <p className="text-[11px] text-gray-400 mt-2">Nhập số lượng, đơn vị và giá dự kiến cho từng hạng mục để người duyệt có cơ sở xem xét.</p>
               </div>
 
               <div className="flex justify-end gap-2 pt-4 border-t">
                 <button type="button" onClick={() => setShowNewRequestModal(false)} className="btn-secondary">Hủy</button>
                 <button type="submit" className="btn-primary">Gửi đề xuất</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: DUYỆT / TỪ CHỐI ĐỀ XUẤT */}
+      {requestApproval && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
+            <p className="text-xs font-semibold tracking-wide text-indigo-600 uppercase">Phê duyệt nội bộ</p>
+            <h3 className="font-bold text-gray-900 text-lg mt-1">
+              {requestApproval.status === 'approved' ? 'Duyệt đề xuất mua sắm' : 'Từ chối đề xuất mua sắm'}
+            </h3>
+            <p className="text-sm text-gray-600 mt-2">{requestApproval.request.title} · {requestApproval.request.requestCode}</p>
+            <form onSubmit={handleApproveRequest} className="space-y-4 mt-5">
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">
+                  {requestApproval.status === 'approved' ? 'GHI CHÚ DUYỆT (NẾU CÓ)' : 'LÝ DO TỪ CHỐI'}
+                </label>
+                <textarea
+                  value={requestApproval.approvalNotes}
+                  onChange={(e) => setRequestApproval({ ...requestApproval, approvalNotes: e.target.value })}
+                  placeholder={requestApproval.status === 'approved' ? 'Ví dụ: Duyệt theo ngân sách tháng này.' : 'Nêu rõ lý do để bộ phận bếp có thể xử lý tiếp.'}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg min-h-24"
+                  required={requestApproval.status === 'rejected'}
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-4 border-t">
+                <button type="button" onClick={() => setRequestApproval(null)} className="btn-secondary">Hủy</button>
+                <button type="submit" className={requestApproval.status === 'approved' ? 'btn-primary' : 'px-4 py-2 rounded-lg bg-rose-600 text-white text-sm font-semibold hover:bg-rose-700'}>
+                  {requestApproval.status === 'approved' ? 'Xác nhận duyệt' : 'Xác nhận từ chối'}
+                </button>
               </div>
             </form>
           </div>

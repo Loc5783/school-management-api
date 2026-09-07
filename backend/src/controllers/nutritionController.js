@@ -3,6 +3,7 @@ const Dish = require('../models/zone5_nutrition/Dish');
 const IngredientMaster = require('../models/zone5_nutrition/IngredientMaster');
 const Inventory = require('../models/zone5_nutrition/Inventory');
 const InventoryTransaction = require('../models/zone5_nutrition/InventoryTransaction');
+const InventoryReconciliation = require('../models/zone5_nutrition/InventoryReconciliation');
 const Supplier = require('../models/zone5_nutrition/Supplier');
 const KitchenStaff = require('../models/zone5_nutrition/KitchenStaff');
 const KitchenEquipment = require('../models/zone5_nutrition/KitchenEquipment');
@@ -72,11 +73,10 @@ const prepareMenuDays = async (days, startDate) => {
 
     const seenDays = new Set();
     const dishIds = new Set();
+    const dishNames = new Set();
     const collectDishId = (item) => {
         if (item?.dishId) dishIds.add(String(item.dishId));
-        if (item?.dishName && !item?.dishId) {
-            throw new Error('Thực đơn phải chọn món từ danh mục món ăn đã được phê duyệt');
-        }
+        if (item?.dishName) dishNames.add(String(item.dishName).trim());
     };
 
     days.forEach((day) => {
@@ -95,15 +95,22 @@ const prepareMenuDays = async (days, startDate) => {
         ].forEach(([collectionKey, legacyKey]) => getLunchItems(day.lunch, collectionKey, legacyKey).forEach(collectDishId));
     });
 
-    const dishes = dishIds.size
-        ? await Dish.find({ _id: { $in: [...dishIds] }, status: 'active' }).select('name calories')
+    const dishConditions = [];
+    if (dishIds.size) dishConditions.push({ _id: { $in: [...dishIds] } });
+    if (dishNames.size) dishConditions.push({ name: { $in: [...dishNames] } });
+    const dishes = dishConditions.length
+        ? await Dish.find({ status: 'active', $or: dishConditions }).select('name calories')
         : [];
     const dishesById = new Map(dishes.map((dish) => [String(dish._id), dish]));
-    if (dishesById.size !== dishIds.size) {
-        throw new Error('Một hoặc nhiều món ăn đã ngừng sử dụng hoặc không tồn tại');
-    }
-
-    const hydrateItems = (items) => items.map((item) => getDishReference(dishesById.get(String(item.dishId)), item));
+    const dishesByName = new Map(dishes.map((dish) => [dish.name.trim().toLocaleLowerCase('vi-VN'), dish]));
+    const hydrateItems = (items) => items.map((item) => {
+        const nameKey = String(item.dishName || '').trim().toLocaleLowerCase('vi-VN');
+        const dish = dishesById.get(String(item.dishId)) || dishesByName.get(nameKey);
+        if (!dish) {
+            throw new Error(`Món “${item.dishName || 'không xác định'}” không còn hoạt động trong danh mục. Hãy chọn món thay thế trước khi lưu.`);
+        }
+        return getDishReference(dish, item);
+    });
     const summarizeMeal = (items, notes = '') => ({
         ...(items[0] || { dishName: '', calories: 0 }),
         items,
@@ -321,7 +328,11 @@ const updateMenu = async (req, res) => {
         });
     } catch (err) {
         console.error('Lỗi updateMenu:', err);
-        res.status(500).json({ message: 'Không thể cập nhật thực đơn' });
+        const expectedDataError = err.name === 'ValidationError'
+            || /món.*không còn hoạt động|ngày phục vụ|thực đơn phải chọn/i.test(err.message || '');
+        res.status(expectedDataError ? 422 : 500).json({
+            message: expectedDataError ? err.message : 'Không thể cập nhật thực đơn'
+        });
     }
 };
 
@@ -562,10 +573,164 @@ const deleteIngredient = async (req, res) => {
 
 const getInventoryList = async (req, res) => {
     try {
-        const inventories = await Inventory.find().populate('ingredientId', 'category minStockAlert standardPrice').sort({ expiryDate: 1 });
+        const todayStart = startOfWorkDate(getWorkDate(new Date()));
+        const threeDaysLater = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+        await Inventory.updateMany(
+            { quantity: { $lte: 0 }, status: { $nin: ['disposed', 'depleted'] } },
+            { $set: { status: 'depleted' } }
+        );
+        await Inventory.updateMany(
+            { quantity: { $gt: 0 }, expiryDate: { $lt: todayStart }, status: { $nin: ['disposed', 'depleted'] } },
+            { $set: { status: 'expired' } }
+        );
+        await Inventory.updateMany(
+            { quantity: { $gt: 0 }, expiryDate: { $gte: todayStart, $lte: threeDaysLater }, status: 'available' },
+            { $set: { status: 'near_expiry' } }
+        );
+        await Inventory.updateMany(
+            { quantity: { $gt: 0 }, expiryDate: { $gt: threeDaysLater }, status: 'near_expiry' },
+            { $set: { status: 'available' } }
+        );
+        const inventories = await Inventory.find()
+            .populate('ingredientId', 'category minStockAlert standardPrice')
+            .sort({ createdAt: -1, _id: -1 });
         res.json({ success: true, count: inventories.length, data: inventories });
     } catch (err) {
         res.status(500).json({ message: 'Không thể tải tồn kho' });
+    }
+};
+
+const getTodayStart = () => startOfWorkDate(getWorkDate(new Date()));
+
+const disposeInventoryLot = async (req, res) => {
+    try {
+        const { reason } = req.body;
+        if (!String(reason || '').trim()) return res.status(400).json({ message: 'Vui lòng ghi lý do xử lý hàng hết hạn/hư hỏng' });
+        const lot = await Inventory.findById(req.params.id);
+        if (!lot) return res.status(404).json({ message: 'Không tìm thấy lô hàng' });
+        if (lot.quantity <= 0 || ['depleted', 'disposed'].includes(lot.status)) {
+            return res.status(409).json({ message: 'Lô hàng này đã được xử lý hoặc không còn số lượng tồn' });
+        }
+
+        const disposedQuantity = lot.quantity;
+        lot.quantity = 0;
+        lot.status = 'disposed';
+        await lot.save();
+        await InventoryTransaction.create({
+            type: 'spoilage',
+            ingredientId: lot.ingredientId,
+            ingredientName: lot.ingredientName,
+            batchNumber: lot.batchNumber,
+            quantity: -disposedQuantity,
+            unit: lot.unit,
+            costPerUnit: lot.costPerUnit || 0,
+            totalAmount: -(disposedQuantity * (lot.costPerUnit || 0)),
+            supplierId: lot.supplierId,
+            supplierName: lot.supplierName,
+            storageLocation: lot.storageLocation,
+            reason: String(reason).trim(),
+            performedBy: req.user._id,
+            performedByName: req.user.profile?.fullName || req.user.username
+        });
+        res.json({ success: true, message: 'Đã lập biên bản xử lý lô hàng và trừ khỏi tồn kho.', data: lot });
+    } catch (err) {
+        res.status(400).json({ message: err.message || 'Không thể xử lý lô hàng' });
+    }
+};
+
+const returnUnusedFood = async (req, res) => {
+    try {
+        const { quantity, reason, rawAndSafe } = req.body;
+        const returnQuantity = Number(quantity);
+        if (!Number.isFinite(returnQuantity) || returnQuantity <= 0) {
+            return res.status(400).json({ message: 'Số lượng hoàn trả phải lớn hơn 0' });
+        }
+        if (rawAndSafe !== true) {
+            return res.status(400).json({ message: 'Chỉ hoàn trả nguyên liệu chưa chế biến, còn nguyên trạng và bảo đảm an toàn' });
+        }
+        const lot = await Inventory.findById(req.params.id);
+        if (!lot) return res.status(404).json({ message: 'Không tìm thấy lô hàng' });
+        if (lot.expiryDate < getTodayStart()) {
+            return res.status(422).json({ message: 'Không thể hoàn trả lô hàng đã hết hạn' });
+        }
+        if (lot.status === 'disposed') {
+            return res.status(422).json({ message: 'Không thể hoàn trả lô hàng đã xử lý hủy' });
+        }
+
+        lot.quantity += returnQuantity;
+        lot.status = 'available';
+        await lot.save();
+        await InventoryTransaction.create({
+            type: 'return',
+            ingredientId: lot.ingredientId,
+            ingredientName: lot.ingredientName,
+            batchNumber: lot.batchNumber,
+            quantity: returnQuantity,
+            unit: lot.unit,
+            costPerUnit: lot.costPerUnit || 0,
+            totalAmount: returnQuantity * (lot.costPerUnit || 0),
+            reason: String(reason || 'Hoàn trả nguyên liệu chưa sử dụng').trim(),
+            performedBy: req.user._id,
+            performedByName: req.user.profile?.fullName || req.user.username
+        });
+        res.json({ success: true, message: 'Đã cộng lại lượng nguyên liệu chưa sử dụng vào tồn kho.', data: lot });
+    } catch (err) {
+        res.status(400).json({ message: err.message || 'Không thể hoàn trả nguyên liệu' });
+    }
+};
+
+const reconcileInventoryLot = async (req, res) => {
+    try {
+        const actualQuantity = Number(req.body.actualQuantity);
+        if (!Number.isFinite(actualQuantity) || actualQuantity < 0) {
+            return res.status(400).json({ message: 'Số lượng kiểm kê thực tế phải là số không âm' });
+        }
+        const lot = await Inventory.findById(req.params.id);
+        if (!lot) return res.status(404).json({ message: 'Không tìm thấy lô hàng' });
+        if (lot.status === 'disposed') return res.status(422).json({ message: 'Lô hàng đã xử lý hủy, không thể kiểm kê lại' });
+        if (actualQuantity > 0 && lot.expiryDate < getTodayStart()) {
+            return res.status(422).json({ message: 'Lô hàng đã hết hạn không được ghi nhận tồn khả dụng; hãy xử lý hủy.' });
+        }
+
+        const systemQuantity = lot.quantity;
+        const difference = actualQuantity - systemQuantity;
+        lot.quantity = actualQuantity;
+        lot.status = actualQuantity === 0 ? 'depleted' : 'available';
+        await lot.save();
+        const reconciliation = await InventoryReconciliation.create({
+            inventoryId: lot._id,
+            ingredientId: lot.ingredientId,
+            ingredientName: lot.ingredientName,
+            batchNumber: lot.batchNumber,
+            systemQuantity,
+            actualQuantity,
+            difference,
+            unit: lot.unit,
+            notes: String(req.body.notes || '').trim(),
+            countedBy: req.user._id,
+            countedByName: req.user.profile?.fullName || req.user.username
+        });
+        if (difference !== 0) {
+            await InventoryTransaction.create({
+                type: 'adjustment', ingredientId: lot.ingredientId, ingredientName: lot.ingredientName,
+                batchNumber: lot.batchNumber, quantity: difference, unit: lot.unit,
+                costPerUnit: lot.costPerUnit || 0, totalAmount: difference * (lot.costPerUnit || 0),
+                reason: `Kiểm kê: ${String(req.body.notes || 'Điều chỉnh theo số thực tế').trim()}`,
+                performedBy: req.user._id, performedByName: req.user.profile?.fullName || req.user.username
+            });
+        }
+        res.json({ success: true, message: 'Đã ghi nhận kiểm kê và điều chỉnh tồn kho.', data: reconciliation });
+    } catch (err) {
+        res.status(400).json({ message: err.message || 'Không thể kiểm kê lô hàng' });
+    }
+};
+
+const getInventoryReconciliations = async (req, res) => {
+    try {
+        const records = await InventoryReconciliation.find().sort({ createdAt: -1 }).limit(100);
+        res.json({ success: true, count: records.length, data: records });
+    } catch (err) {
+        res.status(500).json({ message: 'Không thể tải lịch sử kiểm kê' });
     }
 };
 
@@ -583,11 +748,15 @@ const importStock = async (req, res) => {
         if (!Number.isFinite(unitCost) || unitCost < 0) {
             return res.status(400).json({ message: 'Đơn giá nhập không được âm' });
         }
+        if (!String(storageLocation || '').trim()) {
+            return res.status(400).json({ message: 'Vui lòng chọn vị trí bảo quản cho lô hàng' });
+        }
 
         const ingredient = await IngredientMaster.findById(ingredientId);
         if (!ingredient) return res.status(404).json({ message: 'Không tìm thấy nguyên liệu' });
         const resolvedBatchNumber = String(batchNumber || createImportBatchNumber(ingredientId)).trim();
         const resolvedSupplierName = String(supplierName).trim();
+        const resolvedStorageLocation = String(storageLocation).trim();
 
         let inv = await Inventory.findOne({ ingredientId, batchNumber: resolvedBatchNumber });
         if (inv) {
@@ -595,6 +764,7 @@ const importStock = async (req, res) => {
             inv.costPerUnit = unitCost || inv.costPerUnit;
             inv.supplierId = supplierId || inv.supplierId;
             inv.supplierName = resolvedSupplierName;
+            inv.storageLocation = resolvedStorageLocation;
             inv.status = 'available';
             await inv.save();
         } else {
@@ -608,7 +778,7 @@ const importStock = async (req, res) => {
                 expiryDate: new Date(expiryDate),
                 supplierId,
                 supplierName: resolvedSupplierName,
-                storageLocation: storageLocation || 'Kho thực phẩm chung',
+                storageLocation: resolvedStorageLocation,
                 status: 'available'
             });
         }
@@ -627,6 +797,7 @@ const importStock = async (req, res) => {
             totalAmount,
             supplierId,
             supplierName: resolvedSupplierName,
+            storageLocation: resolvedStorageLocation,
             reason: 'Nhập kho từ nhà cung cấp',
             performedBy: req.user._id,
             performedByName: req.user.profile?.fullName || req.user.username
@@ -651,7 +822,9 @@ const exportStock = async (req, res) => {
         // Tìm các lô còn hàng sắp xếp theo hạn sử dụng sớm nhất (FEFO)
         const availableLots = await Inventory.find({
             ingredientId,
-            quantity: { $gt: 0 }
+            quantity: { $gt: 0 },
+            status: { $in: ['available', 'near_expiry'] },
+            expiryDate: { $gte: getTodayStart() }
         }).sort({ expiryDate: 1 });
 
         const totalAvailable = availableLots.reduce((sum, lot) => sum + lot.quantity, 0);
@@ -713,11 +886,22 @@ const getInventoryAlertsController = async (req, res) => {
 
 const getTransactions = async (req, res) => {
     try {
-        const { type } = req.query;
+        const { type, startDate, endDate } = req.query;
         const query = {};
         if (type) query.type = type;
+        if (startDate || endDate) {
+            const rangeStart = startDate || endDate;
+            const rangeEnd = endDate || startDate;
+            if (!isValidWorkDate(rangeStart) || !isValidWorkDate(rangeEnd) || rangeStart > rangeEnd) {
+                return res.status(400).json({ message: 'Khoảng ngày tra cứu không hợp lệ' });
+            }
+            query.createdAt = {
+                $gte: startOfWorkDate(rangeStart),
+                $lt: startOfWorkDate(addWorkDays(rangeEnd, 1))
+            };
+        }
         const transactions = await InventoryTransaction.find(query).sort({ createdAt: -1 }).limit(100);
-        res.json({ success: true, count: transactions.length, data: transactions });
+        res.json({ success: true, count: transactions.length, data: transactions, range: { startDate: startDate || null, endDate: endDate || null } });
     } catch (err) {
         res.status(500).json({ message: 'Không thể lấy lịch sử kho' });
     }
@@ -1028,6 +1212,10 @@ module.exports = {
     getInventoryList,
     importStock,
     exportStock,
+    disposeInventoryLot,
+    returnUnusedFood,
+    reconcileInventoryLot,
+    getInventoryReconciliations,
     getInventoryAlertsController,
     getTransactions,
     // Suppliers

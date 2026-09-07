@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const InventoryTransactionSchema = new mongoose.Schema({
     type: {
         type: String,
-        enum: ['import', 'export', 'spoilage', 'adjustment'],
+        enum: ['import', 'export', 'return', 'spoilage', 'adjustment'],
         required: true
     },
     ingredientId: {
@@ -40,6 +40,10 @@ const InventoryTransactionSchema = new mongoose.Schema({
         ref: 'Supplier'
     },
     supplierName: String,
+    storageLocation: {
+        type: String,
+        default: ''
+    },
     classroomId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Classroom'
@@ -69,4 +73,3 @@ InventoryTransactionSchema.index({ type: 1 });
 InventoryTransactionSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model('InventoryTransaction', InventoryTransactionSchema);
-

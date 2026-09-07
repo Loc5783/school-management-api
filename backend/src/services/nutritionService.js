@@ -6,7 +6,7 @@ const Menu = require('../models/zone5_nutrition/Menu');
 const Inventory = require('../models/zone5_nutrition/Inventory');
 const IngredientMaster = require('../models/zone5_nutrition/IngredientMaster');
 const InventoryTransaction = require('../models/zone5_nutrition/InventoryTransaction');
-const { getWorkDate, DEFAULT_SCHOOL_TIMEZONE } = require('../utils/dateHelpers');
+const { getWorkDate, startOfWorkDate, DEFAULT_SCHOOL_TIMEZONE } = require('../utils/dateHelpers');
 
 // Danh mục dị nguyên chuẩn hoá để dữ liệu món ăn và hồ sơ học sinh có thể
 // đối chiếu chính xác. Không dùng ghi chú tự do làm căn cứ cảnh báo an toàn.
@@ -196,7 +196,7 @@ const calculateDailyMealReport = async (date) => {
     const exportTransactions = await InventoryTransaction.find({
         type: 'export',
         createdAt: { $gte: startOfDay, $lte: endOfDay }
-    });
+    }).sort({ createdAt: -1 });
 
     const totalIngredientCost = exportTransactions.reduce((sum, item) => sum + (item.totalAmount || 0), 0);
 
@@ -205,6 +205,16 @@ const calculateDailyMealReport = async (date) => {
     const totalMealRevenueBudget = totalStudentsPresent * standardMealRatePerStudent;
     const actualCostPerStudent = totalStudentsPresent > 0 ? Math.round(totalIngredientCost / totalStudentsPresent) : 0;
     const balance = totalMealRevenueBudget - totalIngredientCost;
+    const budgetUtilizationPercent = totalMealRevenueBudget > 0
+        ? Math.round((totalIngredientCost / totalMealRevenueBudget) * 1000) / 10
+        : 0;
+    const mealCostBreakdown = Object.values(exportTransactions.reduce((summary, transaction) => {
+        const key = transaction.mealType || 'general';
+        if (!summary[key]) summary[key] = { mealType: key, cost: 0, transactions: 0 };
+        summary[key].cost += Number(transaction.totalAmount) || 0;
+        summary[key].transactions += 1;
+        return summary;
+    }, {}));
 
     return {
         dateKey,
@@ -216,7 +226,22 @@ const calculateDailyMealReport = async (date) => {
         totalIngredientCost,
         actualCostPerStudent,
         balance,
-        exportTransactionsCount: exportTransactions.length
+        budgetUtilizationPercent,
+        exportTransactionsCount: exportTransactions.length,
+        mealCostBreakdown,
+        recentExpenseTransactions: exportTransactions.slice(0, 10).map((transaction) => ({
+            _id: transaction._id,
+            ingredientName: transaction.ingredientName,
+            batchNumber: transaction.batchNumber || '',
+            quantity: transaction.quantity,
+            unit: transaction.unit,
+            totalAmount: transaction.totalAmount,
+            mealType: transaction.mealType,
+            className: transaction.className || '',
+            reason: transaction.reason || '',
+            createdAt: transaction.createdAt,
+            performedByName: transaction.performedByName || ''
+        }))
     };
 };
 
@@ -277,11 +302,19 @@ const cloneWeeklyMenu = async (sourceMenuId, {
 const getInventoryAlerts = async () => {
     const now = new Date();
     const threeDaysLater = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+    const todayStart = startOfWorkDate(getWorkDate(now, DEFAULT_SCHOOL_TIMEZONE));
 
-    // Hết hạn hoặc cận date trong 3 ngày tới
+    const expiredItems = await Inventory.find({
+        quantity: { $gt: 0 },
+        status: { $nin: ['disposed', 'depleted'] },
+        expiryDate: { $lt: todayStart }
+    }).populate('ingredientId', 'name unit minStockAlert');
+
+    // Còn hạn nhưng cận date trong 3 ngày tới
     const expiringItems = await Inventory.find({
         quantity: { $gt: 0 },
-        expiryDate: { $lte: threeDaysLater }
+        status: { $nin: ['disposed', 'depleted'] },
+        expiryDate: { $gte: todayStart, $lte: threeDaysLater }
     }).populate('ingredientId', 'name unit minStockAlert');
 
     // Tồn kho thấp so với minStockAlert
@@ -295,7 +328,9 @@ const getInventoryAlerts = async () => {
         });
         const totalStock = inventories.reduce((sum, inv) => sum + inv.quantity, 0);
 
-        if (totalStock <= master.minStockAlert) {
+        // Hàng đã hết sạch không còn là lô tồn để vận hành. Lịch sử nhập/xuất/hủy
+        // vẫn được bảo toàn trong sổ kho; màn cảnh báo chỉ phục vụ các mặt hàng còn tồn.
+        if (totalStock > 0 && totalStock <= master.minStockAlert) {
             lowStockAlerts.push({
                 ingredientId: master._id,
                 name: master.name,
@@ -308,6 +343,7 @@ const getInventoryAlerts = async () => {
     }
 
     return {
+        expiredItems,
         expiringItems,
         lowStockAlerts
     };

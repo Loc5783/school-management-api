@@ -24,6 +24,10 @@ const {
     getInventoryList,
     importStock,
     exportStock,
+    disposeInventoryLot,
+    returnUnusedFood,
+    reconcileInventoryLot,
+    getInventoryReconciliations,
     getInventoryAlertsController,
     getTransactions,
     // Suppliers
@@ -77,6 +81,10 @@ router.delete('/ingredients/:id', roleCheck(['admin', 'principal', 'chef']), del
 router.get('/inventory', roleCheck(['admin', 'principal', 'chef', 'accountant']), getInventoryList);
 router.post('/inventory/import', roleCheck(['admin', 'principal', 'chef', 'accountant']), importStock);
 router.post('/inventory/export', roleCheck(['admin', 'principal', 'chef']), exportStock);
+router.post('/inventory/:id/dispose', roleCheck(['admin', 'principal', 'chef']), disposeInventoryLot);
+router.post('/inventory/:id/return', roleCheck(['admin', 'principal', 'chef']), returnUnusedFood);
+router.post('/inventory/:id/reconcile', roleCheck(['admin', 'principal']), reconcileInventoryLot);
+router.get('/inventory/reconciliations', roleCheck(['admin', 'principal']), getInventoryReconciliations);
 router.get('/inventory/alerts', roleCheck(['admin', 'principal', 'chef', 'accountant']), getInventoryAlertsController);
 router.get('/inventory/transactions', roleCheck(['admin', 'principal', 'chef', 'accountant']), getTransactions);
 
@@ -104,7 +112,7 @@ router.get('/food-inspections', roleCheck(['admin', 'principal', 'chef']), getFo
 router.post('/food-inspections', roleCheck(['admin', 'principal', 'chef']), createFoodInspection);
 
 // ===== TÀI CHÍNH NHÀ ĂN & ĐỀ XUẤT MUA SẮM =====
-router.get('/financials/daily', roleCheck(['admin', 'principal', 'accountant', 'chef']), getDailyFinancialReport);
+router.get('/financials/daily', roleCheck(['admin', 'principal']), getDailyFinancialReport);
 router.get('/requests', roleCheck(['admin', 'principal', 'accountant', 'chef']), getKitchenRequests);
 router.post('/requests', roleCheck(['admin', 'principal', 'chef']), createKitchenRequest);
 router.put('/requests/:id/approve', roleCheck(['admin', 'principal', 'accountant']), approveKitchenRequest);
