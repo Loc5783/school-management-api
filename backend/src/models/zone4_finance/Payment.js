@@ -24,12 +24,24 @@ const PaymentSchema = new mongoose.Schema({
         type: String, // Mã giao dịch ngân hàng
         trim: true
     },
+    idempotencyKey: {
+        type: String,
+        required: true,
+        trim: true,
+        maxlength: 120
+    },
     note: String,
     recordedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         required: true
-    }
+    },
+    auditTrail: [{
+        action: { type: String, enum: ['created'], required: true },
+        actorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+        actorName: { type: String, required: true },
+        occurredAt: { type: Date, default: Date.now, required: true }
+    }]
 }, {
     timestamps: true
 });
@@ -37,5 +49,7 @@ const PaymentSchema = new mongoose.Schema({
 PaymentSchema.index({ invoiceId: 1 });
 PaymentSchema.index({ recordedBy: 1 });
 PaymentSchema.index({ paidAt: 1 });
+PaymentSchema.index({ invoiceId: 1, idempotencyKey: 1 }, { unique: true });
+PaymentSchema.index({ txnRef: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('Payment', PaymentSchema);

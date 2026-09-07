@@ -4,6 +4,7 @@ const Student = require('../models/zone3_school/Student');
 const Classroom = require('../models/zone3_school/Classroom');
 const { canAccessStudent, isParent, isValidStudentId } = require('../services/studentAccessService');
 const { isValidObjectId } = require('../utils/idValidation');
+const { recordPayment } = require('../services/paymentTransactionService');
 
 // ==============================
 // 1. Tạo hóa đơn học phí
@@ -112,58 +113,15 @@ const createBulkTuitionFees = async (req, res) => {
 };
 
 // ==============================
-// 3. Thanh toán học phí (KHÔNG TRANSACTION)
+// 3. Thanh toán học phí (transaction + idempotency)
 // ==============================
 const makePayment = async (req, res) => {
     try {
-        const { invoiceId, amount, method, txnRef, note } = req.body;
+        const idempotencyKey = req.get('Idempotency-Key') || req.body.idempotencyKey || req.body.txnRef;
+        const { payment, invoice, replayed } = await recordPayment(req.body, req.user, idempotencyKey);
 
-        if (!isValidObjectId(invoiceId)) {
-            return res.status(400).json({ message: 'ID hóa đơn không hợp lệ' });
-        }
-
-        // Tìm hóa đơn
-        const invoice = await TuitionFee.findById(invoiceId);
-        if (!invoice) {
-            return res.status(404).json({ message: 'Không tìm thấy hóa đơn' });
-        }
-
-        if (invoice.status === 'paid') {
-            return res.status(400).json({ message: 'Hóa đơn đã được thanh toán đầy đủ' });
-        }
-
-        if (invoice.status === 'cancelled') {
-            return res.status(400).json({ message: 'Hóa đơn đã bị hủy' });
-        }
-
-        // Số tiền còn lại
-        const remaining = invoice.totalAmount - invoice.paidAmount;
-        if (amount > remaining) {
-            return res.status(400).json({ message: `Số tiền thanh toán vượt quá số tiền còn lại (${remaining})` });
-        }
-
-        // Tạo bản ghi thanh toán
-        const payment = new Payment({
-            invoiceId,
-            amount,
-            method,
-            txnRef,
-            note,
-            recordedBy: req.user._id
-        });
-        await payment.save();
-
-        // Cập nhật hóa đơn
-        invoice.paidAmount += amount;
-        if (invoice.paidAmount >= invoice.totalAmount) {
-            invoice.status = 'paid';
-        } else if (invoice.paidAmount > 0) {
-            invoice.status = 'partial';
-        }
-        await invoice.save();
-
-        res.status(201).json({
-            message: 'Thanh toán thành công',
+        res.status(replayed ? 200 : 201).json({
+            message: replayed ? 'Yêu cầu thanh toán đã được ghi nhận trước đó' : 'Thanh toán thành công',
             data: {
                 payment,
                 invoice: {
@@ -172,11 +130,12 @@ const makePayment = async (req, res) => {
                     paidAmount: invoice.paidAmount,
                     totalAmount: invoice.totalAmount
                 }
-            }
+            },
+            replayed
         });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ message: 'Lỗi server' });
+        res.status(err.statusCode || 500).json({ message: err.message || 'Lỗi server' });
     }
 };
 

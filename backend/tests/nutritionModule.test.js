@@ -25,6 +25,8 @@ const FoodInspection = require('../src/models/zone5_nutrition/FoodInspection');
 const KitchenEquipment = require('../src/models/zone5_nutrition/KitchenEquipment');
 const KitchenStaff = require('../src/models/zone5_nutrition/KitchenStaff');
 const KitchenRequest = require('../src/models/zone5_nutrition/KitchenRequest');
+const TuitionFee = require('../src/models/zone4_finance/TuitionFee');
+const Payment = require('../src/models/zone4_finance/Payment');
 const { getWorkDate, DEFAULT_SCHOOL_TIMEZONE } = require('../src/utils/dateHelpers');
 
 const app = createApp();
@@ -67,7 +69,9 @@ beforeEach(async () => {
         FoodInspection.deleteMany({}),
         KitchenEquipment.deleteMany({}),
         KitchenStaff.deleteMany({}),
-        KitchenRequest.deleteMany({})
+        KitchenRequest.deleteMany({}),
+        TuitionFee.deleteMany({}),
+        Payment.deleteMany({})
     ]);
 
     // Tạo Users
@@ -614,6 +618,32 @@ describe('Module Quản lý Nhà ăn & Dinh dưỡng (Nutrition & Kitchen)', () 
             const remaining = await Inventory.find({ ingredientId: ingredient._id });
             expect(remaining.reduce((sum, lot) => sum + lot.quantity, 0)).toBe(3);
             expect(await InventoryTransaction.countDocuments({ ingredientId: ingredient._id, type: 'export' })).toBe(1);
+        });
+
+        it('ghi nhận thanh toán nguyên tử, chống thu dư và idempotent khi request được gửi lại', async () => {
+            const invoice = await TuitionFee.create({
+                studentId: studentAllergic._id, studentName: studentAllergic.fullName,
+                classroomId: classroom1._id, className: classroom1.name, period: '09-2026',
+                tuitionBase: 100000, totalAmount: 100000, dueDate: new Date('2026-09-30')
+            });
+            const sameRequest = {
+                invoiceId: invoice._id, amount: 60000, method: 'bank_transfer', txnRef: 'BANK-TEST-001'
+            };
+            const [first, retry] = await Promise.all([
+                request(app).post('/api/finance/payment').set(authHeader(adminUser)).set('Idempotency-Key', 'payment-retry-001').send(sameRequest),
+                request(app).post('/api/finance/payment').set(authHeader(adminUser)).set('Idempotency-Key', 'payment-retry-001').send(sameRequest)
+            ]);
+            expect([first.status, retry.status].sort()).toEqual([200, 201]);
+            expect(await Payment.countDocuments({ invoiceId: invoice._id })).toBe(1);
+            expect((await TuitionFee.findById(invoice._id)).paidAmount).toBe(60000);
+
+            await request(app)
+                .post('/api/finance/payment')
+                .set(authHeader(adminUser))
+                .set('Idempotency-Key', 'payment-overpay-001')
+                .send({ invoiceId: invoice._id, amount: 50000, method: 'cash' })
+                .expect(422);
+            expect((await TuitionFee.findById(invoice._id)).paidAmount).toBe(60000);
         });
     });
 
