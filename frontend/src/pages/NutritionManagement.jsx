@@ -348,6 +348,16 @@ export default function NutritionManagement() {
   const auditLotPagination = paginate(auditLots, auditLotPage);
   const reconciliationPagination = paginate(reconciliations, reconciliationPage);
   const disposalTransactions = inventoryTransactions.filter((item) => item.type === 'spoilage');
+  const exportTransactions = inventoryTransactions.filter((item) => item.type === 'export');
+  const selectedReturnExport = exportTransactions.find((item) => item._id === returnFoodForm.sourceExportTransactionId);
+  const returnableLots = (selectedReturnExport?.lotAllocations || []).map((allocation) => {
+    const returnedQuantity = inventoryTransactions
+      .filter((item) => item.type === 'return'
+        && item.sourceExportTransactionId === selectedReturnExport._id
+        && item.sourceInventoryId === allocation.inventoryId)
+      .reduce((total, item) => total + Number(item.quantity || 0), 0);
+    return { ...allocation, remainingQuantity: Number(allocation.quantity || 0) - returnedQuantity };
+  }).filter((allocation) => allocation.remainingQuantity > 0);
   const disposalPagination = paginate(disposalTransactions, disposalPage);
   const reportTransactions = inventoryTransactions;
   const dailyTransactionPagination = paginate(reportTransactions, dailyTransactionPage);
@@ -408,7 +418,7 @@ export default function NutritionManagement() {
   });
   const [selectedInventoryLot, setSelectedInventoryLot] = useState(null);
   const [disposeReason, setDisposeReason] = useState('Hàng hết hạn');
-  const [returnFoodForm, setReturnFoodForm] = useState({ inventoryId: '', quantity: '', reason: 'Nguyên liệu chưa dùng sau khi chuẩn bị bếp', rawAndSafe: false });
+  const [returnFoodForm, setReturnFoodForm] = useState({ sourceExportTransactionId: '', inventoryId: '', quantity: '', reason: 'Nguyên liệu chưa dùng sau khi chuẩn bị bếp', rawAndSafe: false });
   const [reconcileForm, setReconcileForm] = useState({ actualQuantity: '', notes: '' });
 
   const [newSampleForm, setNewSampleForm] = useState(() => ({
@@ -483,7 +493,7 @@ export default function NutritionManagement() {
           getInventoryAlerts(),
           getIngredients(),
           canReconcileInventory ? getInventoryReconciliations() : Promise.resolve({ data: { data: [] } }),
-          canReconcileInventory ? getInventoryTransactions() : Promise.resolve({ data: { data: [] } })
+          getInventoryTransactions()
         ];
         const [invRes, alertRes, ingRes, reconciliationRes, transactionRes] = await Promise.all(requests);
         setInventories(invRes.data.data || []);
@@ -809,11 +819,12 @@ export default function NutritionManagement() {
       await returnUnusedFood(lot._id, {
         quantity: Number(returnFoodForm.quantity),
         reason: returnFoodForm.reason,
-        rawAndSafe: returnFoodForm.rawAndSafe
+        rawAndSafe: returnFoodForm.rawAndSafe,
+        sourceExportTransactionId: returnFoodForm.sourceExportTransactionId
       });
       showFeedback('success', 'Đã cộng lại nguyên liệu chưa dùng vào tồn kho.');
       setShowReturnLotModal(false);
-      setReturnFoodForm({ inventoryId: '', quantity: '', reason: 'Nguyên liệu chưa dùng sau khi chuẩn bị bếp', rawAndSafe: false });
+      setReturnFoodForm({ sourceExportTransactionId: '', inventoryId: '', quantity: '', reason: 'Nguyên liệu chưa dùng sau khi chuẩn bị bếp', rawAndSafe: false });
       loadTabData();
     } catch (err) {
       showFeedback('error', err.response?.data?.message || 'Không thể hoàn trả nguyên liệu');
@@ -2146,20 +2157,34 @@ export default function NutritionManagement() {
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
             <h3 className="font-bold text-gray-900 text-lg mb-2">Báo Cáo Nguyên Liệu Chưa Dùng</h3>
-            <p className="nutrition-modal-note">Chỉ hoàn trả nguyên liệu còn nguyên trạng, chưa chế biến và còn hạn sử dụng. Thức ăn đã nấu không được cộng lại kho.</p>
+            <p className="nutrition-modal-note">Chỉ hoàn trả nguyên liệu còn nguyên trạng, chưa chế biến và còn hạn sử dụng. Hệ thống đối chiếu từng lô với phiếu xuất gốc; thức ăn đã nấu không được cộng lại kho.</p>
             <form onSubmit={handleReturnUnusedFood} className="space-y-4 text-sm">
               <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1">LÔ NGUYÊN LIỆU HOÀN TRẢ</label>
-                <select value={returnFoodForm.inventoryId} onChange={(e) => setReturnFoodForm({ ...returnFoodForm, inventoryId: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" required>
-                  <option value="">-- Chọn lô còn hạn --</option>
-                  {inventories.filter((lot) => ['available', 'near_expiry', 'depleted'].includes(lot.status)).map((lot) => (
-                    <option key={lot._id} value={lot._id}>{lot.ingredientName} — {lot.batchNumber} (đang có {lot.quantity} {lot.unit})</option>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">PHIẾU XUẤT NGUỒN</label>
+                <select value={returnFoodForm.sourceExportTransactionId} onChange={(e) => setReturnFoodForm({ ...returnFoodForm, sourceExportTransactionId: e.target.value, inventoryId: '', quantity: '' })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" required>
+                  <option value="">-- Chọn phiếu đã xuất cho bếp --</option>
+                  {exportTransactions.map((transaction) => (
+                    <option key={transaction._id} value={transaction._id}>
+                      {new Date(transaction.createdAt).toLocaleString('vi-VN')} — {transaction.ingredientName} ({transaction.quantity} {transaction.unit})
+                    </option>
                   ))}
                 </select>
               </div>
+              {returnFoodForm.sourceExportTransactionId && <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">LÔ THUỘC PHIẾU XUẤT</label>
+                <select value={returnFoodForm.inventoryId} onChange={(e) => setReturnFoodForm({ ...returnFoodForm, inventoryId: e.target.value, quantity: '' })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" required>
+                  <option value="">-- Chọn lô cần hoàn --</option>
+                  {returnableLots.map((lot) => (
+                    <option key={lot.inventoryId} value={lot.inventoryId}>
+                      {lot.batchNumber} — còn được hoàn {lot.remainingQuantity} {lot.unit}
+                    </option>
+                  ))}
+                </select>
+                {!returnableLots.length && <p className="mt-1 text-xs text-amber-700">Tất cả lô của phiếu này đã hoàn đủ hoặc không còn đủ điều kiện hoàn.</p>}
+              </div>}
               <div>
                 <label className="block text-xs font-semibold text-gray-600 mb-1">SỐ LƯỢNG CÒN LẠI</label>
-                <input type="number" min="0.001" step="0.001" value={returnFoodForm.quantity} onChange={(e) => setReturnFoodForm({ ...returnFoodForm, quantity: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" required />
+                <input type="number" min="0.001" step="0.001" max={returnableLots.find((lot) => lot.inventoryId === returnFoodForm.inventoryId)?.remainingQuantity} value={returnFoodForm.quantity} onChange={(e) => setReturnFoodForm({ ...returnFoodForm, quantity: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" required />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-gray-600 mb-1">GHI CHÚ</label>
