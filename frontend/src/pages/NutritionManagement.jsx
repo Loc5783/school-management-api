@@ -7,6 +7,10 @@ import {
   getWeeklyMenus,
   createMenu,
   updateMenu,
+  submitMenuForApproval,
+  approveMenu,
+  returnMenuForRevision,
+  archiveMenu,
   getClassroomDietaryAlerts,
   getDishes,
   createDish,
@@ -308,6 +312,7 @@ export default function NutritionManagement() {
   const canReconcileInventory = ['admin', 'principal'].includes(getSessionRole());
   const canApproveKitchenRequest = ['admin', 'principal', 'accountant'].includes(getSessionRole());
   const canViewFinance = ['admin', 'principal'].includes(getSessionRole());
+  const canApproveMenus = ['admin', 'principal'].includes(getSessionRole());
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
 
@@ -618,6 +623,25 @@ export default function NutritionManagement() {
       showFeedback('success', 'Đã cập nhật thực đơn của ngày được chọn và quét lại cảnh báo dị ứng.');
     } catch (err) {
       showFeedback('error', err.response?.data?.message || 'Không thể cập nhật thực đơn ngày');
+    }
+  };
+
+  const handleMenuWorkflow = async (action) => {
+    if (!currentMenu) return;
+    try {
+      let response;
+      if (action === 'submit') response = await submitMenuForApproval(currentMenu._id);
+      if (action === 'approve') response = await approveMenu(currentMenu._id);
+      if (action === 'return') {
+        const reason = window.prompt('Lý do trả thực đơn để chỉnh sửa:');
+        if (!reason?.trim()) return;
+        response = await returnMenuForRevision(currentMenu._id, { reason });
+      }
+      if (action === 'archive') response = await archiveMenu(currentMenu._id);
+      setCurrentMenu(response.data.data);
+      showFeedback('success', response.data.message);
+    } catch (err) {
+      showFeedback('error', err.response?.data?.message || 'Không thể cập nhật trạng thái thực đơn');
     }
   };
 
@@ -1076,6 +1100,15 @@ export default function NutritionManagement() {
 
           {/* Chi tiết thực đơn tuần */}
           {currentMenu ? (
+            <>
+              <div className="mb-4 bg-white border border-gray-200 rounded-xl p-4 flex flex-wrap gap-3 items-center justify-between">
+                <div className="text-sm"><span className="text-gray-500">Trạng thái: </span><strong>{({ draft: 'Bản nháp', pending_approval: 'Chờ phê duyệt', published: 'Đã công bố', archived: 'Đã lưu trữ' })[currentMenu.status] || currentMenu.status}</strong>{currentMenu.approvalNote && <span className="ml-2 text-xs text-gray-500">— {currentMenu.approvalNote}</span>}</div>
+                <div className="flex gap-2">
+                  {currentMenu.status === 'draft' && <button type="button" onClick={() => handleMenuWorkflow('submit')} className="btn-primary text-xs">Gửi duyệt</button>}
+                  {currentMenu.status === 'pending_approval' && canApproveMenus && <><button type="button" onClick={() => handleMenuWorkflow('approve')} className="btn-primary text-xs">Phê duyệt & công bố</button><button type="button" onClick={() => handleMenuWorkflow('return')} className="btn-secondary text-xs">Trả chỉnh sửa</button></>}
+                  {currentMenu.status === 'published' && canApproveMenus && <button type="button" onClick={() => handleMenuWorkflow('archive')} className="btn-secondary text-xs">Lưu trữ</button>}
+                </div>
+              </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {currentMenu.days.map((day, index) => (
                 <div key={day.dayOfWeek} className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
@@ -1127,7 +1160,7 @@ export default function NutritionManagement() {
                   </div>
                 </div>
               ))}
-            </div>
+            </div></>
           ) : (
             <div className="bg-white p-12 text-center rounded-xl border border-gray-200">
               <p className="text-gray-500 mb-4">Lớp này chưa có thực đơn cho tuần đã chọn.</p>

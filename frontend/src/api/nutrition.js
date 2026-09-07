@@ -5,6 +5,10 @@ export const getMenuById = (id) => api.get(`/nutrition/menus/${id}`);
 export const getClassroomDietaryAlerts = (classroomId) => api.get(`/nutrition/classrooms/${classroomId}/dietary-alerts`);
 export const createMenu = (data) => api.post('/nutrition/menus', data);
 export const updateMenu = (id, data) => api.put(`/nutrition/menus/${id}`, data);
+export const submitMenuForApproval = (id, data = {}) => api.post(`/nutrition/menus/${id}/submit`, data);
+export const approveMenu = (id, data = {}) => api.post(`/nutrition/menus/${id}/approve`, data);
+export const returnMenuForRevision = (id, data) => api.post(`/nutrition/menus/${id}/return`, data);
+export const archiveMenu = (id, data = {}) => api.post(`/nutrition/menus/${id}/archive`, data);
 export const cloneMenu = (data) => api.post('/nutrition/menus/clone', data);
 export const checkMenuAllergies = (data) => api.post('/nutrition/menus/check-allergies', data);
 
