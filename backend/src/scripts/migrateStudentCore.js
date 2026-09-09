@@ -62,7 +62,10 @@ const run = async () => {
         return;
     }
     if (!dryRun && operations.length) {
-        await Student.bulkWrite(operations, { ordered: true });
+        // Dùng native collection để bổ sung studentCode cho bản ghi legacy.
+        // Mongoose sẽ bỏ qua update trường immutable, trong khi migration này là
+        // con đường được kiểm soát duy nhất để backfill dữ liệu cũ.
+        await Student.collection.bulkWrite(operations, { ordered: true });
         await Promise.all([...years.entries()].map(([year, sequence]) => StudentCodeCounter.findOneAndUpdate({ year }, { $max: { sequence } }, { upsert: true })));
         await Student.collection.createIndex({ studentCode: 1 }, { unique: true, name: 'studentCode_1' });
         console.log('Đã migrate Student Core và tạo unique index studentCode_1.');
