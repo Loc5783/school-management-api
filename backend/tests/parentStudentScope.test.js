@@ -3,7 +3,7 @@ process.env.JWT_ISSUER = 'school-management-api';
 process.env.JWT_AUDIENCE = 'school-management-web';
 
 const mongoose = require('mongoose');
-const { MongoMemoryServer } = require('mongodb-memory-server');
+const { MongoMemoryReplSet } = require('mongodb-memory-server');
 const request = require('supertest');
 const createApp = require('../app');
 const { generateToken } = require('../src/utils/jwt');
@@ -44,7 +44,7 @@ const createUser = (overrides = {}) => User.create({
 const authHeader = (user) => ({ Authorization: `Bearer ${generateToken(user)}` });
 
 beforeAll(async () => {
-    mongoServer = await MongoMemoryServer.create();
+    mongoServer = await MongoMemoryReplSet.create({ replSet: { count: 1, storageEngine: 'wiredTiger' } });
     await mongoose.connect(mongoServer.getUri());
 });
 
@@ -357,12 +357,17 @@ describe('parent student data scope', () => {
         const response = await request(app)
             .put(`/api/students/${studentA._id}`)
             .set(authHeader(teacher))
-            .send({ fullName: 'Bé An đã cập nhật', status: 'withdrawn', attendanceCardId: 'UNAUTHORIZED-CARD' })
+            .send({ fullName: 'Bé An đã cập nhật' })
             .expect(200);
 
         expect(response.body.data.fullName).toBe('Bé An đã cập nhật');
         expect(response.body.data.status).toBe('enrolled');
-        expect(response.body.data.attendanceCardId).toBeUndefined();
+
+        await request(app)
+            .put(`/api/students/${studentA._id}`)
+            .set(authHeader(teacher))
+            .send({ status: 'withdrawn', attendanceCardId: 'UNAUTHORIZED-CARD' })
+            .expect(403);
 
         await request(app)
             .put(`/api/students/${studentA._id}`)

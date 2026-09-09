@@ -1,4 +1,5 @@
 const StudentCodeCounter = require('../models/zone3_school/StudentCodeCounter');
+const mongoose = require('mongoose');
 
 const STUDENT_STATUSES = Object.freeze([
     'pending_admission', 'enrolled', 'temporarily_absent', 'withdrawn', 'transferred', 'graduated'
@@ -16,14 +17,29 @@ const STATUS_TRANSITIONS = {
 const isClassroomCountedStatus = (status) => ACTIVE_CLASSROOM_STATUSES.has(status);
 const canTransitionStudentStatus = (fromStatus, toStatus) => fromStatus === toStatus || STATUS_TRANSITIONS[fromStatus]?.has(toStatus);
 
-const generateStudentCode = async (date = new Date()) => {
+const generateStudentCode = async (date = new Date(), session = null) => {
     const year = date.getFullYear();
     const counter = await StudentCodeCounter.findOneAndUpdate(
         { year },
         { $inc: { sequence: 1 }, $setOnInsert: { year } },
-        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true, session }
     );
     return `HS-${year}-${String(counter.sequence).padStart(6, '0')}`;
+};
+
+const runStudentTransaction = async (operation) => {
+    const topology = await mongoose.connection.db.admin().command({ hello: 1 });
+    if (!topology.setName && topology.msg !== 'isdbgrid') {
+        const error = new Error('MongoDB phải chạy Replica Set hoặc sharded cluster để cập nhật học sinh an toàn');
+        error.statusCode = 503;
+        throw error;
+    }
+    const session = await mongoose.startSession();
+    try {
+        let result;
+        await session.withTransaction(async () => { result = await operation(session); });
+        return result;
+    } finally { await session.endSession(); }
 };
 
 const serializeStudent = (student, role, mode = 'detail') => {
@@ -62,4 +78,4 @@ const serializeStudent = (student, role, mode = 'detail') => {
     };
 };
 
-module.exports = { STUDENT_STATUSES, isClassroomCountedStatus, canTransitionStudentStatus, generateStudentCode, serializeStudent };
+module.exports = { STUDENT_STATUSES, isClassroomCountedStatus, canTransitionStudentStatus, generateStudentCode, runStudentTransaction, serializeStudent };

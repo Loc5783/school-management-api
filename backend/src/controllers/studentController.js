@@ -3,24 +3,36 @@ const Classroom = require('../models/zone3_school/Classroom');
 const AuditLog = require('../models/zone1_system/AuditLog');
 const { applyStudentListScope, canAccessStudent, isParent, isValidStudentId } = require('../services/studentAccessService');
 const { canAccessClassroom, getTeacherClassroomIds, hasSchoolWideReadAccess } = require('../services/schoolDataAccessService');
-const { STUDENT_STATUSES, isClassroomCountedStatus, canTransitionStudentStatus, generateStudentCode, serializeStudent } = require('../services/studentCoreService');
+const { STUDENT_STATUSES, isClassroomCountedStatus, canTransitionStudentStatus, generateStudentCode, runStudentTransaction, serializeStudent } = require('../services/studentCoreService');
 
-const MUTABLE = ['fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'notes', 'classroomId', 'schoolYear', 'parents', 'authorizedPickers', 'allergies', 'disease', 'emergencyContact', 'admissionDate'];
+const ADMIN_MUTABLE = ['fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'notes', 'classroomId', 'schoolYear', 'parents', 'authorizedPickers', 'allergies', 'disease', 'emergencyContact', 'admissionDate'];
+const TEACHER_MUTABLE = ['fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'notes'];
 const SORTS = new Set(['fullName', 'studentCode', 'birthDate', 'admissionDate', 'createdAt', 'updatedAt']);
-const pick = (body = {}) => Object.fromEntries(MUTABLE.filter((key) => Object.hasOwn(body, key)).map((key) => [key, body[key]]));
+const pick = (body = {}, role = 'admin') => Object.fromEntries((role === 'teacher' ? TEACHER_MUTABLE : ADMIN_MUTABLE).filter((key) => Object.hasOwn(body, key)).map((key) => [key, body[key]]));
+const assertTeacherAllowedFields = (body, creating = false) => {
+    const allowed = new Set(creating ? [...TEACHER_MUTABLE, 'classroomId'] : TEACHER_MUTABLE);
+    const forbidden = Object.keys(body || {}).filter((key) => !allowed.has(key));
+    if (forbidden.length) throw httpError(`Giáo viên không có quyền cập nhật trường: ${forbidden.join(', ')}`, 403);
+};
 const actorName = (user) => user.profile?.fullName || user.username;
 const httpError = (message, statusCode) => Object.assign(new Error(message), { statusCode });
 const regexEscape = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-const audit = (req, action, student, before = {}, after = {}) => AuditLog.create({
+const audit = (req, action, student, before = {}, after = {}, session = null) => AuditLog.create([{
     actorId: req.user._id, actorUsername: req.user.username, action, targetType: 'Student', targetId: student._id, before, after
-});
-const adjustHeadcount = (classroomId, delta) => delta ? Classroom.findByIdAndUpdate(classroomId, { $inc: { 'statistics.currentStudents': delta } }) : null;
+}], { session });
+const adjustHeadcount = (classroomId, delta, session = null) => delta ? Classroom.findOneAndUpdate({ _id: classroomId, 'statistics.currentStudents': { $gte: delta < 0 ? Math.abs(delta) : 0 } }, { $inc: { 'statistics.currentStudents': delta } }, { session }) : null;
 const validatePayload = (data, creating = false) => {
     if (creating && (!String(data.fullName || '').trim() || !data.birthDate || !data.gender || !data.classroomId)) throw httpError('Vui lòng nhập họ tên, ngày sinh, giới tính và lớp học', 422);
     if (data.birthDate && Number.isNaN(new Date(data.birthDate).getTime())) throw httpError('Ngày sinh không hợp lệ', 422);
+    if (data.birthDate && new Date(data.birthDate) > new Date()) throw httpError('Ngày sinh không được ở tương lai', 422);
     if (data.admissionDate && Number.isNaN(new Date(data.admissionDate).getTime())) throw httpError('Ngày nhập học không hợp lệ', 422);
+    if (data.birthDate && data.admissionDate && new Date(data.admissionDate) < new Date(data.birthDate)) throw httpError('Ngày nhập học không được trước ngày sinh', 422);
     if (data.gender && !['male', 'female'].includes(data.gender)) throw httpError('Giới tính không hợp lệ', 422);
+    for (const contact of [...(data.parents || []), data.emergencyContact || {}]) {
+        if (contact.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.email)) throw httpError('Email không hợp lệ', 422);
+        if (contact.phone && !/^(0|\+84)\d{9,10}$/.test(String(contact.phone).replace(/[.\s-]/g, ''))) throw httpError('Số điện thoại không hợp lệ', 422);
+    }
 };
 const scopedFilter = async (user, filter, classroomId) => {
     if (isParent(user)) return applyStudentListScope(user, filter);
@@ -35,17 +47,21 @@ const scopedFilter = async (user, filter, classroomId) => {
 
 const createStudent = async (req, res) => {
     try {
-        const data = pick(req.body); validatePayload(data, true);
+        if (req.user.role === 'teacher') assertTeacherAllowedFields(req.body, true);
+        const data = req.user.role === 'teacher' ? { ...pick(req.body, req.user.role), classroomId: req.body.classroomId } : pick(req.body, req.user.role); validatePayload(data, true);
         if (!isValidStudentId(data.classroomId)) return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
         const classroom = await Classroom.findOne({ _id: data.classroomId, status: 'active' });
         if (!classroom) return res.status(404).json({ message: 'Không tìm thấy lớp học' });
         if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, classroom._id)) return res.status(403).json({ message: 'Bạn không có quyền thêm học sinh vào lớp này' });
-        const status = req.body.status || 'enrolled';
+        const status = req.user.role === 'teacher' ? 'enrolled' : (req.body.status || 'enrolled');
         if (!STUDENT_STATUSES.includes(status)) return res.status(422).json({ message: 'Trạng thái học sinh không hợp lệ' });
         const admissionDate = data.admissionDate || new Date();
-        const student = await Student.create({ ...data, fullName: data.fullName.trim(), classroomId: classroom._id, className: classroom.name, status, admissionDate, enrollmentDate: admissionDate, studentCode: await generateStudentCode(admissionDate), createdBy: req.user._id, updatedBy: req.user._id, statusHistory: [{ toStatus: status, reason: 'Tạo hồ sơ học sinh', effectiveDate: admissionDate, changedBy: req.user._id, changedByName: actorName(req.user) }] });
-        if (isClassroomCountedStatus(status)) await adjustHeadcount(classroom._id, 1);
-        await audit(req, 'STUDENT_CREATED', student, {}, { studentCode: student.studentCode, status });
+        const student = await runStudentTransaction(async (session) => {
+            const created = (await Student.create([{ ...data, fullName: data.fullName.trim(), classroomId: classroom._id, className: classroom.name, status, admissionDate, enrollmentDate: admissionDate, studentCode: await generateStudentCode(admissionDate, session), createdBy: req.user._id, updatedBy: req.user._id, statusHistory: [{ toStatus: status, reason: 'Tạo hồ sơ học sinh', effectiveDate: admissionDate, changedBy: req.user._id, changedByName: actorName(req.user) }] }], { session }))[0];
+            if (isClassroomCountedStatus(status) && !await adjustHeadcount(classroom._id, 1, session)) throw httpError('Không thể cập nhật sĩ số lớp', 409);
+            await audit(req, 'STUDENT_CREATED', created, {}, { studentCode: created.studentCode, status }, session);
+            return created;
+        });
         res.status(201).json({ message: 'Thêm học sinh thành công', data: serializeStudent(student, req.user.role) });
     } catch (err) { console.error(err); res.status(err.statusCode || (err.code === 11000 ? 409 : 500)).json({ message: err.code === 11000 ? 'Mã học sinh đã tồn tại' : (err.message || 'Lỗi server') }); }
 };
@@ -84,7 +100,8 @@ const updateStudent = async (req, res) => {
         if (!isValidStudentId(req.params.id)) return res.status(400).json({ message: 'ID học sinh không hợp lệ' });
         const current = await Student.findById(req.params.id); if (!current) return res.status(404).json({ message: 'Không tìm thấy học sinh' });
         if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, current.classroomId)) return res.status(403).json({ message: 'Bạn không có quyền cập nhật học sinh này' });
-        const updates = pick(req.body); if (!Object.keys(updates).length) return res.status(400).json({ message: 'Không có trường học sinh hợp lệ để cập nhật' });
+        if (req.user.role === 'teacher') assertTeacherAllowedFields(req.body);
+        const updates = pick(req.body, req.user.role); if (!Object.keys(updates).length) return res.status(400).json({ message: 'Không có trường học sinh hợp lệ để cập nhật' });
         validatePayload(updates); let target;
         if (Object.hasOwn(updates, 'classroomId')) {
             if (!isValidStudentId(updates.classroomId)) return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
@@ -93,9 +110,14 @@ const updateStudent = async (req, res) => {
             updates.classroomId = target._id; updates.className = target.name;
         }
         updates.updatedBy = req.user._id;
-        const student = await Student.findByIdAndUpdate(current._id, { $set: updates }, { returnDocument: 'after', runValidators: true });
-        if (target && String(current.classroomId) !== String(target._id) && isClassroomCountedStatus(current.status)) await Promise.all([adjustHeadcount(current.classroomId, -1), adjustHeadcount(target._id, 1)]);
-        await audit(req, 'STUDENT_UPDATED', student, {}, { changedFields: Object.keys(updates).filter((key) => key !== 'updatedBy') });
+        const student = await runStudentTransaction(async (session) => {
+            const updated = await Student.findByIdAndUpdate(current._id, { $set: updates }, { returnDocument: 'after', runValidators: true, session });
+            if (target && String(current.classroomId) !== String(target._id) && isClassroomCountedStatus(current.status)) {
+                if (!await adjustHeadcount(current.classroomId, -1, session) || !await adjustHeadcount(target._id, 1, session)) throw httpError('Không thể cập nhật sĩ số lớp', 409);
+            }
+            await audit(req, 'STUDENT_UPDATED', updated, {}, { changedFields: Object.keys(updates).filter((key) => key !== 'updatedBy') }, session);
+            return updated;
+        });
         res.json({ message: 'Cập nhật học sinh thành công', data: serializeStudent(student, req.user.role) });
     } catch (err) { console.error(err); res.status(err.statusCode || 500).json({ message: err.message || 'Lỗi server' }); }
 };
@@ -112,9 +134,13 @@ const changeStudentStatus = async (req, res) => {
         if (['withdrawn', 'transferred', 'graduated'].includes(status)) student.exitDate = new Date(effectiveDate);
         if (status === 'enrolled' && !student.admissionDate) student.admissionDate = new Date(effectiveDate);
         student.statusHistory.push({ fromStatus, toStatus: status, reason: String(reason).trim(), effectiveDate: new Date(effectiveDate), changedBy: req.user._id, changedByName: actorName(req.user) });
-        await student.save(); if (isClassroomCountedStatus(fromStatus) !== isClassroomCountedStatus(status)) await adjustHeadcount(student.classroomId, isClassroomCountedStatus(status) ? 1 : -1);
-        await audit(req, 'STUDENT_STATUS_CHANGED', student, { status: fromStatus }, { status, reason: String(reason).trim() });
-        res.json({ message: 'Đã cập nhật trạng thái học sinh', data: serializeStudent(student, req.user.role) });
+        const savedStudent = await runStudentTransaction(async (session) => {
+            await student.save({ session });
+            if (isClassroomCountedStatus(fromStatus) !== isClassroomCountedStatus(status) && !await adjustHeadcount(student.classroomId, isClassroomCountedStatus(status) ? 1 : -1, session)) throw httpError('Không thể cập nhật sĩ số lớp', 409);
+            await audit(req, 'STUDENT_STATUS_CHANGED', student, { status: fromStatus }, { status, reason: String(reason).trim() }, session);
+            return student;
+        });
+        res.json({ success: true, message: 'Đã cập nhật trạng thái học sinh', data: serializeStudent(savedStudent, req.user.role) });
     } catch (err) { console.error(err); res.status(err.statusCode || 500).json({ message: err.message || 'Lỗi server' }); }
 };
 
