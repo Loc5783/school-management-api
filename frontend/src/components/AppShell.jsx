@@ -6,9 +6,7 @@ import api from '../api/axiosConfig';
 const allNavItems = [
   { to: '/dashboard', label: 'Tổng quan', icon: 'grid', permission: 'report.read' },
   { to: '/attendance', label: 'Điểm danh', icon: 'attendance', permission: 'attendance.manage' },
-  { to: '/timekeeping', label: 'Làm đơn chấm công bù', icon: 'clock', permission: 'attendance.correction' },
-  { to: '/smart-attendance', label: 'Điểm danh tự động', icon: 'camera', permission: 'attendance.manage' },
-  { to: '/timekeeping-management', label: 'Quản lý chấm công', icon: 'users', permission: 'attendance.correction' },
+  { to: '/timekeeping', label: 'Chấm công nhân sự', icon: 'clock', roles: ['admin', 'principal', 'teacher'] },
   { to: '/parent-accounts', label: 'Duyệt phụ huynh', icon: 'users', roles: ['admin', 'principal'] },
   { to: '/students', label: 'Học sinh', icon: 'students', permission: 'student.read' },
   { to: '/classrooms', label: 'Lớp học', icon: 'classes', permission: 'classroom.read' },

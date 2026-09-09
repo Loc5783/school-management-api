@@ -5,9 +5,7 @@ import ParentAccountManagement from './pages/ParentAccountManagement';
 import Dashboard from './pages/Dashboard';
 import AttendanceClassList from './pages/AttendanceClassList';
 import AttendanceDetail from './pages/AttendanceDetail';
-import SmartAttendance from './pages/SmartAttendance';
-import ManualTimekeeping from './pages/ManualTimekeeping';
-import TimekeepingManagement from './pages/TimekeepingManagement';
+import TimekeepingHub from './pages/TimekeepingHub';
 import NutritionManagement from './pages/NutritionManagement';
 import StudentList from './pages/StudentList';
 import StudentDetail from './pages/StudentDetail';
@@ -38,15 +36,15 @@ function App() {
         />
         <Route
           path="/smart-attendance"
-          element={<ProtectedRoute><SmartAttendance /></ProtectedRoute>}
+          element={<Navigate to="/timekeeping?tab=kiosk" replace />}
         />
         <Route
           path="/timekeeping"
-          element={<ProtectedRoute><ManualTimekeeping /></ProtectedRoute>}
+          element={<ProtectedRoute><TimekeepingHub /></ProtectedRoute>}
         />
         <Route
           path="/timekeeping-management"
-          element={<ProtectedRoute><TimekeepingManagement /></ProtectedRoute>}
+          element={<Navigate to="/timekeeping?tab=management" replace />}
         />
         <Route
           path="/nutrition"

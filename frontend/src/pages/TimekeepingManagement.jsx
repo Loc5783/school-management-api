@@ -8,7 +8,7 @@ import {
   recalculateAttendance
 } from '../api/timekeeping';
 
-export default function TimekeepingManagement() {
+export default function TimekeepingManagement({ embedded = false }) {
   const [pendingRequests, setPendingRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState('');
@@ -90,10 +90,9 @@ export default function TimekeepingManagement() {
     }
   };
 
-  if (loading) return <div className="page-loader"><span className="loading-orb" />Đang tải...</div>;
+  if (loading) return embedded ? <div className="inline-loader"><span className="loading-orb" />Đang tải...</div> : <div className="page-loader"><span className="loading-orb" />Đang tải...</div>;
 
-  return (
-    <AppShell title="Quản lý chấm công" subtitle="Phê duyệt đơn và theo dõi công nhân viên">
+  const content = <>
       <section className="content-card">
         <div className="card-heading">
           <div>
@@ -164,6 +163,6 @@ export default function TimekeepingManagement() {
           </button>
         </div>
       </section>
-    </AppShell>
-  );
+  </>;
+  return embedded ? content : <AppShell title="Quản lý chấm công" subtitle="Phê duyệt đơn và theo dõi công nhân viên">{content}</AppShell>;
 }

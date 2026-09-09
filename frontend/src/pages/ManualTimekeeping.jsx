@@ -29,7 +29,7 @@ const sourceLabel = {
 
 const today = () => new Date().toISOString().slice(0, 10);
 
-export default function ManualTimekeeping() {
+export default function ManualTimekeeping({ embedded = false }) {
   const [data, setData] = useState({ records: [], corrections: [] });
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -73,11 +73,7 @@ export default function ManualTimekeeping() {
     }
   };
 
-  return (
-    <AppShell
-      title="Làm đơn chấm công bù"
-      subtitle="Khai báo thời gian bị thiếu để Admin hoặc Ban giám hiệu kiểm tra và phê duyệt."
-    >
+  const content = <>
       {notice && <div className={`timekeeping-notice ${notice.type}`}><Icon name={notice.type === 'success' ? 'check' : 'shield'} size={17} />{notice.text}</div>}
 
       <section className="adjustment-hero">
@@ -145,6 +141,6 @@ export default function ManualTimekeeping() {
           </div>
         </div>}
       </section>
-    </AppShell>
-  );
+  </>;
+  return embedded ? content : <AppShell title="Làm đơn chấm công bù" subtitle="Khai báo thời gian bị thiếu để Admin hoặc Ban giám hiệu kiểm tra và phê duyệt.">{content}</AppShell>;
 }

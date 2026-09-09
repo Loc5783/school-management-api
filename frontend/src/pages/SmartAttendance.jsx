@@ -3,7 +3,7 @@ import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
 import { kioskCheckIn } from '../api/timekeeping';
 
-export default function SmartAttendance() {
+export default function SmartAttendance({ embedded = false }) {
   const [mode, setMode] = useState('face');
   const [cameraReady, setCameraReady] = useState(false);
   const [message, setMessage] = useState(null);
@@ -74,11 +74,7 @@ export default function SmartAttendance() {
     }
   };
 
-  return (
-    <AppShell
-      title="Điểm danh tự động"
-      subtitle="Trạm ghi nhận học sinh và chấm công nhân viên bằng thiết bị hoặc mã định danh."
-    >
+  const content = <>
       <div className="smart-layout device-layout">
         <section className="smart-scanner-card">
           <div className="scanner-heading">
@@ -164,6 +160,6 @@ export default function SmartAttendance() {
         </aside>
       </div>
       <section className="setup-note"><Icon name="shield" size={19} /><div><strong>Ghi nhận thay thế có kiểm soát</strong><p>Thẻ và khuôn mặt vẫn là nguồn ưu tiên. Nhập mã nhân viên là phương án dự phòng, được lưu tách biệt với nguồn <code>MANUAL_CODE</code> để đối soát.</p></div></section>
-    </AppShell>
-  );
+  </>;
+  return embedded ? content : <AppShell title="Điểm danh tự động" subtitle="Trạm ghi nhận học sinh và chấm công nhân viên bằng thiết bị hoặc mã định danh.">{content}</AppShell>;
 }
