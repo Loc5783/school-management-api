@@ -1,6 +1,27 @@
 const mongoose = require('mongoose');
 
+const StudentStatusHistorySchema = new mongoose.Schema({
+    fromStatus: String,
+    toStatus: {
+        type: String,
+        enum: ['pending_admission', 'enrolled', 'temporarily_absent', 'withdrawn', 'transferred', 'graduated'],
+        required: true
+    },
+    reason: { type: String, trim: true, maxlength: 500, default: '' },
+    effectiveDate: { type: Date, required: true },
+    changedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    changedByName: { type: String, required: true },
+    changedAt: { type: Date, default: Date.now, required: true }
+}, { _id: false });
+
 const StudentSchema = new mongoose.Schema({
+    studentCode: {
+        type: String,
+        trim: true,
+        uppercase: true,
+        immutable: true,
+        match: /^HS-\d{4}-\d{6}$/
+    },
     fullName: {
         type: String,
         required: true,
@@ -16,6 +37,11 @@ const StudentSchema = new mongoose.Schema({
         required: true
     },
     address: String,
+    nationality: { type: String, trim: true, default: 'Việt Nam' },
+    ethnicity: { type: String, trim: true, default: '' },
+    birthPlace: { type: String, trim: true, default: '' },
+    avatar: { type: String, trim: true, default: '' },
+    notes: { type: String, trim: true, maxlength: 2000, default: '' },
     classroomId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Classroom',
@@ -98,11 +124,23 @@ const StudentSchema = new mongoose.Schema({
         type: Date,
         default: Date.now
     },
+    admissionDate: {
+        type: Date
+    },
+    exitDate: {
+        type: Date
+    },
     status: {
         type: String,
-        enum: ['enrolled', 'graduated', 'withdrawn', 'suspended'],
+        enum: ['pending_admission', 'enrolled', 'temporarily_absent', 'withdrawn', 'transferred', 'graduated'],
         default: 'enrolled'
     },
+    statusHistory: {
+        type: [StudentStatusHistorySchema],
+        default: []
+    },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     dailyReports: {
         type: [{
             reportDate: {
@@ -131,6 +169,8 @@ const StudentSchema = new mongoose.Schema({
 StudentSchema.index({ classroomId: 1 });
 StudentSchema.index({ status: 1 });
 StudentSchema.index({ fullName: 'text' });
+StudentSchema.index({ studentCode: 1 }, { unique: true, sparse: true });
+StudentSchema.index({ classroomId: 1, status: 1, fullName: 1 });
 
 // Middleware tự động gán className trước khi lưu
 StudentSchema.pre('save', async function() {
@@ -144,6 +184,7 @@ StudentSchema.pre('save', async function() {
             this.className = classroom.name;
         }
     }
+    if (!this.admissionDate && this.enrollmentDate) this.admissionDate = this.enrollmentDate;
 });
 
 module.exports = mongoose.model('Student', StudentSchema);

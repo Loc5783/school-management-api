@@ -4,6 +4,7 @@ const {
     getAllStudents,
     getStudentById,
     updateStudent,
+    changeStudentStatus,
     deleteStudent
 } = require('../controllers/studentController');
 const auth = require('../middlewares/auth');
@@ -17,6 +18,7 @@ router.post('/', roleCheck(['admin', 'principal', 'teacher']), createStudent);
 router.get('/', getAllStudents);
 router.get('/:id', getStudentById);
 router.put('/:id', roleCheck(['admin', 'principal', 'teacher']), updateStudent);
+router.patch('/:id/status', roleCheck(['admin', 'principal']), changeStudentStatus);
 router.delete('/:id', roleCheck(['admin', 'principal']), deleteStudent);
 
 module.exports = router;
