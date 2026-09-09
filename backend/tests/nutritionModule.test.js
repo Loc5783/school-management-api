@@ -116,6 +116,7 @@ beforeEach(async () => {
 
     // Tạo Học sinh có tiền sử dị ứng và bệnh lý
     studentAllergic = await Student.create({
+        studentCode: 'HS-2026-009001',
         fullName: 'Bé Nguyễn Gia Bảo',
         birthDate: new Date('2022-05-10'),
         gender: 'male',

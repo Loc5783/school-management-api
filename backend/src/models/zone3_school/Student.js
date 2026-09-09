@@ -19,6 +19,7 @@ const StudentSchema = new mongoose.Schema({
         type: String,
         trim: true,
         uppercase: true,
+        required: true,
         immutable: true,
         match: /^HS-\d{4}-\d{6}$/
     },
@@ -169,7 +170,7 @@ const StudentSchema = new mongoose.Schema({
 StudentSchema.index({ classroomId: 1 });
 StudentSchema.index({ status: 1 });
 StudentSchema.index({ fullName: 'text' });
-StudentSchema.index({ studentCode: 1 }, { unique: true, sparse: true });
+StudentSchema.index({ studentCode: 1 }, { unique: true });
 StudentSchema.index({ classroomId: 1, status: 1, fullName: 1 });
 
 // Middleware tự động gán className trước khi lưu

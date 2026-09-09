@@ -12,6 +12,8 @@
     "migrate:timekeeping-v2": "node src/scripts/migrateTimekeepingV2.js",
     "migrate:student-attendance-date-keys": "node src/scripts/migrateStudentAttendanceDateKeys.js",
     "migrate:student-core": "node src/scripts/migrateStudentCore.js",
+    "migrate:student-core:dry-run": "node src/scripts/migrateStudentCore.js --dry-run",
+    "migrate:student-core:verify": "node src/scripts/migrateStudentCore.js --verify",
     "test": "jest --runInBand"
   },
   "keywords": [],

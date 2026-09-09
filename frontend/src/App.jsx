@@ -9,6 +9,9 @@ import SmartAttendance from './pages/SmartAttendance';
 import ManualTimekeeping from './pages/ManualTimekeeping';
 import TimekeepingManagement from './pages/TimekeepingManagement';
 import NutritionManagement from './pages/NutritionManagement';
+import StudentList from './pages/StudentList';
+import StudentDetail from './pages/StudentDetail';
+import StudentForm from './pages/StudentForm';
 
 function ProtectedRoute({ children }) {
   return localStorage.getItem('token') ? children : <Navigate to="/login" replace />;
@@ -49,6 +52,10 @@ function App() {
           path="/nutrition"
           element={<ProtectedRoute><NutritionManagement /></ProtectedRoute>}
         />
+        <Route path="/students" element={<ProtectedRoute><StudentList /></ProtectedRoute>} />
+        <Route path="/students/new" element={<ProtectedRoute><StudentForm /></ProtectedRoute>} />
+        <Route path="/students/:id" element={<ProtectedRoute><StudentDetail /></ProtectedRoute>} />
+        <Route path="/students/:id/edit" element={<ProtectedRoute><StudentForm /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to="/dashboard" />} />
       </Routes>
     </BrowserRouter>

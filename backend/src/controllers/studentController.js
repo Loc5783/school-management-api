@@ -16,6 +16,11 @@ const assertTeacherAllowedFields = (body, creating = false) => {
 };
 const actorName = (user) => user.profile?.fullName || user.username;
 const httpError = (message, statusCode) => Object.assign(new Error(message), { statusCode });
+const respondError = (res, err, fallback = 'Lỗi server') => {
+    const field = Object.keys(err.keyPattern || {})[0];
+    const duplicateMessages = { studentCode: 'Mã học sinh đã tồn tại', attendanceCardId: 'Mã thẻ điểm danh đã tồn tại', faceProfileId: 'Mã hồ sơ khuôn mặt đã tồn tại' };
+    return res.status(err.statusCode || (err.code === 11000 ? 409 : 500)).json({ success: false, message: err.code === 11000 ? (duplicateMessages[field] || 'Dữ liệu trùng lặp') : (err.message || fallback) });
+};
 const regexEscape = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const audit = (req, action, student, before = {}, after = {}, session = null) => AuditLog.create([{
@@ -29,6 +34,9 @@ const validatePayload = (data, creating = false) => {
     if (data.admissionDate && Number.isNaN(new Date(data.admissionDate).getTime())) throw httpError('Ngày nhập học không hợp lệ', 422);
     if (data.birthDate && data.admissionDate && new Date(data.admissionDate) < new Date(data.birthDate)) throw httpError('Ngày nhập học không được trước ngày sinh', 422);
     if (data.gender && !['male', 'female'].includes(data.gender)) throw httpError('Giới tính không hợp lệ', 422);
+    for (const [field, value, max] of [['fullName', data.fullName, 120], ['address', data.address, 500], ['nationality', data.nationality, 80], ['ethnicity', data.ethnicity, 80], ['birthPlace', data.birthPlace, 120], ['notes', data.notes, 2000]]) {
+        if (value != null && String(value).trim().length > max) throw httpError(`${field} vượt quá ${max} ký tự`, 422);
+    }
     for (const contact of [...(data.parents || []), data.emergencyContact || {}]) {
         if (contact.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.email)) throw httpError('Email không hợp lệ', 422);
         if (contact.phone && !/^(0|\+84)\d{9,10}$/.test(String(contact.phone).replace(/[.\s-]/g, ''))) throw httpError('Số điện thoại không hợp lệ', 422);
@@ -62,13 +70,13 @@ const createStudent = async (req, res) => {
             await audit(req, 'STUDENT_CREATED', created, {}, { studentCode: created.studentCode, status }, session);
             return created;
         });
-        res.status(201).json({ message: 'Thêm học sinh thành công', data: serializeStudent(student, req.user.role) });
-    } catch (err) { console.error(err); res.status(err.statusCode || (err.code === 11000 ? 409 : 500)).json({ message: err.code === 11000 ? 'Mã học sinh đã tồn tại' : (err.message || 'Lỗi server') }); }
+        res.status(201).json({ success: true, message: 'Thêm học sinh thành công', data: serializeStudent(student, req.user.role) });
+    } catch (err) { console.error(err); return respondError(res, err); }
 };
 
 const getAllStudents = async (req, res) => {
     try {
-        const { classroomId, status, search, sortBy = 'fullName', sortOrder = 'asc' } = req.query;
+        const { classroomId, status, schoolYear, search, sortBy = 'fullName', sortOrder = 'asc' } = req.query;
         const page = Number(req.query.page || 1); const limit = Number(req.query.limit || 20);
         if (classroomId && !isValidStudentId(classroomId)) return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
         if (!Number.isInteger(page) || page < 1 || !Number.isInteger(limit) || limit < 1 || limit > 100) return res.status(400).json({ message: 'Thông tin phân trang không hợp lệ' });
@@ -76,12 +84,13 @@ const getAllStudents = async (req, res) => {
         if (status && status !== 'all' && !STUDENT_STATUSES.includes(status)) return res.status(400).json({ message: 'Trạng thái học sinh không hợp lệ' });
         let filter = {};
         if (classroomId) filter.classroomId = classroomId;
+        if (schoolYear?.trim()) filter.schoolYear = schoolYear.trim();
         if (status && status !== 'all') filter.status = status; else if (!status) filter.status = 'enrolled';
         if (search?.trim()) { const keyword = regexEscape(search.trim()); filter.$or = [{ fullName: { $regex: keyword, $options: 'i' } }, { studentCode: { $regex: keyword, $options: 'i' } }]; }
         filter = await scopedFilter(req.user, filter, classroomId);
         const [students, total] = await Promise.all([Student.find(filter).sort({ [sortBy]: sortOrder === 'asc' ? 1 : -1, _id: 1 }).skip((page - 1) * limit).limit(limit), Student.countDocuments(filter)]);
-        res.json({ message: 'Lấy danh sách học sinh thành công', data: students.map((student) => serializeStudent(student, req.user.role, 'list')), pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
-    } catch (err) { console.error(err); res.status(err.statusCode || 500).json({ message: err.message || 'Lỗi server' }); }
+        res.json({ success: true, message: 'Lấy danh sách học sinh thành công', data: students.map((student) => serializeStudent(student, req.user.role, 'list')), pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+    } catch (err) { console.error(err); return respondError(res, err); }
 };
 
 const getStudentById = async (req, res) => {
@@ -91,8 +100,8 @@ const getStudentById = async (req, res) => {
         if (isParent(req.user) && !canAccessStudent(req.user, student._id)) return res.status(403).json({ message: 'Bạn không có quyền xem thông tin học sinh này' });
         if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, student.classroomId)) return res.status(403).json({ message: 'Bạn không có quyền xem thông tin học sinh này' });
         if (!isParent(req.user) && req.user.role !== 'teacher' && !hasSchoolWideReadAccess(req.user)) return res.status(403).json({ message: 'Bạn không có quyền xem dữ liệu học sinh' });
-        res.json({ message: 'Lấy chi tiết học sinh thành công', data: serializeStudent(student, req.user.role) });
-    } catch (err) { console.error(err); res.status(500).json({ message: 'Lỗi server' }); }
+        res.json({ success: true, message: 'Lấy chi tiết học sinh thành công', data: serializeStudent(student, req.user.role) });
+    } catch (err) { console.error(err); return respondError(res, err); }
 };
 
 const updateStudent = async (req, res) => {
@@ -118,8 +127,8 @@ const updateStudent = async (req, res) => {
             await audit(req, 'STUDENT_UPDATED', updated, {}, { changedFields: Object.keys(updates).filter((key) => key !== 'updatedBy') }, session);
             return updated;
         });
-        res.json({ message: 'Cập nhật học sinh thành công', data: serializeStudent(student, req.user.role) });
-    } catch (err) { console.error(err); res.status(err.statusCode || 500).json({ message: err.message || 'Lỗi server' }); }
+        res.json({ success: true, message: 'Cập nhật học sinh thành công', data: serializeStudent(student, req.user.role) });
+    } catch (err) { console.error(err); return respondError(res, err); }
 };
 
 const changeStudentStatus = async (req, res) => {
@@ -128,8 +137,10 @@ const changeStudentStatus = async (req, res) => {
         const { status, reason = '', effectiveDate = new Date() } = req.body;
         if (!STUDENT_STATUSES.includes(status)) return res.status(422).json({ message: 'Trạng thái học sinh không hợp lệ' });
         if (Number.isNaN(new Date(effectiveDate).getTime())) return res.status(422).json({ message: 'Ngày hiệu lực không hợp lệ' });
-        const student = await Student.findById(req.params.id); if (!student) return res.status(404).json({ message: 'Không tìm thấy học sinh' });
-        if (!canTransitionStudentStatus(student.status, status)) return res.status(409).json({ message: `Không thể chuyển từ ${student.status} sang ${status}` });
+        const student = await Student.findById(req.params.id); if (!student) return res.status(404).json({ success: false, message: 'Không tìm thấy học sinh' });
+        if (student.admissionDate && new Date(effectiveDate) < new Date(student.admissionDate)) return res.status(422).json({ success: false, message: 'Ngày thôi học không được trước ngày nhập học' });
+        if (!canTransitionStudentStatus(student.status, status)) return res.status(409).json({ success: false, message: `Không thể chuyển từ ${student.status} sang ${status}` });
+        if (student.status === status) return res.json({ success: true, message: 'Trạng thái học sinh không thay đổi', data: serializeStudent(student, req.user.role) });
         const fromStatus = student.status; student.status = status; student.updatedBy = req.user._id;
         if (['withdrawn', 'transferred', 'graduated'].includes(status)) student.exitDate = new Date(effectiveDate);
         if (status === 'enrolled' && !student.admissionDate) student.admissionDate = new Date(effectiveDate);
@@ -141,7 +152,7 @@ const changeStudentStatus = async (req, res) => {
             return student;
         });
         res.json({ success: true, message: 'Đã cập nhật trạng thái học sinh', data: serializeStudent(savedStudent, req.user.role) });
-    } catch (err) { console.error(err); res.status(err.statusCode || 500).json({ message: err.message || 'Lỗi server' }); }
+    } catch (err) { console.error(err); return respondError(res, err); }
 };
 
 const deleteStudent = (req, res) => { req.body = { ...req.body, status: 'withdrawn', reason: req.body.reason || 'Hồ sơ ngừng theo học' }; return changeStudentStatus(req, res); };

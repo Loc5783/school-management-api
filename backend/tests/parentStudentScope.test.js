@@ -10,6 +10,7 @@ const { generateToken } = require('../src/utils/jwt');
 const User = require('../src/models/zone1_system/User');
 const Classroom = require('../src/models/zone3_school/Classroom');
 const Student = require('../src/models/zone3_school/Student');
+const StudentCodeCounter = require('../src/models/zone3_school/StudentCodeCounter');
 const StudentAttendance = require('../src/models/zone3_school/StudentAttendance');
 const TuitionFee = require('../src/models/zone4_finance/TuitionFee');
 
@@ -58,6 +59,7 @@ beforeEach(async () => {
         User.deleteMany({}),
         Classroom.deleteMany({}),
         Student.deleteMany({}),
+        StudentCodeCounter.deleteMany({}),
         StudentAttendance.deleteMany({}),
         TuitionFee.deleteMany({})
     ]);
@@ -75,14 +77,16 @@ beforeEach(async () => {
         {
             _id: classroomA,
             name: 'Lớp A',
-            ageGroup: '3-4',
+            ageGroup: '3-4', statistics: { currentStudents: 2 },
             teachers: [{ teacherId: teacher._id, teacherName: 'Giáo viên A', role: 'homeroom' }]
         },
-        { _id: classroomB, name: 'Lớp B', ageGroup: '4-5' }
+        { _id: classroomB, name: 'Lớp B', ageGroup: '4-5', statistics: { currentStudents: 1 } }
     ]);
+    await StudentCodeCounter.create({ year: 2026, sequence: 3 });
 
     [studentA, studentB, studentC] = await Student.create([
         {
+            studentCode: 'HS-2026-000001',
             fullName: 'Bé An',
             birthDate: new Date('2020-01-01'),
             gender: 'male',
@@ -91,6 +95,7 @@ beforeEach(async () => {
             status: 'enrolled'
         },
         {
+            studentCode: 'HS-2026-000002',
             fullName: 'Bé Bình',
             birthDate: new Date('2020-02-02'),
             gender: 'female',
@@ -99,6 +104,7 @@ beforeEach(async () => {
             status: 'enrolled'
         },
         {
+            studentCode: 'HS-2026-000003',
             fullName: 'Bé Chi',
             birthDate: new Date('2020-03-03'),
             gender: 'female',
