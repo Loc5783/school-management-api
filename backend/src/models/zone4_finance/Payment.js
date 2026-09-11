@@ -24,6 +24,14 @@ const PaymentSchema = new mongoose.Schema({
         type: String, // Mã giao dịch ngân hàng
         trim: true
     },
+    receiptNumber: {
+        type: String,
+        trim: true,
+        uppercase: true,
+        immutable: true,
+        unique: true,
+        sparse: true
+    },
     idempotencyKey: {
         type: String,
         required: true,

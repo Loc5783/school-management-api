@@ -6,7 +6,11 @@ const {
     getAttendanceByStudent,
     getAttendanceByClass,
     updateAttendance,
-    deleteAttendance
+    deleteAttendance,
+    createLeaveRequest,
+    getLeaveRequests,
+    reviewLeaveRequest,
+    getAbsenceReport
 } = require('../controllers/attendanceController');
 const auth = require('../middlewares/auth');
 const roleCheck = require('../middlewares/roleCheck');
@@ -20,6 +24,13 @@ router.use(auth);
 router.post('/', roleCheck(['teacher', 'admin', 'principal']), createAttendance);
 router.post('/bulk', roleCheck(['teacher', 'admin', 'principal']), createBulkAttendance);
 router.post('/check-in', roleCheck(['teacher', 'admin', 'principal', 'guard']), automaticCheckIn);
+
+// Đơn xin nghỉ và báo cáo vắng mặt. Các kiểm tra liên kết phụ huynh/lớp giáo
+// viên tiếp tục nằm ở controller để không tin tưởng riêng vào giao diện.
+router.post('/leave-requests', roleCheck(['parent']), createLeaveRequest);
+router.get('/leave-requests', getLeaveRequests);
+router.patch('/leave-requests/:id/review', roleCheck(['admin', 'principal']), reviewLeaveRequest);
+router.get('/reports/absence', roleCheck(['teacher', 'admin', 'principal']), getAbsenceReport);
 
 // Xem danh sách
 router.get('/student/:studentId', getAttendanceByStudent);

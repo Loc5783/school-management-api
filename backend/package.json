@@ -15,6 +15,8 @@
     "migrate:student-core": "node src/scripts/migrateStudentCore.js",
     "migrate:student-core:dry-run": "node src/scripts/migrateStudentCore.js --dry-run",
     "migrate:student-core:verify": "node src/scripts/migrateStudentCore.js --verify",
+    "migrate:tuition-invoice-index:dry-run": "node src/scripts/migrateTuitionInvoiceUniqueIndex.js",
+    "migrate:tuition-invoice-index": "node src/scripts/migrateTuitionInvoiceUniqueIndex.js --apply",
     "test": "jest --runInBand"
   },
   "keywords": [],

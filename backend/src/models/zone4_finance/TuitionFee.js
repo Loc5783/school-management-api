@@ -74,7 +74,8 @@ const TuitionFeeSchema = new mongoose.Schema({
 });
 
 // Indexes
-TuitionFeeSchema.index({ studentId: 1, period: 1 });
+// Unique index studentId + period được quản lý bởi migration/createIndexes.
+// Hóa đơn đã hủy không chặn việc lập lại một hóa đơn nghiệp vụ mới.
 TuitionFeeSchema.index({ classroomId: 1 });
 TuitionFeeSchema.index({ status: 1 });
 TuitionFeeSchema.index({ dueDate: 1 });

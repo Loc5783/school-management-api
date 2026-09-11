@@ -14,3 +14,9 @@ export const automaticCheckIn = (identifier, method) => api.post('/attendance/ch
 export const updateAttendance = (id, data) => api.put(`/attendance/${id}`, data);
 
 export const deleteAttendance = (id) => api.delete(`/attendance/${id}`);
+
+export const getStudentAttendance = (studentId, params) => api.get(`/attendance/student/${studentId}`, { params });
+export const createLeaveRequest = (data) => api.post('/attendance/leave-requests', data);
+export const getLeaveRequests = (params) => api.get('/attendance/leave-requests', { params });
+export const reviewLeaveRequest = (id, data) => api.patch(`/attendance/leave-requests/${id}/review`, data);
+export const getAbsenceReport = (params) => api.get('/attendance/reports/absence', { params });

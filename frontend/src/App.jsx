@@ -5,6 +5,8 @@ import ParentAccountManagement from './pages/ParentAccountManagement';
 import Dashboard from './pages/Dashboard';
 import AttendanceClassList from './pages/AttendanceClassList';
 import AttendanceDetail from './pages/AttendanceDetail';
+import AttendanceAbsenceReport from './pages/AttendanceAbsenceReport';
+import AttendanceLeaveManagement from './pages/AttendanceLeaveManagement';
 import TimekeepingHub from './pages/TimekeepingHub';
 import NutritionManagement from './pages/NutritionManagement';
 import StudentList from './pages/StudentList';
@@ -12,6 +14,7 @@ import StudentDetail from './pages/StudentDetail';
 import StudentForm from './pages/StudentForm';
 import ClassroomManagement from './pages/ClassroomManagement';
 import ParentPortal from './pages/ParentPortal';
+import FinanceManagement from './pages/FinanceManagement';
 
 function ProtectedRoute({ children }) {
   return localStorage.getItem('token') ? children : <Navigate to="/login" replace />;
@@ -43,6 +46,14 @@ function App() {
           element={<ProtectedRoute><AttendanceDetail /></ProtectedRoute>}
         />
         <Route
+          path="/attendance/reports"
+          element={<ProtectedRoute><AttendanceAbsenceReport /></ProtectedRoute>}
+        />
+        <Route
+          path="/attendance/leave-requests"
+          element={<ProtectedRoute><AttendanceLeaveManagement /></ProtectedRoute>}
+        />
+        <Route
           path="/smart-attendance"
           element={<Navigate to="/timekeeping?tab=kiosk" replace />}
         />
@@ -63,6 +74,7 @@ function App() {
         <Route path="/students/:id" element={<ProtectedRoute><StudentDetail /></ProtectedRoute>} />
         <Route path="/students/:id/edit" element={<ProtectedRoute><StudentForm /></ProtectedRoute>} />
         <Route path="/classrooms" element={<ProtectedRoute><ClassroomManagement /></ProtectedRoute>} />
+        <Route path="/finance" element={<ProtectedRoute><FinanceManagement /></ProtectedRoute>} />
         <Route path="/parent-portal" element={<ParentRoute><ParentPortal /></ParentRoute>} />
         <Route path="*" element={<Navigate to="/dashboard" />} />
       </Routes>

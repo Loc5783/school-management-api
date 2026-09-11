@@ -1,4 +1,5 @@
 const StudentAttendance = require('../models/zone3_school/StudentAttendance');
+const StudentLeaveRequest = require('../models/zone3_school/StudentLeaveRequest');
 const Student = require('../models/zone3_school/Student');
 const Classroom = require('../models/zone3_school/Classroom');
 const {
@@ -15,8 +16,10 @@ const {
     DEFAULT_SCHOOL_TIMEZONE,
     getWorkDate,
     getWorkDateRange,
+    addWorkDays,
     isValidWorkDate
 } = require('../utils/dateHelpers');
+const { runStudentTransaction } = require('../services/studentCoreService');
 
 const getTodayRange = () => getWorkDateRange(
     getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE),
@@ -35,6 +38,21 @@ const parseWorkDate = (value) => {
 };
 
 const isDuplicateKeyError = (error) => error?.code === 11000;
+const SCHOOL_WIDE_ATTENDANCE_ROLES = new Set(['admin', 'principal']);
+
+const getWeekdayDateKeys = (startDate, endDate) => {
+    const dates = [];
+    for (let date = startDate; date <= endDate; date = addWorkDays(date, 1)) {
+        const weekday = new Date(`${date}T00:00:00.000Z`).getUTCDay();
+        if (weekday !== 0 && weekday !== 6) dates.push(date);
+    }
+    return dates;
+};
+
+const canReadLeaveRequests = async (user, classroomId) => (
+    SCHOOL_WIDE_ATTENDANCE_ROLES.has(user?.role)
+    || (user?.role === 'teacher' && await canAccessClassroom(user, classroomId))
+);
 
 // Check-in tự động bằng mã thẻ hoặc mã hồ sơ khuôn mặt từ thiết bị/dịch vụ nhận diện.
 const automaticCheckIn = async (req, res) => {
@@ -422,6 +440,192 @@ const deleteAttendance = async (req, res) => {
     }
 };
 
+// Phụ huynh chỉ được tạo đơn cho học sinh đã liên kết với tài khoản của mình.
+const createLeaveRequest = async (req, res) => {
+    try {
+        const { studentId, startDate, endDate, reason } = req.body;
+        if (!isParent(req.user)) {
+            return res.status(403).json({ success: false, message: 'Chỉ phụ huynh có thể gửi đơn xin nghỉ trên cổng này' });
+        }
+        if (!isValidStudentId(studentId)) {
+            return res.status(400).json({ success: false, message: 'ID học sinh không hợp lệ' });
+        }
+        const start = parseWorkDate(String(startDate || ''));
+        const end = parseWorkDate(String(endDate || ''));
+        if (!start || !end || start > end) {
+            return res.status(400).json({ success: false, message: 'Khoảng ngày xin nghỉ không hợp lệ' });
+        }
+        if (!getWeekdayDateKeys(start, end).length) {
+            return res.status(400).json({ success: false, message: 'Khoảng xin nghỉ phải có ít nhất một ngày học từ Thứ Hai đến Thứ Sáu' });
+        }
+        if (start < getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE)) {
+            return res.status(400).json({ success: false, message: 'Chỉ có thể gửi đơn nghỉ từ ngày hôm nay trở đi' });
+        }
+        if (typeof reason !== 'string' || reason.trim().length < 5 || reason.trim().length > 1000) {
+            return res.status(400).json({ success: false, message: 'Lý do xin nghỉ cần từ 5 đến 1000 ký tự' });
+        }
+        if (!canAccessStudent(req.user, studentId)) {
+            return res.status(403).json({ success: false, message: 'Bạn không có quyền gửi đơn cho học sinh này' });
+        }
+        const student = await Student.findById(studentId).select('fullName classroomId className status');
+        if (!student || student.status !== 'enrolled') {
+            return res.status(422).json({ success: false, message: 'Chỉ học sinh đang theo học mới có thể gửi đơn xin nghỉ' });
+        }
+        const overlap = await StudentLeaveRequest.exists({
+            studentId,
+            status: { $in: ['pending', 'approved'] },
+            startDate: { $lte: end },
+            endDate: { $gte: start }
+        });
+        if (overlap) {
+            return res.status(409).json({ success: false, message: 'Đã có đơn chờ duyệt hoặc được duyệt trong khoảng ngày này' });
+        }
+        const request = await StudentLeaveRequest.create({
+            studentId: student._id,
+            studentName: student.fullName,
+            classroomId: student.classroomId,
+            className: student.className || '',
+            requesterId: req.user._id,
+            requesterName: req.user.profile?.fullName || req.user.username,
+            startDate: start,
+            endDate: end,
+            reason: reason.trim()
+        });
+        return res.status(201).json({ success: true, message: 'Đã gửi đơn xin nghỉ đến nhà trường', data: request });
+    } catch (err) {
+        console.error(err);
+        return res.status(500).json({ success: false, message: 'Không thể gửi đơn xin nghỉ' });
+    }
+};
+
+const getLeaveRequests = async (req, res) => {
+    try {
+        const status = req.query.status;
+        if (status && !['pending', 'approved', 'rejected', 'cancelled'].includes(status)) {
+            return res.status(400).json({ success: false, message: 'Trạng thái đơn không hợp lệ' });
+        }
+        let filter;
+        if (isParent(req.user)) {
+            filter = { requesterId: req.user._id };
+        } else if (SCHOOL_WIDE_ATTENDANCE_ROLES.has(req.user.role)) {
+            filter = {};
+        } else if (req.user.role === 'teacher') {
+            const classroomIds = (await Classroom.find({ 'teachers.teacherId': req.user._id, status: 'active' }).select('_id')).map((item) => item._id);
+            filter = { classroomId: { $in: classroomIds } };
+        } else {
+            return res.status(403).json({ success: false, message: 'Bạn không có quyền xem đơn xin nghỉ' });
+        }
+        if (status) filter.status = status;
+        const data = await StudentLeaveRequest.find(filter).sort({ createdAt: -1 }).limit(100);
+        return res.json({ success: true, data });
+    } catch (err) {
+        console.error(err);
+        return res.status(500).json({ success: false, message: 'Không thể lấy danh sách đơn xin nghỉ' });
+    }
+};
+
+const reviewLeaveRequest = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { decision, reviewNote = '' } = req.body;
+        if (!SCHOOL_WIDE_ATTENDANCE_ROLES.has(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Chỉ Principal hoặc quản trị viên được duyệt đơn nghỉ' });
+        }
+        if (!isValidObjectId(id) || !['approved', 'rejected'].includes(decision)) {
+            return res.status(400).json({ success: false, message: 'Dữ liệu duyệt đơn không hợp lệ' });
+        }
+        if (typeof reviewNote !== 'string' || reviewNote.length > 500) {
+            return res.status(400).json({ success: false, message: 'Ghi chú phản hồi tối đa 500 ký tự' });
+        }
+        const reviewed = await runStudentTransaction(async (session) => {
+            const request = await StudentLeaveRequest.findById(id).session(session);
+            if (!request) {
+                const error = new Error('Không tìm thấy đơn xin nghỉ'); error.statusCode = 404; throw error;
+            }
+            if (request.status !== 'pending') {
+                const error = new Error('Đơn này đã được xử lý'); error.statusCode = 409; throw error;
+            }
+            if (decision === 'approved') {
+                const dates = getWeekdayDateKeys(request.startDate, request.endDate);
+                const existing = dates.length ? await StudentAttendance.find({
+                    studentId: request.studentId,
+                    attendanceDateKey: { $in: dates }
+                }).session(session).select('attendanceDateKey') : [];
+                if (existing.length) {
+                    const error = new Error(`Không thể duyệt vì đã có điểm danh vào ngày ${existing[0].attendanceDateKey}`);
+                    error.statusCode = 409;
+                    throw error;
+                }
+                if (dates.length) {
+                    await StudentAttendance.insertMany(dates.map((dateKey) => ({
+                        studentId: request.studentId,
+                        studentName: request.studentName,
+                        classroomId: request.classroomId,
+                        className: request.className,
+                        attendDate: getWorkDateRange(dateKey, DEFAULT_SCHOOL_TIMEZONE).start,
+                        attendanceDateKey: dateKey,
+                        status: 'absent_permission',
+                        attendanceMethod: 'manual',
+                        note: `Nghỉ có phép: ${request.reason}`,
+                        recordedBy: req.user._id,
+                        recordedByName: req.user.profile?.fullName || req.user.username
+                    })), { session });
+                }
+            }
+            request.status = decision;
+            request.reviewedBy = req.user._id;
+            request.reviewerName = req.user.profile?.fullName || req.user.username;
+            request.reviewNote = reviewNote.trim();
+            request.reviewedAt = new Date();
+            await request.save({ session });
+            return request;
+        });
+        return res.json({ success: true, message: decision === 'approved' ? 'Đã duyệt đơn và ghi nhận nghỉ có phép' : 'Đã từ chối đơn xin nghỉ', data: reviewed });
+    } catch (err) {
+        const status = err.statusCode || (isDuplicateKeyError(err) ? 409 : 500);
+        if (status === 500) console.error(err);
+        return res.status(status).json({ success: false, message: err.message || 'Không thể xử lý đơn xin nghỉ' });
+    }
+};
+
+const getAbsenceReport = async (req, res) => {
+    try {
+        if (isParent(req.user) || !['teacher', 'admin', 'principal'].includes(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Bạn không có quyền xem báo cáo vắng mặt' });
+        }
+        const endDate = req.query.endDate ? parseWorkDate(String(req.query.endDate)) : getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE);
+        const startDate = req.query.startDate ? parseWorkDate(String(req.query.startDate)) : addWorkDays(endDate, -29);
+        if (!startDate || !endDate || startDate > endDate) {
+            return res.status(400).json({ success: false, message: 'Khoảng thời gian báo cáo không hợp lệ' });
+        }
+        const filter = {
+            attendDate: { $gte: getWorkDateRange(startDate, DEFAULT_SCHOOL_TIMEZONE).start, $lt: getWorkDateRange(endDate, DEFAULT_SCHOOL_TIMEZONE).end },
+            status: { $in: ['absent', 'absent_permission', 'late'] }
+        };
+        if (req.query.classroomId) {
+            if (!isValidObjectId(req.query.classroomId)) return res.status(400).json({ success: false, message: 'ID lớp học không hợp lệ' });
+            if (!await canReadLeaveRequests(req.user, req.query.classroomId)) return res.status(403).json({ success: false, message: 'Bạn không có quyền xem lớp này' });
+            filter.classroomId = req.query.classroomId;
+        } else if (req.user.role === 'teacher') {
+            filter.classroomId = { $in: (await Classroom.find({ 'teachers.teacherId': req.user._id, status: 'active' }).select('_id')).map((item) => item._id) };
+        }
+        const records = await StudentAttendance.find(filter).sort({ attendDate: -1, studentName: 1 }).lean();
+        const summary = new Map();
+        records.forEach((item) => {
+            const key = item.studentId.toString();
+            if (!summary.has(key)) summary.set(key, { studentId: item.studentId, studentName: item.studentName, className: item.className, absent: 0, permitted: 0, late: 0, total: 0 });
+            const row = summary.get(key); row.total += 1;
+            if (item.status === 'absent') row.absent += 1;
+            if (item.status === 'absent_permission') row.permitted += 1;
+            if (item.status === 'late') row.late += 1;
+        });
+        return res.json({ success: true, data: { startDate, endDate, totals: { absent: records.filter((r) => r.status === 'absent').length, permitted: records.filter((r) => r.status === 'absent_permission').length, late: records.filter((r) => r.status === 'late').length }, students: [...summary.values()].sort((a, b) => b.total - a.total || a.studentName.localeCompare(b.studentName, 'vi')), records } });
+    } catch (err) {
+        console.error(err);
+        return res.status(500).json({ success: false, message: 'Không thể lập báo cáo vắng mặt' });
+    }
+};
+
 module.exports = {
     createAttendance,
     automaticCheckIn,
@@ -429,5 +633,9 @@ module.exports = {
     getAttendanceByStudent,
     getAttendanceByClass,
     updateAttendance,
-    deleteAttendance
+    deleteAttendance,
+    createLeaveRequest,
+    getLeaveRequests,
+    reviewLeaveRequest,
+    getAbsenceReport
 };

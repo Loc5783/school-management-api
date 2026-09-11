@@ -12,6 +12,7 @@ const Classroom = require('../src/models/zone3_school/Classroom');
 const Student = require('../src/models/zone3_school/Student');
 const StudentCodeCounter = require('../src/models/zone3_school/StudentCodeCounter');
 const StudentAttendance = require('../src/models/zone3_school/StudentAttendance');
+const StudentLeaveRequest = require('../src/models/zone3_school/StudentLeaveRequest');
 const TuitionFee = require('../src/models/zone4_finance/TuitionFee');
 
 const app = createApp();
@@ -61,6 +62,7 @@ beforeEach(async () => {
         Student.deleteMany({}),
         StudentCodeCounter.deleteMany({}),
         StudentAttendance.deleteMany({}),
+        StudentLeaveRequest.deleteMany({}),
         TuitionFee.deleteMany({})
     ]);
 
@@ -549,5 +551,52 @@ describe('parent student data scope', () => {
             .get('/api/students')
             .set({ Authorization: `Bearer ${token}` })
             .expect(401);
+    });
+
+    test('creates class tuition atomically and prevents generating the same period twice', async () => {
+        const payload = { classroomId: classroomA, period: '09-2026', tuitionBase: 1200000, mealFee: 300000, busFee: 0, extraFee: 0, discount: 0, dueDate: '2026-09-30' };
+        const created = await request(app).post('/api/finance/tuition/bulk').set(authHeader(admin)).send(payload).expect(201);
+        expect(created.body.data).toHaveLength(2);
+        await request(app).post('/api/finance/tuition/bulk').set(authHeader(admin)).send(payload).expect(409);
+        const list = await request(app).get('/api/finance/invoices?period=09-2026').set(authHeader(accountant)).expect(200);
+        expect(list.body.pagination.total).toBe(2);
+        const debts = await request(app).get('/api/finance/debts?period=09-2026').set(authHeader(accountant)).expect(200);
+        expect(debts.body.summary.totalDebt).toBe(3000000);
+    });
+
+    test('lets a parent request leave only for a linked child and principal approval creates permitted attendance', async () => {
+        const workDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' })
+            .formatToParts(new Date()).reduce((result, part) => ({ ...result, [part.type]: part.value }), {});
+        const dateKey = `${workDate.year}-${workDate.month}-${workDate.day}`;
+        const created = await request(app)
+            .post('/api/attendance/leave-requests')
+            .set(authHeader(parentOne))
+            .send({ studentId: studentA._id, startDate: dateKey, endDate: dateKey, reason: 'Bé cần nghỉ để theo dõi sức khỏe.' })
+            .expect(201);
+        expect(created.body.success).toBe(true);
+
+        await request(app)
+            .post('/api/attendance/leave-requests')
+            .set(authHeader(parentOne))
+            .send({ studentId: studentB._id, startDate: dateKey, endDate: dateKey, reason: 'Không được gửi cho học sinh khác.' })
+            .expect(403);
+
+        await request(app)
+            .patch(`/api/attendance/leave-requests/${created.body.data._id}/review`)
+            .set(authHeader(principal))
+            .send({ decision: 'approved', reviewNote: 'Chúc bé mau khỏe.' })
+            .expect(200);
+        expect(await StudentAttendance.exists({ studentId: studentA._id, attendanceDateKey: dateKey, status: 'absent_permission' })).toBeTruthy();
+
+        const history = await request(app).get('/api/attendance/leave-requests').set(authHeader(parentOne)).expect(200);
+        expect(history.body.data).toHaveLength(1);
+        expect(history.body.data[0].status).toBe('approved');
+    });
+
+    test('keeps absence reports restricted to school attendance roles', async () => {
+        await request(app).get('/api/attendance/reports/absence').set(authHeader(parentOne)).expect(403);
+        const response = await request(app).get('/api/attendance/reports/absence').set(authHeader(teacher)).expect(200);
+        expect(response.body.success).toBe(true);
+        expect(Array.isArray(response.body.data.students)).toBe(true);
     });
 });

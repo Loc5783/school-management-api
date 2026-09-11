@@ -5,6 +5,8 @@ const { isValidObjectId } = require('../utils/idValidation');
 
 const PAYMENT_METHODS = new Set(['cash', 'bank_transfer', 'ewallet']);
 
+const createReceiptNumber = () => `PT-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${new mongoose.Types.ObjectId().toString().slice(-8).toUpperCase()}`;
+
 const throwHttpError = (message, statusCode) => {
     const error = new Error(message);
     error.statusCode = statusCode;
@@ -63,7 +65,7 @@ const recordPayment = async (payload, user, idempotencyKey) => {
         const actorName = user.profile?.fullName || user.username;
         const payment = (await Payment.create([{
             invoiceId, amount: paymentAmount, method, txnRef: txnRef ? String(txnRef).trim() : undefined,
-            idempotencyKey: String(idempotencyKey).trim(), note: String(note || '').trim(), recordedBy: user._id,
+            receiptNumber: createReceiptNumber(), idempotencyKey: String(idempotencyKey).trim(), note: String(note || '').trim(), recordedBy: user._id,
             auditTrail: [{ action: 'created', actorId: user._id, actorName }]
         }], { session }))[0];
         invoice.paidAmount += paymentAmount;

@@ -27,6 +27,7 @@ const models = {
   Classroom: require('../models/zone3_school/Classroom'),
   Student: require('../models/zone3_school/Student'),
   StudentAttendance: require('../models/zone3_school/StudentAttendance'),
+  StudentLeaveRequest: require('../models/zone3_school/StudentLeaveRequest'),
   HealthRecord: require('../models/zone3_school/HealthRecord'),
   AcademicReport: require('../models/zone3_school/AcademicReport'),
   DailyReport: require('../models/zone3_school/DailyReport'),
@@ -102,13 +103,19 @@ const specs = [
     partialFilterExpression: { attendanceDateKey: { $exists: true } }
   }],
   ['StudentAttendance', { classroomId: 1, attendDate: 1 }],
+  ['StudentLeaveRequest', { studentId: 1, startDate: 1, endDate: 1, status: 1 }],
+  ['StudentLeaveRequest', { classroomId: 1, status: 1, startDate: 1 }],
+  ['StudentLeaveRequest', { requesterId: 1, createdAt: -1 }],
   ['HealthRecord', { studentId: 1, recordDate: 1 }],
   ['AcademicReport', { studentId: 1, semester: 1 }],
   ['DailyReport', { studentId: 1, reportDate: 1 }],
   ['Incident', { studentId: 1, incidentDate: 1 }],
   ['EntryExitLog', { studentId: 1, entryTime: 1 }],
   ['AuthorizedPicker', { studentId: 1 }],
-  ['TuitionFee', { studentId: 1, period: 1 }],
+  ['TuitionFee', { studentId: 1, period: 1 }, {
+    unique: true,
+    partialFilterExpression: { status: { $in: ['unpaid', 'partial', 'paid'] } }
+  }],
   ['TuitionFee', { classroomId: 1, period: 1 }],
   ['Payment', { invoiceId: 1 }],
   ['Debt', { studentId: 1 }],
