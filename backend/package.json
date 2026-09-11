@@ -8,6 +8,7 @@
     "start:dev": "nodemon server.js",
     "seed:attendance": "node src/scripts/seedAttendance.js",
     "seed:nutrition-dishes": "node src/scripts/seedNutritionDishes.js",
+    "seed:student-demo": "node src/scripts/seedStudentDemo.js",
     "db:create-indexes": "node src/scripts/createIndexes.js",
     "migrate:timekeeping-v2": "node src/scripts/migrateTimekeepingV2.js",
     "migrate:student-attendance-date-keys": "node src/scripts/migrateStudentAttendanceDateKeys.js",

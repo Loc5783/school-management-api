@@ -10,6 +10,7 @@ import NutritionManagement from './pages/NutritionManagement';
 import StudentList from './pages/StudentList';
 import StudentDetail from './pages/StudentDetail';
 import StudentForm from './pages/StudentForm';
+import ClassroomManagement from './pages/ClassroomManagement';
 
 function ProtectedRoute({ children }) {
   return localStorage.getItem('token') ? children : <Navigate to="/login" replace />;
@@ -54,6 +55,7 @@ function App() {
         <Route path="/students/new" element={<ProtectedRoute><StudentForm /></ProtectedRoute>} />
         <Route path="/students/:id" element={<ProtectedRoute><StudentDetail /></ProtectedRoute>} />
         <Route path="/students/:id/edit" element={<ProtectedRoute><StudentForm /></ProtectedRoute>} />
+        <Route path="/classrooms" element={<ProtectedRoute><ClassroomManagement /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to="/dashboard" />} />
       </Routes>
     </BrowserRouter>
