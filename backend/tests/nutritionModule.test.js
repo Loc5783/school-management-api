@@ -593,17 +593,20 @@ describe('Module Quản lý Nhà ăn & Dinh dưỡng (Nutrition & Kitchen)', () 
         });
 
         it('không cho xuất vượt tồn khi hai yêu cầu xuất chạy đồng thời và lưu vết lô FEFO', async () => {
+            const today = new Date(`${getWorkDate(new Date())}T00:00:00.000Z`);
+            const olderExpiry = new Date(today); olderExpiry.setUTCDate(olderExpiry.getUTCDate() + 1);
+            const newerExpiry = new Date(today); newerExpiry.setUTCDate(newerExpiry.getUTCDate() + 3);
             const ingredient = await IngredientMaster.create({
                 name: 'Bí đỏ kiểm thử đồng thời', code: 'NL_BI_DO_CONCURRENT', category: 'vegetable', unit: 'kg'
             });
             const [olderLot, newerLot] = await Inventory.create([
                 {
                     ingredientId: ingredient._id, ingredientName: ingredient.name, batchNumber: 'LOT-FEFO-OLD',
-                    quantity: 4, unit: 'kg', costPerUnit: 10000, expiryDate: new Date('2026-09-10'), status: 'available'
+                    quantity: 4, unit: 'kg', costPerUnit: 10000, expiryDate: olderExpiry, status: 'available'
                 },
                 {
                     ingredientId: ingredient._id, ingredientName: ingredient.name, batchNumber: 'LOT-FEFO-NEW',
-                    quantity: 6, unit: 'kg', costPerUnit: 12000, expiryDate: new Date('2026-09-12'), status: 'available'
+                    quantity: 6, unit: 'kg', costPerUnit: 12000, expiryDate: newerExpiry, status: 'available'
                 }
             ]);
             const payload = { ingredientId: ingredient._id, quantity: 7, mealType: 'lunch' };
