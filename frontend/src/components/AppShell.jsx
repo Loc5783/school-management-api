@@ -8,6 +8,7 @@ const allNavItems = [
   { to: '/attendance', label: 'Điểm danh', icon: 'attendance', permission: 'attendance.manage' },
   { to: '/timekeeping', label: 'Chấm công nhân sự', icon: 'clock', roles: ['admin', 'principal', 'teacher'] },
   { to: '/parent-accounts', label: 'Duyệt phụ huynh', icon: 'users', roles: ['admin', 'principal'] },
+  { to: '/parent-portal', label: 'Thông tin của con', icon: 'students', roles: ['parent'] },
   { to: '/students', label: 'Học sinh', icon: 'students', permission: 'student.read' },
   { to: '/classrooms', label: 'Lớp học', icon: 'classes', permission: 'classroom.read' },
   { to: '/finance', label: 'Tài chính', icon: 'money', permission: 'tuition.read' },

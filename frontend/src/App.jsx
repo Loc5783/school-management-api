@@ -11,9 +11,16 @@ import StudentList from './pages/StudentList';
 import StudentDetail from './pages/StudentDetail';
 import StudentForm from './pages/StudentForm';
 import ClassroomManagement from './pages/ClassroomManagement';
+import ParentPortal from './pages/ParentPortal';
 
 function ProtectedRoute({ children }) {
   return localStorage.getItem('token') ? children : <Navigate to="/login" replace />;
+}
+
+function ParentRoute({ children }) {
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
+  return user.role === 'parent' ? children : <Navigate to="/dashboard" replace />;
 }
 
 function App() {
@@ -56,6 +63,7 @@ function App() {
         <Route path="/students/:id" element={<ProtectedRoute><StudentDetail /></ProtectedRoute>} />
         <Route path="/students/:id/edit" element={<ProtectedRoute><StudentForm /></ProtectedRoute>} />
         <Route path="/classrooms" element={<ProtectedRoute><ClassroomManagement /></ProtectedRoute>} />
+        <Route path="/parent-portal" element={<ParentRoute><ParentPortal /></ParentRoute>} />
         <Route path="*" element={<Navigate to="/dashboard" />} />
       </Routes>
     </BrowserRouter>
