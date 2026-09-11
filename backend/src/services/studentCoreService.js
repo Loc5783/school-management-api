@@ -18,7 +18,13 @@ const isClassroomCountedStatus = (status) => ACTIVE_CLASSROOM_STATUSES.has(statu
 const canTransitionStudentStatus = (fromStatus, toStatus) => fromStatus === toStatus || STATUS_TRANSITIONS[fromStatus]?.has(toStatus);
 
 const generateStudentCode = async (date = new Date(), session = null) => {
-    const year = date.getFullYear();
+    const normalizedDate = date instanceof Date ? date : new Date(date);
+    if (Number.isNaN(normalizedDate.getTime())) {
+        const error = new Error('Ngày nhập học không hợp lệ để tạo mã học sinh');
+        error.statusCode = 422;
+        throw error;
+    }
+    const year = normalizedDate.getFullYear();
     const counter = await StudentCodeCounter.findOneAndUpdate(
         { year },
         { $inc: { sequence: 1 }, $setOnInsert: { year } },

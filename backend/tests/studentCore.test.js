@@ -32,7 +32,7 @@ beforeEach(async () => {
 
 describe('Student Core Pha 1', () => {
   test('creates immutable, sequential student codes and increments class size atomically', async () => {
-    const [one, two] = await Promise.all([request(app).post('/api/students').set(token(admin)).send(payload({ fullName: 'Bé Một' })), request(app).post('/api/students').set(token(admin)).send(payload({ fullName: 'Bé Hai' }))]);
+    const [one, two] = await Promise.all([request(app).post('/api/students').set(token(admin)).send(payload({ fullName: 'Bé Một', admissionDate: '2026-08-01' })), request(app).post('/api/students').set(token(admin)).send(payload({ fullName: 'Bé Hai', admissionDate: '2026-08-01' }))]);
     expect([one.status, two.status].sort()).toEqual([201, 201]);
     expect(new Set([one.body.data.studentCode, two.body.data.studentCode]).size).toBe(2);
     expect(one.body.data.studentCode).toMatch(/^HS-2026-\d{6}$/);
