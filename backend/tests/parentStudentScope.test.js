@@ -565,8 +565,12 @@ describe('parent student data scope', () => {
     });
 
     test('lets a parent request leave only for a linked child and principal approval creates permitted attendance', async () => {
+        const schoolNow = new Date();
+        const weekday = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Ho_Chi_Minh', weekday: 'short' }).format(schoolNow);
+        if (weekday === 'Sat') schoolNow.setUTCDate(schoolNow.getUTCDate() + 2);
+        if (weekday === 'Sun') schoolNow.setUTCDate(schoolNow.getUTCDate() + 1);
         const workDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' })
-            .formatToParts(new Date()).reduce((result, part) => ({ ...result, [part.type]: part.value }), {});
+            .formatToParts(schoolNow).reduce((result, part) => ({ ...result, [part.type]: part.value }), {});
         const dateKey = `${workDate.year}-${workDate.month}-${workDate.day}`;
         const created = await request(app)
             .post('/api/attendance/leave-requests')

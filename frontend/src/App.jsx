@@ -15,6 +15,9 @@ import StudentForm from './pages/StudentForm';
 import ClassroomManagement from './pages/ClassroomManagement';
 import ParentPortal from './pages/ParentPortal';
 import FinanceManagement from './pages/FinanceManagement';
+import Reports from './pages/Reports';
+import AssetManagement from './pages/AssetManagement';
+import EmployeeManagement from './pages/EmployeeManagement';
 
 function ProtectedRoute({ children }) {
   return localStorage.getItem('token') ? children : <Navigate to="/login" replace />;
@@ -75,6 +78,9 @@ function App() {
         <Route path="/students/:id/edit" element={<ProtectedRoute><StudentForm /></ProtectedRoute>} />
         <Route path="/classrooms" element={<ProtectedRoute><ClassroomManagement /></ProtectedRoute>} />
         <Route path="/finance" element={<ProtectedRoute><FinanceManagement /></ProtectedRoute>} />
+        <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
+        <Route path="/assets" element={<ProtectedRoute><AssetManagement /></ProtectedRoute>} />
+        <Route path="/hr" element={<ProtectedRoute><EmployeeManagement /></ProtectedRoute>} />
         <Route path="/parent-portal" element={<ParentRoute><ParentPortal /></ParentRoute>} />
         <Route path="*" element={<Navigate to="/dashboard" />} />
       </Routes>

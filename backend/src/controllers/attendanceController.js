@@ -1,5 +1,6 @@
 const StudentAttendance = require('../models/zone3_school/StudentAttendance');
 const StudentLeaveRequest = require('../models/zone3_school/StudentLeaveRequest');
+const Notification = require('../models/zone1_system/Notification');
 const Student = require('../models/zone3_school/Student');
 const Classroom = require('../models/zone3_school/Classroom');
 const {
@@ -579,6 +580,12 @@ const reviewLeaveRequest = async (req, res) => {
             request.reviewedAt = new Date();
             await request.save({ session });
             return request;
+        });
+        await Notification.create({
+            recipientId: reviewed.requesterId,
+            title: decision === 'approved' ? 'Đơn xin nghỉ đã được duyệt' : 'Đơn xin nghỉ bị từ chối',
+            message: decision === 'approved' ? `Đơn nghỉ của ${reviewed.studentName} đã được ghi nhận là nghỉ có phép.` : (reviewed.reviewNote || 'Nhà trường chưa thể phê duyệt đơn nghỉ này.'),
+            type: 'attendance', link: '/parent-portal', createdBy: req.user._id
         });
         return res.json({ success: true, message: decision === 'approved' ? 'Đã duyệt đơn và ghi nhận nghỉ có phép' : 'Đã từ chối đơn xin nghỉ', data: reviewed });
     } catch (err) {

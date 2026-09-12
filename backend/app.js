@@ -11,6 +11,8 @@ const procurementRoutes = require('./src/routes/procurementRoutes');
 const timekeepingRoutes = require('./src/routes/timekeepingRoutes');
 const systemUserRoutes = require('./src/routes/systemUserRoutes');
 const nutritionRoutes = require('./src/routes/nutritionRoutes');
+const hrRoutes = require('./src/routes/hrRoutes');
+const notificationRoutes = require('./src/routes/notificationRoutes');
 
 const createApp = () => {
     const app = express();
@@ -39,6 +41,8 @@ const createApp = () => {
     app.use('/api/timekeeping', timekeepingRoutes);
     app.use('/api/system', systemUserRoutes);
     app.use('/api/nutrition', nutritionRoutes);
+    app.use('/api/hr', hrRoutes);
+    app.use('/api/notifications', notificationRoutes);
 
     app.get('/api/health', (req, res) => {
         res.status(200).json({ status: 'OK', message: 'Server đang chạy!' });

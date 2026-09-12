@@ -1,0 +1,23 @@
+const express = require('express');
+const auth = require('../middlewares/auth');
+const roleCheck = require('../middlewares/roleCheck');
+const controller = require('../controllers/hrController');
+const router = express.Router();
+router.use(auth);
+
+router.get('/departments', roleCheck(['admin', 'principal', 'accountant']), controller.getDepartments);
+router.post('/departments', roleCheck(['admin', 'principal']), controller.createDepartment);
+router.put('/departments/:id', roleCheck(['admin', 'principal']), controller.updateDepartment);
+router.get('/employees', roleCheck(['admin', 'principal', 'accountant']), controller.getEmployees);
+router.get('/employees/:id', roleCheck(['admin', 'principal', 'accountant']), controller.getEmployeeById);
+router.post('/employees', roleCheck(['admin', 'principal']), controller.createEmployee);
+router.put('/employees/:id', roleCheck(['admin', 'principal']), controller.updateEmployee);
+router.delete('/employees/:id', roleCheck(['admin', 'principal']), controller.deleteEmployee);
+router.post('/leave-requests', roleCheck(['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard']), controller.createLeaveRequest);
+router.get('/leave-requests', roleCheck(['admin', 'principal', 'accountant']), controller.getLeaveRequests);
+router.patch('/leave-requests/:id/review', roleCheck(['admin', 'principal']), controller.processLeaveRequest);
+router.post('/payroll/generate', roleCheck(['admin', 'principal', 'accountant']), controller.generateMonthlyPayroll);
+router.get('/payroll', roleCheck(['admin', 'principal', 'accountant']), controller.getPayrollByMonth);
+router.patch('/payroll/:id/status', roleCheck(['admin', 'principal', 'accountant']), controller.updatePayrollStatus);
+router.patch('/payroll/:id/adjustments', roleCheck(['admin', 'principal', 'accountant']), controller.updatePayrollAdjustment);
+module.exports = router;

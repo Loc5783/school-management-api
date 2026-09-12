@@ -1,5 +1,7 @@
 const TuitionFee = require('../models/zone4_finance/TuitionFee');
 const Payment = require('../models/zone4_finance/Payment');
+const Notification = require('../models/zone1_system/Notification');
+const User = require('../models/zone1_system/User');
 const Student = require('../models/zone3_school/Student');
 const Classroom = require('../models/zone3_school/Classroom');
 const { canAccessStudent, isParent, isValidStudentId } = require('../services/studentAccessService');
@@ -134,6 +136,14 @@ const makePayment = async (req, res) => {
     try {
         const idempotencyKey = req.get('Idempotency-Key') || req.body.idempotencyKey || req.body.txnRef;
         const { payment, invoice, replayed } = await recordPayment(req.body, req.user, idempotencyKey);
+        if (!replayed) {
+            const parents = await User.find({ role: 'parent', 'parentInfo.studentIds': invoice.studentId, status: 'active' }).select('_id');
+            if (parents.length) await Notification.insertMany(parents.map((parent) => ({
+                recipientId: parent._id, title: 'Đã ghi nhận thanh toán học phí',
+                message: `Nhà trường đã ghi nhận ${Number(payment.amount).toLocaleString('vi-VN')}đ cho học phí của ${invoice.studentName}.`,
+                type: 'finance', link: '/parent-portal', createdBy: req.user._id
+            })));
+        }
 
         res.status(replayed ? 200 : 201).json({
             message: replayed ? 'Yêu cầu thanh toán đã được ghi nhận trước đó' : 'Thanh toán thành công',

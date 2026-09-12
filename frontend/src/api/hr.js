@@ -1,0 +1,10 @@
+import api from './axiosConfig';
+export const getEmployees = (params) => api.get('/hr/employees', { params });
+export const getDepartments = () => api.get('/hr/departments');
+export const createEmployee = (data) => api.post('/hr/employees', data);
+export const updateEmployee = (id, data) => api.put(`/hr/employees/${id}`, data);
+export const getEmployeeLeaves = (params) => api.get('/hr/leave-requests', { params });
+export const reviewEmployeeLeave = (id, data) => api.patch(`/hr/leave-requests/${id}/review`, data);
+export const generatePayroll = (data) => api.post('/hr/payroll/generate', data);
+export const getPayroll = (params) => api.get('/hr/payroll', { params });
+export const updatePayrollStatus = (id, data) => api.patch(`/hr/payroll/${id}/status`, data);

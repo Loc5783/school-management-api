@@ -4,6 +4,7 @@ const PurchaseOrder = require('../models/zone6_procurement/PurchaseOrder');
 const Asset = require('../models/zone6_procurement/Asset');
 const Supplier = require('../models/zone5_nutrition/Supplier'); // dùng chung từ Zone 5
 const User = require('../models/zone1_system/User');
+const Notification = require('../models/zone1_system/Notification');
 
 // ==============================
 // 1. Quản lý mặt hàng (Item Master)
@@ -124,6 +125,12 @@ const approveProcurementRequest = async (req, res) => {
             }
         }
         await request.save();
+        await Notification.create({
+            recipientId: request.requesterId,
+            title: status === 'rejected' ? 'Đề xuất mua sắm bị từ chối' : 'Đề xuất mua sắm đã được duyệt',
+            message: status === 'rejected' ? (rejectionReason || 'Đề xuất chưa được phê duyệt.') : 'Đề xuất của bạn đã được phê duyệt và chuyển sang bước mua sắm.',
+            type: 'system', link: '/assets', createdBy: req.user._id
+        });
         res.json({ message: 'Duyệt đề xuất thành công', data: request });
     } catch (err) {
         console.error(err);
