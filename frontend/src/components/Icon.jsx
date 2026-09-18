@@ -22,6 +22,8 @@ const paths = {
   menu: <><path d="M4 7h16M4 12h16M4 17h16" /></>,
   utensils: <><path d="M18 2v6a3 3 0 0 1-3 3 3 3 0 0 1-3-3V2M15 2v10M15 12v10M5 2v8a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2V2M8 2v20" /></>,
   alertCircle: <><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></>,
+  phone: <path d="M7 3h3l1.5 4-2 1.5a15 15 0 0 0 6 6l1.5-2 4 1.5v3c0 1.1-.9 2-2 2C10.2 19 5 13.8 5 7c0-1.1.9-2 2-2Z" />,
+  mail: <><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 7 9 6 9-6" /></>,
 };
 
 export default function Icon({ name, size = 20, stroke = 1.8, className = '' }) {

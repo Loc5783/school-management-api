@@ -26,24 +26,24 @@ const toWorkDate = (value, timezone = DEFAULT_SCHOOL_TIMEZONE) => {
 
 const getCalculationInputs = async ({ userId, workDate, timezone, session }) => {
   const { start, end } = getWorkDateRange(workDate, timezone);
-  const [events, adjustments, legacyRaw, existingRecord] = await Promise.all([
-    RawAttendanceEvent.find({
-      userId,
-      isValid: true,
-      workDate: start
-    }).sort({ occurredAt: 1 }).session(session || null),
-    TimekeepingCorrectionRequest.find({
-      userId,
-      workDate: { $gte: start, $lt: end },
-      status: 'APPROVED'
-    }).sort({ requestedAt: 1 }).session(session || null),
-    // Read-only fallback for records created by the pre-event implementation.
-    RawAttendance.find({
-      userId,
-      workDate: { $gte: start, $lt: end }
-    }).session(session || null),
-    AttendanceRecord.findOne({ userId, workDate: start }).session(session || null)
-  ]);
+  // MongoDB does not allow parallel operations on the same transaction session.
+  // Sequential reads here prevent the queue worker from failing after a valid kiosk log.
+  const events = await RawAttendanceEvent.find({
+    userId,
+    isValid: true,
+    workDate: start
+  }).sort({ occurredAt: 1 }).session(session || null);
+  const adjustments = await TimekeepingCorrectionRequest.find({
+    userId,
+    workDate: { $gte: start, $lt: end },
+    status: 'APPROVED'
+  }).sort({ requestedAt: 1 }).session(session || null);
+  // Read-only fallback for records created by the pre-event implementation.
+  const legacyRaw = await RawAttendance.find({
+    userId,
+    workDate: { $gte: start, $lt: end }
+  }).session(session || null);
+  const existingRecord = await AttendanceRecord.findOne({ userId, workDate: start }).session(session || null);
 
   return { adjustments, events, existingRecord, legacyRaw, start };
 };

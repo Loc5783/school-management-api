@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
 import api from '../api/axiosConfig';
@@ -57,6 +58,7 @@ const ALLERGEN_OPTIONS = [
   { value: 'tree_nut', label: 'Hạt cây' },
   { value: 'mollusc', label: 'Nhuyễn thể' }
 ];
+const ALLERGEN_LABELS = Object.fromEntries(ALLERGEN_OPTIONS.map(({ value, label }) => [value, label]));
 
 const DISH_CATEGORY_LABELS = {
   main_course: 'Món chính',
@@ -229,6 +231,10 @@ function PaginationControls({ pagination, total, onPageChange }) {
   );
 }
 
+function NutritionModal({ children }) {
+  return createPortal(<div className="nutrition-module nutrition-modal-backdrop">{children}</div>, document.body);
+}
+
 const getSelectedMealDishIds = (meal) => (
   Array.isArray(meal?.items) && meal.items.length
     ? meal.items.map((item) => String(item.dishId))
@@ -283,7 +289,7 @@ function MealPlanFields({ day, onChange, getDishOptions }) {
   );
 }
 
-function ClassroomDietaryAlertPanel({ alerts }) {
+function ClassroomDietaryAlertPanel({ alerts, blockedAllergens = [] }) {
   if (!alerts.length) {
     return <div className="nutrition-class-alerts nutrition-class-alerts--clear">Không có hồ sơ dị ứng hoặc ghi chú y tế cần bếp lưu ý ở lớp này.</div>;
   }
@@ -291,7 +297,9 @@ function ClassroomDietaryAlertPanel({ alerts }) {
   return (
     <section className="nutrition-class-alerts">
       <h4>Học sinh cần bếp lưu ý</h4>
-      <p>Chuẩn bị suất thay thế hoặc xác nhận lại với y tế trường trước khi phục vụ.</p>
+      {blockedAllergens.length > 0
+        ? <p>Thực đơn chung của lớp không được dùng món chứa: <strong>{blockedAllergens.map((allergen) => ALLERGEN_LABELS[allergen] || allergen).join(', ')}</strong>. Các món này đã bị loại khỏi danh sách chọn.</p>
+        : <p>Hồ sơ bệnh lý cần được xác nhận với y tế trường trước khi phục vụ.</p>}
       <div>
         {alerts.map((student) => (
           <article key={student.studentId}>
@@ -332,6 +340,7 @@ export default function NutritionManagement() {
   const [financialReport, setFinancialReport] = useState(null);
   const [kitchenRequests, setKitchenRequests] = useState([]);
   const [classroomDietaryAlerts, setClassroomDietaryAlerts] = useState([]);
+  const [classroomBlockedAllergens, setClassroomBlockedAllergens] = useState([]);
   const [inventoryPage, setInventoryPage] = useState(1);
   const [auditLotPage, setAuditLotPage] = useState(1);
   const [reconciliationPage, setReconciliationPage] = useState(1);
@@ -544,6 +553,7 @@ export default function NutritionManagement() {
       ]);
       setDishes(dishResponse.data.data || []);
       setClassroomDietaryAlerts(alertsResponse.data.data || []);
+      setClassroomBlockedAllergens(alertsResponse.data.blockedAllergens || []);
       setNewMenuForm(createBlankMenu(selectedClassId, selectedWeekStart));
       setShowNewMenuModal(true);
     } catch (err) {
@@ -552,14 +562,17 @@ export default function NutritionManagement() {
   };
 
   const changeMenuClassroom = async (classroomId) => {
-    setNewMenuForm((previous) => ({ ...previous, classroomId }));
     try {
       const response = classroomId
         ? await getClassroomDietaryAlerts(classroomId)
         : { data: { data: [] } };
       setClassroomDietaryAlerts(response.data.data || []);
+      setClassroomBlockedAllergens(response.data.blockedAllergens || []);
+      setNewMenuForm((previous) => createBlankMenu(classroomId, previous.startDate));
+      showFeedback('success', 'Đã đổi lớp áp dụng. Hãy chọn lại món theo danh sách an toàn của lớp này.');
     } catch (err) {
       setClassroomDietaryAlerts([]);
+      setClassroomBlockedAllergens([]);
       showFeedback('error', err.response?.data?.message || 'Không thể tải lưu ý dinh dưỡng của lớp');
     }
   };
@@ -592,7 +605,10 @@ export default function NutritionManagement() {
     });
   };
 
-  const getDishOptions = (categories) => dishes.filter((dish) => categories.includes(dish.category));
+  const getDishOptions = (categories) => dishes.filter((dish) => (
+    categories.includes(dish.category)
+      && !(dish.allergens || []).some((allergen) => classroomBlockedAllergens.includes(allergen))
+  ));
 
   const openDailyMenuEditor = async (dayIndex) => {
     if (!currentMenu?.days?.[dayIndex]) return;
@@ -603,6 +619,7 @@ export default function NutritionManagement() {
       ]);
       setDishes(dishResponse.data.data || []);
       setClassroomDietaryAlerts(alertsResponse.data.data || []);
+      setClassroomBlockedAllergens(alertsResponse.data.blockedAllergens || []);
       setEditingDayIndex(dayIndex);
       setDailyMenuForm(currentMenu.days[dayIndex]);
       setShowEditDayModal(true);
@@ -1728,7 +1745,7 @@ export default function NutritionManagement() {
       {/* MODAL: THÊM THỰC ĐƠN TUẦN */}
       {/* ========================================== */}
       {showNewMenuModal && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+        <NutritionModal>
           <div className="bg-white rounded-2xl nutrition-menu-modal w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto">
             <p className="card-kicker mb-1">BẢN NHÁP VẬN HÀNH BẾP</p>
             <h3 className="font-bold text-gray-900 text-lg">Lập Thực Đơn Tuần Theo Danh Mục Món</h3>
@@ -1762,6 +1779,8 @@ export default function NutritionManagement() {
                 </div>
               </div>
 
+              <ClassroomDietaryAlertPanel alerts={classroomDietaryAlerts} blockedAllergens={classroomBlockedAllergens} />
+
               {dishes.length === 0 ? (
                 <div className="nutrition-empty-catalog">
                   Chưa có món ăn hoạt động trong danh mục. Hãy tạo và phê duyệt món ăn trước khi lập thực đơn.
@@ -1787,30 +1806,26 @@ export default function NutritionManagement() {
                 </div>
               )}
 
-              <div className="nutrition-safety-note">
-                Không nhập dị ứng bằng ghi chú theo lớp. Cảnh báo chỉ lấy từ hồ sơ học sinh và dị nguyên đã chuẩn hóa của món ăn; hồ sơ bệnh lý cần chỉ định dinh dưỡng được phê duyệt riêng.
-              </div>
-              <ClassroomDietaryAlertPanel alerts={classroomDietaryAlerts} />
-
               <div className="flex justify-end gap-2 pt-4 border-t">
                 <button type="button" onClick={() => setShowNewMenuModal(false)} className="btn-secondary">Hủy</button>
                 <button type="submit" className="btn-primary" disabled={!dishes.length}>Lưu Bản Nháp & Quét Dị Nguyên</button>
               </div>
             </form>
           </div>
-        </div>
+        </NutritionModal>
       )}
 
       {/* ========================================== */}
       {/* MODAL: CẬP NHẬT THỰC ĐƠN THEO NGÀY */}
       {/* ========================================== */}
       {showEditDayModal && dailyMenuForm && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+        <NutritionModal>
           <div className="bg-white rounded-2xl nutrition-menu-modal w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto">
             <p className="card-kicker mb-1">CẬP NHẬT VẬN HÀNH THEO NGÀY</p>
             <h3 className="font-bold text-gray-900 text-lg">{MENU_DAYS.find((entry) => entry.key === dailyMenuForm.dayOfWeek)?.label} — Thực Đơn Phục Vụ</h3>
             <p className="nutrition-modal-note">Thay đổi chỉ áp dụng cho ngày này. Năng lượng và cảnh báo dị ứng sẽ được tính lại trước khi lưu.</p>
             <form onSubmit={handleSaveDailyMenu} className="space-y-4 text-sm">
+              <ClassroomDietaryAlertPanel alerts={classroomDietaryAlerts} blockedAllergens={classroomBlockedAllergens} />
               <section className="nutrition-menu-day">
                 <header>
                   <strong>{MENU_DAYS.find((entry) => entry.key === dailyMenuForm.dayOfWeek)?.label}</strong>
@@ -1818,7 +1833,6 @@ export default function NutritionManagement() {
                 </header>
                 <MealPlanFields day={dailyMenuForm} getDishOptions={getDishOptions} onChange={updateDailyMenuMeal} />
               </section>
-              <ClassroomDietaryAlertPanel alerts={classroomDietaryAlerts} />
               <div className="nutrition-safety-note">
                 Nếu có cảnh báo, bếp phải bố trí suất thay thế và đánh dấu đã xử lý trước khi công bố thực đơn.
               </div>
@@ -1828,14 +1842,14 @@ export default function NutritionManagement() {
               </div>
             </form>
           </div>
-        </div>
+        </NutritionModal>
       )}
 
       {/* ========================================== */}
       {/* MODAL: THÊM MÓN ĂN MỚI */}
       {/* ========================================== */}
       {showNewDishModal && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+        <NutritionModal>
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
             <h3 className="font-bold text-gray-900 text-lg mb-4">{editingDishId ? 'Cập Nhật Món Ăn' : 'Thêm Món Ăn Mới'}</h3>
             <form onSubmit={handleCreateDish} className="space-y-4 text-sm">
@@ -1931,14 +1945,14 @@ export default function NutritionManagement() {
               </div>
             </form>
           </div>
-        </div>
+        </NutritionModal>
       )}
 
       {/* ========================================== */}
       {/* MODAL: QUẢN LÝ DANH MỤC NGUYÊN LIỆU */}
       {/* ========================================== */}
       {showIngredientManager && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+        <NutritionModal>
           <div className="bg-white rounded-2xl nutrition-menu-modal w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
               <div>
@@ -2018,14 +2032,14 @@ export default function NutritionManagement() {
               </div>
             )}
           </div>
-        </div>
+        </NutritionModal>
       )}
 
       {/* ========================================== */}
       {/* MODAL: TẠO DANH MỤC NGUYÊN LIỆU */}
       {/* ========================================== */}
       {showNewIngredientModal && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+        <NutritionModal>
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
             <p className="card-kicker mb-1">DANH MỤC DÙNG CHUNG</p>
             <h3 className="font-bold text-gray-900 text-lg mb-2">Thêm Nguyên Liệu Chuẩn</h3>
@@ -2063,14 +2077,14 @@ export default function NutritionManagement() {
               </div>
             </form>
           </div>
-        </div>
+        </NutritionModal>
       )}
 
       {/* ========================================== */}
       {/* MODAL: NHẬP KHO THỰC PHẨM */}
       {/* ========================================== */}
       {showImportStockModal && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+        <NutritionModal>
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
             <h3 className="font-bold text-gray-900 text-lg mb-4">Nhập Kho Nguyên Liệu</h3>
             <form onSubmit={handleImportStock} className="space-y-4 text-sm">
@@ -2180,14 +2194,14 @@ export default function NutritionManagement() {
               </div>
             </form>
           </div>
-        </div>
+        </NutritionModal>
       )}
 
       {/* ========================================== */}
       {/* MODAL: BÁO CÁO NGUYÊN LIỆU CHƯA DÙNG */}
       {/* ========================================== */}
       {showReturnLotModal && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+        <NutritionModal>
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
             <h3 className="font-bold text-gray-900 text-lg mb-2">Báo Cáo Nguyên Liệu Chưa Dùng</h3>
             <p className="nutrition-modal-note">Chỉ hoàn trả nguyên liệu còn nguyên trạng, chưa chế biến và còn hạn sử dụng. Hệ thống đối chiếu từng lô với phiếu xuất gốc; thức ăn đã nấu không được cộng lại kho.</p>
@@ -2230,14 +2244,14 @@ export default function NutritionManagement() {
               <div className="flex justify-end gap-2 pt-4 border-t"><button type="button" onClick={() => setShowReturnLotModal(false)} className="btn-secondary">Hủy</button><button type="submit" className="btn-primary">Cộng Lại Kho</button></div>
             </form>
           </div>
-        </div>
+        </NutritionModal>
       )}
 
       {/* ========================================== */}
       {/* MODAL: XỬ LÝ HÀNG HẾT HẠN */}
       {/* ========================================== */}
       {showDisposeLotModal && selectedInventoryLot && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+        <NutritionModal>
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
             <h3 className="font-bold text-gray-900 text-lg mb-2">Xử Lý Lô Hàng</h3>
             <p className="nutrition-modal-note"><strong>{selectedInventoryLot.ingredientName}</strong> — {selectedInventoryLot.quantity} {selectedInventoryLot.unit}. Thao tác này lập biên bản hao hụt/hủy và đưa số lượng lô về 0.</p>
@@ -2246,14 +2260,14 @@ export default function NutritionManagement() {
               <div className="flex justify-end gap-2 pt-4 border-t"><button type="button" onClick={() => { setShowDisposeLotModal(false); setSelectedInventoryLot(null); }} className="btn-secondary">Hủy</button><button type="submit" className="btn-primary">Xác Nhận Xử Lý</button></div>
             </form>
           </div>
-        </div>
+        </NutritionModal>
       )}
 
       {/* ========================================== */}
       {/* MODAL: KIỂM KÊ LÔ HÀNG */}
       {/* ========================================== */}
       {showReconcileLotModal && selectedInventoryLot && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+        <NutritionModal>
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
             <h3 className="font-bold text-gray-900 text-lg mb-2">Kiểm Kê Lô Hàng</h3>
             <p className="nutrition-modal-note"><strong>{selectedInventoryLot.ingredientName}</strong> — lô {selectedInventoryLot.batchNumber}. Sổ kho hiện có: <strong>{selectedInventoryLot.quantity} {selectedInventoryLot.unit}</strong>.</p>
@@ -2263,14 +2277,14 @@ export default function NutritionManagement() {
               <div className="flex justify-end gap-2 pt-4 border-t"><button type="button" onClick={() => { setShowReconcileLotModal(false); setSelectedInventoryLot(null); }} className="btn-secondary">Hủy</button><button type="submit" className="btn-primary">Lưu Biên Bản</button></div>
             </form>
           </div>
-        </div>
+        </NutritionModal>
       )}
 
       {/* ========================================== */}
       {/* MODAL: XUẤT KHO THỰC PHẨM */}
       {/* ========================================== */}
       {showExportStockModal && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+        <NutritionModal>
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
             <h3 className="font-bold text-gray-900 text-lg mb-4">Xuất Kho Cho Bếp Chế Biến</h3>
             <form onSubmit={handleExportStock} className="space-y-4 text-sm">
@@ -2306,14 +2320,14 @@ export default function NutritionManagement() {
               </div>
             </form>
           </div>
-        </div>
+        </NutritionModal>
       )}
 
       {/* ========================================== */}
       {/* MODAL: LƯU MẪU THỨC ĂN 24H */}
       {/* ========================================== */}
       {showNewSampleModal && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+        <NutritionModal>
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
             <h3 className="font-bold text-gray-900 text-lg mb-4">Ghi Nhận Lưu Mẫu Thức Ăn 24H</h3>
             <form onSubmit={handleCreateSample} className="space-y-4 text-sm">
@@ -2371,14 +2385,14 @@ export default function NutritionManagement() {
               </div>
             </form>
           </div>
-        </div>
+        </NutritionModal>
       )}
 
       {/* ========================================== */}
       {/* MODAL: TẠO ĐỀ XUẤT NHÀ BẾP */}
       {/* ========================================== */}
       {showNewRequestModal && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+        <NutritionModal>
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between gap-4 mb-5">
               <div>
@@ -2523,12 +2537,12 @@ export default function NutritionManagement() {
               </div>
             </form>
           </div>
-        </div>
+        </NutritionModal>
       )}
 
       {/* MODAL: DUYỆT / TỪ CHỐI ĐỀ XUẤT */}
       {requestApproval && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+        <NutritionModal>
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
             <p className="text-xs font-semibold tracking-wide text-indigo-600 uppercase">Phê duyệt nội bộ</p>
             <h3 className="font-bold text-gray-900 text-lg mt-1">
@@ -2556,7 +2570,7 @@ export default function NutritionManagement() {
               </div>
             </form>
           </div>
-        </div>
+        </NutritionModal>
       )}
       </div>
     </AppShell>

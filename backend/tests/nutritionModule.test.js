@@ -218,7 +218,7 @@ describe('Module Quản lý Nhà ăn & Dinh dưỡng (Nutrition & Kitchen)', () 
     });
 
     describe('2. Quản lý Thực đơn tuần theo lớp & Cảnh báo Dị ứng / Bệnh lý', () => {
-        it('Tự động phát hiện cảnh báo nguy cơ dị ứng khi lên thực đơn có món chứa chất dị ứng của học sinh trong lớp', async () => {
+        it('Không cho lưu thực đơn chung có món chứa dị nguyên của học sinh đang theo học trong lớp', async () => {
             // Thêm món ăn có tôm
             const tomDish = await Dish.create({
                 name: 'Tôm rim thịt',
@@ -243,23 +243,23 @@ describe('Module Quản lý Nhà ăn & Dinh dưỡng (Nutrition & Kitchen)', () 
                     }]
                 });
 
-            expect(menuRes.status).toBe(201);
-            expect(menuRes.body.data.weekNumber).toBe(37);
-            expect(menuRes.body.data.schoolYear).toBe('2026-2027');
-            expect(getWorkDate(menuRes.body.data.endDate, DEFAULT_SCHOOL_TIMEZONE)).toBe('2026-09-11');
-            expect(menuRes.body.allergyWarningsFound).toBeGreaterThan(0);
-            expect(menuRes.body.data.allergyWarnings.length).toBeGreaterThan(0);
-
-            const warning = menuRes.body.data.allergyWarnings[0];
-            expect(warning.studentName).toBe('Bé Nguyễn Gia Bảo');
-            expect(warning.allergenMatched).toBe('tôm');
-            expect(warning.dishName).toBe('Tôm rim thịt');
+            expect(menuRes.status).toBe(422);
+            expect(menuRes.body.code).toBe('CLASSROOM_ALLERGEN_CONFLICT');
+            expect(menuRes.body.message).toMatch(/Không thể lưu thực đơn chung/i);
+            expect(menuRes.body.conflicts).toEqual(expect.arrayContaining([
+                expect.objectContaining({
+                    studentName: 'Bé Nguyễn Gia Bảo',
+                    allergenMatched: 'tôm',
+                    dishName: 'Tôm rim thịt'
+                })
+            ]));
+            expect(await Menu.countDocuments({ classroomId: classroom1._id, weekNumber: 37 })).toBe(0);
 
             const deactivateDishRes = await request(app)
                 .delete(`/api/nutrition/dishes/${tomDish._id}`)
                 .set(authHeader(chefUser));
             expect(deactivateDishRes.status).toBe(200);
-            expect(deactivateDishRes.body.action).toBe('deactivated');
+            expect(deactivateDishRes.body.action).toBe('deleted');
         });
 
         it('Lưu được nhiều món trong mỗi bữa và trả về lưu ý dinh dưỡng của lớp cho bếp', async () => {

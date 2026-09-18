@@ -251,6 +251,9 @@
 .nutrition-module textarea:focus { border-color: #8193e4 !important; box-shadow: 0 0 0 3px #eef1ff; }
 .nutrition-module .btn-primary,
 .nutrition-module .btn-secondary { white-space: nowrap; }
+.nutrition-modal-backdrop { position: fixed; z-index: 1200; inset: 0; display: grid; place-items: center; padding: 24px; overflow-y: auto; overscroll-behavior: contain; background: rgba(17, 35, 78, .52); backdrop-filter: blur(4px); }
+.nutrition-modal-backdrop > div { box-sizing: border-box; width: min(640px, 100%); max-height: calc(100dvh - 48px); overflow: auto; border: 1px solid #dce5f4; border-radius: 18px; background: #fff; box-shadow: 0 28px 70px rgba(16, 35, 83, .3); }
+.nutrition-modal-backdrop > .nutrition-menu-modal { width: min(980px, 100%); max-width: 980px !important; }
 .nutrition-menu-modal { max-width: 980px !important; }
 .nutrition-modal-note { margin: 6px 0 18px; color: #71809a; font-size: 12px; line-height: 1.55; }
 .nutrition-menu-builder { display: grid; gap: 12px; }
@@ -287,6 +290,8 @@
 .nutrition-module .hover\:text-rose-800:hover { color: #9f1239 !important; }
 .nutrition-module .animate-spin { animation: nutrition-spin .8s linear infinite !important; }
 @keyframes nutrition-spin { to { transform: rotate(360deg); } }
+@media (max-width: 720px) { .nutrition-modal-backdrop { place-items: start center; padding: 12px; }.nutrition-modal-backdrop > div { max-height: calc(100dvh - 24px); }.nutrition-menu-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 460px) { .nutrition-menu-fields { grid-template-columns: 1fr; }.nutrition-modal-backdrop > div { border-radius: 14px !important; } }
 @media (min-width: 768px) {
   .nutrition-module .md\:grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
   .nutrition-module .md\:grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }

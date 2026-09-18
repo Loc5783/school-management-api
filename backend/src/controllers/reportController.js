@@ -25,13 +25,18 @@ const resolveWorkDate = (value) => {
 // ==============================
 const getDashboardStats = async (req, res) => {
     try {
+        const requestedPage = Number.parseInt(req.query.page, 10);
+        const requestedLimit = Number.parseInt(req.query.limit, 10);
+        const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+        const limit = Number.isInteger(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 20) : 5;
         const { start: today, end: tomorrow } = getWorkDateRange(
             getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE),
             DEFAULT_SCHOOL_TIMEZONE
         );
+        const attendanceFilter = { attendDate: { $gte: today, $lt: tomorrow } };
 
         const User = require('../models/zone1_system/User');
-        const [totalStudents, totalClassrooms, totalTeachers, todayRevenue, attendedToday, recentAttendance] = await Promise.all([
+        const [totalStudents, totalClassrooms, totalTeachers, todayRevenue, attendedToday, recentAttendance, totalAttendance, attendanceSummary] = await Promise.all([
             Student.countDocuments({ status: 'enrolled' }),
             Classroom.countDocuments({ status: 'active' }),
             User.countDocuments({ role: 'teacher', status: 'active' }),
@@ -39,16 +44,21 @@ const getDashboardStats = async (req, res) => {
                 { $match: { paidAt: { $gte: today, $lt: tomorrow } } },
                 { $group: { _id: null, total: { $sum: '$amount' } } }
             ]),
-            StudentAttendance.countDocuments({
-                attendDate: { $gte: today, $lt: tomorrow },
-                status: 'present'
-            }),
-            StudentAttendance.find({ attendDate: { $gte: today, $lt: tomorrow } })
+            StudentAttendance.countDocuments({ ...attendanceFilter, status: 'present' }),
+            StudentAttendance.find(attendanceFilter)
                 .sort({ checkInTime: -1, createdAt: -1 })
-                .limit(6)
+                .skip((page - 1) * limit)
+                .limit(limit)
                 .select('studentName status checkInTime')
-                .lean()
+                .lean(),
+            StudentAttendance.countDocuments(attendanceFilter),
+            StudentAttendance.aggregate([
+                { $match: attendanceFilter },
+                { $group: { _id: '$status', count: { $sum: 1 } } }
+            ])
         ]);
+
+        const statusCounts = attendanceSummary.reduce((result, item) => ({ ...result, [item._id]: item.count }), {});
 
         res.json({
             message: 'Lấy thống kê tổng quan thành công',
@@ -61,7 +71,20 @@ const getDashboardStats = async (req, res) => {
                     attendedToday,
                     attendanceRate: totalStudents > 0 ? Math.round((attendedToday / totalStudents) * 100) : 0
                 },
-                recentAttendance
+                recentAttendance,
+                recentAttendancePagination: {
+                    page,
+                    limit,
+                    total: totalAttendance,
+                    totalPages: Math.ceil(totalAttendance / limit)
+                },
+                attendanceSummary: {
+                    total: totalAttendance,
+                    present: statusCounts.present || 0,
+                    late: statusCounts.late || 0,
+                    absent: statusCounts.absent || 0,
+                    absent_permission: statusCounts.absent_permission || 0
+                }
             }
         });
     } catch (err) {

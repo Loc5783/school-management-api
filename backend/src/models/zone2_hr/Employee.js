@@ -25,7 +25,6 @@ const EmployeeSchema = new mongoose.Schema({
     birthDate: Date,
     phone: {
         type: String,
-        required: true,
         trim: true
     },
     email: {
@@ -81,6 +80,7 @@ const EmployeeSchema = new mongoose.Schema({
 });
 
 EmployeeSchema.index({ departmentId: 1 });
+EmployeeSchema.index({ userId: 1 }, { unique: true, sparse: true });
 EmployeeSchema.index({ status: 1 });
 EmployeeSchema.index({ position: 1 });
 

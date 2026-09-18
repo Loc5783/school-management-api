@@ -22,6 +22,11 @@ const respondError = (res, err, fallback = 'Lỗi server') => {
     return res.status(err.statusCode || (err.code === 11000 ? 409 : 500)).json({ success: false, message: err.code === 11000 ? (duplicateMessages[field] || 'Dữ liệu trùng lặp') : (err.message || fallback) });
 };
 const regexEscape = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const deriveSchoolYear = (date = new Date()) => {
+    const parsed = new Date(date);
+    const startYear = parsed.getMonth() >= 7 ? parsed.getFullYear() : parsed.getFullYear() - 1;
+    return `${startYear}-${startYear + 1}`;
+};
 
 const audit = (req, action, student, before = {}, after = {}, session = null) => AuditLog.create([{
     actorId: req.user._id, actorUsername: req.user.username, action, targetType: 'Student', targetId: student._id, before, after
@@ -33,6 +38,10 @@ const validatePayload = (data, creating = false) => {
     if (data.birthDate && new Date(data.birthDate) > new Date()) throw httpError('Ngày sinh không được ở tương lai', 422);
     if (data.admissionDate && Number.isNaN(new Date(data.admissionDate).getTime())) throw httpError('Ngày nhập học không hợp lệ', 422);
     if (data.birthDate && data.admissionDate && new Date(data.admissionDate) < new Date(data.birthDate)) throw httpError('Ngày nhập học không được trước ngày sinh', 422);
+    if (data.schoolYear) {
+        const match = String(data.schoolYear).trim().match(/^(\d{4})-(\d{4})$/);
+        if (!match || Number(match[2]) !== Number(match[1]) + 1) throw httpError('Năm học phải có dạng YYYY-YYYY liên tiếp, ví dụ 2026-2027', 422);
+    }
     if (data.gender && !['male', 'female'].includes(data.gender)) throw httpError('Giới tính không hợp lệ', 422);
     for (const [field, value, max] of [['fullName', data.fullName, 120], ['address', data.address, 500], ['nationality', data.nationality, 80], ['ethnicity', data.ethnicity, 80], ['birthPlace', data.birthPlace, 120], ['notes', data.notes, 2000]]) {
         if (value != null && String(value).trim().length > max) throw httpError(`${field} vượt quá ${max} ký tự`, 422);
@@ -64,6 +73,7 @@ const createStudent = async (req, res) => {
         const status = req.user.role === 'teacher' ? 'enrolled' : (req.body.status || 'enrolled');
         if (!STUDENT_STATUSES.includes(status)) return res.status(422).json({ message: 'Trạng thái học sinh không hợp lệ' });
         const admissionDate = data.admissionDate || new Date();
+        data.schoolYear = data.schoolYear || deriveSchoolYear(admissionDate);
         const student = await runStudentTransaction(async (session) => {
             const created = (await Student.create([{ ...data, fullName: data.fullName.trim(), classroomId: classroom._id, className: classroom.name, status, admissionDate, enrollmentDate: admissionDate, studentCode: await generateStudentCode(admissionDate, session), createdBy: req.user._id, updatedBy: req.user._id, statusHistory: [{ toStatus: status, reason: 'Tạo hồ sơ học sinh', effectiveDate: admissionDate, changedBy: req.user._id, changedByName: actorName(req.user) }] }], { session }))[0];
             if (isClassroomCountedStatus(status) && !await adjustHeadcount(classroom._id, 1, session)) throw httpError('Không thể cập nhật sĩ số lớp', 409);

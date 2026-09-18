@@ -164,6 +164,23 @@ const validatePublishReadiness = (menu) => {
     }
 };
 
+// Chính sách thực đơn chung theo lớp: khi một bé đang theo học có dị ứng đã
+// khai báo, món chứa dị nguyên đó không được phục vụ cho cả lớp. Không dùng
+// cờ "đã xử lý" để lách chính sách này; suất thay thế là một thực đơn/lớp
+// riêng, không phải cùng thực đơn chung.
+const assertClassroomMenuIsAllergenSafe = async (classroomId, days) => {
+    const conflicts = await checkAllergyAndDiseaseConflicts(classroomId, days);
+    if (!conflicts.length) return;
+
+    const dishes = [...new Set(conflicts.map((conflict) => conflict.dishName).filter(Boolean))];
+    const allergens = [...new Set(conflicts.map((conflict) => conflict.allergenMatched).filter(Boolean))];
+    const error = new Error(`Không thể lưu thực đơn chung của lớp vì có học sinh dị ứng ${allergens.join(', ')}. Hãy thay các món: ${dishes.join(', ')}.`);
+    error.statusCode = 422;
+    error.code = 'CLASSROOM_ALLERGEN_CONFLICT';
+    error.conflicts = conflicts;
+    throw error;
+};
+
 /**
  * Server-side source of truth for a menu: the client only selects dish IDs.
  * Names, calories and service dates are derived here so a stale browser cannot
@@ -337,8 +354,13 @@ const getClassroomDietaryAlerts = async (req, res) => {
             medicalReviewRequired: Boolean(student.disease?.name),
             medicalNote: student.disease?.name || ''
         }));
+        const blockedAllergens = [...new Set(
+            students.flatMap((student) => (student.allergies || [])
+                .map((allergy) => normalizeAllergen(allergy.allergen))
+                .filter((allergen) => ALLERGEN_CODES.includes(allergen)))
+        )];
 
-        res.json({ success: true, classroomName: classroom.name, count: alerts.length, data: alerts });
+        res.json({ success: true, classroomName: classroom.name, count: alerts.length, blockedAllergens, data: alerts });
     } catch (err) {
         res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Không thể tải cảnh báo dinh dưỡng của lớp' });
     }
@@ -367,8 +389,7 @@ const createMenu = async (req, res) => {
             return res.status(409).json({ message: `Lớp ${classroom.name} đã có thực đơn cho tuần ${weekNumber}` });
         }
 
-        // Tự động kiểm tra cảnh báo dị ứng & bệnh lý của học sinh trong lớp
-        const allergyWarnings = await checkAllergyAndDiseaseConflicts(classroomId, preparedDays);
+        await assertClassroomMenuIsAllergenSafe(classroomId, preparedDays);
 
         const menu = await Menu.create({
             classroomId,
@@ -381,7 +402,7 @@ const createMenu = async (req, res) => {
             medicalNotes: medicalNotes || '',
             allergensExcluded: [...new Set((allergensExcluded || []).map(normalizeAllergen).filter((allergen) => ALLERGEN_CODES.includes(allergen)))],
             days: preparedDays,
-            allergyWarnings,
+            allergyWarnings: [],
             status: 'draft',
             createdBy: req.user._id,
             createdByName: req.user.profile?.fullName || req.user.username,
@@ -396,12 +417,16 @@ const createMenu = async (req, res) => {
         res.status(201).json({
             success: true,
             message: 'Đã tạo thực đơn tuần thành công',
-            allergyWarningsFound: allergyWarnings.length,
+            allergyWarningsFound: 0,
             data: menu
         });
     } catch (err) {
-        console.error('Lỗi createMenu:', err);
-        res.status(500).json({ message: err.message || 'Không thể tạo thực đơn' });
+        if (!err.statusCode || err.statusCode >= 500) console.error('Lỗi createMenu:', err);
+        res.status(err.statusCode || 500).json({
+            message: err.message || 'Không thể tạo thực đơn',
+            code: err.code,
+            conflicts: err.conflicts
+        });
     }
 };
 
@@ -423,9 +448,10 @@ const updateMenu = async (req, res) => {
 
         if (days) {
             const startDate = getWorkDate(menu.startDate);
-            menu.days = await prepareMenuDays(days, startDate);
-            // Tự động quét lại dị ứng/bệnh lý khi thay đổi món
-            menu.allergyWarnings = await checkAllergyAndDiseaseConflicts(menu.classroomId, menu.days);
+            const preparedDays = await prepareMenuDays(days, startDate);
+            await assertClassroomMenuIsAllergenSafe(menu.classroomId, preparedDays);
+            menu.days = preparedDays;
+            menu.allergyWarnings = [];
         }
         if (dietaryType) menu.dietaryType = dietaryType;
         if (medicalNotes !== undefined) menu.medicalNotes = medicalNotes;
@@ -444,10 +470,12 @@ const updateMenu = async (req, res) => {
         });
     } catch (err) {
         console.error('Lỗi updateMenu:', err);
-        const expectedDataError = err.name === 'ValidationError'
+        const expectedDataError = err.statusCode === 422 || err.name === 'ValidationError'
             || /món.*không còn hoạt động|ngày phục vụ|thực đơn phải chọn/i.test(err.message || '');
         res.status(expectedDataError ? 422 : 500).json({
-            message: expectedDataError ? err.message : 'Không thể cập nhật thực đơn'
+            message: expectedDataError ? err.message : 'Không thể cập nhật thực đơn',
+            code: err.code,
+            conflicts: err.conflicts
         });
     }
 };

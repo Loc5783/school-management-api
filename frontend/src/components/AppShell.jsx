@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import Icon from './Icon';
 import api from '../api/axiosConfig';
 
@@ -20,6 +20,8 @@ const allNavItems = [
 
 export default function AppShell({ title, subtitle, actions, children }) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navRef = useRef(null);
   const [user, setUser] = useState(null);
   const [permissions, setPermissions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -41,6 +43,18 @@ export default function AppShell({ title, subtitle, actions, children }) {
     };
     fetchUser();
   }, []);
+
+  useEffect(() => {
+    if (loading) return undefined;
+    const frame = requestAnimationFrame(() => {
+      const nav = navRef.current;
+      const activeLink = nav?.querySelector('.nav-link.active');
+      if (!nav || !activeLink) return;
+      const targetTop = activeLink.offsetTop - (nav.clientHeight - activeLink.offsetHeight) / 2;
+      nav.scrollTo({ top: Math.max(0, targetTop), behavior: 'auto' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [location.pathname, loading]);
 
   const loadNotifications = async () => {
     try {
@@ -92,7 +106,7 @@ export default function AppShell({ title, subtitle, actions, children }) {
           <span className="brand-mark"><Icon name="classes" size={22} stroke={2.2} /></span>
           <span><strong>Hoa Nắng</strong><small>School Management</small></span>
         </NavLink>
-        <nav className="sidebar-nav" aria-label="Điều hướng chính">
+        <nav ref={navRef} className="sidebar-nav" aria-label="Điều hướng chính">
           <p className="nav-label">QUẢN LÝ</p>
           {navItems.map((item) => (
             <NavLink to={item.to} key={item.to} className="nav-link">
@@ -102,10 +116,12 @@ export default function AppShell({ title, subtitle, actions, children }) {
         </nav>
         <div className="sidebar-bottom">
           <span className="nav-link is-disabled"><Icon name="settings" />Cài đặt</span>
-          <button className="account-card" onClick={logout} title="Đăng xuất">
+          <div className="account-card">
             <span className="avatar">{displayName.charAt(0).toUpperCase()}</span>
-            <span><strong>{displayName}</strong><small>{user?.role || 'admin'}</small></span>
-            <Icon name="logout" size={18} />
+            <span><strong>{displayName}</strong><small>{roleLabel}</small></span>
+          </div>
+          <button className="sidebar-logout" onClick={logout} title="Đăng xuất khỏi hệ thống">
+            <Icon name="logout" size={17} />Đăng xuất
           </button>
         </div>
       </aside>

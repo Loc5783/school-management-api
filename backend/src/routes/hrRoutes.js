@@ -8,6 +8,8 @@ router.use(auth);
 router.get('/departments', roleCheck(['admin', 'principal', 'accountant']), controller.getDepartments);
 router.post('/departments', roleCheck(['admin', 'principal']), controller.createDepartment);
 router.put('/departments/:id', roleCheck(['admin', 'principal']), controller.updateDepartment);
+router.get('/staff-accounts', roleCheck(['admin', 'principal']), controller.getStaffAccounts);
+router.post('/staff-accounts/sync', roleCheck(['admin', 'principal']), controller.syncStaffAccounts);
 router.get('/employees', roleCheck(['admin', 'principal', 'accountant']), controller.getEmployees);
 router.get('/employees/:id', roleCheck(['admin', 'principal', 'accountant']), controller.getEmployeeById);
 router.post('/employees', roleCheck(['admin', 'principal']), controller.createEmployee);
