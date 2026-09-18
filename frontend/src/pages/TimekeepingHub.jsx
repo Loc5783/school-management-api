@@ -3,12 +3,10 @@ import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
 import SmartAttendance from './SmartAttendance';
 import ManualTimekeeping from './ManualTimekeeping';
-import TimekeepingManagement from './TimekeepingManagement';
 
 const tabs = [
   { id: 'kiosk', label: 'Chấm công bằng mã', icon: 'clock', roles: null, Component: SmartAttendance },
-  { id: 'corrections', label: 'Đơn chấm công bù', icon: 'attendance', roles: null, Component: ManualTimekeeping },
-  { id: 'management', label: 'Quản lý & phê duyệt', icon: 'users', roles: ['admin', 'principal'], Component: TimekeepingManagement }
+  { id: 'corrections', label: 'Đơn chấm công bù', icon: 'attendance', roles: null, Component: ManualTimekeeping }
 ];
 
 export default function TimekeepingHub() {
@@ -20,7 +18,7 @@ export default function TimekeepingHub() {
   const activeTab = visibleTabs.find((tab) => tab.id === active);
   const Content = activeTab?.Component;
 
-  return <AppShell title="Chấm công nhân sự" subtitle="Ghi nhận check-in, làm đơn công bù và phê duyệt trên một không gian thống nhất.">
+  return <AppShell title="Chấm công nhân sự" subtitle="Ghi nhận check-in hàng ngày và gửi đơn chấm công bù.">
     <section className="timekeeping-hub content-card">
       <div className="timekeeping-hub-tabs" role="tablist" aria-label="Chức năng chấm công">
         {visibleTabs.map((tab) => <button type="button" key={tab.id} role="tab" aria-selected={active === tab.id} className={active === tab.id ? 'active' : ''} onClick={() => setSearchParams({ tab: tab.id })}><Icon name={tab.icon} size={18} />{tab.label}</button>)}

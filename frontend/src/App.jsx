@@ -68,7 +68,7 @@ function App() {
         />
         <Route
           path="/timekeeping-management"
-          element={<Navigate to="/timekeeping?tab=management" replace />}
+          element={<Navigate to="/hr?tab=timekeeping" replace />}
         />
         <Route
           path="/nutrition"

@@ -1,19 +1,24 @@
 /* eslint-disable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
 import {
   createEmployee,
   generatePayroll,
-  getEmployeeLeaves,
   getEmployees,
   getStaffAccounts,
   getPayroll,
-  reviewEmployeeLeave,
   syncStaffAccounts,
   updateEmployee,
   updatePayrollStatus
 } from '../api/hr';
+import {
+  getPendingCorrections,
+  approveCorrection,
+  rejectCorrection,
+  recalculateAttendance
+} from '../api/timekeeping';
 
 const money = (value) => `${new Intl.NumberFormat('vi-VN').format(value || 0)} đ`;
 const currentMonth = new Date().getMonth() + 1;
@@ -34,10 +39,13 @@ const emptyEmployeeForm = {
 };
 
 export default function EmployeeManagement() {
-  const [tab, setTab] = useState('employees');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab') || 'employees';
+  const [tab, setTab] = useState(['employees', 'timekeeping', 'payroll'].includes(initialTab) ? initialTab : 'employees');
   const [employees, setEmployees] = useState([]);
   const [staffAccounts, setStaffAccounts] = useState([]);
-  const [leaves, setLeaves] = useState([]);
+  const [pendingCorrections, setPendingCorrections] = useState([]);
+  const [selectedRecalcDate, setSelectedRecalcDate] = useState('');
   const [payrolls, setPayrolls] = useState([]);
   const [payrollSummary, setPayrollSummary] = useState({ totalEmployees: 0, totalNet: 0, byRole: [] });
   const [notice, setNotice] = useState('');
@@ -50,15 +58,17 @@ export default function EmployeeManagement() {
   const canManageHr = ['admin', 'principal', 'hr'].includes(role);
   const canManagePayroll = ['admin', 'principal', 'accountant'].includes(role);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [employeeRes, leaveRes, payrollRes, staffAccountRes] = await Promise.all([
-        getEmployees(), getEmployeeLeaves({ status: 'pending' }), getPayroll(period),
+      const [employeeRes, correctionRes, payrollRes, staffAccountRes] = await Promise.all([
+        getEmployees(),
+        canManageHr ? getPendingCorrections() : Promise.resolve({ data: { data: [] } }),
+        getPayroll(period),
         canManageHr ? getStaffAccounts() : Promise.resolve({ data: { data: [] } })
       ]);
       setEmployees(employeeRes.data.data || []);
-      setLeaves(leaveRes.data.data || []);
+      setPendingCorrections(correctionRes.data.data || []);
       setPayrolls(payrollRes.data.data?.payrolls || []);
       setPayrollSummary(payrollRes.data.data?.summary || { totalEmployees: 0, totalNet: 0, byRole: [] });
       setStaffAccounts(staffAccountRes.data.data || []);
@@ -68,9 +78,14 @@ export default function EmployeeManagement() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [canManageHr, period]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const changeTab = (nextTab) => {
+    setTab(nextTab);
+    setSearchParams({ tab: nextTab });
+  };
 
   const submitEmployee = async (event) => {
     event.preventDefault();
@@ -94,8 +109,6 @@ export default function EmployeeManagement() {
 
   const openEmployeeForm = (employee = null, account = null) => {
     const populatedAccount = employee?.userId && typeof employee.userId === 'object' ? employee.userId : null;
-    // Danh sách nhân sự trả về tài khoản populate, còn danh sách tài khoản có
-    // suggestedPayrollRole. Ưu tiên cả hai để hồ sơ legacy không rơi về Giáo viên.
     const linkedAccount = account || staffAccounts.find((item) => String(item._id) === String(populatedAccount?._id || employee?.userId)) || populatedAccount;
     setEditingEmployee(employee);
     setForm({
@@ -143,15 +156,43 @@ export default function EmployeeManagement() {
     }
   };
 
-  const processLeave = async (id, approved) => {
+  const handleApproveCorrection = async (id) => {
+    if (!window.confirm('Bạn có chắc chắn muốn duyệt đơn chấm công bù này?')) return;
     try {
-      await reviewEmployeeLeave(id, {
-        approved,
-        rejectionReason: approved ? '' : 'Chưa thể phê duyệt theo kế hoạch nhân sự hiện tại.'
-      });
+      const request = pendingCorrections.find((item) => item._id === id);
+      await approveCorrection(id, request?.version);
       await load();
+      setNotice('Đã duyệt đơn chấm công bù thành công.');
     } catch (err) {
-      setNotice(err.response?.data?.message || 'Không thể xử lý đơn nghỉ.');
+      setNotice(err.response?.data?.message || 'Lỗi khi duyệt đơn chấm công.');
+    }
+  };
+
+  const handleRejectCorrection = async (id) => {
+    const reason = window.prompt('Nhập lý do từ chối:');
+    if (reason === null) return;
+    try {
+      const request = pendingCorrections.find((item) => item._id === id);
+      await rejectCorrection(id, request?.version, reason);
+      await load();
+      setNotice('Đã từ chối đơn chấm công.');
+    } catch (err) {
+      setNotice(err.response?.data?.message || 'Lỗi khi từ chối đơn chấm công.');
+    }
+  };
+
+  const handleRecalculateAttendance = async () => {
+    if (!selectedRecalcDate) {
+      window.alert('Vui lòng chọn ngày cần tính lại chấm công.');
+      return;
+    }
+    if (!window.confirm(`Bạn có chắc chắn muốn tính lại dữ liệu chấm công ngày ${selectedRecalcDate}?`)) return;
+    try {
+      await recalculateAttendance(selectedRecalcDate);
+      await load();
+      setNotice(`Đã tính lại công ngày ${selectedRecalcDate} thành công.`);
+    } catch (err) {
+      setNotice(err.response?.data?.message || 'Lỗi khi tính lại chấm công.');
     }
   };
 
@@ -167,7 +208,7 @@ export default function EmployeeManagement() {
   return (
     <AppShell
       title="Nhân sự & Bảng lương"
-      subtitle="Quản lý hồ sơ nhân viên, đơn nghỉ phép và tính lương từ dữ liệu chấm công."
+      subtitle="Quản lý hồ sơ nhân viên, phê duyệt chấm công và tính lương theo vai trò."
       actions={canManageHr && <button className="button button-primary" onClick={() => openEmployeeForm()}><Icon name="plus" size={15} /> Thêm nhân viên</button>}
     >
       <section className="hr-workspace">
@@ -175,7 +216,7 @@ export default function EmployeeManagement() {
 
         <div className="hr-summary">
           <article><span><Icon name="users" size={19} /></span><div><small>NHÂN SỰ ĐANG QUẢN LÝ</small><strong>{employees.length} hồ sơ</strong></div></article>
-          <article><span><Icon name="clock" size={19} /></span><div><small>ĐƠN CHỜ XỬ LÝ</small><strong>{leaves.length} đơn</strong></div></article>
+          <article><span><Icon name="clock" size={19} /></span><div><small>ĐƠN CÔNG BÙ CHỜ DUYỆT</small><strong>{pendingCorrections.length} đơn</strong></div></article>
           <article><span><Icon name="money" size={19} /></span><div><small>BẢNG LƯƠNG THÁNG {period.month}/{period.year}</small><strong>{payrolls.length} nhân viên</strong></div></article>
         </div>
 
@@ -183,10 +224,10 @@ export default function EmployeeManagement() {
           <div className="timekeeping-hub-tabs">
             {[
               ['employees', 'Hồ sơ nhân sự', 'users'],
-              ['leaves', 'Duyệt nghỉ phép', 'clock'],
+              ['timekeeping', 'Quản lý & duyệt chấm công', 'clock'],
               ['payroll', 'Bảng lương', 'money']
             ].map(([key, label, icon]) => (
-              <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>
+              <button key={key} className={tab === key ? 'active' : ''} onClick={() => changeTab(key)}>
                 <Icon name={icon} size={16} />{label}
               </button>
             ))}
@@ -208,13 +249,82 @@ export default function EmployeeManagement() {
           </section>
         )}
 
-        {tab === 'leaves' && (
-          <section className="content-card student-list-card">
-            <div className="card-heading"><div><p className="card-kicker">ĐƠN NGHỈ PHÉP</p><h2>Chờ phê duyệt</h2><p>{leaves.length} đơn cần được xem xét trước khi chốt công.</p></div></div>
-            <div className="table-wrap"><table className="data-table"><thead><tr><th>NHÂN VIÊN</th><th>LOẠI NGHỈ</th><th>THỜI GIAN</th><th>LÝ DO</th><th>THAO TÁC</th></tr></thead><tbody>
-              {leaves.length ? leaves.map((item) => <tr key={item._id}><td><strong>{item.employeeName}</strong><small>{item.departmentName || 'Chưa phân tổ'}</small></td><td>{item.leaveType}</td><td>{new Date(item.startDate).toLocaleDateString('vi-VN')} – {new Date(item.endDate).toLocaleDateString('vi-VN')}</td><td>{item.reason}</td><td><div className="leave-actions"><button className="button button-primary" onClick={() => processLeave(item._id, true)}>Duyệt</button><button className="button button-secondary" onClick={() => processLeave(item._id, false)}>Từ chối</button></div></td></tr>) : <tr><td colSpan="5" className="history-empty">Không có đơn nghỉ phép chờ duyệt.</td></tr>}
-            </tbody></table></div>
-          </section>
+        {tab === 'timekeeping' && (
+          <div className="timekeeping-management-container">
+            <section className="content-card student-list-card">
+              <div className="card-heading">
+                <div>
+                  <p className="card-kicker">PHÊ DUYỆT CHẤM CÔNG</p>
+                  <h2>Đơn chấm công bù chờ duyệt ({pendingCorrections.length})</h2>
+                  <p>Phê duyệt đơn giải trình / quên chấm công trước khi chốt dữ liệu tính lương.</p>
+                </div>
+              </div>
+              {pendingCorrections.length === 0 ? (
+                <div className="empty-state"><strong>Không có đơn chấm công bù chờ duyệt</strong></div>
+              ) : (
+                <div className="table-wrap">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>NHÂN VIÊN</th>
+                        <th>NGÀY CẦN BÙ</th>
+                        <th>GIỜ ĐỀ NGHỊ</th>
+                        <th>LÝ DO</th>
+                        <th>THAO TÁC</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pendingCorrections.map((req) => (
+                        <tr key={req._id}>
+                          <td><strong>{req.employeeName}</strong></td>
+                          <td>{new Date(req.workDate).toLocaleDateString('vi-VN')}</td>
+                          <td><span className="badge-time">{req.requestedCheckInTime}</span></td>
+                          <td>{req.reason}</td>
+                          <td>
+                            <div className="leave-actions">
+                              <button
+                                className="button button-primary"
+                                onClick={() => handleApproveCorrection(req._id)}
+                              >
+                                <Icon name="check" size={16} /> Duyệt
+                              </button>
+                              <button
+                                className="button button-secondary"
+                                onClick={() => handleRejectCorrection(req._id)}
+                              >
+                                <Icon name="x" size={16} /> Từ chối
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+
+            <section className="content-card" style={{ marginTop: 20 }}>
+              <div className="card-heading">
+                <div>
+                  <p className="card-kicker">CÔNG CỤ ĐỒNG BỘ CÔNG</p>
+                  <h2>Tính lại ngày chấm công đã chốt</h2>
+                  <p>Hệ thống sẽ quét lại các sự kiện quẹt thẻ / điểm danh sinh trắc học để cập nhật lại ngày công chính xác.</p>
+                </div>
+              </div>
+              <div style={{ padding: '0 23px 23px', display: 'flex', gap: 12, alignItems: 'center' }}>
+                <input
+                  type="date"
+                  value={selectedRecalcDate}
+                  onChange={(e) => setSelectedRecalcDate(e.target.value)}
+                  style={{ padding: '8px 12px', border: '1px solid #ddd', borderRadius: 6 }}
+                />
+                <button className="button button-primary" onClick={handleRecalculateAttendance}>
+                  <Icon name="refresh" size={16} /> Tính lại công
+                </button>
+              </div>
+            </section>
+          </div>
         )}
 
         {tab === 'payroll' && (
