@@ -17,6 +17,9 @@
     "migrate:student-core:verify": "node src/scripts/migrateStudentCore.js --verify",
     "migrate:tuition-invoice-index:dry-run": "node src/scripts/migrateTuitionInvoiceUniqueIndex.js",
     "migrate:tuition-invoice-index": "node src/scripts/migrateTuitionInvoiceUniqueIndex.js --apply",
+    "migrate:payroll-roles": "node src/scripts/migratePayrollRoles.js",
+    "migrate:payroll-roles:dry-run": "node src/scripts/migratePayrollRoles.js --dry-run",
+    "migrate:payroll-roles:verify": "node src/scripts/migratePayrollRoles.js --verify",
     "test": "jest --runInBand"
   },
   "keywords": [],

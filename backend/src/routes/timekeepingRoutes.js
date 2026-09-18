@@ -22,7 +22,7 @@ const deviceAuth = require('../middlewares/deviceAuth');
 const roleCheck = require('../middlewares/roleCheck');
 
 const router = express.Router();
-const employeeRoles = ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard'];
+const employeeRoles = ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'];
 const approvalRoles = ['admin', 'principal'];
 
 // Raw machine logs bypass staff JWT and use a dedicated device secret.

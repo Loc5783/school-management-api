@@ -41,7 +41,14 @@ const EmployeeSchema = new mongoose.Schema({
     departmentName: String,
     position: {
         type: String,
-        enum: ['principal', 'vice_principal', 'head_teacher', 'teacher', 'assistant_teacher', 'accountant', 'chef', 'nurse', 'security', 'cleaner'],
+        enum: ['principal', 'vice_principal', 'head_teacher', 'teacher', 'assistant_teacher', 'accountant', 'chef', 'hr', 'nurse', 'security', 'cleaner'],
+        required: true,
+        default: 'teacher'
+    },
+    // Lương được phân loại theo vai trò; tổ/bộ phận chỉ phục vụ cơ cấu nội bộ.
+    payrollRole: {
+        type: String,
+        enum: ['principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'],
         required: true,
         default: 'teacher'
     },
@@ -83,5 +90,6 @@ EmployeeSchema.index({ departmentId: 1 });
 EmployeeSchema.index({ userId: 1 }, { unique: true, sparse: true });
 EmployeeSchema.index({ status: 1 });
 EmployeeSchema.index({ position: 1 });
+EmployeeSchema.index({ payrollRole: 1, status: 1 });
 
 module.exports = mongoose.model('Employee', EmployeeSchema);

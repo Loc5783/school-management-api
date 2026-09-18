@@ -7,7 +7,17 @@ const AuditLogSchema = new mongoose.Schema({
   actorUsername: { type: String, required: true },
   action: {
     type: String,
-    enum: ['PARENT_STUDENTS_LINKED', 'USER_STATUS_CHANGED', 'STUDENT_CREATED', 'STUDENT_UPDATED', 'STUDENT_STATUS_CHANGED'],
+    enum: [
+      'PARENT_STUDENTS_LINKED',
+      'USER_STATUS_CHANGED',
+      'INTERNAL_ACCOUNT_CREATED',
+      'INTERNAL_ACCOUNT_ROLE_CHANGED',
+      'INTERNAL_ACCOUNT_UPDATED',
+      'INTERNAL_ACCOUNT_DEACTIVATED',
+      'STUDENT_CREATED',
+      'STUDENT_UPDATED',
+      'STUDENT_STATUS_CHANGED'
+    ],
     required: true
   },
   targetType: { type: String, required: true },

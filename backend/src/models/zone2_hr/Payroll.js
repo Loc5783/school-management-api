@@ -22,6 +22,13 @@ const PayrollSchema = new mongoose.Schema({
         type: String,
         default: 'teacher'
     },
+    // Snapshot vai trò khi lập bảng lương, độc lập với tổ/bộ phận.
+    payrollRole: {
+        type: String,
+        enum: ['principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'],
+        required: true,
+        default: 'teacher'
+    },
     month: {
         type: Number,
         required: true,
@@ -90,5 +97,6 @@ const PayrollSchema = new mongoose.Schema({
 PayrollSchema.index({ employeeId: 1, month: 1, year: 1 }, { unique: true });
 PayrollSchema.index({ month: 1, year: 1 });
 PayrollSchema.index({ status: 1 });
+PayrollSchema.index({ month: 1, year: 1, payrollRole: 1 });
 
 module.exports = mongoose.model('Payroll', PayrollSchema);

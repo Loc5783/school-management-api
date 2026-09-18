@@ -9,22 +9,29 @@ const Notification = require('../models/zone1_system/Notification');
 
 // `admin` is retained as the legacy system-owner role and is treated as the principal
 // for HR purposes. Parent accounts must never enter the employee/payroll workflow.
-const STAFF_ACCOUNT_ROLES = ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard'];
+const STAFF_ACCOUNT_ROLES = ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'];
 const ROLE_POSITIONS = {
     admin: new Set(['principal', 'vice_principal']),
     principal: new Set(['principal', 'vice_principal']),
     teacher: new Set(['teacher', 'head_teacher', 'assistant_teacher']),
     accountant: new Set(['accountant']),
     chef: new Set(['chef']),
-    guard: new Set(['security'])
+    guard: new Set(['security']),
+    hr: new Set(['hr'])
 };
-const DEFAULT_POSITION_BY_ROLE = { admin: 'principal', principal: 'principal', teacher: 'teacher', accountant: 'accountant', chef: 'chef', guard: 'security' };
-const EMPLOYEE_CODE_PREFIX_BY_ROLE = { admin: 'HT', principal: 'HT', teacher: 'GV', accountant: 'KT', chef: 'BEP', guard: 'BV' };
-const EMPLOYEE_FIELDS = ['employeeCode', 'fullName', 'phone', 'email', 'departmentId', 'position', 'salaryConfig', 'status'];
+const DEFAULT_POSITION_BY_ROLE = { admin: 'principal', principal: 'principal', teacher: 'teacher', accountant: 'accountant', chef: 'chef', guard: 'security', hr: 'hr' };
+const DEFAULT_PAYROLL_ROLE_BY_ACCOUNT_ROLE = { admin: 'principal', principal: 'principal', teacher: 'teacher', accountant: 'accountant', chef: 'chef', guard: 'guard', hr: 'hr' };
+const EMPLOYEE_CODE_PREFIX_BY_ROLE = { admin: 'HT', principal: 'HT', teacher: 'GV', accountant: 'KT', chef: 'BEP', guard: 'BV', hr: 'NS' };
+const EMPLOYEE_FIELDS = ['employeeCode', 'fullName', 'phone', 'email', 'departmentId', 'position', 'payrollRole', 'salaryConfig', 'status'];
 
 const httpError = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode });
 const isValidObjectId = (value) => mongoose.isValidObjectId(value);
 const pickEmployeeFields = (body = {}) => Object.fromEntries(EMPLOYEE_FIELDS.filter((field) => Object.hasOwn(body, field)).map((field) => [field, body[field]]));
+const PAYROLL_ROLES = new Set(['principal', 'teacher', 'accountant', 'chef', 'guard', 'hr']);
+const payrollRoleFromPosition = (position) => ({
+    principal: 'principal', vice_principal: 'principal', head_teacher: 'teacher', teacher: 'teacher', assistant_teacher: 'teacher',
+    accountant: 'accountant', chef: 'chef', security: 'guard', hr: 'hr'
+}[position] || 'teacher');
 
 const runHrTransaction = async (operation) => {
     const topology = await mongoose.connection.db.admin().command({ hello: 1 });
@@ -64,6 +71,11 @@ const validateEmployeeData = (data, linkedUser = null) => {
     if (data.phone && !/^[0-9+().\s-]{8,20}$/.test(String(data.phone))) throw httpError('Số điện thoại không hợp lệ', 422);
     if (linkedUser && !ROLE_POSITIONS[linkedUser.role]?.has(data.position)) {
         throw httpError(`Vị trí không phù hợp với vai trò tài khoản ${linkedUser.role}`, 422);
+    }
+    if (!PAYROLL_ROLES.has(data.payrollRole)) throw httpError('Vai trò tính lương không hợp lệ', 422);
+    const accountPayrollRole = linkedUser && DEFAULT_PAYROLL_ROLE_BY_ACCOUNT_ROLE[linkedUser.role];
+    if (accountPayrollRole && data.payrollRole !== accountPayrollRole) {
+        throw httpError('Vai trò tính lương phải trùng với vai trò của tài khoản đã liên kết', 422);
     }
 };
 
@@ -149,7 +161,7 @@ const getStaffAccounts = async (req, res) => {
             .sort({ 'profile.fullName': 1, username: 1 })
             .lean();
         const linkedProfiles = await Employee.find({ userId: { $in: users.map((user) => user._id) } })
-            .select('userId employeeCode fullName departmentId departmentName position status')
+            .select('userId employeeCode fullName departmentId departmentName position payrollRole status')
             .lean();
         const profileByUserId = new Map(linkedProfiles.map((profile) => [String(profile.userId), profile]));
         res.json({
@@ -157,6 +169,7 @@ const getStaffAccounts = async (req, res) => {
             data: users.map((user) => ({
                 ...user,
                 suggestedPosition: DEFAULT_POSITION_BY_ROLE[user.role],
+                suggestedPayrollRole: DEFAULT_PAYROLL_ROLE_BY_ACCOUNT_ROLE[user.role],
                 employeeProfile: profileByUserId.get(String(user._id)) || null
             }))
         });
@@ -185,6 +198,7 @@ const syncStaffAccounts = async (req, res) => {
                     phone: String(account.profile?.phone || '').trim(),
                     email: String(account.profile?.email || '').trim().toLowerCase(),
                     position: account.employeeInfo?.position || DEFAULT_POSITION_BY_ROLE[account.role],
+                    payrollRole: DEFAULT_PAYROLL_ROLE_BY_ACCOUNT_ROLE[account.role],
                     // A zero salary deliberately means “needs HR setup”; it is excluded from payroll.
                     salaryConfig: { baseSalary: Number(account.employeeInfo?.baseSalary) || 0, positionAllowance: 0, lunchAllowance: 0 },
                     status: 'active'
@@ -204,10 +218,11 @@ const syncStaffAccounts = async (req, res) => {
 
 const getEmployees = async (req, res) => {
     try {
-        const { status, position, departmentId, search } = req.query;
+        const { status, position, payrollRole, departmentId, search } = req.query;
         const filter = {};
         if (status) filter.status = status;
         if (position) filter.position = position;
+        if (payrollRole) filter.payrollRole = payrollRole;
         if (departmentId) filter.departmentId = departmentId;
         if (search) {
             filter.$or = [
@@ -220,7 +235,15 @@ const getEmployees = async (req, res) => {
             .populate('departmentId', 'name code')
             .populate('userId', 'username role status profile employeeInfo')
             .sort({ fullName: 1 });
-        res.json({ message: 'Lấy danh sách nhân viên thành công', data: employees });
+        // Với hồ sơ tạo trước khi có payrollRole, Mongoose có thể trả default
+        // "teacher" dù chưa hề lưu xuống DB. Tài khoản liên kết là nguồn chuẩn.
+        const data = employees.map((employee) => {
+            const item = employee.toObject();
+            const linkedRole = DEFAULT_PAYROLL_ROLE_BY_ACCOUNT_ROLE[item.userId?.role];
+            if (linkedRole) item.payrollRole = linkedRole;
+            return item;
+        });
+        res.json({ message: 'Lấy danh sách nhân viên thành công', data });
     } catch (error) {
         res.status(500).json({ message: 'Lỗi máy chủ', error: error.message });
     }
@@ -248,6 +271,7 @@ const createEmployee = async (req, res) => {
             data.phone = String(data.phone || linkedUser?.profile?.phone || '').trim();
             data.email = String(data.email || linkedUser?.profile?.email || '').trim().toLowerCase();
             data.position = data.position || linkedUser?.employeeInfo?.position || DEFAULT_POSITION_BY_ROLE[linkedUser?.role] || 'teacher';
+            data.payrollRole = data.payrollRole || DEFAULT_PAYROLL_ROLE_BY_ACCOUNT_ROLE[linkedUser?.role] || payrollRoleFromPosition(data.position);
             data.salaryConfig = data.salaryConfig || { baseSalary: 7000000, positionAllowance: 0, lunchAllowance: 0 };
             validateEmployeeData(data, linkedUser);
             const existing = await Employee.exists({ employeeCode: data.employeeCode });
@@ -280,6 +304,10 @@ const updateEmployee = async (req, res) => {
             next.fullName = String(next.fullName || '').trim();
             next.phone = String(next.phone || '').trim();
             next.email = String(next.email || '').trim().toLowerCase();
+            next.payrollRole = next.payrollRole || DEFAULT_PAYROLL_ROLE_BY_ACCOUNT_ROLE[linkedUser?.role] || payrollRoleFromPosition(next.position);
+            // Hồ sơ legacy sẽ được migration backfill; dòng này bảo đảm lần sửa
+            // hợp lệ đầu tiên cũng chuẩn hóa luôn, không chờ migration.
+            if (!current.payrollRole) fields.payrollRole = next.payrollRole;
             validateEmployeeData(next, linkedUser);
             const department = Object.hasOwn(fields, 'departmentId') ? await resolveDepartment(fields.departmentId, session) : {};
             const update = { $set: { ...fields, ...department } };
@@ -415,7 +443,8 @@ const generateMonthlyPayroll = async (req, res) => {
 
         // A linked employee whose salary is not configured is a valid HR profile,
         // but must not create a zero-value payroll record by accident.
-        const employees = await Employee.find({ status: 'active', 'salaryConfig.baseSalary': { $gt: 0 } });
+        const employees = await Employee.find({ status: 'active', 'salaryConfig.baseSalary': { $gt: 0 } })
+            .populate('userId', 'role');
         if (employees.length === 0) return res.status(400).json({ message: 'Không có nhân viên đang hoạt động' });
 
         // Get approved leaves for this month
@@ -470,12 +499,16 @@ const generateMonthlyPayroll = async (req, res) => {
                 const grossSalary = Math.round(earnedBase + positionAllowance + lunchAllowance);
                 const netSalary = Math.max(0, grossSalary - insuranceDeduction);
 
+                const payrollRole = DEFAULT_PAYROLL_ROLE_BY_ACCOUNT_ROLE[employee.userId?.role]
+                    || employee.payrollRole
+                    || payrollRoleFromPosition(employee.position);
                 const payrollData = {
                     employeeId: employee._id,
                     employeeCode: employee.employeeCode,
                     employeeName: employee.fullName,
                     departmentName: employee.departmentName || '',
                     position: employee.position,
+                    payrollRole,
                     month,
                     year,
                     baseSalary,
@@ -523,11 +556,19 @@ const getPayrollByMonth = async (req, res) => {
     try {
         const { month, year } = req.query;
         if (!month || !year) return res.status(400).json({ message: 'Tháng và năm là bắt buộc' });
-        const payrolls = await Payroll.find({ month: Number(month), year: Number(year) }).sort({ employeeName: 1 });
+        const payrolls = await Payroll.find({ month: Number(month), year: Number(year) }).sort({ payrollRole: 1, employeeName: 1 });
         const totalNet = payrolls.reduce((sum, p) => sum + p.netSalary, 0);
+        const byRole = payrolls.reduce((summary, payroll) => {
+            const role = payroll.payrollRole || payrollRoleFromPosition(payroll.position);
+            if (!summary[role]) summary[role] = { role, employees: 0, grossSalary: 0, netSalary: 0 };
+            summary[role].employees += 1;
+            summary[role].grossSalary += payroll.grossSalary || 0;
+            summary[role].netSalary += payroll.netSalary || 0;
+            return summary;
+        }, {});
         res.json({
             message: 'Lấy bảng lương thành công',
-            data: { payrolls, summary: { totalEmployees: payrolls.length, totalNet } }
+            data: { payrolls, summary: { totalEmployees: payrolls.length, totalNet, byRole: Object.values(byRole) } }
         });
     } catch (error) {
         res.status(500).json({ message: 'Lỗi máy chủ', error: error.message });

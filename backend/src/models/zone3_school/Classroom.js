@@ -10,6 +10,14 @@ const ClassroomSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    // Lớp mầm non có thể chưa tách môn học. Giữ tùy chọn này cho chương trình
+    // đặc thù (ví dụ: tiếng Anh, năng khiếu) khi nhà trường cần khai báo.
+    subject: {
+        type: String,
+        trim: true,
+        maxlength: 120,
+        default: ''
+    },
     ageGroup: {
         type: String,
         enum: ['3-4', '4-5', '5-6'],

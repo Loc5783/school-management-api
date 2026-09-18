@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const Classroom = require('../models/zone3_school/Classroom');
 const Student = require('../models/zone3_school/Student');
 
-const editableFields = ['name', 'fullName', 'ageGroup', 'maxSize', 'schoolYear', 'teachers'];
+const editableFields = ['name', 'fullName', 'subject', 'ageGroup', 'maxSize', 'schoolYear', 'teachers'];
 const activeStudentStatuses = ['enrolled', 'temporarily_absent'];
 const error = (message, statusCode) => Object.assign(new Error(message), { statusCode });
 const isId = (value) => mongoose.isValidObjectId(value);
@@ -12,12 +12,13 @@ const validate = (data) => {
   if (!['3-4', '4-5', '5-6'].includes(data.ageGroup)) throw error('Độ tuổi lớp không hợp lệ', 422);
   if (!Number.isInteger(Number(data.maxSize)) || Number(data.maxSize) < 1 || Number(data.maxSize) > 60) throw error('Sĩ số tối đa phải từ 1 đến 60', 422);
   if (!/^\d{4}-\d{4}$/.test(String(data.schoolYear || ''))) throw error('Năm học phải theo dạng YYYY-YYYY', 422);
+  if (String(data.subject || '').trim().length > 120) throw error('Môn học không được vượt quá 120 ký tự', 422);
 };
 const respond = (res, err) => res.status(err.statusCode || 500).json({ success: false, message: err.message || 'Lỗi server' });
 
 const createClassroom = async (req, res) => {
   try {
-    const data = pick(req.body); data.name = String(data.name || '').trim(); validate(data);
+    const data = pick(req.body); data.name = String(data.name || '').trim(); data.subject = String(data.subject || '').trim(); validate(data);
     if (await Classroom.exists({ name: data.name, schoolYear: data.schoolYear, status: 'active' })) throw error('Tên lớp đã tồn tại trong năm học này', 409);
     const classroom = await Classroom.create({ ...data, maxSize: Number(data.maxSize), statistics: { currentStudents: 0, male: 0, female: 0 } });
     res.status(201).json({ success: true, message: 'Tạo lớp học thành công', data: classroom });
@@ -44,7 +45,7 @@ const updateClassroom = async (req, res) => {
   try {
     if (!isId(req.params.id)) throw error('ID lớp học không hợp lệ', 400);
     const current = await Classroom.findById(req.params.id); if (!current) throw error('Không tìm thấy lớp học', 404);
-    const data = { ...pick(req.body), name: Object.hasOwn(req.body, 'name') ? String(req.body.name || '').trim() : current.name, ageGroup: req.body.ageGroup || current.ageGroup, maxSize: Object.hasOwn(req.body, 'maxSize') ? Number(req.body.maxSize) : current.maxSize, schoolYear: req.body.schoolYear || current.schoolYear };
+    const data = { ...pick(req.body), name: Object.hasOwn(req.body, 'name') ? String(req.body.name || '').trim() : current.name, subject: Object.hasOwn(req.body, 'subject') ? String(req.body.subject || '').trim() : current.subject || '', ageGroup: req.body.ageGroup || current.ageGroup, maxSize: Object.hasOwn(req.body, 'maxSize') ? Number(req.body.maxSize) : current.maxSize, schoolYear: req.body.schoolYear || current.schoolYear };
     validate(data);
     if (await Classroom.exists({ _id: { $ne: current._id }, name: data.name, schoolYear: data.schoolYear, status: 'active' })) throw error('Tên lớp đã tồn tại trong năm học này', 409);
     const classroom = await Classroom.findByIdAndUpdate(current._id, { $set: data }, { new: true, runValidators: true });
