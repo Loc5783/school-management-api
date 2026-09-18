@@ -194,13 +194,13 @@ describe('parent student data scope', () => {
             .toEqual([studentA._id.toString(), studentB._id.toString()].sort());
     });
 
-    test('returns an empty list for a parent without linked children', async () => {
+    test('blocks all data access for a parent without linked children', async () => {
         const response = await request(app)
             .get('/api/students')
             .set(authHeader(parentNone))
-            .expect(200);
+            .expect(403);
 
-        expect(response.body.data).toEqual([]);
+        expect(response.body.code).toBe('PARENT_STUDENT_NOT_LINKED');
     });
 
     test('does not let a classroom query bypass the parent student scope', async () => {
@@ -602,5 +602,56 @@ describe('parent student data scope', () => {
         const response = await request(app).get('/api/attendance/reports/absence').set(authHeader(teacher)).expect(200);
         expect(response.body.success).toBe(true);
         expect(Array.isArray(response.body.data.students)).toBe(true);
+    });
+
+    test('only permits public parent registration and always assigns one parent role', async () => {
+        await request(app)
+            .post('/api/auth/register')
+            .send({ username: 'phuhuynh-test', password: 'mat-khau-test-123', role: 'teacher', profile: { fullName: 'Phụ huynh test' } })
+            .expect(400);
+
+        const response = await request(app)
+            .post('/api/auth/register')
+            .send({ username: 'phuhuynh-hop-le', password: 'mat-khau-test-123', profile: { fullName: 'Phụ huynh hợp lệ' }, parentInfo: { requestedClassroomId: classroomA, registrationNote: 'Phụ huynh của bé An, cần liên kết hồ sơ.' } })
+            .expect(201);
+        expect(response.body.data).toEqual(expect.objectContaining({ role: 'parent', status: 'inactive' }));
+        expect(await User.exists({ username: 'phuhuynh-hop-le', role: 'parent' })).toBeTruthy();
+    });
+
+    test('lets an administrator create and assign exactly one internal role', async () => {
+        const created = await request(app)
+            .post('/api/system/accounts')
+            .set(authHeader(admin))
+            .send({ username: 'giaovien-test', password: 'mat-khau-test-123', role: 'teacher', profile: { fullName: 'Giáo viên test' } })
+            .expect(201);
+        expect(created.body.data.role).toBe('teacher');
+
+        await request(app)
+            .patch(`/api/system/accounts/${created.body.data._id}/role`)
+            .set(authHeader(admin))
+            .send({ role: ['teacher', 'chef'] })
+            .expect(422);
+
+        const updated = await request(app)
+            .patch(`/api/system/accounts/${created.body.data._id}/role`)
+            .set(authHeader(admin))
+            .send({ role: 'chef' })
+            .expect(200);
+        expect(updated.body.data.role).toBe('chef');
+        expect(await User.exists({ _id: created.body.data._id, role: 'chef' })).toBeTruthy();
+
+        const edited = await request(app)
+            .patch(`/api/system/accounts/${created.body.data._id}`)
+            .set(authHeader(admin))
+            .send({ username: 'nhanvien-bep-test', status: 'suspended', profile: { fullName: 'Nhân viên bếp test', phone: '0901000000', email: 'bep@example.test' } })
+            .expect(200);
+        expect(edited.body.data).toEqual(expect.objectContaining({ username: 'nhanvien-bep-test', status: 'suspended', role: 'chef' }));
+
+        const deactivated = await request(app)
+            .delete(`/api/system/accounts/${created.body.data._id}`)
+            .set(authHeader(admin))
+            .send({ reason: 'Kết thúc tài khoản thử nghiệm' })
+            .expect(200);
+        expect(deactivated.body.data.status).toBe('inactive');
     });
 });

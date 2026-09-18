@@ -1,5 +1,5 @@
 const express = require('express');
-const { register, login, getMe } = require('../controllers/authController');
+const { register, login, getMe, getRegistrationClassrooms } = require('../controllers/authController');
 const auth = require('../middlewares/auth');
 const rateLimit = require('express-rate-limit');
 
@@ -14,6 +14,7 @@ const authLimiter = rateLimit({
 });
 
 router.post('/register', authLimiter, register);
+router.get('/registration-classrooms', getRegistrationClassrooms);
 router.post('/login', authLimiter, login);
 router.get('/me', auth, getMe);
 

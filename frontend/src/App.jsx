@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import ParentAccountManagement from './pages/ParentAccountManagement';
+import AccountManagement from './pages/AccountManagement';
 import Dashboard from './pages/Dashboard';
 import AttendanceClassList from './pages/AttendanceClassList';
 import AttendanceDetail from './pages/AttendanceDetail';
@@ -36,6 +37,7 @@ function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route path="/parent-accounts" element={<ProtectedRoute><ParentAccountManagement /></ProtectedRoute>} />
+        <Route path="/accounts" element={<ProtectedRoute><AccountManagement /></ProtectedRoute>} />
         <Route
           path="/dashboard"
           element={<ProtectedRoute><Dashboard /></ProtectedRoute>}

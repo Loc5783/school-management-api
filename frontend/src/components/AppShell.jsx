@@ -7,8 +7,9 @@ const allNavItems = [
   { to: '/dashboard', label: 'Tổng quan', icon: 'grid', permission: 'report.read' },
   { to: '/attendance', label: 'Điểm danh', icon: 'attendance', permission: 'attendance.manage' },
   { to: '/timekeeping', label: 'Chấm công nhân sự', icon: 'clock', roles: ['admin', 'principal', 'teacher'] },
-  { to: '/hr', label: 'Nhân sự & Lương', icon: 'users', roles: ['admin', 'principal', 'accountant'] },
+  { to: '/hr', label: 'Nhân sự & Lương', icon: 'users', roles: ['admin', 'principal', 'accountant', 'hr'] },
   { to: '/parent-accounts', label: 'Duyệt phụ huynh', icon: 'users', roles: ['admin', 'principal'] },
+  { to: '/accounts', label: 'Tài khoản & vai trò', icon: 'shield', roles: ['admin', 'principal', 'hr'] },
   { to: '/parent-portal', label: 'Thông tin của con', icon: 'students', roles: ['parent'] },
   { to: '/students', label: 'Học sinh', icon: 'students', permission: 'student.read' },
   { to: '/classrooms', label: 'Lớp học', icon: 'classes', permission: 'classroom.read' },
@@ -83,7 +84,7 @@ export default function AppShell({ title, subtitle, actions, children }) {
 
   const displayName = user?.profile?.fullName || user?.username || 'Quản trị viên';
   const isAdmin = user?.role === 'admin';
-  const roleLabel = { admin: 'Quản trị viên', principal: 'Hiệu trưởng', teacher: 'Giáo viên', accountant: 'Kế toán', chef: 'Nhân viên bếp', parent: 'Phụ huynh', guard: 'Bảo vệ' }[user?.role] || 'Tài khoản trường';
+  const roleLabel = { admin: 'Quản trị viên', principal: 'Hiệu trưởng', teacher: 'Giáo viên', accountant: 'Kế toán', chef: 'Nhân viên bếp', hr: 'Nhân sự', parent: 'Phụ huynh', guard: 'Bảo vệ' }[user?.role] || 'Tài khoản trường';
 
   // Lọc menu dựa trên permissions
   const navItems = allNavItems.filter(item => {

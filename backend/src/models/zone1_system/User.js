@@ -13,7 +13,7 @@ const UserSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'parent'],
+    enum: ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr', 'parent'],
     required: true
   },
   // THÊM TRƯỜNG PERMISSIONS
@@ -44,7 +44,20 @@ const UserSchema = new mongoose.Schema({
     studentIds: [{
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Student'
-    }]
+    }],
+    // Thông tin phụ huynh tự khai khi đăng ký; chỉ dùng để khoanh vùng
+    // xác minh, không tự động cấp quyền xem bất kỳ hồ sơ học sinh nào.
+    requestedClassroomId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Classroom',
+      default: null
+    },
+    registrationNote: {
+      type: String,
+      trim: true,
+      maxlength: 500,
+      default: ''
+    }
   },
   status: {
     type: String,
