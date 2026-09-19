@@ -51,10 +51,37 @@ export default function Login() {
         </div>
 
         <div className="login-platform-preview" aria-hidden="true">
-          <div className="preview-heading"><span>Hôm nay tại Hoa Nắng</span><i /></div>
-          <div className="preview-main-row"><b>Vận hành thông suốt</b><span>Trực tuyến</span></div>
-          <div className="preview-bars"><i /><i /><i /><i /><i /></div>
-          <div className="preview-footer"><span>Điểm danh</span><span>Học sinh</span><span>Nhà bếp</span></div>
+          <div className="preview-heading">
+            <span>Hôm nay tại Hoa Nắng</span>
+            <span className="preview-live-badge"><i />Trực tuyến</span>
+          </div>
+          <div className="preview-main-row">
+            <b>Vận hành thông suốt</b>
+            <p>Dữ liệu điểm danh, lớp học và bán trú được đồng bộ tức thời</p>
+          </div>
+          <div className="preview-metrics-grid">
+            <div className="preview-metric-card">
+              <span className="metric-icon green"><Icon name="attendance" size={17} /></span>
+              <div>
+                <strong>98.5%</strong>
+                <small>Điểm danh</small>
+              </div>
+            </div>
+            <div className="preview-metric-card">
+              <span className="metric-icon blue"><Icon name="classes" size={17} /></span>
+              <div>
+                <strong>100%</strong>
+                <small>Lớp học</small>
+              </div>
+            </div>
+            <div className="preview-metric-card">
+              <span className="metric-icon amber"><Icon name="utensils" size={17} /></span>
+              <div>
+                <strong>An toàn</strong>
+                <small>Bếp ăn</small>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div className="login-highlights">

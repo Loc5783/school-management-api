@@ -27,7 +27,7 @@ const KitchenStaff = require('../src/models/zone5_nutrition/KitchenStaff');
 const KitchenRequest = require('../src/models/zone5_nutrition/KitchenRequest');
 const TuitionFee = require('../src/models/zone4_finance/TuitionFee');
 const Payment = require('../src/models/zone4_finance/Payment');
-const { getWorkDate, DEFAULT_SCHOOL_TIMEZONE } = require('../src/utils/dateHelpers');
+const { getWorkDate, addWorkDays, DEFAULT_SCHOOL_TIMEZONE } = require('../src/utils/dateHelpers');
 
 const app = createApp();
 
@@ -483,6 +483,7 @@ describe('Module Quản lý Nhà ăn & Dinh dưỡng (Nutrition & Kitchen)', () 
                 minStockAlert: 10
             });
 
+            const futureExpiry = addWorkDays(getWorkDate(new Date()), 30);
             const invalidImportRes = await request(app)
                 .post('/api/nutrition/inventory/import')
                 .set(authHeader(chefUser))
@@ -490,7 +491,7 @@ describe('Module Quản lý Nhà ăn & Dinh dưỡng (Nutrition & Kitchen)', () 
                     ingredientId: ing._id,
                     quantity: -1,
                     costPerUnit: 24000,
-                    expiryDate: '2026-09-12',
+                    expiryDate: futureExpiry,
                     supplierName: supRes.body.data.name
                 });
 
@@ -505,7 +506,7 @@ describe('Module Quản lý Nhà ăn & Dinh dưỡng (Nutrition & Kitchen)', () 
                     ingredientId: ing._id,
                     quantity: 20,
                     costPerUnit: 24000,
-                    expiryDate: '2026-09-12',
+                    expiryDate: futureExpiry,
                     supplierId: supRes.body.data._id,
                     supplierName: supRes.body.data.name,
                     storageLocation: 'Kho lạnh 01'
