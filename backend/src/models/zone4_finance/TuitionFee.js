@@ -44,6 +44,12 @@ const TuitionFeeSchema = new mongoose.Schema({
         default: 0,
         min: 0
     },
+    // Các khoản thu linh hoạt được lập cùng hóa đơn: hoạt động ngoại khóa,
+    // hội phí, bảo hiểm... Giữ extraFee để tương thích hóa đơn cũ.
+    additionalItems: [{
+        name: { type: String, required: true, trim: true, maxlength: 120 },
+        amount: { type: Number, required: true, min: 0 }
+    }],
     discount: {
         type: Number,
         default: 0,
@@ -68,7 +74,11 @@ const TuitionFeeSchema = new mongoose.Schema({
         enum: ['unpaid', 'partial', 'paid', 'cancelled'],
         default: 'unpaid'
     },
-    note: String
+    note: String,
+    cancelledAt: Date,
+    cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    cancelledByName: String,
+    cancelReason: { type: String, trim: true, maxlength: 1000, default: '' }
 }, {
     timestamps: true
 });

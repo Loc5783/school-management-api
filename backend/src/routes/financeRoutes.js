@@ -7,9 +7,13 @@ const {
     getTuitionByClass,
     getInvoices,
     getDebtReport,
+    sendDebtReminders,
     getPaymentsByInvoice,
     getReceipt,
-    cancelTuitionFee
+    cancelTuitionFee,
+    adjustTuitionFee,
+    addBulkInvoiceItem,
+    getInvoiceAdjustments
 } = require('../controllers/financeController');
 const auth = require('../middlewares/auth');
 const roleCheck = require('../middlewares/roleCheck');
@@ -23,9 +27,13 @@ router.post('/tuition', roleCheck(['admin', 'principal', 'accountant']), createT
 router.post('/tuition/bulk', roleCheck(['admin', 'principal', 'accountant']), createBulkTuitionFees);
 router.get('/invoices', roleCheck(['admin', 'principal', 'accountant']), getInvoices);
 router.get('/debts', roleCheck(['admin', 'principal', 'accountant']), getDebtReport);
+router.post('/debts/remind', roleCheck(['admin', 'principal', 'accountant']), sendDebtReminders);
 router.get('/tuition/student/:studentId', roleCheck(['admin', 'principal', 'accountant', 'parent']), getTuitionByStudent);
 router.get('/tuition/class/:classroomId', roleCheck(['admin', 'principal', 'accountant']), getTuitionByClass);
 router.put('/tuition/cancel/:id', roleCheck(['admin', 'principal']), cancelTuitionFee);
+router.post('/tuition/:id/adjustments', roleCheck(['admin', 'principal', 'accountant']), adjustTuitionFee);
+router.post('/tuition/bulk-additional-item', roleCheck(['admin', 'principal', 'accountant']), addBulkInvoiceItem);
+router.get('/tuition/:id/adjustments', roleCheck(['admin', 'principal', 'accountant', 'parent']), getInvoiceAdjustments);
 
 // Thanh toán
 router.post('/payment', roleCheck(['admin', 'principal', 'accountant']), makePayment);
