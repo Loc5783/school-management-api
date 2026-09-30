@@ -1,0 +1,11 @@
+const express = require('express');
+const auth = require('../middlewares/auth');
+const roleCheck = require('../middlewares/roleCheck');
+const { listAnnouncements, createAnnouncement, listClassCareReports, saveClassCareReport } = require('../controllers/classroomCommunicationController');
+const router = express.Router();
+router.use(auth);
+router.get('/announcements', roleCheck(['admin', 'principal', 'teacher', 'parent']), listAnnouncements);
+router.post('/announcements', roleCheck(['admin', 'principal', 'teacher']), createAnnouncement);
+router.get('/care-reports', roleCheck(['admin', 'principal', 'teacher', 'parent']), listClassCareReports);
+router.put('/care-reports', roleCheck(['admin', 'principal', 'teacher']), saveClassCareReport);
+module.exports = router;

@@ -159,35 +159,91 @@ const checkAllergyAndDiseaseConflicts = async (classroomId, days = []) => {
 };
 
 /**
- * Tính toán số suất ăn thực tế dựa vào điểm danh học sinh & chi phí nguyên liệu xuất kho
+ * Lập kế hoạch suất ăn theo lớp từ sĩ số và điểm danh.
+ * Học sinh chưa được điểm danh vẫn được tính suất để bếp không chuẩn bị thiếu;
+ * chỉ học sinh đã được ghi nhận nghỉ mới bị trừ khỏi số suất đề xuất.
+ */
+const calculateDailyServingPlan = async (date, classroomIds = null) => {
+    const targetDate = date ? new Date(date) : new Date();
+    const dateKey = getWorkDate(targetDate, DEFAULT_SCHOOL_TIMEZONE);
+    const classroomQuery = { status: 'active' };
+    if (Array.isArray(classroomIds)) classroomQuery._id = { $in: classroomIds };
+
+    const classrooms = await Classroom.find(classroomQuery).select('name fullName').lean();
+    const activeClassroomIds = classrooms.map((item) => item._id);
+    const students = await Student.find({
+        classroomId: { $in: activeClassroomIds },
+        status: 'enrolled'
+    }).select('_id fullName classroomId').lean();
+    const attendances = await StudentAttendance.find({
+        attendanceDateKey: dateKey,
+        classroomId: { $in: activeClassroomIds }
+    }).select('studentId classroomId status').lean();
+
+    const attendanceByStudent = new Map(attendances.map((item) => [String(item.studentId), item]));
+    const studentsByClassroom = students.reduce((result, student) => {
+        const key = String(student.classroomId);
+        if (!result[key]) result[key] = [];
+        result[key].push(student);
+        return result;
+    }, {});
+
+    const classBreakdown = classrooms.map((classroom) => {
+        const classStudents = studentsByClassroom[String(classroom._id)] || [];
+        const presentStudents = [];
+        const absentStudents = [];
+        const unmarkedStudents = [];
+        let lateStudents = 0;
+
+        classStudents.forEach((student) => {
+            const attendance = attendanceByStudent.get(String(student._id));
+            const compactStudent = { studentId: student._id, studentName: student.fullName };
+            if (!attendance) {
+                unmarkedStudents.push(compactStudent);
+            } else if (['present', 'late'].includes(attendance.status)) {
+                presentStudents.push({ ...compactStudent, status: attendance.status });
+                if (attendance.status === 'late') lateStudents += 1;
+            } else {
+                absentStudents.push({ ...compactStudent, status: attendance.status });
+            }
+        });
+
+        return {
+            classroomId: classroom._id,
+            className: classroom.name || classroom.fullName || 'Chưa rõ',
+            totalEnrolledStudents: classStudents.length,
+            actualPresentStudents: presentStudents.length,
+            lateStudents,
+            absentCount: absentStudents.length,
+            unmarkedCount: unmarkedStudents.length,
+            recommendedServings: Math.max(0, classStudents.length - absentStudents.length),
+            attendanceComplete: unmarkedStudents.length === 0,
+            absentStudents,
+            unmarkedStudents
+        };
+    }).sort((left, right) => left.className.localeCompare(right.className, 'vi'));
+
+    return {
+        date: targetDate,
+        dateKey,
+        totalEnrolledStudents: classBreakdown.reduce((sum, item) => sum + item.totalEnrolledStudents, 0),
+        totalStudentsPresent: classBreakdown.reduce((sum, item) => sum + item.actualPresentStudents, 0),
+        totalAbsentStudents: classBreakdown.reduce((sum, item) => sum + item.absentCount, 0),
+        totalUnmarkedStudents: classBreakdown.reduce((sum, item) => sum + item.unmarkedCount, 0),
+        totalRecommendedServings: classBreakdown.reduce((sum, item) => sum + item.recommendedServings, 0),
+        classBreakdown
+    };
+};
+
+/**
+ * Tính toán số suất ăn và chi phí nguyên liệu xuất kho trong ngày.
  */
 const calculateDailyMealReport = async (date) => {
     const targetDate = date ? new Date(date) : new Date();
-    const dateKey = getWorkDate(targetDate, DEFAULT_SCHOOL_TIMEZONE);
+    const servingPlan = await calculateDailyServingPlan(targetDate);
+    const { dateKey, totalStudentsPresent, totalRecommendedServings, classBreakdown } = servingPlan;
 
-    // 1. Lấy danh sách điểm danh học sinh có mặt trong ngày
-    const attendances = await StudentAttendance.find({
-        attendanceDateKey: dateKey,
-        status: 'present'
-    }).select('studentId classroomId className');
-
-    // Thống kê theo lớp
-    const classServingMap = {};
-    attendances.forEach(att => {
-        const cId = String(att.classroomId);
-        if (!classServingMap[cId]) {
-            classServingMap[cId] = {
-                classroomId: att.classroomId,
-                className: att.className || 'Chưa rõ',
-                actualPresentStudents: 0
-            };
-        }
-        classServingMap[cId].actualPresentStudents += 1;
-    });
-
-    const totalStudentsPresent = attendances.length;
-
-    // 2. Lấy chi phí nguyên liệu đã xuất kho trong ngày
+    // Lấy chi phí nguyên liệu đã xuất kho trong ngày
     const startOfDay = new Date(targetDate);
     startOfDay.setHours(0, 0, 0, 0);
     const endOfDay = new Date(targetDate);
@@ -202,8 +258,8 @@ const calculateDailyMealReport = async (date) => {
 
     // Giả định định mức thu tiền ăn tiêu chuẩn: 35.000 VNĐ / học sinh / ngày
     const standardMealRatePerStudent = 35000;
-    const totalMealRevenueBudget = totalStudentsPresent * standardMealRatePerStudent;
-    const actualCostPerStudent = totalStudentsPresent > 0 ? Math.round(totalIngredientCost / totalStudentsPresent) : 0;
+    const totalMealRevenueBudget = totalRecommendedServings * standardMealRatePerStudent;
+    const actualCostPerStudent = totalRecommendedServings > 0 ? Math.round(totalIngredientCost / totalRecommendedServings) : 0;
     const balance = totalMealRevenueBudget - totalIngredientCost;
     const budgetUtilizationPercent = totalMealRevenueBudget > 0
         ? Math.round((totalIngredientCost / totalMealRevenueBudget) * 1000) / 10
@@ -219,8 +275,9 @@ const calculateDailyMealReport = async (date) => {
     return {
         dateKey,
         date: targetDate,
+        ...servingPlan,
         totalStudentsPresent,
-        classBreakdown: Object.values(classServingMap),
+        classBreakdown,
         standardMealRatePerStudent,
         totalMealRevenueBudget,
         totalIngredientCost,
@@ -353,6 +410,7 @@ module.exports = {
     ALLERGEN_CODES,
     checkAllergyAndDiseaseConflicts,
     calculateDailyMealReport,
+    calculateDailyServingPlan,
     cloneWeeklyMenu,
     getInventoryAlerts,
     normalizeAllergen

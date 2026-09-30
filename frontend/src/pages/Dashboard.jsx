@@ -13,6 +13,8 @@ export default function Dashboard() {
   const [error, setError] = useState('');
   const [attendancePage, setAttendancePage] = useState(1);
   const navigate = useNavigate();
+  const role = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const isTeacher = role === 'teacher';
 
   useEffect(() => {
     const fetchDashboard = async () => {
@@ -37,7 +39,11 @@ export default function Dashboard() {
   if (loading) return <div className="page-loader"><span className="loading-orb" />Đang tải không gian làm việc...</div>;
 
   const summary = data?.summary || {};
-  const cards = [
+  const cards = isTeacher ? [
+    { label: 'Học sinh lớp tôi', value: summary.totalStudents || 0, note: 'Đang theo học', icon: 'students', tone: 'blue', to: '/students', detailLabel: 'Xem học sinh được phân công' },
+    { label: 'Lớp được phân công', value: summary.totalClassrooms || 0, note: 'Đang hoạt động', icon: 'classes', tone: 'orange', to: '/attendance', detailLabel: 'Điểm danh lớp được phân công' },
+    { label: 'Có mặt hôm nay', value: summary.attendedToday || 0, note: 'Theo điểm danh của lớp', icon: 'attendance', tone: 'green', to: '/attendance', detailLabel: 'Điểm danh lớp' },
+  ] : [
     { label: 'Tổng số học sinh', value: summary.totalStudents || 0, note: 'Đang theo học', icon: 'students', tone: 'blue', to: '/students', detailLabel: 'Xem danh sách học sinh' },
     { label: 'Giáo viên & nhân sự', value: summary.totalTeachers || 0, note: 'Đang làm việc', icon: 'users', tone: 'violet', to: '/hr', detailLabel: 'Xem danh sách nhân sự' },
     { label: 'Lớp học hoạt động', value: summary.totalClassrooms || 0, note: 'Trong năm học này', icon: 'classes', tone: 'orange', to: '/classrooms', detailLabel: 'Xem danh sách lớp học' },
@@ -81,7 +87,7 @@ export default function Dashboard() {
           </section>
           {attendance.length ? <><div className="table-wrap"><table className="data-table"><thead><tr><th>Học sinh</th><th>Trạng thái</th><th>Thời gian đến</th></tr></thead><tbody>{attendance.map((item, index) => <tr key={item._id || index}><td><span className="student-avatar">{item.studentName?.charAt(0) || 'H'}</span>{item.studentName || 'Học sinh'}</td><td><span className={`status-badge ${item.status || 'present'}`}><i />{statusLabel[item.status] || 'Có mặt'}</span></td><td>{item.checkInTime ? new Date(item.checkInTime).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—'}</td></tr>)}</tbody></table></div>{totalAttendancePages > 1 && <nav className="dashboard-pagination" aria-label="Phân trang điểm danh gần đây"><span>Trang {attendancePage}/{totalAttendancePages} · {attendanceTotal} lượt</span><div><button type="button" onClick={() => setAttendancePage((page) => Math.max(1, page - 1))} disabled={attendancePage === 1}>Trước</button><button type="button" onClick={() => setAttendancePage((page) => Math.min(totalAttendancePages, page + 1))} disabled={attendancePage === totalAttendancePages}>Sau <Icon name="chevronRight" size={14} /></button></div></nav>}</> : <div className="empty-state"><span className="empty-icon"><Icon name="attendance" /></span><strong>Chưa có dữ liệu điểm danh</strong><p>Bắt đầu điểm danh để theo dõi tình hình đến lớp hôm nay.</p><Link to="/attendance" className="button button-secondary">Chọn lớp điểm danh</Link></div>}
         </article>
-        <aside className="quick-panel"><p className="card-kicker">TRUY CẬP NHANH</p><h2>Công việc hôm nay</h2><Link to="/attendance" className="quick-action"><span className="quick-icon blue"><Icon name="attendance" /></span><span><strong>Điểm danh lớp</strong><small>Ghi nhận có mặt, vắng, đi muộn</small></span><Icon name="chevronRight" size={18} /></Link><span className="quick-action is-muted"><span className="quick-icon orange"><Icon name="students" /></span><span><strong>Thêm học sinh</strong><small>Quản lý hồ sơ học sinh</small></span><small>Sắp có</small></span><span className="quick-action is-muted"><span className="quick-icon violet"><Icon name="chart" /></span><span><strong>Xem báo cáo</strong><small>Phân tích vận hành trường học</small></span><small>Sắp có</small></span></aside>
+        <aside className="quick-panel"><p className="card-kicker">TRUY CẬP NHANH</p><h2>Công việc hôm nay</h2><Link to="/attendance" className="quick-action"><span className="quick-icon blue"><Icon name="attendance" /></span><span><strong>Điểm danh lớp</strong><small>Ghi nhận có mặt, vắng, đi muộn</small></span><Icon name="chevronRight" size={18} /></Link>{isTeacher ? <><Link to="/attendance/leave-requests" className="quick-action"><span className="quick-icon orange"><Icon name="attendance" /></span><span><strong>Đơn nghỉ lớp tôi</strong><small>Theo dõi đơn phụ huynh đã gửi</small></span><Icon name="chevronRight" size={18} /></Link><Link to="/nutrition" className="quick-action"><span className="quick-icon violet"><Icon name="utensils" /></span><span><strong>Thực đơn & lưu ý ăn uống</strong><small>Xem thực đơn và cảnh báo của lớp</small></span><Icon name="chevronRight" size={18} /></Link><Link to="/messages" className="quick-action"><span className="quick-icon blue"><Icon name="chat" /></span><span><strong>Trao đổi phụ huynh</strong><small>Tin nhắn theo từng học sinh</small></span><Icon name="chevronRight" size={18} /></Link></> : <><span className="quick-action is-muted"><span className="quick-icon orange"><Icon name="students" /></span><span><strong>Thêm học sinh</strong><small>Quản lý hồ sơ học sinh</small></span><small>Sắp có</small></span><span className="quick-action is-muted"><span className="quick-icon violet"><Icon name="chart" /></span><span><strong>Xem báo cáo</strong><small>Phân tích vận hành trường học</small></span><small>Sắp có</small></span></>}</aside>
       </section>
     </AppShell>
   );

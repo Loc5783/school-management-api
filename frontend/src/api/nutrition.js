@@ -50,6 +50,7 @@ export const getFoodInspections = () => api.get('/nutrition/food-inspections');
 export const createFoodInspection = (data) => api.post('/nutrition/food-inspections', data);
 
 export const getDailyMealFinancials = (date) => api.get('/nutrition/financials/daily', { params: { date } });
+export const getDailyServingPlan = (date) => api.get('/nutrition/servings/daily', { params: { date } });
 export const getKitchenRequests = (params) => api.get('/nutrition/requests', { params });
 export const createKitchenRequest = (data) => api.post('/nutrition/requests', data);
 export const approveKitchenRequest = (id, data) => api.put(`/nutrition/requests/${id}/approve`, data);

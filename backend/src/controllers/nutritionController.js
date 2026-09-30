@@ -16,6 +16,7 @@ const {
     ALLERGEN_CODES,
     checkAllergyAndDiseaseConflicts,
     calculateDailyMealReport,
+    calculateDailyServingPlan,
     cloneWeeklyMenu,
     getInventoryAlerts: fetchInventoryAlerts,
     normalizeAllergen
@@ -1202,6 +1203,20 @@ const getDailyFinancialReport = async (req, res) => {
     }
 };
 
+const getDailyServingPlan = async (req, res) => {
+    try {
+        const date = req.query.date || new Date().toISOString();
+        const classroomIds = req.user.role === 'teacher'
+            ? await getTeacherClassroomIds(req.user)
+            : null;
+        const report = await calculateDailyServingPlan(date, classroomIds);
+        res.json({ success: true, data: report });
+    } catch (err) {
+        console.error('Lỗi getDailyServingPlan:', err);
+        res.status(500).json({ success: false, message: 'Không thể lập kế hoạch suất ăn theo lớp' });
+    }
+};
+
 const getKitchenRequests = async (req, res) => {
     try {
         const { status } = req.query;
@@ -1316,6 +1331,7 @@ module.exports = {
     createFoodInspection,
     // Finance & Requests
     getDailyFinancialReport,
+    getDailyServingPlan,
     getKitchenRequests,
     createKitchenRequest,
     approveKitchenRequest

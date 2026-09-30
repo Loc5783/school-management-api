@@ -1,6 +1,7 @@
 const StudentAttendance = require('../models/zone3_school/StudentAttendance');
 const StudentLeaveRequest = require('../models/zone3_school/StudentLeaveRequest');
 const Notification = require('../models/zone1_system/Notification');
+const User = require('../models/zone1_system/User');
 const Student = require('../models/zone3_school/Student');
 const Classroom = require('../models/zone3_school/Classroom');
 const {
@@ -10,6 +11,7 @@ const {
 } = require('../services/studentAccessService');
 const {
     canAccessClassroom,
+    getTeacherClassroomIds,
     hasSchoolWideReadAccess
 } = require('../services/schoolDataAccessService');
 const { isValidObjectId } = require('../utils/idValidation');
@@ -54,6 +56,28 @@ const canReadLeaveRequests = async (user, classroomId) => (
     SCHOOL_WIDE_ATTENDANCE_ROLES.has(user?.role)
     || (user?.role === 'teacher' && await canAccessClassroom(user, classroomId))
 );
+
+const attendanceStatusText = { present: 'có mặt', late: 'đi muộn', absent: 'vắng mặt', absent_permission: 'nghỉ có phép' };
+const notifyParentsOfAttendance = async (attendance, actorId) => {
+    if (!attendance?._id || !attendance?.studentId) return;
+    const parents = await User.find({
+        role: 'parent', status: 'active', 'parentInfo.studentIds': attendance.studentId
+    }).select('_id').lean();
+    if (!parents.length) return;
+    const statusText = attendanceStatusText[attendance.status] || attendance.status;
+    const eventKey = `${attendance._id}:${attendance.status}`;
+    await Promise.all(parents.map((parent) => Notification.updateOne(
+        { recipientId: parent._id, 'metadata.attendanceEventKey': eventKey },
+        { $setOnInsert: {
+            recipientId: parent._id,
+            title: `Điểm danh: ${attendance.studentName}`,
+            message: `${attendance.studentName} được ghi nhận ${statusText} ngày ${new Date(attendance.attendDate).toLocaleDateString('vi-VN')}.`,
+            type: 'attendance', link: '/parent-portal', createdBy: actorId,
+            metadata: { attendanceId: attendance._id, studentId: attendance.studentId, status: attendance.status, attendanceEventKey: eventKey }
+        } },
+        { upsert: true }
+    )));
+};
 
 // Check-in tự động bằng mã thẻ hoặc mã hồ sơ khuôn mặt từ thiết bị/dịch vụ nhận diện.
 const automaticCheckIn = async (req, res) => {
@@ -102,6 +126,7 @@ const automaticCheckIn = async (req, res) => {
             recordedBy: req.user._id,
             recordedByName: req.user.profile.fullName
         });
+        await notifyParentsOfAttendance(attendance, req.user._id);
 
         return res.status(201).json({
             message: `Đã điểm danh ${student.fullName}`,
@@ -171,6 +196,7 @@ const createAttendance = async (req, res) => {
         });
 
         await attendance.save();
+        await notifyParentsOfAttendance(attendance, req.user._id);
 
         res.status(201).json({
             message: 'Điểm danh thành công',
@@ -267,6 +293,7 @@ const createBulkAttendance = async (req, res) => {
         }
 
         const result = await StudentAttendance.insertMany(attendanceRecords);
+        await Promise.all(result.map((attendance) => notifyParentsOfAttendance(attendance, req.user._id)));
 
         res.status(201).json({
             message: `Điểm danh thành công ${result.length} học sinh`,
@@ -412,6 +439,7 @@ const updateAttendance = async (req, res) => {
             { $set: updates },
             { returnDocument: 'after', runValidators: true }
         );
+        if (updates.status && updates.status !== record.status) await notifyParentsOfAttendance(updatedRecord, req.user._id);
 
         res.json({
             message: 'Cập nhật điểm danh thành công',
@@ -511,7 +539,7 @@ const getLeaveRequests = async (req, res) => {
         } else if (SCHOOL_WIDE_ATTENDANCE_ROLES.has(req.user.role)) {
             filter = {};
         } else if (req.user.role === 'teacher') {
-            const classroomIds = (await Classroom.find({ 'teachers.teacherId': req.user._id, status: 'active' }).select('_id')).map((item) => item._id);
+            const classroomIds = await getTeacherClassroomIds(req.user);
             filter = { classroomId: { $in: classroomIds } };
         } else {
             return res.status(403).json({ success: false, message: 'Bạn không có quyền xem đơn xin nghỉ' });
@@ -614,7 +642,7 @@ const getAbsenceReport = async (req, res) => {
             if (!await canReadLeaveRequests(req.user, req.query.classroomId)) return res.status(403).json({ success: false, message: 'Bạn không có quyền xem lớp này' });
             filter.classroomId = req.query.classroomId;
         } else if (req.user.role === 'teacher') {
-            filter.classroomId = { $in: (await Classroom.find({ 'teachers.teacherId': req.user._id, status: 'active' }).select('_id')).map((item) => item._id) };
+            filter.classroomId = { $in: await getTeacherClassroomIds(req.user) };
         }
         const records = await StudentAttendance.find(filter).sort({ attendDate: -1, studentName: 1 }).lean();
         const summary = new Map();

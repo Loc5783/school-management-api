@@ -13,6 +13,8 @@ const systemUserRoutes = require('./src/routes/systemUserRoutes');
 const nutritionRoutes = require('./src/routes/nutritionRoutes');
 const hrRoutes = require('./src/routes/hrRoutes');
 const notificationRoutes = require('./src/routes/notificationRoutes');
+const chatRoutes = require('./src/routes/chatRoutes');
+const classroomCommunicationRoutes = require('./src/routes/classroomCommunicationRoutes');
 
 const createApp = () => {
     const app = express();
@@ -43,6 +45,8 @@ const createApp = () => {
     app.use('/api/nutrition', nutritionRoutes);
     app.use('/api/hr', hrRoutes);
     app.use('/api/notifications', notificationRoutes);
+    app.use('/api/chat', chatRoutes);
+    app.use('/api/class-communication', classroomCommunicationRoutes);
 
     app.get('/api/health', (req, res) => {
         res.status(200).json({ status: 'OK', message: 'Server đang chạy!' });

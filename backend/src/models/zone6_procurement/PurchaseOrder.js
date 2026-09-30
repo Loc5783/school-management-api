@@ -1,6 +1,13 @@
 const mongoose = require('mongoose');
 
 const PurchaseOrderSchema = new mongoose.Schema({
+    orderCode: {
+        type: String,
+        required: true,
+        unique: true,
+        trim: true,
+        uppercase: true
+    },
     requestId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'ProcurementRequest',
@@ -10,7 +17,7 @@ const PurchaseOrderSchema = new mongoose.Schema({
     supplierId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Supplier',
-        required: true
+        default: null
     },
     supplierName: {
         type: String,
@@ -80,6 +87,7 @@ const PurchaseOrderSchema = new mongoose.Schema({
 // ==============================
 // Đảm bảo mỗi đề xuất chỉ tạo được 1 đơn hàng
 PurchaseOrderSchema.index({ requestId: 1 }, { unique: true });
+PurchaseOrderSchema.index({ orderCode: 1 }, { unique: true });
 
 // Tối ưu truy vấn theo nhà cung cấp và trạng thái
 PurchaseOrderSchema.index({ supplierId: 1 });

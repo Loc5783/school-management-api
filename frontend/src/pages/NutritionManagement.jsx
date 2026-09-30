@@ -33,6 +33,7 @@ import {
   getEquipments,
   createFoodSample,
   getDailyMealFinancials,
+  getDailyServingPlan,
   getKitchenRequests,
   createKitchenRequest,
   approveKitchenRequest
@@ -316,7 +317,10 @@ function ClassroomDietaryAlertPanel({ alerts, blockedAllergens = [] }) {
 }
 
 export default function NutritionManagement() {
-  const [activeTab, setActiveTab] = useState('menus'); // menus | dishes | inventory | equipment | dailyKitchenReport | finance
+  const [activeTab, setActiveTab] = useState('menus');
+  const sessionRole = getSessionRole();
+  const isTeacher = sessionRole === 'teacher';
+  const canManageMenuContent = ['admin', 'principal', 'chef'].includes(sessionRole);
   const canReconcileInventory = ['admin', 'principal'].includes(getSessionRole());
   const canApproveKitchenRequest = ['admin', 'principal', 'accountant'].includes(getSessionRole());
   const canViewFinance = ['admin', 'principal'].includes(getSessionRole());
@@ -329,6 +333,10 @@ export default function NutritionManagement() {
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedWeekStart] = useState(() => getMonday());
   const [currentMenu, setCurrentMenu] = useState(null);
+  const [archivedMenus, setArchivedMenus] = useState([]);
+  const [selectedArchivedMenu, setSelectedArchivedMenu] = useState(null);
+  const [menuArchivePage, setMenuArchivePage] = useState(1);
+  const [menuArchiveClassId, setMenuArchiveClassId] = useState('');
 
   const [dishes, setDishes] = useState([]);
   const [ingredients, setIngredients] = useState([]);
@@ -338,6 +346,7 @@ export default function NutritionManagement() {
   const [inventoryTransactions, setInventoryTransactions] = useState([]);
   const [equipments, setEquipments] = useState([]);
   const [financialReport, setFinancialReport] = useState(null);
+  const [servingPlan, setServingPlan] = useState(null);
   const [kitchenRequests, setKitchenRequests] = useState([]);
   const [classroomDietaryAlerts, setClassroomDietaryAlerts] = useState([]);
   const [classroomBlockedAllergens, setClassroomBlockedAllergens] = useState([]);
@@ -368,6 +377,8 @@ export default function NutritionManagement() {
   const dailyStockPagination = paginate(availableStockItems, dailyStockPage);
   const stockSummaryPagination = paginate(availableStockItems, stockSummaryPage);
   const dishPagination = paginate(dishes, dishPage);
+  const filteredArchivedMenus = archivedMenus.filter((menu) => !menuArchiveClassId || String(menu.classroomId) === menuArchiveClassId);
+  const menuArchivePagination = paginate(filteredArchivedMenus, menuArchivePage);
   const equipmentPagination = paginate(equipments, equipmentPage);
   const equipmentRequests = kitchenRequests.filter((request) => ['equipment_new', 'equipment_repair'].includes(request.requestType));
   const equipmentRequestPagination = paginate(equipmentRequests, equipmentRequestPage);
@@ -497,8 +508,16 @@ export default function NutritionManagement() {
         const res = await getWeeklyMenus(params);
         const data = res.data.data || [];
         setCurrentMenu(data[0] || null);
+      } else if (activeTab === 'menuArchive') {
+        const res = await getWeeklyMenus({});
+        const todayKey = dateToInput(new Date());
+        const data = (res.data.data || [])
+          .filter((menu) => dateToInput(new Date(menu.endDate || menu.startDate)) < todayKey)
+          .sort((left, right) => new Date(right.startDate) - new Date(left.startDate));
+        setArchivedMenus(data);
+        setSelectedArchivedMenu((current) => current && data.some((menu) => menu._id === current._id) ? current : data[0] || null);
       } else if (activeTab === 'dishes') {
-        const [dRes, iRes] = await Promise.all([getDishes(), getIngredients()]);
+        const [dRes, iRes] = await Promise.all([getDishes(), isTeacher ? Promise.resolve({ data: { data: [] } }) : getIngredients()]);
         setDishes(dRes.data.data || []);
         setIngredients(iRes.data.data || []);
       } else if (activeTab === 'inventory' || activeTab === 'inventoryAudit') {
@@ -520,14 +539,16 @@ export default function NutritionManagement() {
         setEquipments(eqRes.data.data || []);
         setKitchenRequests(reqRes.data.data || []);
       } else if (activeTab === 'dailyKitchenReport') {
-        const [invRes, transactionRes, reconciliationRes] = await Promise.all([
-          getInventory(),
-          getInventoryTransactions(dailyReportRange),
-          canReconcileInventory ? getInventoryReconciliations() : Promise.resolve({ data: { data: [] } })
+        const [invRes, transactionRes, reconciliationRes, servingRes] = await Promise.all([
+          isTeacher ? Promise.resolve({ data: { data: [] } }) : getInventory(),
+          isTeacher ? Promise.resolve({ data: { data: [] } }) : getInventoryTransactions(dailyReportRange),
+          !isTeacher && canReconcileInventory ? getInventoryReconciliations() : Promise.resolve({ data: { data: [] } }),
+          getDailyServingPlan(dailyReportRange.endDate)
         ]);
         setInventories(invRes.data.data || []);
         setInventoryTransactions(transactionRes.data.data || []);
         setReconciliations(reconciliationRes.data.data || []);
+        setServingPlan(servingRes.data.data || null);
       } else if (activeTab === 'finance') {
         const finRes = await getDailyMealFinancials(new Date().toISOString());
         setFinancialReport(finRes.data.data || null);
@@ -538,7 +559,7 @@ export default function NutritionManagement() {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, selectedClassId, selectedWeekStart, canReconcileInventory, dailyReportRange]);
+  }, [activeTab, selectedClassId, selectedWeekStart, canReconcileInventory, dailyReportRange, isTeacher]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => loadTabData(), 0);
@@ -974,15 +995,15 @@ export default function NutritionManagement() {
   return (
     <AppShell
       title="Bếp Ăn & Dinh Dưỡng Bán Trú"
-      subtitle="Quản lý thực đơn theo lớp, cảnh báo dị ứng/bệnh lý học sinh, kho thực phẩm, thiết bị bếp và tài chính suất ăn"
+      subtitle="Quản lý thực đơn theo lớp, lưu trữ thực đơn tuần, cảnh báo dinh dưỡng, kho thực phẩm và suất ăn"
       actions={
         <div className="flex gap-2">
-          {activeTab === 'menus' && (
+          {activeTab === 'menus' && canManageMenuContent && (
             <button className="btn-primary" onClick={openNewMenuModal}>
               <Icon name="plus" size={16} /> Lập Thực Đơn Tuần
             </button>
           )}
-          {activeTab === 'dishes' && (
+          {activeTab === 'dishes' && canManageMenuContent && (
             <button className="btn-primary" onClick={() => { setEditingDishId(null); setNewDishForm(createEmptyDishForm()); setShowNewDishModal(true); }}>
               <Icon name="plus" size={16} /> Thêm Món Ăn Mới
             </button>
@@ -1023,15 +1044,17 @@ export default function NutritionManagement() {
 
       {/* Tabs Navigation */}
       <div className="flex gap-1 border-b border-gray-200 mb-6 overflow-x-auto">
-        {[
+        {(isTeacher ? [
+          { key: 'menus', label: 'Thực Đơn Theo Lớp', icon: 'menu' }
+        ] : [
           { key: 'menus', label: 'Thực Đơn Theo Lớp', icon: 'menu' },
+          { key: 'menuArchive', label: 'Lưu Trữ Thực Đơn Tuần', icon: 'calendar' },
           { key: 'dishes', label: 'Món Ăn & Dinh Dưỡng', icon: 'utensils' },
           { key: 'inventory', label: 'Kho Thực Phẩm & Date', icon: 'grid' },
           ...(canReconcileInventory ? [{ key: 'inventoryAudit', label: 'Kiểm Kê Kho', icon: 'grid' }] : []),
-          { key: 'equipment', label: 'Thiết Bị & Đề Xuất Mua Sắm', icon: 'settings' },
-          { key: 'dailyKitchenReport', label: 'Báo Cáo Kho Hằng Ngày', icon: 'chart' },
+          { key: 'dailyKitchenReport', label: 'Suất Ăn & Báo Cáo Kho', icon: 'chart' },
           ...(canViewFinance ? [{ key: 'finance', label: 'Tài Chính & Suất Ăn', icon: 'money' }] : [])
-        ].map((tab) => (
+        ]).map((tab) => (
           <button
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
@@ -1121,7 +1144,7 @@ export default function NutritionManagement() {
               <div className="mb-4 bg-white border border-gray-200 rounded-xl p-4 flex flex-wrap gap-3 items-center justify-between">
                 <div className="text-sm"><span className="text-gray-500">Trạng thái: </span><strong>{({ draft: 'Bản nháp', pending_approval: 'Chờ phê duyệt', published: 'Đã công bố', archived: 'Đã lưu trữ' })[currentMenu.status] || currentMenu.status}</strong>{currentMenu.approvalNote && <span className="ml-2 text-xs text-gray-500">— {currentMenu.approvalNote}</span>}</div>
                 <div className="flex gap-2">
-                  {currentMenu.status === 'draft' && <button type="button" onClick={() => handleMenuWorkflow('submit')} className="btn-primary text-xs">Gửi duyệt</button>}
+                  {currentMenu.status === 'draft' && canManageMenuContent && <button type="button" onClick={() => handleMenuWorkflow('submit')} className="btn-primary text-xs">Gửi duyệt</button>}
                   {currentMenu.status === 'pending_approval' && canApproveMenus && <><button type="button" onClick={() => handleMenuWorkflow('approve')} className="btn-primary text-xs">Phê duyệt & công bố</button><button type="button" onClick={() => handleMenuWorkflow('return')} className="btn-secondary text-xs">Trả chỉnh sửa</button></>}
                   {currentMenu.status === 'published' && canApproveMenus && <button type="button" onClick={() => handleMenuWorkflow('archive')} className="btn-secondary text-xs">Lưu trữ</button>}
                 </div>
@@ -1173,7 +1196,7 @@ export default function NutritionManagement() {
                       <span className="font-semibold text-gray-500 block mb-0.5">XẾ CHIỀU (14:30)</span>
                       <p className="font-medium text-gray-800">{getDishNames(day.afternoonSnack)}</p>
                     </div>
-                    <button type="button" className="nutrition-day-edit" onClick={() => openDailyMenuEditor(index)}>Cập nhật thực đơn ngày</button>
+                    {canManageMenuContent && <button type="button" className="nutrition-day-edit" onClick={() => openDailyMenuEditor(index)}>Cập nhật thực đơn ngày</button>}
                   </div>
                 </div>
               ))}
@@ -1181,11 +1204,72 @@ export default function NutritionManagement() {
           ) : (
             <div className="bg-white p-12 text-center rounded-xl border border-gray-200">
               <p className="text-gray-500 mb-4">Lớp này chưa có thực đơn cho tuần đã chọn.</p>
-              <button className="btn-primary inline-flex items-center gap-1 text-sm" onClick={openNewMenuModal}>
+              {canManageMenuContent && <button className="btn-primary inline-flex items-center gap-1 text-sm" onClick={openNewMenuModal}>
                 <Icon name="plus" size={16} /> Lập Bản Nháp Thực Đơn
-              </button>
+              </button>}
             </div>
           )}
+        </div>
+      )}
+
+      {activeTab === 'menuArchive' && !loading && (
+        <div className="nutrition-menu-archive">
+          <section className="nutrition-archive-toolbar">
+            <div>
+              <span className="card-kicker">LỊCH SỬ THỰC ĐƠN</span>
+              <h3>Kho lưu trữ thực đơn các tuần trước</h3>
+              <p>Tra cứu lớp đã ăn gì theo từng tuần. Dữ liệu được lấy từ các thực đơn đã lập, không phụ thuộc trạng thái lưu trữ thủ công.</p>
+            </div>
+            <label>
+              Lọc theo lớp
+              <select value={menuArchiveClassId} onChange={(event) => { setMenuArchiveClassId(event.target.value); setMenuArchivePage(1); setSelectedArchivedMenu(null); }}>
+                <option value="">Tất cả lớp học</option>
+                {classrooms.map((classroom) => <option key={classroom._id} value={classroom._id}>{classroom.name}</option>)}
+              </select>
+            </label>
+          </section>
+
+          <div className="nutrition-archive-layout">
+            <section className="nutrition-archive-list">
+              {menuArchivePagination.rows.map((menu) => (
+                <button key={menu._id} type="button" className={selectedArchivedMenu?._id === menu._id ? 'is-active' : ''} onClick={() => setSelectedArchivedMenu(menu)}>
+                  <span>Tuần {menu.weekNumber} · {menu.schoolYear}</span>
+                  <strong>{menu.className || 'Lớp chưa xác định'}</strong>
+                  <small>{new Date(menu.startDate).toLocaleDateString('vi-VN')} – {new Date(menu.endDate).toLocaleDateString('vi-VN')}</small>
+                  <em>{({ draft: 'Bản nháp', pending_approval: 'Chờ duyệt', published: 'Đã công bố', archived: 'Đã lưu trữ' })[menu.status] || menu.status}</em>
+                </button>
+              ))}
+              {!filteredArchivedMenus.length && <div className="nutrition-archive-empty">Chưa có thực đơn của tuần trước phù hợp với lớp đã chọn.</div>}
+              <PaginationControls pagination={menuArchivePagination} total={filteredArchivedMenus.length} onPageChange={setMenuArchivePage} />
+            </section>
+
+            <section className="nutrition-archive-detail">
+              {selectedArchivedMenu ? (
+                <>
+                  <header>
+                    <div><span>THỰC ĐƠN ĐÃ LƯU</span><h3>{selectedArchivedMenu.className} · Tuần {selectedArchivedMenu.weekNumber}</h3></div>
+                    <small>{new Date(selectedArchivedMenu.startDate).toLocaleDateString('vi-VN')} – {new Date(selectedArchivedMenu.endDate).toLocaleDateString('vi-VN')}</small>
+                  </header>
+                  <div className="nutrition-archive-days">
+                    {(selectedArchivedMenu.days || []).map((day) => (
+                      <article key={day.dayOfWeek}>
+                        <h4>{MENU_DAYS.find((item) => item.key === day.dayOfWeek)?.label || day.dayOfWeek}</h4>
+                        <dl>
+                          <div><dt>Sáng</dt><dd>{getDishNames(day.breakfast)}</dd></div>
+                          <div><dt>Phụ sáng</dt><dd>{getDishNames(day.morningSnack)}</dd></div>
+                          <div><dt>Món chính</dt><dd>{getLunchDishNames(day.lunch, 'mainDishes', 'mainDish')}</dd></div>
+                          <div><dt>Rau / xào</dt><dd>{getLunchDishNames(day.lunch, 'stirFryDishes', 'stirFryDish')}</dd></div>
+                          <div><dt>Canh</dt><dd>{getLunchDishNames(day.lunch, 'soupDishes', 'soupDish')}</dd></div>
+                          <div><dt>Tráng miệng</dt><dd>{getLunchDishNames(day.lunch, 'desserts', 'dessert')}</dd></div>
+                          <div><dt>Bữa xế</dt><dd>{getDishNames(day.afternoonSnack)}</dd></div>
+                        </dl>
+                      </article>
+                    ))}
+                  </div>
+                </>
+              ) : <div className="nutrition-archive-empty">Chọn một thực đơn bên trái để xem chi tiết.</div>}
+            </section>
+          </div>
         </div>
       )}
 
@@ -1595,6 +1679,38 @@ export default function NutritionManagement() {
       {/* ========================================== */}
       {activeTab === 'dailyKitchenReport' && !loading && (
         <div className="space-y-6">
+          {servingPlan && (
+            <section className="nutrition-serving-plan">
+              <header>
+                <div>
+                  <span className="card-kicker">KẾ HOẠCH PHỤC VỤ NGÀY {new Date(`${servingPlan.dateKey}T00:00:00`).toLocaleDateString('vi-VN')}</span>
+                  <h3>Suất ăn cần chuẩn bị theo từng lớp</h3>
+                  <p>Số suất đề xuất = sĩ số đang học trừ học sinh đã báo nghỉ. Học sinh chưa điểm danh vẫn được tạm tính suất để bếp không chuẩn bị thiếu.</p>
+                </div>
+                <div className="nutrition-serving-total"><small>TỔNG SUẤT CẦN NẤU</small><strong>{servingPlan.totalRecommendedServings}</strong><span>suất ăn</span></div>
+              </header>
+              <div className="nutrition-serving-kpis">
+                <div><span>Sĩ số đang học</span><strong>{servingPlan.totalEnrolledStudents}</strong></div>
+                <div className="is-green"><span>Đã có mặt / đi muộn</span><strong>{servingPlan.totalStudentsPresent}</strong></div>
+                <div className="is-red"><span>Đã báo nghỉ</span><strong>{servingPlan.totalAbsentStudents}</strong></div>
+                <div className="is-amber"><span>Chưa điểm danh</span><strong>{servingPlan.totalUnmarkedStudents}</strong></div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="nutrition-serving-table">
+                  <thead><tr><th>Lớp</th><th>Sĩ số</th><th>Có mặt</th><th>Đã nghỉ</th><th>Chưa điểm danh</th><th>Suất cần nấu</th><th>Học sinh nghỉ</th></tr></thead>
+                  <tbody>
+                    {(servingPlan.classBreakdown || []).map((item) => (
+                      <tr key={item.classroomId}>
+                        <td><strong>{item.className}</strong><small className={item.attendanceComplete ? 'is-complete' : 'is-pending'}>{item.attendanceComplete ? 'Đã chốt điểm danh' : 'Chưa chốt điểm danh'}</small></td>
+                        <td>{item.totalEnrolledStudents}</td><td>{item.actualPresentStudents}</td><td className="is-absent">{item.absentCount}</td><td className="is-unmarked">{item.unmarkedCount}</td><td className="is-serving">{item.recommendedServings}</td>
+                        <td>{item.absentStudents?.length ? item.absentStudents.map((student) => student.studentName).join(', ') : 'Không có'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
           <div className="nutrition-report-filter">
             <div>
               <strong>Tra cứu nhật ký kho</strong>
@@ -1689,7 +1805,7 @@ export default function NutritionManagement() {
           </section>
 
           <section className="nutrition-finance-kpis">
-            <article><span>HỌC SINH CÓ MẶT</span><strong>{financialReport.totalStudentsPresent}</strong><small>Từ điểm danh thực tế</small></article>
+            <article><span>SUẤT ĂN CẦN CHUẨN BỊ</span><strong>{financialReport.totalRecommendedServings}</strong><small>{financialReport.totalStudentsPresent} em đã có mặt · {financialReport.totalAbsentStudents} em nghỉ</small></article>
             <article><span>NGÂN SÁCH SUẤT ĂN</span><strong>{financialReport.totalMealRevenueBudget?.toLocaleString('vi-VN')} đ</strong><small>{financialReport.standardMealRatePerStudent?.toLocaleString('vi-VN')} đ / trẻ / ngày</small></article>
             <article className="is-expense"><span>CHI PHÍ ĐÃ XUẤT KHO</span><strong>{financialReport.totalIngredientCost?.toLocaleString('vi-VN')} đ</strong><small>{financialReport.exportTransactionsCount} phiếu xuất nguyên liệu</small></article>
             <article className={financialReport.balance >= 0 ? 'is-positive' : 'is-negative'}><span>CÒN LẠI / CHÊNH LỆCH</span><strong>{financialReport.balance?.toLocaleString('vi-VN')} đ</strong><small>{financialReport.balance >= 0 ? 'Còn trong ngân sách' : 'Cần rà soát ngay'}</small></article>
@@ -1698,7 +1814,7 @@ export default function NutritionManagement() {
           <section className="nutrition-finance-grid">
             <article className="nutrition-finance-panel">
               <h4>Hiệu quả sử dụng ngân sách</h4>
-              <p className="nutrition-finance-muted">Chi phí nguyên liệu thực tế trên mỗi học sinh có mặt.</p>
+              <p className="nutrition-finance-muted">Chi phí nguyên liệu thực tế trên mỗi suất ăn cần chuẩn bị.</p>
               <div className="nutrition-finance-cost-row"><span>Chi phí / học sinh</span><strong>{financialReport.actualCostPerStudent?.toLocaleString('vi-VN')} đ</strong></div>
               <div className="nutrition-finance-cost-row"><span>Tỷ lệ đã sử dụng</span><strong>{financialReport.budgetUtilizationPercent || 0}%</strong></div>
               <div className="nutrition-finance-progress"><span style={{ width: `${Math.min(financialReport.budgetUtilizationPercent || 0, 100)}%` }} /></div>
@@ -1722,10 +1838,10 @@ export default function NutritionManagement() {
           <section className="nutrition-finance-grid">
             <article className="nutrition-finance-panel nutrition-finance-table-panel">
               <h4>Dự toán suất ăn theo lớp</h4>
-              <p className="nutrition-finance-muted">Phân bổ ngân sách dựa trên số học sinh có mặt thực tế.</p>
-              <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr><th>Lớp</th><th>Có mặt</th><th>Ngân sách dự kiến</th></tr></thead><tbody>
-                {(financialReport.classBreakdown || []).map((item) => <tr key={item.classroomId}><td>{item.className}</td><td className="nutrition-finance-number">{item.actualPresentStudents}</td><td className="nutrition-finance-number">{(item.actualPresentStudents * financialReport.standardMealRatePerStudent).toLocaleString('vi-VN')} đ</td></tr>)}
-                {!financialReport.classBreakdown?.length && <tr><td colSpan="3" className="nutrition-finance-empty">Chưa có học sinh được điểm danh có mặt hôm nay.</td></tr>}
+              <p className="nutrition-finance-muted">Số suất theo lớp đã trừ học sinh báo nghỉ; học sinh chưa điểm danh vẫn được giữ suất.</p>
+              <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr><th>Lớp</th><th>Sĩ số</th><th>Có mặt</th><th>Nghỉ</th><th>Chưa điểm danh</th><th>Suất cần nấu</th><th>Ngân sách dự kiến</th></tr></thead><tbody>
+                {(financialReport.classBreakdown || []).map((item) => <tr key={item.classroomId}><td>{item.className}</td><td className="nutrition-finance-number">{item.totalEnrolledStudents}</td><td className="nutrition-finance-number">{item.actualPresentStudents}</td><td className="nutrition-finance-number">{item.absentCount}</td><td className="nutrition-finance-number">{item.unmarkedCount}</td><td className="nutrition-finance-number"><strong>{item.recommendedServings}</strong></td><td className="nutrition-finance-number">{(item.recommendedServings * financialReport.standardMealRatePerStudent).toLocaleString('vi-VN')} đ</td></tr>)}
+                {!financialReport.classBreakdown?.length && <tr><td colSpan="7" className="nutrition-finance-empty">Chưa có lớp đang hoạt động.</td></tr>}
               </tbody></table></div>
             </article>
 

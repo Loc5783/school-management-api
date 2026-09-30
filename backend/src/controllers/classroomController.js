@@ -1,9 +1,12 @@
 const mongoose = require('mongoose');
 const Classroom = require('../models/zone3_school/Classroom');
 const Student = require('../models/zone3_school/Student');
+const User = require('../models/zone1_system/User');
+const { canAccessClassroom, getTeacherClassroomIds, hasSchoolWideReadAccess } = require('../services/schoolDataAccessService');
 
-const editableFields = ['name', 'fullName', 'subject', 'ageGroup', 'maxSize', 'schoolYear', 'teachers'];
+const editableFields = ['name', 'fullName', 'subject', 'ageGroup', 'maxSize', 'schoolYear'];
 const activeStudentStatuses = ['enrolled', 'temporarily_absent'];
+let homeroomIndexPromise;
 const error = (message, statusCode) => Object.assign(new Error(message), { statusCode });
 const isId = (value) => mongoose.isValidObjectId(value);
 const pick = (body = {}) => Object.fromEntries(editableFields.filter((key) => Object.hasOwn(body, key)).map((key) => [key, body[key]]));
@@ -15,6 +18,15 @@ const validate = (data) => {
   if (String(data.subject || '').trim().length > 120) throw error('Môn học không được vượt quá 120 ký tự', 422);
 };
 const respond = (res, err) => res.status(err.statusCode || 500).json({ success: false, message: err.message || 'Lỗi server' });
+const ensureHomeroomAssignmentIndex = () => {
+  if (!homeroomIndexPromise) {
+    homeroomIndexPromise = Classroom.collection.createIndex(
+      { schoolYear: 1, homeroomTeacherId: 1 },
+      { name: 'schoolYear_1_homeroomTeacherId_1', unique: true, partialFilterExpression: { status: 'active', homeroomTeacherId: { $type: 'objectId' } } }
+    );
+  }
+  return homeroomIndexPromise;
+};
 
 const createClassroom = async (req, res) => {
   try {
@@ -28,6 +40,13 @@ const createClassroom = async (req, res) => {
 const getAllClassrooms = async (req, res) => {
   try {
     const filter = req.query.includeArchived === 'true' ? {} : { status: 'active' };
+    if (req.user.role === 'teacher') {
+      // A teacher can only discover classrooms that they have been assigned to.
+      // This protects attendance/student pages even if a user opens an API URL directly.
+      filter._id = { $in: await getTeacherClassroomIds(req.user) };
+    } else if (!hasSchoolWideReadAccess(req.user)) {
+      throw error('Bạn không có quyền xem danh sách lớp học', 403);
+    }
     const classrooms = await Classroom.find(filter).sort({ status: 1, schoolYear: -1, name: 1 });
     res.json({ success: true, message: 'Lấy danh sách lớp học thành công', data: classrooms });
   } catch (err) { console.error(err); respond(res, err); }
@@ -36,6 +55,8 @@ const getAllClassrooms = async (req, res) => {
 const getClassroomById = async (req, res) => {
   try {
     if (!isId(req.params.id)) throw error('ID lớp học không hợp lệ', 400);
+    if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, req.params.id)) throw error('Bạn không có quyền xem lớp học này', 403);
+    if (req.user.role !== 'teacher' && !hasSchoolWideReadAccess(req.user)) throw error('Bạn không có quyền xem lớp học', 403);
     const classroom = await Classroom.findById(req.params.id); if (!classroom) throw error('Không tìm thấy lớp học', 404);
     res.json({ success: true, message: 'Lấy chi tiết lớp học thành công', data: classroom });
   } catch (err) { console.error(err); respond(res, err); }
@@ -53,6 +74,58 @@ const updateClassroom = async (req, res) => {
   } catch (err) { console.error(err); respond(res, err); }
 };
 
+// Kept separate from the general classroom update so a client cannot silently
+// assign arbitrary accounts by posting a `teachers` array.
+const assignHomeroomTeacher = async (req, res) => {
+  try {
+    await ensureHomeroomAssignmentIndex();
+    if (!isId(req.params.id)) throw error('ID lớp học không hợp lệ', 400);
+    const classroom = await Classroom.findById(req.params.id);
+    if (!classroom) throw error('Không tìm thấy lớp học', 404);
+    if (classroom.status !== 'active') throw error('Không thể phân công giáo viên cho lớp đã lưu trữ', 409);
+
+    const teacherId = req.body?.teacherId;
+    if (teacherId !== null && teacherId !== undefined && teacherId !== '') {
+      if (!isId(teacherId)) throw error('ID giáo viên không hợp lệ', 400);
+      const teacher = await User.findOne({ _id: teacherId, role: 'teacher', status: 'active' })
+        .select('profile.fullName username');
+      if (!teacher) throw error('Chỉ có thể chọn tài khoản giáo viên đang hoạt động', 422);
+
+      const alreadyHomeroom = await Classroom.findOne({
+        _id: { $ne: classroom._id },
+        schoolYear: classroom.schoolYear,
+        status: 'active',
+        homeroomTeacherId: teacher._id
+      }).select('name');
+      if (alreadyHomeroom) throw error(`Giáo viên này đang là chủ nhiệm lớp ${alreadyHomeroom.name} trong năm học ${classroom.schoolYear}`, 409);
+
+      classroom.teachers = (classroom.teachers || []).filter((assignment) =>
+        assignment.role !== 'homeroom' && String(assignment.teacherId) !== String(teacher._id)
+      );
+      classroom.teachers.push({
+        teacherId: teacher._id,
+        teacherName: teacher.profile?.fullName || teacher.username,
+        role: 'homeroom',
+        assignedAt: new Date()
+      });
+      classroom.homeroomTeacherId = teacher._id;
+    } else {
+      classroom.teachers = (classroom.teachers || []).filter((assignment) => assignment.role !== 'homeroom');
+      classroom.homeroomTeacherId = null;
+    }
+
+    await classroom.save();
+    res.json({
+      success: true,
+      message: teacherId ? 'Đã phân công giáo viên chủ nhiệm.' : 'Đã bỏ phân công giáo viên chủ nhiệm.',
+      data: classroom
+    });
+  } catch (err) {
+    if (err.code === 11000 && err.keyPattern?.homeroomTeacherId) return res.status(409).json({ success: false, message: 'Giáo viên này đã được phân công chủ nhiệm một lớp khác trong năm học này' });
+    console.error(err); respond(res, err);
+  }
+};
+
 const deleteClassroom = async (req, res) => {
   try {
     if (!isId(req.params.id)) throw error('ID lớp học không hợp lệ', 400);
@@ -63,4 +136,4 @@ const deleteClassroom = async (req, res) => {
   } catch (err) { console.error(err); respond(res, err); }
 };
 
-module.exports = { createClassroom, getAllClassrooms, getClassroomById, updateClassroom, deleteClassroom };
+module.exports = { createClassroom, getAllClassrooms, getClassroomById, updateClassroom, assignHomeroomTeacher, deleteClassroom };

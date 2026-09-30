@@ -69,10 +69,27 @@ const serializeStudent = (student, role, mode = 'detail') => {
     };
     if (mode === 'list') return base;
     if (role === 'parent') {
-        return { ...base, address: raw.address || '', nationality: raw.nationality || '', birthPlace: raw.birthPlace || '', notes: raw.notes || '' };
+        return {
+            ...base,
+            address: raw.address || '',
+            nationality: raw.nationality || '',
+            ethnicity: raw.ethnicity || '',
+            birthPlace: raw.birthPlace || '',
+            schoolYear: raw.schoolYear || '',
+            allergies: raw.allergies || [],
+            disease: raw.disease || {},
+            emergencyContact: raw.emergencyContact || {},
+            notes: raw.notes || ''
+        };
     }
     if (role === 'teacher') {
-        return { ...base, allergies: raw.allergies || [], disease: raw.disease || {}, emergencyContact: raw.emergencyContact || {}, notes: raw.notes || '' };
+        return {
+            ...base,
+            allergies: raw.allergies || [], disease: raw.disease || {}, emergencyContact: raw.emergencyContact || {}, notes: raw.notes || '',
+            authorizedPickers: (raw.authorizedPickers || []).filter((item) => item.isActive !== false).map((item) => ({
+                fullName: item.fullName || '', phone: item.phone || '', relationship: item.relationship || '', photoURL: item.photoURL || ''
+            }))
+        };
     }
     return {
         ...base,

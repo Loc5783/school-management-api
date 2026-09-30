@@ -21,3 +21,5 @@ export const approveProcurementRequest = (id, data) => api.put(`/procurement/req
 export const getPurchaseOrders = (params) => api.get('/procurement/orders', { params });
 export const createPurchaseOrder = (data) => api.post('/procurement/orders', data);
 export const updatePurchaseOrderStatus = (id, data) => api.put(`/procurement/orders/${id}/status`, data);
+export const updatePurchaseOrderDetails = (id, data) => api.put(`/procurement/orders/${id}/details`, data);
+export const getProcurementSuppliers = () => api.get('/procurement/suppliers');

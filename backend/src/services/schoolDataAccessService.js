@@ -8,7 +8,7 @@ const getTeacherClassroomIds = async (user) => {
     if (user?.role !== 'teacher') return [];
 
     const classrooms = await Classroom.find(
-        { 'teachers.teacherId': user._id, status: 'active' },
+        { homeroomTeacherId: user._id, status: 'active' },
         { _id: 1 }
     ).lean();
 
@@ -22,7 +22,7 @@ const canAccessClassroom = async (user, classroomId) => {
     const classroom = await Classroom.exists({
         _id: classroomId,
         status: 'active',
-        'teachers.teacherId': user._id
+        homeroomTeacherId: user._id
     });
 
     return Boolean(classroom);

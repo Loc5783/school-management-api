@@ -19,6 +19,10 @@ import FinanceManagement from './pages/FinanceManagement';
 import Reports from './pages/Reports';
 import AssetManagement from './pages/AssetManagement';
 import EmployeeManagement from './pages/EmployeeManagement';
+import Messages from './pages/Messages';
+import MyPayroll from './pages/MyPayroll';
+import DailyCare from './pages/DailyCare';
+import ParentCare from './pages/ParentCare';
 
 function ProtectedRoute({ children }) {
   return localStorage.getItem('token') ? children : <Navigate to="/login" replace />;
@@ -30,14 +34,52 @@ function ParentRoute({ children }) {
   return user.role === 'parent' ? children : <Navigate to="/dashboard" replace />;
 }
 
+function StudentManagementRoute({ children }) {
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
+  // Hồ sơ của con được hiển thị qua ParentPortal; không cho phụ huynh dùng
+  // giao diện quản trị/danh sách học sinh dù họ tự nhập URL.
+  return user.role === 'parent' ? <Navigate to="/parent-portal" replace /> : children;
+}
+
+function ChatRoute({ children }) {
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
+  return ['parent', 'teacher'].includes(user.role) ? children : <Navigate to="/dashboard" replace />;
+}
+
+function StaffRoute({ children }) {
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
+  return ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'].includes(user.role) ? children : <Navigate to="/dashboard" replace />;
+}
+
+function ClassroomRoute({ children }) {
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
+  return ['admin', 'principal'].includes(user.role) ? children : <Navigate to="/dashboard" replace />;
+}
+
+function TeacherRoute({ children }) {
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
+  return user.role === 'teacher' ? children : <Navigate to="/dashboard" replace />;
+}
+
+function RoleRoute({ roles, children }) {
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
+  return roles.includes(user.role) ? children : <Navigate to="/dashboard" replace />;
+}
+
 function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
-        <Route path="/parent-accounts" element={<ProtectedRoute><ParentAccountManagement /></ProtectedRoute>} />
-        <Route path="/accounts" element={<ProtectedRoute><AccountManagement /></ProtectedRoute>} />
+        <Route path="/parent-accounts" element={<RoleRoute roles={['admin', 'principal']}><ParentAccountManagement /></RoleRoute>} />
+        <Route path="/accounts" element={<RoleRoute roles={['admin', 'principal', 'hr']}><AccountManagement /></RoleRoute>} />
         <Route
           path="/dashboard"
           element={<ProtectedRoute><Dashboard /></ProtectedRoute>}
@@ -66,6 +108,8 @@ function App() {
           path="/timekeeping"
           element={<ProtectedRoute><TimekeepingHub /></ProtectedRoute>}
         />
+        <Route path="/my-payroll" element={<StaffRoute><MyPayroll /></StaffRoute>} />
+        <Route path="/daily-care" element={<TeacherRoute><DailyCare /></TeacherRoute>} />
         <Route
           path="/timekeeping-management"
           element={<Navigate to="/hr?tab=timekeeping" replace />}
@@ -74,16 +118,18 @@ function App() {
           path="/nutrition"
           element={<ProtectedRoute><NutritionManagement /></ProtectedRoute>}
         />
-        <Route path="/students" element={<ProtectedRoute><StudentList /></ProtectedRoute>} />
-        <Route path="/students/new" element={<ProtectedRoute><StudentForm /></ProtectedRoute>} />
-        <Route path="/students/:id" element={<ProtectedRoute><StudentDetail /></ProtectedRoute>} />
-        <Route path="/students/:id/edit" element={<ProtectedRoute><StudentForm /></ProtectedRoute>} />
-        <Route path="/classrooms" element={<ProtectedRoute><ClassroomManagement /></ProtectedRoute>} />
-        <Route path="/finance" element={<ProtectedRoute><FinanceManagement /></ProtectedRoute>} />
-        <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
-        <Route path="/assets" element={<ProtectedRoute><AssetManagement /></ProtectedRoute>} />
-        <Route path="/hr" element={<ProtectedRoute><EmployeeManagement /></ProtectedRoute>} />
+        <Route path="/students" element={<StudentManagementRoute><StudentList /></StudentManagementRoute>} />
+        <Route path="/students/new" element={<StudentManagementRoute><StudentForm /></StudentManagementRoute>} />
+        <Route path="/students/:id" element={<StudentManagementRoute><StudentDetail /></StudentManagementRoute>} />
+        <Route path="/students/:id/edit" element={<StudentManagementRoute><StudentForm /></StudentManagementRoute>} />
+        <Route path="/classrooms" element={<ClassroomRoute><ClassroomManagement /></ClassroomRoute>} />
+        <Route path="/finance" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><FinanceManagement /></RoleRoute>} />
+        <Route path="/reports" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><Reports /></RoleRoute>} />
+        <Route path="/assets" element={<RoleRoute roles={['admin', 'principal', 'teacher']}><AssetManagement /></RoleRoute>} />
+        <Route path="/hr" element={<RoleRoute roles={['admin', 'principal', 'accountant', 'hr']}><EmployeeManagement /></RoleRoute>} />
         <Route path="/parent-portal" element={<ParentRoute><ParentPortal /></ParentRoute>} />
+        <Route path="/parent-care" element={<ParentRoute><ParentCare /></ParentRoute>} />
+        <Route path="/messages" element={<ChatRoute><Messages /></ChatRoute>} />
         <Route path="*" element={<Navigate to="/dashboard" />} />
       </Routes>
     </BrowserRouter>

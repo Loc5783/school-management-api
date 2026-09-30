@@ -54,6 +54,7 @@ const {
     createFoodInspection,
     // Finance & Requests
     getDailyFinancialReport,
+    getDailyServingPlan,
     getKitchenRequests,
     createKitchenRequest,
     approveKitchenRequest
@@ -120,6 +121,7 @@ router.get('/food-inspections', roleCheck(['admin', 'principal', 'chef']), getFo
 router.post('/food-inspections', roleCheck(['admin', 'principal', 'chef']), createFoodInspection);
 
 // ===== TÀI CHÍNH NHÀ ĂN & ĐỀ XUẤT MUA SẮM =====
+router.get('/servings/daily', roleCheck(['admin', 'principal', 'chef', 'teacher']), getDailyServingPlan);
 router.get('/financials/daily', roleCheck(['admin', 'principal']), getDailyFinancialReport);
 router.get('/requests', roleCheck(['admin', 'principal', 'accountant', 'chef']), getKitchenRequests);
 router.post('/requests', roleCheck(['admin', 'principal', 'chef']), createKitchenRequest);

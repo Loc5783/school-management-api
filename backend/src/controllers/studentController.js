@@ -1,16 +1,23 @@
 const Student = require('../models/zone3_school/Student');
 const Classroom = require('../models/zone3_school/Classroom');
 const AuditLog = require('../models/zone1_system/AuditLog');
+const User = require('../models/zone1_system/User');
+const Notification = require('../models/zone1_system/Notification');
 const { applyStudentListScope, canAccessStudent, isParent, isValidStudentId } = require('../services/studentAccessService');
 const { canAccessClassroom, getTeacherClassroomIds, hasSchoolWideReadAccess } = require('../services/schoolDataAccessService');
 const { STUDENT_STATUSES, isClassroomCountedStatus, canTransitionStudentStatus, generateStudentCode, runStudentTransaction, serializeStudent } = require('../services/studentCoreService');
 
 const ADMIN_MUTABLE = ['fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'notes', 'classroomId', 'schoolYear', 'parents', 'authorizedPickers', 'allergies', 'disease', 'emergencyContact', 'admissionDate'];
-const TEACHER_MUTABLE = ['fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'notes'];
+const TEACHER_CREATE_FIELDS = ['fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'notes'];
+const TEACHER_MUTABLE = ['avatar', 'notes'];
+const PARENT_MUTABLE = ['fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'allergies', 'disease', 'emergencyContact', 'authorizedPickers'];
 const SORTS = new Set(['fullName', 'studentCode', 'birthDate', 'admissionDate', 'createdAt', 'updatedAt']);
-const pick = (body = {}, role = 'admin') => Object.fromEntries((role === 'teacher' ? TEACHER_MUTABLE : ADMIN_MUTABLE).filter((key) => Object.hasOwn(body, key)).map((key) => [key, body[key]]));
+const mutableFieldsFor = (role, creating = false) => role === 'teacher'
+    ? (creating ? TEACHER_CREATE_FIELDS : TEACHER_MUTABLE)
+    : role === 'parent' ? PARENT_MUTABLE : ADMIN_MUTABLE;
+const pick = (body = {}, role = 'admin', creating = false) => Object.fromEntries(mutableFieldsFor(role, creating).filter((key) => Object.hasOwn(body, key)).map((key) => [key, body[key]]));
 const assertTeacherAllowedFields = (body, creating = false) => {
-    const allowed = new Set(creating ? [...TEACHER_MUTABLE, 'classroomId'] : TEACHER_MUTABLE);
+    const allowed = new Set(creating ? [...TEACHER_CREATE_FIELDS, 'classroomId'] : TEACHER_MUTABLE);
     const forbidden = Object.keys(body || {}).filter((key) => !allowed.has(key));
     if (forbidden.length) throw httpError(`Giáo viên không có quyền cập nhật trường: ${forbidden.join(', ')}`, 403);
 };
@@ -65,7 +72,7 @@ const scopedFilter = async (user, filter, classroomId) => {
 const createStudent = async (req, res) => {
     try {
         if (req.user.role === 'teacher') assertTeacherAllowedFields(req.body, true);
-        const data = req.user.role === 'teacher' ? { ...pick(req.body, req.user.role), classroomId: req.body.classroomId } : pick(req.body, req.user.role); validatePayload(data, true);
+        const data = req.user.role === 'teacher' ? { ...pick(req.body, req.user.role, true), classroomId: req.body.classroomId } : pick(req.body, req.user.role); validatePayload(data, true);
         if (!isValidStudentId(data.classroomId)) return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
         const classroom = await Classroom.findOne({ _id: data.classroomId, status: 'active' });
         if (!classroom) return res.status(404).json({ message: 'Không tìm thấy lớp học' });
@@ -118,6 +125,7 @@ const updateStudent = async (req, res) => {
     try {
         if (!isValidStudentId(req.params.id)) return res.status(400).json({ message: 'ID học sinh không hợp lệ' });
         const current = await Student.findById(req.params.id); if (!current) return res.status(404).json({ message: 'Không tìm thấy học sinh' });
+        if (isParent(req.user) && !canAccessStudent(req.user, current._id)) return res.status(403).json({ message: 'Bạn chỉ được cập nhật hồ sơ của con đã liên kết với tài khoản' });
         if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, current.classroomId)) return res.status(403).json({ message: 'Bạn không có quyền cập nhật học sinh này' });
         if (req.user.role === 'teacher') assertTeacherAllowedFields(req.body);
         const updates = pick(req.body, req.user.role); if (!Object.keys(updates).length) return res.status(400).json({ message: 'Không có trường học sinh hợp lệ để cập nhật' });
@@ -166,4 +174,53 @@ const changeStudentStatus = async (req, res) => {
 };
 
 const deleteStudent = (req, res) => { req.body = { ...req.body, status: 'withdrawn', reason: req.body.reason || 'Hồ sơ ngừng theo học' }; return changeStudentStatus(req, res); };
-module.exports = { createStudent, getAllStudents, getStudentById, updateStudent, changeStudentStatus, deleteStudent };
+
+const canReadStudentCare = async (user, student) => {
+    if (isParent(user)) return canAccessStudent(user, student._id);
+    if (user.role === 'teacher') return canAccessClassroom(user, student.classroomId);
+    return hasSchoolWideReadAccess(user);
+};
+
+const getDailyReports = async (req, res) => {
+    try {
+        if (!isValidStudentId(req.params.id)) return res.status(400).json({ success: false, message: 'ID học sinh không hợp lệ' });
+        const student = await Student.findById(req.params.id).select('fullName classroomId dailyReports');
+        if (!student) return res.status(404).json({ success: false, message: 'Không tìm thấy học sinh' });
+        if (!await canReadStudentCare(req.user, student)) return res.status(403).json({ success: false, message: 'Bạn không có quyền xem sổ chăm sóc của học sinh này' });
+        const reports = [...(student.dailyReports || [])].sort((a, b) => new Date(b.reportDate) - new Date(a.reportDate)).slice(0, 60);
+        return res.json({ success: true, data: reports });
+    } catch (err) { console.error(err); return respondError(res, err); }
+};
+
+const saveDailyReport = async (req, res) => {
+    try {
+        if (!isValidStudentId(req.params.id)) return res.status(400).json({ success: false, message: 'ID học sinh không hợp lệ' });
+        const student = await Student.findById(req.params.id);
+        if (!student) return res.status(404).json({ success: false, message: 'Không tìm thấy học sinh' });
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, student.classroomId)) return res.status(403).json({ success: false, message: 'Bạn không được ghi sổ cho học sinh ngoài lớp phụ trách' });
+        const reportDate = new Date(req.body.reportDate || new Date());
+        if (Number.isNaN(reportDate.getTime())) return res.status(422).json({ success: false, message: 'Ngày ghi nhận không hợp lệ' });
+        const today = new Date(); today.setHours(23, 59, 59, 999);
+        if (reportDate > today) return res.status(422).json({ success: false, message: 'Không thể ghi sổ chăm sóc cho ngày tương lai' });
+        const fields = ['activities', 'meals', 'sleep', 'health'];
+        const values = Object.fromEntries(fields.map((field) => [field, String(req.body[field] || '').trim().slice(0, 1000)]));
+        if (!Object.values(values).some(Boolean)) return res.status(422).json({ success: false, message: 'Vui lòng nhập ít nhất một nội dung chăm sóc' });
+        const dateKey = reportDate.toISOString().slice(0, 10);
+        const existing = student.dailyReports.find((item) => new Date(item.reportDate).toISOString().slice(0, 10) === dateKey);
+        if (existing) Object.assign(existing, values, { recordedBy: req.user._id, recordedByName: actorName(req.user), sentAt: new Date() });
+        else student.dailyReports.push({ reportDate, ...values, recordedBy: req.user._id, recordedByName: actorName(req.user), sentAt: new Date() });
+        student.updatedBy = req.user._id;
+        await student.save();
+        const saved = student.dailyReports.find((item) => new Date(item.reportDate).toISOString().slice(0, 10) === dateKey);
+        const parents = await User.find({ role: 'parent', status: 'active', 'parentInfo.studentIds': student._id }).select('_id').lean();
+        await Promise.all(parents.map((parent) => Notification.create({
+            recipientId: parent._id, title: `Sổ chăm sóc: ${student.fullName}`,
+            message: `Giáo viên đã cập nhật tình hình ăn, ngủ, sức khỏe và hoạt động ngày ${reportDate.toLocaleDateString('vi-VN')}.`,
+            type: 'info', link: '/parent-portal', createdBy: req.user._id,
+            metadata: { studentId: student._id, dailyReportId: saved?._id }
+        })));
+        return res.json({ success: true, message: 'Đã lưu và gửi sổ chăm sóc cho phụ huynh', data: saved });
+    } catch (err) { console.error(err); return respondError(res, err); }
+};
+
+module.exports = { createStudent, getAllStudents, getStudentById, updateStudent, changeStudentStatus, deleteStudent, getDailyReports, saveDailyReport };

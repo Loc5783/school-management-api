@@ -53,6 +53,14 @@ const ClassroomSchema = new mongoose.Schema({
             default: Date.now
         }
     }],
+    // Nguồn phân quyền chính cho giáo viên chủ nhiệm. Giữ riêng với mảng
+    // teachers để MongoDB có thể bảo đảm một giáo viên chỉ chủ nhiệm một lớp
+    // trong cùng năm học đang hoạt động.
+    homeroomTeacherId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null
+    },
     // Thống kê nhanh (tính toán định kỳ)
     statistics: {
         currentStudents: {
@@ -76,5 +84,9 @@ const ClassroomSchema = new mongoose.Schema({
 ClassroomSchema.index({ name: 1 });
 ClassroomSchema.index({ schoolYear: 1 });
 ClassroomSchema.index({ status: 1 });
+ClassroomSchema.index(
+    { schoolYear: 1, homeroomTeacherId: 1 },
+    { name: 'schoolYear_1_homeroomTeacherId_1', unique: true, partialFilterExpression: { status: 'active', homeroomTeacherId: { $type: 'objectId' } } }
+);
 
 module.exports = mongoose.model('Classroom', ClassroomSchema);

@@ -6,3 +6,5 @@ export const createStudent = (data) => api.post('/students', data);
 export const updateStudent = (id, data) => api.put(`/students/${id}`, data);
 export const changeStudentStatus = (id, data) => api.patch(`/students/${id}/status`, data);
 export const deleteStudent = (id, reason) => api.delete(`/students/${id}`, { data: { reason } });
+export const getDailyReports = (id) => api.get(`/students/${id}/daily-reports`);
+export const saveDailyReport = (id, data) => api.put(`/students/${id}/daily-reports`, data);
