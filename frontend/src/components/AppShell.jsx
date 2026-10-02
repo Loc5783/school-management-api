@@ -11,8 +11,12 @@ const allNavItems = [
   { to: '/my-payroll', label: 'Lương của tôi', icon: 'money', roles: ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'] },
   { to: '/hr', label: 'Nhân sự & Lương', icon: 'users', roles: ['admin', 'principal', 'accountant', 'hr'] },
   { to: '/accounts', label: 'Tài khoản & vai trò', icon: 'shield', roles: ['admin', 'principal', 'hr'] },
+  { to: '/student-profile-change-requests', label: 'Duyệt cập nhật hồ sơ', icon: 'card', roles: ['admin', 'principal'] },
+  { to: '/parent-feedback', label: 'Phản hồi phụ huynh', icon: 'chat', roles: ['admin', 'principal'] },
+  { to: '/parent-dashboard', label: 'Tổng quan', icon: 'grid', roles: ['parent'] },
   { to: '/parent-portal', label: 'Thông tin của con', icon: 'students', roles: ['parent'] },
   { to: '/parent-care', label: 'Sổ chăm sóc của con', icon: 'attendance', roles: ['parent'] },
+  { to: '/pickups', label: 'Đón trẻ', icon: 'users', roles: ['parent', 'teacher', 'guard', 'admin', 'principal'] },
   { to: '/messages', label: 'Tin nhắn', icon: 'chat', roles: ['parent', 'teacher'] },
   { to: '/daily-care', label: 'Sổ chăm sóc lớp', icon: 'attendance', roles: ['teacher'] },
   { to: '/students', label: 'Học sinh', icon: 'students', roles: ['admin', 'principal', 'teacher'] },
@@ -167,7 +171,7 @@ export default function AppShell({ title, subtitle, actions, children }) {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <span className="nav-link is-disabled"><Icon name="settings" />Cài đặt</span>
+          {user?.role === 'parent' ? <NavLink to="/parent-settings" className="nav-link"><Icon name="settings" />Cài đặt</NavLink> : <span className="nav-link is-disabled"><Icon name="settings" />Cài đặt</span>}
           <div className="account-card">
             <span className="avatar">{displayName.charAt(0).toUpperCase()}</span>
             <span><strong>{displayName}</strong><small>{roleLabel}</small></span>

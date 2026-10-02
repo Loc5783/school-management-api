@@ -1,0 +1,10 @@
+const express = require('express');
+const auth = require('../middlewares/auth');
+const roleCheck = require('../middlewares/roleCheck');
+const controller = require('../controllers/studentProfileChangeRequestController');
+const router = express.Router();
+router.use(auth);
+router.post('/', roleCheck(['parent']), controller.createRequest);
+router.get('/', roleCheck(['parent', 'admin', 'principal']), controller.listRequests);
+router.patch('/:id/review', roleCheck(['admin', 'principal']), controller.reviewRequest);
+module.exports = router;

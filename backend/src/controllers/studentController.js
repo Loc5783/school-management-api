@@ -57,6 +57,14 @@ const validatePayload = (data, creating = false) => {
         if (contact.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.email)) throw httpError('Email không hợp lệ', 422);
         if (contact.phone && !/^(0|\+84)\d{9,10}$/.test(String(contact.phone).replace(/[.\s-]/g, ''))) throw httpError('Số điện thoại không hợp lệ', 422);
     }
+    if (data.authorizedPickers != null) {
+        if (!Array.isArray(data.authorizedPickers) || data.authorizedPickers.length > 10) throw httpError('Danh sách người được phép đón phải có tối đa 10 người', 422);
+        for (const picker of data.authorizedPickers) {
+            if (!String(picker?.fullName || '').trim()) throw httpError('Mỗi người được phép đón cần có họ tên', 422);
+            if (String(picker.fullName).trim().length > 120 || String(picker.relationship || '').trim().length > 80) throw httpError('Thông tin người được phép đón quá dài', 422);
+            if (picker.phone && !/^(0|\+84)\d{9,10}$/.test(String(picker.phone).replace(/[.\s-]/g, ''))) throw httpError('Số điện thoại người đón không hợp lệ', 422);
+        }
+    }
 };
 const scopedFilter = async (user, filter, classroomId) => {
     if (isParent(user)) return applyStudentListScope(user, filter);
@@ -126,9 +134,19 @@ const updateStudent = async (req, res) => {
         if (!isValidStudentId(req.params.id)) return res.status(400).json({ message: 'ID học sinh không hợp lệ' });
         const current = await Student.findById(req.params.id); if (!current) return res.status(404).json({ message: 'Không tìm thấy học sinh' });
         if (isParent(req.user) && !canAccessStudent(req.user, current._id)) return res.status(403).json({ message: 'Bạn chỉ được cập nhật hồ sơ của con đã liên kết với tài khoản' });
+        if (isParent(req.user)) return res.status(403).json({ success: false, message: 'Phụ huynh cần gửi yêu cầu cập nhật hồ sơ để nhà trường phê duyệt' });
         if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, current.classroomId)) return res.status(403).json({ message: 'Bạn không có quyền cập nhật học sinh này' });
         if (req.user.role === 'teacher') assertTeacherAllowedFields(req.body);
         const updates = pick(req.body, req.user.role); if (!Object.keys(updates).length) return res.status(400).json({ message: 'Không có trường học sinh hợp lệ để cập nhật' });
+        // Parent-facing serialization deliberately hides identity documents. Keep
+        // existing protected values when a parent edits the visible picker list.
+        if (isParent(req.user) && Array.isArray(updates.authorizedPickers)) {
+            const existingPickers = new Map((current.authorizedPickers || []).map((picker) => [String(picker._id), picker]));
+            updates.authorizedPickers = updates.authorizedPickers.map((picker) => {
+                const existing = existingPickers.get(String(picker._id || ''));
+                return existing ? { ...picker, identityCard: existing.identityCard || '', photoURL: picker.photoURL || existing.photoURL || '' } : picker;
+            });
+        }
         validatePayload(updates); let target;
         if (Object.hasOwn(updates, 'classroomId')) {
             if (!isValidStudentId(updates.classroomId)) return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
