@@ -23,6 +23,10 @@ import Messages from './pages/Messages';
 import MyPayroll from './pages/MyPayroll';
 import DailyCare from './pages/DailyCare';
 import ParentCare from './pages/ParentCare';
+import PickupManagement from './pages/PickupManagement';
+import StudentProfileChangeRequests from './pages/StudentProfileChangeRequests';
+import ParentFeedbackManagement from './pages/ParentFeedbackManagement';
+import ParentSettings from './pages/ParentSettings';
 
 function ProtectedRoute({ children }) {
   return localStorage.getItem('token') ? children : <Navigate to="/login" replace />;
@@ -46,6 +50,12 @@ function ChatRoute({ children }) {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
   return ['parent', 'teacher'].includes(user.role) ? children : <Navigate to="/dashboard" replace />;
+}
+
+function PickupRoute({ children }) {
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
+  return ['parent', 'teacher', 'guard', 'admin', 'principal'].includes(user.role) ? children : <Navigate to="/dashboard" replace />;
 }
 
 function StaffRoute({ children }) {
@@ -127,8 +137,13 @@ function App() {
         <Route path="/reports" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><Reports /></RoleRoute>} />
         <Route path="/assets" element={<RoleRoute roles={['admin', 'principal', 'teacher']}><AssetManagement /></RoleRoute>} />
         <Route path="/hr" element={<RoleRoute roles={['admin', 'principal', 'accountant', 'hr']}><EmployeeManagement /></RoleRoute>} />
+        <Route path="/parent-dashboard" element={<ParentRoute><ParentPortal /></ParentRoute>} />
         <Route path="/parent-portal" element={<ParentRoute><ParentPortal /></ParentRoute>} />
+        <Route path="/parent-settings" element={<ParentRoute><ParentSettings /></ParentRoute>} />
         <Route path="/parent-care" element={<ParentRoute><ParentCare /></ParentRoute>} />
+        <Route path="/pickups" element={<PickupRoute><PickupManagement /></PickupRoute>} />
+        <Route path="/student-profile-change-requests" element={<RoleRoute roles={['admin', 'principal']}><StudentProfileChangeRequests /></RoleRoute>} />
+        <Route path="/parent-feedback" element={<RoleRoute roles={['admin', 'principal']}><ParentFeedbackManagement /></RoleRoute>} />
         <Route path="/messages" element={<ChatRoute><Messages /></ChatRoute>} />
         <Route path="*" element={<Navigate to="/dashboard" />} />
       </Routes>

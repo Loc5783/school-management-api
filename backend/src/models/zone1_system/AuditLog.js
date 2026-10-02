@@ -16,7 +16,10 @@ const AuditLogSchema = new mongoose.Schema({
       'INTERNAL_ACCOUNT_DEACTIVATED',
       'STUDENT_CREATED',
       'STUDENT_UPDATED',
-      'STUDENT_STATUS_CHANGED'
+      'STUDENT_STATUS_CHANGED',
+      'STUDENT_PROFILE_CHANGE_REQUESTED',
+      'STUDENT_PROFILE_CHANGE_APPROVED',
+      'STUDENT_PROFILE_CHANGE_REJECTED'
     ],
     required: true
   },

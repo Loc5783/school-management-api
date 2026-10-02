@@ -15,6 +15,9 @@ const hrRoutes = require('./src/routes/hrRoutes');
 const notificationRoutes = require('./src/routes/notificationRoutes');
 const chatRoutes = require('./src/routes/chatRoutes');
 const classroomCommunicationRoutes = require('./src/routes/classroomCommunicationRoutes');
+const pickupRoutes = require('./src/routes/pickupRoutes');
+const studentProfileChangeRequestRoutes = require('./src/routes/studentProfileChangeRequestRoutes');
+const parentFeedbackRoutes = require('./src/routes/parentFeedbackRoutes');
 
 const createApp = () => {
     const app = express();
@@ -47,6 +50,9 @@ const createApp = () => {
     app.use('/api/notifications', notificationRoutes);
     app.use('/api/chat', chatRoutes);
     app.use('/api/class-communication', classroomCommunicationRoutes);
+    app.use('/api/pickups', pickupRoutes);
+    app.use('/api/student-profile-change-requests', studentProfileChangeRequestRoutes);
+    app.use('/api/parent-feedback', parentFeedbackRoutes);
 
     app.get('/api/health', (req, res) => {
         res.status(200).json({ status: 'OK', message: 'Server đang chạy!' });
