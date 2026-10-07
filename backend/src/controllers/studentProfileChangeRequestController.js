@@ -16,6 +16,7 @@ const cleanChanges = (body = {}) => {
   if (changes.birthDate && (Number.isNaN(new Date(changes.birthDate).getTime()) || new Date(changes.birthDate) > new Date())) throw error('Ngày sinh không hợp lệ');
   if (changes.gender && !['male', 'female'].includes(changes.gender)) throw error('Giới tính không hợp lệ');
   if (changes.authorizedPickers != null && (!Array.isArray(changes.authorizedPickers) || changes.authorizedPickers.length > 10 || changes.authorizedPickers.some((item) => !String(item?.fullName || '').trim()))) throw error('Danh sách người được phép đón không hợp lệ');
+  if (changes.authorizedPickers?.some((item) => (item.photoURL && (!/^https?:\/\//i.test(item.photoURL) || String(item.photoURL).length > 1000)) || String(item.vehicleType || '').length > 80 || String(item.vehiclePlate || '').length > 20)) throw error('Ảnh hoặc thông tin phương tiện người đón không hợp lệ');
   return changes;
 };
 

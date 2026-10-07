@@ -4,7 +4,7 @@ import Icon from '../components/Icon';
 import { kioskCheckIn } from '../api/timekeeping';
 
 export default function SmartAttendance({ embedded = false }) {
-  const [mode, setMode] = useState('face');
+  const [mode, setMode] = useState(() => JSON.parse(localStorage.getItem('user') || '{}').role === 'guard' ? 'employee-code' : 'face');
   const [cameraReady, setCameraReady] = useState(false);
   const [message, setMessage] = useState(null);
   const [employeeCode, setEmployeeCode] = useState('');

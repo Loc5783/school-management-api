@@ -79,6 +79,11 @@ const serializeStudent = (student, role, mode = 'detail') => {
             allergies: raw.allergies || [],
             disease: raw.disease || {},
             emergencyContact: raw.emergencyContact || {},
+            authorizedPickers: (raw.authorizedPickers || []).map((item) => ({
+                _id: item._id,
+                fullName: item.fullName || '', phone: item.phone || '', relationship: item.relationship || '',
+                photoURL: item.photoURL || '', vehicleType: item.vehicleType || '', vehiclePlate: item.vehiclePlate || '', isActive: item.isActive !== false
+            })),
             notes: raw.notes || ''
         };
     }
@@ -87,7 +92,7 @@ const serializeStudent = (student, role, mode = 'detail') => {
             ...base,
             allergies: raw.allergies || [], disease: raw.disease || {}, emergencyContact: raw.emergencyContact || {}, notes: raw.notes || '',
             authorizedPickers: (raw.authorizedPickers || []).filter((item) => item.isActive !== false).map((item) => ({
-                fullName: item.fullName || '', phone: item.phone || '', relationship: item.relationship || '', photoURL: item.photoURL || ''
+                fullName: item.fullName || '', phone: item.phone || '', relationship: item.relationship || '', photoURL: item.photoURL || '', vehicleType: item.vehicleType || '', vehiclePlate: item.vehiclePlate || ''
             }))
         };
     }

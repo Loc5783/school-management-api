@@ -63,6 +63,8 @@ const validatePayload = (data, creating = false) => {
             if (!String(picker?.fullName || '').trim()) throw httpError('Mỗi người được phép đón cần có họ tên', 422);
             if (String(picker.fullName).trim().length > 120 || String(picker.relationship || '').trim().length > 80) throw httpError('Thông tin người được phép đón quá dài', 422);
             if (picker.phone && !/^(0|\+84)\d{9,10}$/.test(String(picker.phone).replace(/[.\s-]/g, ''))) throw httpError('Số điện thoại người đón không hợp lệ', 422);
+            if (picker.photoURL && (!/^https?:\/\//i.test(picker.photoURL) || String(picker.photoURL).length > 1000)) throw httpError('Đường dẫn ảnh người đón không hợp lệ', 422);
+            if (String(picker.vehicleType || '').length > 80 || String(picker.vehiclePlate || '').length > 20) throw httpError('Thông tin phương tiện người đón quá dài', 422);
         }
     }
 };

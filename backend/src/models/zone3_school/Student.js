@@ -96,6 +96,8 @@ const StudentSchema = new mongoose.Schema({
         relationship: String,
         identityCard: String,
         photoURL: String,
+        vehicleType: { type: String, trim: true, maxlength: 80, default: '' },
+        vehiclePlate: { type: String, trim: true, uppercase: true, maxlength: 20, default: '' },
         isActive: {
             type: Boolean,
             default: true
