@@ -27,6 +27,7 @@ import PickupManagement from './pages/PickupManagement';
 import StudentProfileChangeRequests from './pages/StudentProfileChangeRequests';
 import ParentFeedbackManagement from './pages/ParentFeedbackManagement';
 import ParentSettings from './pages/ParentSettings';
+import GuardOperations from './pages/GuardOperations';
 
 function ProtectedRoute({ children }) {
   return localStorage.getItem('token') ? children : <Navigate to="/login" replace />;
@@ -144,6 +145,7 @@ function App() {
         <Route path="/pickups" element={<PickupRoute><PickupManagement /></PickupRoute>} />
         <Route path="/student-profile-change-requests" element={<RoleRoute roles={['admin', 'principal']}><StudentProfileChangeRequests /></RoleRoute>} />
         <Route path="/parent-feedback" element={<RoleRoute roles={['admin', 'principal']}><ParentFeedbackManagement /></RoleRoute>} />
+        <Route path="/guard" element={<RoleRoute roles={['guard', 'admin', 'principal']}><GuardOperations /></RoleRoute>} />
         <Route path="/messages" element={<ChatRoute><Messages /></ChatRoute>} />
         <Route path="*" element={<Navigate to="/dashboard" />} />
       </Routes>

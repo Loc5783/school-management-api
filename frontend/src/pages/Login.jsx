@@ -25,7 +25,7 @@ export default function Login() {
 
       localStorage.setItem('token', res.data.token);
       localStorage.setItem('user', JSON.stringify(res.data.user));
-      navigate(res.data.user?.role === 'parent' ? '/parent-portal' : '/dashboard');
+      navigate(res.data.user?.role === 'parent' ? '/parent-portal' : res.data.user?.role === 'guard' ? '/guard' : '/dashboard');
     } catch (err) {
       setError(err.response?.data?.message || 'Đăng nhập thất bại. Vui lòng thử lại.');
     } finally {

@@ -5,9 +5,10 @@ import api from '../api/axiosConfig';
 import { getUnreadChat } from '../api/chat';
 
 const allNavItems = [
+  { to: '/guard', label: 'Tổng quan trực cổng', icon: 'grid', roles: ['guard'] },
   { to: '/dashboard', label: 'Tổng quan', icon: 'grid', roles: ['admin', 'principal', 'teacher'] },
   { to: '/attendance', label: 'Điểm danh', icon: 'attendance', roles: ['admin', 'principal', 'teacher'] },
-  { to: '/timekeeping', label: 'Chấm công nhân sự', icon: 'clock', roles: ['admin', 'principal', 'teacher'] },
+  { to: '/timekeeping', label: 'Chấm công nhân sự', icon: 'clock', roles: ['admin', 'principal', 'teacher', 'guard'] },
   { to: '/my-payroll', label: 'Lương của tôi', icon: 'money', roles: ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'] },
   { to: '/hr', label: 'Nhân sự & Lương', icon: 'users', roles: ['admin', 'principal', 'accountant', 'hr'] },
   { to: '/accounts', label: 'Tài khoản & vai trò', icon: 'shield', roles: ['admin', 'principal', 'hr'] },
@@ -134,6 +135,7 @@ export default function AppShell({ title, subtitle, actions, children }) {
   const isAdmin = user?.role === 'admin';
   const roleLabel = { admin: 'Quản trị viên', principal: 'Hiệu trưởng', teacher: 'Giáo viên', accountant: 'Kế toán', chef: 'Nhân viên bếp', hr: 'Nhân sự', parent: 'Phụ huynh', guard: 'Bảo vệ' }[user?.role] || 'Tài khoản trường';
   const totalUnread = unreadCount + chatUnread.total;
+  const homePath = user?.role === 'guard' ? '/guard' : user?.role === 'parent' ? '/parent-dashboard' : '/dashboard';
 
   // Lọc menu dựa trên permissions
   const navItems = allNavItems.filter(item => {
@@ -158,7 +160,7 @@ export default function AppShell({ title, subtitle, actions, children }) {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <NavLink to="/dashboard" className="brand" aria-label="Mầm Non Hoa Nắng">
+        <NavLink to={homePath} className="brand" aria-label="Mầm Non Hoa Nắng">
           <span className="brand-mark"><Icon name="classes" size={22} stroke={2.2} /></span>
           <span><strong>Hoa Nắng</strong><small>School Management</small></span>
         </NavLink>
@@ -192,7 +194,7 @@ export default function AppShell({ title, subtitle, actions, children }) {
             {actions}
             <div className="notification-menu"><button className="icon-button" aria-label={`Thông báo${totalUnread ? `, ${totalUnread} chưa đọc` : ''}`} onClick={toggleNotifications}>
               <Icon name="bell" />{totalUnread > 0 && <span className="notification-count">{totalUnread > 99 ? '99+' : totalUnread}</span>}
-            </button>{showNotifications && <div className="notification-popover"><div><strong>Thông báo</strong>{totalUnread > 0 && <span>{totalUnread} chưa đọc</span>}</div>{chatUnread.data.length > 0 && <><div className="notification-group-label">TIN NHẮN</div>{chatUnread.data.map((item) => <button key={item.conversationId} className="chat-alert unread" onClick={() => openChatAlert(item)}><strong>Bạn có {item.count} tin nhắn từ {user?.role === 'teacher' ? 'phụ huynh' : 'giáo viên'} {item.senderName}</strong><small>Về bé {item.studentName} · Nhấn để xem và đánh dấu đã đọc</small><span className="chat-unread-dot" /></button>)}</>}{notifications.length > 0 && chatUnread.data.length > 0 && <div className="notification-group-label">THÔNG BÁO KHÁC</div>}{notifications.length ? notifications.map((item) => <button key={item._id} className={item.isRead ? '' : 'unread'} onClick={() => openNotification(item)}><strong>{item.title}</strong><small>{item.message}</small></button>) : chatUnread.data.length === 0 && <p>Chưa có thông báo mới.</p>}</div>}</div>
+            </button>{showNotifications && <div className="notification-popover"><div><strong>Thông báo</strong>{totalUnread > 0 && <span>{totalUnread} chưa đọc</span>}</div>{chatUnread.data.length > 0 && <><div className="notification-group-label">TIN NHẮN</div>{chatUnread.data.map((item) => <button key={item.conversationId} className="chat-alert unread" onClick={() => openChatAlert(item)}><strong>Bạn có {item.count} tin nhắn từ {user?.role === 'teacher' ? 'phụ huynh' : 'giáo viên'} {item.senderName}</strong><small>Về bé {item.studentName} · Nhấn để xem và đánh dấu đã đọc</small><span className="chat-unread-dot" /></button>)}</>}{notifications.length > 0 && chatUnread.data.length > 0 && <div className="notification-group-label">THÔNG BÁO KHÁC</div>}{notifications.length ? notifications.map((item) => <button key={item._id} className={`${item.isRead ? '' : 'unread'} ${item.metadata?.priority === 'high' ? 'priority' : ''}`.trim()} onClick={() => openNotification(item)}><strong>{item.metadata?.priority === 'high' ? '⚠ ' : ''}{item.title}</strong><small>{item.message}</small></button>) : chatUnread.data.length === 0 && <p>Chưa có thông báo mới.</p>}</div>}</div>
             <div className="topbar-profile"><span className="avatar">{displayName.charAt(0).toUpperCase()}</span><span><strong>{displayName}</strong><small>{roleLabel}</small></span><Icon name="chevronRight" size={15} /></div>
           </div>
         </header>
