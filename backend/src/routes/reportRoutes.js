@@ -16,7 +16,7 @@ const router = express.Router();
 router.use(auth);
 
 // Báo cáo thống kê
-router.get('/dashboard', roleCheck(['admin', 'principal']), getDashboardStats);
+router.get('/dashboard', roleCheck(['admin', 'principal', 'teacher']), getDashboardStats);
 router.get('/class/:classroomId', roleCheck(['admin', 'principal', 'teacher']), getClassReport);
 router.get('/finance', roleCheck(['admin', 'principal', 'accountant']), getFinanceReport);
 

@@ -14,6 +14,8 @@ const StudentCodeCounter = require('../src/models/zone3_school/StudentCodeCounte
 const StudentAttendance = require('../src/models/zone3_school/StudentAttendance');
 const StudentLeaveRequest = require('../src/models/zone3_school/StudentLeaveRequest');
 const TuitionFee = require('../src/models/zone4_finance/TuitionFee');
+const Employee = require('../src/models/zone2_hr/Employee');
+const AuditLog = require('../src/models/zone1_system/AuditLog');
 
 const app = createApp();
 
@@ -63,7 +65,9 @@ beforeEach(async () => {
         StudentCodeCounter.deleteMany({}),
         StudentAttendance.deleteMany({}),
         StudentLeaveRequest.deleteMany({}),
-        TuitionFee.deleteMany({})
+        TuitionFee.deleteMany({}),
+        Employee.deleteMany({}),
+        AuditLog.deleteMany({})
     ]);
 
     classroomA = new mongoose.Types.ObjectId();
@@ -653,5 +657,53 @@ describe('parent student data scope', () => {
             .send({ reason: 'Kết thúc tài khoản thử nghiệm' })
             .expect(200);
         expect(deactivated.body.data.status).toBe('inactive');
+    });
+
+    test('edits a linked account and synchronizes its employee profile without changing salary', async () => {
+        await Employee.create({
+            userId: accountant._id, employeeCode: 'KT-2026-100', fullName: 'Kế toán cũ',
+            position: 'accountant', payrollRole: 'teacher',
+            salaryConfig: { baseSalary: 9000000, positionAllowance: 500000, lunchAllowance: 100000 }
+        });
+        const edited = await request(app).patch(`/api/system/accounts/${accountant._id}`)
+            .set(authHeader(admin)).send({
+                username: 'nhanvienbep-moi', role: 'chef', status: 'suspended',
+                profile: { fullName: 'Nhân viên bếp mới', phone: '0901234567', email: 'BEP@school.test' },
+                password: 'mat-khau-moi-123'
+            }).expect(200);
+        expect(edited.body.data).toEqual(expect.objectContaining({
+            username: 'nhanvienbep-moi', role: 'chef', status: 'suspended', employeeId: 'KT-2026-100'
+        }));
+        const employee = await Employee.findOne({ userId: accountant._id });
+        expect(employee).toEqual(expect.objectContaining({
+            fullName: 'Nhân viên bếp mới', phone: '0901234567', email: 'bep@school.test',
+            position: 'chef', payrollRole: 'chef'
+        }));
+        expect(employee.salaryConfig.baseSalary).toBe(9000000);
+        expect(employee.salaryConfig.positionAllowance).toBe(500000);
+        const account = await User.findById(accountant._id);
+        expect(account.employeeInfo.position).toBe('chef');
+        expect(account.authVersion).toBe(1);
+        const listed = await request(app).get('/api/system/accounts').set(authHeader(admin)).expect(200);
+        expect(listed.body.data.find((item) => item._id === String(accountant._id)).employeeId).toBe('KT-2026-100');
+        expect(await AuditLog.exists({ targetId: accountant._id, action: 'INTERNAL_ACCOUNT_UPDATED' })).toBeTruthy();
+    });
+
+    test('blocks a teacher role change while assigned and rolls back linked updates if audit fails', async () => {
+        await Employee.create({
+            userId: teacher._id, employeeCode: 'GV-2026-100', fullName: 'Giáo viên A',
+            position: 'teacher', payrollRole: 'teacher', salaryConfig: { baseSalary: 8000000 }
+        });
+        await request(app).patch(`/api/system/accounts/${teacher._id}`)
+            .set(authHeader(admin)).send({ role: 'guard' }).expect(409);
+        expect((await User.findById(teacher._id)).role).toBe('teacher');
+
+        const auditSpy = jest.spyOn(AuditLog, 'create').mockRejectedValueOnce(new Error('audit unavailable'));
+        try {
+            await request(app).patch(`/api/system/accounts/${teacher._id}`)
+                .set(authHeader(admin)).send({ profile: { fullName: 'Tên mới' } }).expect(500);
+        } finally { auditSpy.mockRestore(); }
+        expect((await User.findById(teacher._id)).profile.fullName).toBe('Giáo viên A');
+        expect((await Employee.findOne({ userId: teacher._id })).fullName).toBe('Giáo viên A');
     });
 });

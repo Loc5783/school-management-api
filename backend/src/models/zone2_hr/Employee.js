@@ -20,7 +20,7 @@ const EmployeeSchema = new mongoose.Schema({
     gender: {
         type: String,
         enum: ['male', 'female'],
-        default: 'female'
+        default: null
     },
     birthDate: Date,
     phone: {
@@ -53,24 +53,29 @@ const EmployeeSchema = new mongoose.Schema({
         default: 'teacher'
     },
     qualification: {
-        degree: { type: String, default: 'Đại học Sư phạm Mầm non' },
-        major: { type: String, default: 'Giáo dục Mầm non' },
+        degree: { type: String, default: '' },
+        major: { type: String, default: '' },
         graduationYear: Number
     },
     contractType: {
         type: String,
         enum: ['probation', 'fixed_1_year', 'fixed_3_year', 'indefinite'],
-        default: 'fixed_1_year'
+        default: null
     },
+    contractNumber: { type: String, trim: true },
+    contractSignedDate: Date,
+    contractStartDate: Date,
     startDate: {
         type: Date,
-        default: Date.now
+        default: null
     },
     endDate: Date,
     salaryConfig: {
-        baseSalary: { type: Number, required: true, default: 7000000 },
-        positionAllowance: { type: Number, default: 1000000 },
-        lunchAllowance: { type: Number, default: 730000 },
+        baseSalary: { type: Number, required: true, default: 0 },
+        lowMonthlySalaryConfirmed: { type: Boolean, default: false },
+        standardWorkDays: { type: Number, min: 1, max: 31, default: 26 },
+        positionAllowance: { type: Number, default: 0 },
+        lunchAllowance: { type: Number, default: 0 },
         bankAccount: {
             bankName: String,
             accountNumber: String,

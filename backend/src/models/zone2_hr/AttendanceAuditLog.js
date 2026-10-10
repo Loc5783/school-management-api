@@ -1,6 +1,8 @@
 const mongoose = require('mongoose');
+const { sanitizeAuditValue, safeReason, stampActor } = require('../../services/hrAuditSafety');
 
 const AttendanceAuditLogSchema = new mongoose.Schema({
+  actorName: { type: String, default: '' }, actorRole: { type: String, default: '' },
   actor: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
@@ -23,7 +25,12 @@ const AttendanceAuditLogSchema = new mongoose.Schema({
       'MIDNIGHT_SYNC_STARTED',
       'MIDNIGHT_SYNC_COMPLETED',
       'ATTENDANCE_FINALIZED',
-      'ATTENDANCE_REOPENED'
+      'ATTENDANCE_REOPENED',
+      'OVERTIME_REQUESTED',
+      'OVERTIME_APPROVED',
+      'OVERTIME_REJECTED',
+      'OVERTIME_RATE_SET',
+      'MANUAL_CHECK_IN'
     ],
     required: true
   },
@@ -50,5 +57,10 @@ const AttendanceAuditLogSchema = new mongoose.Schema({
 AttendanceAuditLogSchema.index({ entityId: 1 });
 AttendanceAuditLogSchema.index({ actor: 1 });
 AttendanceAuditLogSchema.index({ timestamp: -1 });
+AttendanceAuditLogSchema.pre('validate', async function () {
+  await stampActor(this, this.actor);
+  this.oldValue = sanitizeAuditValue(this.oldValue); this.newValue = sanitizeAuditValue(this.newValue);
+  if (this.reason) this.reason = safeReason(this.reason);
+});
 
 module.exports = mongoose.model('AttendanceAuditLog', AttendanceAuditLogSchema);

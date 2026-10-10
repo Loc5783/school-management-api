@@ -87,7 +87,6 @@ const PurchaseOrderSchema = new mongoose.Schema({
 // ==============================
 // Đảm bảo mỗi đề xuất chỉ tạo được 1 đơn hàng
 PurchaseOrderSchema.index({ requestId: 1 }, { unique: true });
-PurchaseOrderSchema.index({ orderCode: 1 }, { unique: true });
 
 // Tối ưu truy vấn theo nhà cung cấp và trạng thái
 PurchaseOrderSchema.index({ supplierId: 1 });

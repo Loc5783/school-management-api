@@ -15,6 +15,7 @@ const roleCheck = require('../middlewares/roleCheck');
 const router = express.Router();
 
 router.use(auth);
+router.use(require('../middlewares/hrAccessAudit')('accounts'));
 // Phụ huynh là dữ liệu nhạy cảm của học sinh, HR không duyệt hoặc liên kết phụ huynh.
 router.get('/parents', roleCheck(['admin', 'principal']), listParents);
 router.patch('/parents/:id/students', roleCheck(['admin', 'principal']), linkParentStudents);

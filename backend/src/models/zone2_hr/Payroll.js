@@ -61,6 +61,9 @@ const PayrollSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    overtimeMinutes: { type: Number, default: 0, min: 0 },
+    overtimeHourlyAmount: { type: Number, default: 0, min: 0 },
+    overtimePay: { type: Number, default: 0, min: 0 },
     allowances: {
         position: { type: Number, default: 0 },
         lunch: { type: Number, default: 0 },
@@ -71,6 +74,9 @@ const PayrollSchema = new mongoose.Schema({
         advancePayment: { type: Number, default: 0 },
         other: { type: Number, default: 0 }
     },
+    insuranceConfirmed: { type: Boolean, default: false },
+    insuranceBasisNote: { type: String, trim: true, maxlength: 500, default: '' },
+    deductionShortfall: { type: Number, default: 0, min: 0 },
     grossSalary: {
         type: Number,
         default: 0
@@ -82,10 +88,16 @@ const PayrollSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['draft', 'confirmed', 'paid'],
+        enum: ['draft', 'reviewed', 'confirmed', 'paid'],
         default: 'draft'
     },
     paidAt: Date,
+    confirmedAt: Date,
+    confirmedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    reviewedAt: Date,
+    reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    paidBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    paymentReference: { type: String, trim: true, maxlength: 120, default: '' },
     note: {
         type: String,
         default: ''

@@ -28,6 +28,12 @@ import StudentProfileChangeRequests from './pages/StudentProfileChangeRequests';
 import ParentFeedbackManagement from './pages/ParentFeedbackManagement';
 import ParentSettings from './pages/ParentSettings';
 import GuardOperations from './pages/GuardOperations';
+import StaffSettings from './pages/StaffSettings';
+import MyStaffing from './pages/MyStaffing';
+import ProfessionalReviews from './pages/ProfessionalReviews';
+import MyHandovers from './pages/MyHandovers';
+import InternalNotices from './pages/InternalNotices';
+import MyStaffRequests from './pages/MyStaffRequests';
 
 function ProtectedRoute({ children }) {
   return localStorage.getItem('token') ? children : <Navigate to="/login" replace />;
@@ -120,6 +126,12 @@ function App() {
           element={<ProtectedRoute><TimekeepingHub /></ProtectedRoute>}
         />
         <Route path="/my-payroll" element={<StaffRoute><MyPayroll /></StaffRoute>} />
+        <Route path="/staff-settings" element={<StaffRoute><StaffSettings /></StaffRoute>} />
+        <Route path="/my-staffing" element={<StaffRoute><MyStaffing /></StaffRoute>} />
+        <Route path="/my-handovers" element={<StaffRoute><MyHandovers /></StaffRoute>} />
+        <Route path="/internal-notices" element={<StaffRoute><InternalNotices /></StaffRoute>} />
+        <Route path="/my-requests" element={<StaffRoute><MyStaffRequests /></StaffRoute>} />
+        <Route path="/professional-reviews" element={<RoleRoute roles={['teacher', 'principal', 'admin']}><ProfessionalReviews /></RoleRoute>} />
         <Route path="/daily-care" element={<TeacherRoute><DailyCare /></TeacherRoute>} />
         <Route
           path="/timekeeping-management"
@@ -143,9 +155,9 @@ function App() {
         <Route path="/parent-settings" element={<ParentRoute><ParentSettings /></ParentRoute>} />
         <Route path="/parent-care" element={<ParentRoute><ParentCare /></ParentRoute>} />
         <Route path="/pickups" element={<PickupRoute><PickupManagement /></PickupRoute>} />
+        <Route path="/guard" element={<RoleRoute roles={['guard', 'admin', 'principal']}><GuardOperations /></RoleRoute>} />
         <Route path="/student-profile-change-requests" element={<RoleRoute roles={['admin', 'principal']}><StudentProfileChangeRequests /></RoleRoute>} />
         <Route path="/parent-feedback" element={<RoleRoute roles={['admin', 'principal']}><ParentFeedbackManagement /></RoleRoute>} />
-        <Route path="/guard" element={<RoleRoute roles={['guard', 'admin', 'principal']}><GuardOperations /></RoleRoute>} />
         <Route path="/messages" element={<ChatRoute><Messages /></ChatRoute>} />
         <Route path="*" element={<Navigate to="/dashboard" />} />
       </Routes>

@@ -69,7 +69,8 @@ const UserSchema = new mongoose.Schema({
   authVersion: {
     type: Number,
     default: 0
-  }
+  },
+  accessEndsAt: { type: Date, default: null }
 }, {
   timestamps: true
 });

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
+import StudentPagination from '../components/StudentPagination';
 import api from '../api/axiosConfig';
 import { getParentAccounts, linkParentStudents, updateParentStatus } from '../api/systemUsers';
 
@@ -9,6 +10,7 @@ const statusLabel = { inactive: 'Chờ kích hoạt', active: 'Đang hoạt đ�
 export default function ParentAccountManagement({ embedded = false }) {
   const [parents, setParents] = useState([]);
   const [students, setStudents] = useState([]);
+  const [studentPage, setStudentPage] = useState(1);
   const [selectedId, setSelectedId] = useState('');
   const [studentIds, setStudentIds] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -18,6 +20,7 @@ export default function ParentAccountManagement({ embedded = false }) {
   const [notice, setNotice] = useState(null);
 
   const selectedParent = useMemo(() => parents.find((parent) => parent._id === selectedId), [parents, selectedId]);
+  const currentStudentPage = Math.min(studentPage, Math.max(1, Math.ceil(students.length / 10)));
   const loadEligibleStudents = useCallback(async (parent) => {
     const requestId = studentRequestRef.current + 1;
     studentRequestRef.current = requestId;
@@ -64,6 +67,7 @@ export default function ParentAccountManagement({ embedded = false }) {
 
   const toggleStudent = (id) => setStudentIds((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
   const selectParent = async (parent) => {
+    setStudentPage(1);
     setSelectedId(parent._id);
     setStudentIds(parent.studentIds || []);
     await loadEligibleStudents(parent);
@@ -97,7 +101,7 @@ export default function ParentAccountManagement({ embedded = false }) {
         <div className="parent-account-list">{parents.length ? parents.map((parent) => <button key={parent._id} className={parent._id === selectedId ? 'parent-account active' : 'parent-account'} onClick={() => selectParent(parent)}><span className="avatar">{parent.profile.fullName?.charAt(0) || 'P'}</span><span><strong>{parent.profile.fullName}</strong><small>{parent.username} · {parent.profile.phone || 'Chưa có SĐT'}</small></span><i className={`parent-status ${parent.status}`}>{statusLabel[parent.status]}</i></button>) : <p className="history-empty">Chưa có tài khoản phụ huynh.</p>}</div>
       </article>
       <article className="content-card parent-review-card">{selectedParent ? <><div className="card-heading"><div><p className="card-kicker">XÁC MINH HỒ SƠ</p><h2>{selectedParent.profile.fullName}</h2><p className="parent-contact">{selectedParent.profile.phone || 'Chưa có SĐT'} · {selectedParent.profile.email || 'Chưa có email'}</p></div><span className={`parent-status ${selectedParent.status}`}>{statusLabel[selectedParent.status]}</span></div>
-        <div className="parent-review-body"><div className="parent-registration-summary"><span><Icon name="classes" size={17} /></span><div><small>Lớp phụ huynh đã đăng ký</small><strong>{selectedParent.requestedClassroom?.name || 'Chưa chọn lớp (tài khoản cũ)'}</strong><p>{selectedParent.registrationNote || 'Chưa có ghi chú xác minh.'}</p></div></div><div><h3>Liên kết học sinh {selectedParent.requestedClassroom?.name ? `— ${selectedParent.requestedClassroom.name}` : ''}</h3><p>Chỉ hiển thị học sinh đang theo học trong lớp phụ huynh đã đăng ký. Chọn đúng con trước khi kích hoạt.</p>{studentsLoading ? <div className="inline-loader"><span className="loading-orb" />Đang tải học sinh của lớp...</div> : selectedParent.requestedClassroom ? <div className="parent-student-checklist">{students.length ? students.map((student) => <label key={student._id}><input type="checkbox" checked={studentIds.includes(student._id)} onChange={() => toggleStudent(student._id)} /><span><strong>{student.fullName}</strong><small>{student.className || 'Chưa có lớp'}</small></span></label>) : <p className="history-empty">Lớp này hiện chưa có học sinh đang theo học.</p>}</div> : <div className="empty-state compact">Tài khoản cũ chưa có lớp đăng ký. Hãy yêu cầu phụ huynh đăng ký lại để xác minh theo lớp.</div>}</div><div className="parent-actions"><button className="button button-secondary" onClick={saveLinks} disabled={saving || !selectedParent.requestedClassroom}>Lưu liên kết</button>{selectedParent.status !== 'active' && <button className="button button-primary" onClick={() => changeStatus('active')} disabled={saving || !studentIds.length || !selectedParent.requestedClassroom}><Icon name="check" size={17} />Kích hoạt tài khoản</button>}{selectedParent.status === 'active' && <button className="button button-secondary" onClick={() => changeStatus('suspended')} disabled={saving}>Tạm ngưng tài khoản</button>}</div></div>
+        <div className="parent-review-body"><div className="parent-registration-summary"><span><Icon name="classes" size={17} /></span><div><small>Lớp phụ huynh đã đăng ký</small><strong>{selectedParent.requestedClassroom?.name || 'Chưa chọn lớp (tài khoản cũ)'}</strong><p>{selectedParent.registrationNote || 'Chưa có ghi chú xác minh.'}</p></div></div><div><h3>Liên kết học sinh {selectedParent.requestedClassroom?.name ? `— ${selectedParent.requestedClassroom.name}` : ''}</h3><p>Chỉ hiển thị học sinh đang theo học trong lớp phụ huynh đã đăng ký. Chọn đúng con trước khi kích hoạt.</p>{studentsLoading ? <div className="inline-loader"><span className="loading-orb" />Đang tải học sinh của lớp...</div> : selectedParent.requestedClassroom ? <div className="parent-student-checklist">{students.length ? students.slice((currentStudentPage - 1) * 10, currentStudentPage * 10).map((student) => <label key={student._id}><input type="checkbox" checked={studentIds.includes(student._id)} onChange={() => toggleStudent(student._id)} /><span><strong>{student.fullName}</strong><small>{student.className || 'Chưa có lớp'}</small></span></label>) : <p className="history-empty">Lớp này hiện chưa có học sinh đang theo học.</p>}<StudentPagination total={students.length} page={currentStudentPage} onChange={setStudentPage} /></div> : <div className="empty-state compact">Tài khoản cũ chưa có lớp đăng ký. Hãy yêu cầu phụ huynh đăng ký lại để xác minh theo lớp.</div>}</div><div className="parent-actions"><button className="button button-secondary" onClick={saveLinks} disabled={saving || !selectedParent.requestedClassroom}>Lưu liên kết</button>{selectedParent.status !== 'active' && <button className="button button-primary" onClick={() => changeStatus('active')} disabled={saving || !studentIds.length || !selectedParent.requestedClassroom}><Icon name="check" size={17} />Kích hoạt tài khoản</button>}{selectedParent.status === 'active' && <button className="button button-secondary" onClick={() => changeStatus('suspended')} disabled={saving}>Tạm ngưng tài khoản</button>}</div></div>
       </> : <div className="empty-state"><strong>Chọn một tài khoản để xử lý</strong></div>}</article>
     </section>}
   </>;

@@ -1685,7 +1685,7 @@ export default function NutritionManagement() {
                 <div>
                   <span className="card-kicker">KẾ HOẠCH PHỤC VỤ NGÀY {new Date(`${servingPlan.dateKey}T00:00:00`).toLocaleDateString('vi-VN')}</span>
                   <h3>Suất ăn cần chuẩn bị theo từng lớp</h3>
-                  <p>Số suất đề xuất = sĩ số đang học trừ học sinh đã báo nghỉ. Học sinh chưa điểm danh vẫn được tạm tính suất để bếp không chuẩn bị thiếu.</p>
+                  <p>Số suất cần nấu bằng số học sinh đã điểm danh có mặt hoặc đi muộn. Học sinh chưa điểm danh được theo dõi riêng và sẽ được cộng khi xác nhận đến trường.</p>
                 </div>
                 <div className="nutrition-serving-total"><small>TỔNG SUẤT CẦN NẤU</small><strong>{servingPlan.totalRecommendedServings}</strong><span>suất ăn</span></div>
               </header>
@@ -1838,7 +1838,7 @@ export default function NutritionManagement() {
           <section className="nutrition-finance-grid">
             <article className="nutrition-finance-panel nutrition-finance-table-panel">
               <h4>Dự toán suất ăn theo lớp</h4>
-              <p className="nutrition-finance-muted">Số suất theo lớp đã trừ học sinh báo nghỉ; học sinh chưa điểm danh vẫn được giữ suất.</p>
+              <p className="nutrition-finance-muted">Số suất theo lớp chỉ tính học sinh đã điểm danh có mặt hoặc đi muộn; học sinh chưa điểm danh được thống kê riêng.</p>
               <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr><th>Lớp</th><th>Sĩ số</th><th>Có mặt</th><th>Nghỉ</th><th>Chưa điểm danh</th><th>Suất cần nấu</th><th>Ngân sách dự kiến</th></tr></thead><tbody>
                 {(financialReport.classBreakdown || []).map((item) => <tr key={item.classroomId}><td>{item.className}</td><td className="nutrition-finance-number">{item.totalEnrolledStudents}</td><td className="nutrition-finance-number">{item.actualPresentStudents}</td><td className="nutrition-finance-number">{item.absentCount}</td><td className="nutrition-finance-number">{item.unmarkedCount}</td><td className="nutrition-finance-number"><strong>{item.recommendedServings}</strong></td><td className="nutrition-finance-number">{(item.recommendedServings * financialReport.standardMealRatePerStudent).toLocaleString('vi-VN')} đ</td></tr>)}
                 {!financialReport.classBreakdown?.length && <tr><td colSpan="7" className="nutrition-finance-empty">Chưa có lớp đang hoạt động.</td></tr>}

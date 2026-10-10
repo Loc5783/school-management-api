@@ -3,12 +3,21 @@ const AuditLog = require('../models/zone1_system/AuditLog');
 const Student = require('../models/zone3_school/Student');
 const User = require('../models/zone1_system/User');
 const Employee = require('../models/zone2_hr/Employee');
+const Classroom = require('../models/zone3_school/Classroom');
 const { hashPassword } = require('../utils/passwordHash');
 
 const manageableStatuses = ['active', 'inactive', 'suspended'];
 const assignableStaffRoles = ['principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'];
 const internalRoles = ['admin', ...assignableStaffRoles];
 const usernamePattern = /^[a-zA-Z0-9._-]{3,50}$/;
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const phonePattern = /^[0-9+().\s-]{8,20}$/;
+const positionByRole = { principal: 'principal', teacher: 'teacher', accountant: 'accountant', chef: 'chef', guard: 'security', hr: 'hr' };
+const validPositionsByRole = {
+  principal: ['principal', 'vice_principal'],
+  teacher: ['teacher', 'head_teacher', 'assistant_teacher'],
+  accountant: ['accountant'], chef: ['chef'], guard: ['security'], hr: ['hr']
+};
 
 const serializeParent = (user) => ({
   _id: user._id,
@@ -31,7 +40,7 @@ const serializeParent = (user) => ({
   lastLogin: user.lastLogin
 });
 
-const serializeInternalAccount = (user) => ({
+const serializeInternalAccount = (user, employee = null) => ({
   _id: user._id,
   username: user.username,
   role: user.role,
@@ -41,7 +50,7 @@ const serializeInternalAccount = (user) => ({
     email: user.profile?.email
   },
   status: user.status,
-  employeeId: user.employeeInfo?.employeeId || '',
+  employeeId: employee?.employeeCode || '',
   createdAt: user.createdAt,
   lastLogin: user.lastLogin
 });
@@ -50,9 +59,11 @@ const canAssignStaffRole = (actor, role) => actor?.role === 'admin'
   || (['principal', 'hr'].includes(actor?.role) && ['teacher', 'accountant', 'chef', 'guard', 'hr'].includes(role));
 
 const validateInternalAccount = ({ username, password, profile, role }, actor) => {
-  if (!usernamePattern.test(String(username || ''))) return 'Tên đăng nhập chỉ gồm chữ, số, dấu chấm, gạch dưới hoặc gạch ngang (3-50 ký tự)';
+  if (typeof username !== 'string' || !usernamePattern.test(username.trim())) return 'Tên đăng nhập chỉ gồm chữ, số, dấu chấm, gạch dưới hoặc gạch ngang (3-50 ký tự)';
   if (typeof password !== 'string' || password.length < 8 || password.length > 72) return 'Mật khẩu phải có từ 8 đến 72 ký tự';
-  if (!String(profile?.fullName || '').trim()) return 'Vui lòng nhập họ và tên';
+  if (typeof profile?.fullName !== 'string' || !profile.fullName.trim() || profile.fullName.length > 120) return 'Họ và tên phải có từ 1 đến 120 ký tự';
+  if (profile?.email && (typeof profile.email !== 'string' || profile.email.length > 254 || !emailPattern.test(profile.email.trim()))) return 'Email không hợp lệ';
+  if (profile?.phone && (typeof profile.phone !== 'string' || !phonePattern.test(profile.phone.trim()))) return 'Số điện thoại không hợp lệ';
   if (!assignableStaffRoles.includes(role) || !canAssignStaffRole(actor, role)) return 'Bạn không có quyền gán vai trò này';
   return null;
 };
@@ -65,7 +76,7 @@ const canManageInternalTarget = (actor, account) => {
   return null;
 };
 
-const writeAudit = (req, action, target, before, after, reason = '') => AuditLog.create({
+const writeAudit = (req, action, target, before, after, reason = '', session = null) => AuditLog.create([{
   actorId: req.user._id,
   actorUsername: req.user.username,
   action,
@@ -75,7 +86,22 @@ const writeAudit = (req, action, target, before, after, reason = '') => AuditLog
   after,
   reason: reason.trim(),
   requestId: req.header('X-Request-Id') || undefined
-});
+}], session ? { session } : {}).then(([log]) => log);
+
+const runLinkedAccountTransaction = async (operation) => {
+  const topology = await mongoose.connection.db.admin().command({ hello: 1 });
+  if (!topology.setName && topology.msg !== 'isdbgrid') {
+    const error = new Error('MongoDB phải chạy Replica Set để đồng bộ tài khoản và hồ sơ nhân sự');
+    error.statusCode = 503;
+    throw error;
+  }
+  const session = await mongoose.startSession();
+  try {
+    let result;
+    await session.withTransaction(async () => { result = await operation(session); });
+    return result;
+  } finally { await session.endSession(); }
+};
 
 const findParent = async (id) => {
   if (!mongoose.isValidObjectId(id)) return null;
@@ -170,7 +196,10 @@ const listInternalAccounts = async (req, res) => {
         .limit(limit),
       User.countDocuments(filter)
     ]);
-    return res.json({ success: true, data: accounts.map(serializeInternalAccount), pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+    const employees = await Employee.find({ userId: { $in: accounts.map((account) => account._id) } })
+      .select('userId employeeCode').lean();
+    const employeeByUserId = new Map(employees.map((employee) => [String(employee.userId), employee]));
+    return res.json({ success: true, data: accounts.map((account) => serializeInternalAccount(account, employeeByUserId.get(String(account._id)))), pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
   } catch (error) {
     console.error('List internal accounts failed:', error.message);
     return res.status(500).json({ success: false, message: 'Không thể tải danh sách tài khoản nội bộ' });
@@ -187,54 +216,50 @@ const createInternalAccount = async (req, res) => {
     if (await User.exists({ username: normalizedUsername })) {
       return res.status(409).json({ success: false, message: 'Tên đăng nhập đã tồn tại' });
     }
-    const account = await User.create({
-      username: normalizedUsername,
-      passwordHash: await hashPassword(password),
-      role,
-      status: 'active',
-      permissions: [],
-      profile: {
-        fullName: profile.fullName.trim(),
-        phone: String(profile.phone || '').trim(),
-        email: String(profile.email || '').trim().toLowerCase(),
-        address: String(profile.address || '').trim()
-      }
+    const passwordHash = await hashPassword(password);
+    const { account, employee } = await runLinkedAccountTransaction(async (session) => {
+      const [createdAccount] = await User.create([{
+        username: normalizedUsername,
+        passwordHash,
+        role,
+        status: 'active',
+        permissions: [],
+        profile: {
+          fullName: profile.fullName.trim(),
+          phone: String(profile.phone || '').trim(),
+          email: String(profile.email || '').trim().toLowerCase(),
+          address: String(profile.address || '').trim()
+        }
+      }], { session });
+      const employeeCode = `${{ principal: 'HT', teacher: 'GV', accountant: 'KT', chef: 'BEP', guard: 'BV', hr: 'NS' }[role]}-${new Date().getFullYear()}-${String(createdAccount._id).slice(-6).toUpperCase()}`;
+      const [createdEmployee] = await Employee.create([{
+        userId: createdAccount._id, employeeCode, fullName: createdAccount.profile.fullName,
+        phone: createdAccount.profile.phone, email: createdAccount.profile.email,
+        gender: null, contractType: null, startDate: null, qualification: { degree: '', major: '' },
+        position: positionByRole[role], payrollRole: role, status: 'active',
+        salaryConfig: { baseSalary: 0, positionAllowance: 0, lunchAllowance: 0 }
+      }], { session });
+      createdAccount.employeeInfo = { employeeId: employeeCode, position: positionByRole[role], baseSalary: 0 };
+      await createdAccount.save({ session });
+      await writeAudit(req, 'INTERNAL_ACCOUNT_CREATED', createdAccount, {}, {
+        username: createdAccount.username, role: createdAccount.role, status: createdAccount.status, employeeCode
+      }, '', session);
+      return { account: createdAccount, employee: createdEmployee };
     });
-    await writeAudit(req, 'INTERNAL_ACCOUNT_CREATED', account, {}, { username: account.username, role: account.role, status: account.status });
-    return res.status(201).json({ success: true, message: 'Đã tạo tài khoản nội bộ', data: serializeInternalAccount(account) });
+    return res.status(201).json({ success: true, message: 'Đã tạo tài khoản và liên kết hồ sơ nhân sự', data: serializeInternalAccount(account, employee) });
   } catch (error) {
     if (error?.code === 11000) return res.status(409).json({ success: false, message: 'Tên đăng nhập đã tồn tại' });
     console.error('Create internal account failed:', error.message);
-    return res.status(500).json({ success: false, message: 'Không thể tạo tài khoản nội bộ' });
+    return res.status(error.statusCode || 500).json({ success: false, message: error.statusCode ? error.message : 'Không thể tạo tài khoản nội bộ' });
   }
 };
 
 const updateInternalAccountRole = async (req, res) => {
-  try {
-    const { role } = req.body;
-    if (!assignableStaffRoles.includes(role) || !canAssignStaffRole(req.user, role)) {
-      return res.status(422).json({ success: false, message: 'Bạn không có quyền gán vai trò này' });
-    }
-    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ success: false, message: 'ID tài khoản không hợp lệ' });
-    const account = await User.findOne({ _id: req.params.id, role: { $in: internalRoles } });
-    if (!account) return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản nội bộ' });
-    const targetError = canManageInternalTarget(req.user, account);
-    if (targetError) return res.status(409).json({ success: false, message: targetError });
-    if (await Employee.exists({ userId: account._id })) {
-      return res.status(409).json({ success: false, message: 'Tài khoản đã gắn hồ sơ nhân sự. Hãy cập nhật hồ sơ nhân sự trước khi đổi vai trò.' });
-    }
-    const before = { role: account.role, authVersion: account.authVersion || 0 };
-    if (account.role !== role) {
-      account.role = role;
-      account.authVersion = (account.authVersion || 0) + 1;
-      await account.save();
-      await writeAudit(req, 'INTERNAL_ACCOUNT_ROLE_CHANGED', account, before, { role: account.role, authVersion: account.authVersion });
-    }
-    return res.json({ success: true, message: 'Đã cập nhật vai trò tài khoản', data: serializeInternalAccount(account) });
-  } catch (error) {
-    console.error('Update internal account role failed:', error.message);
-    return res.status(500).json({ success: false, message: 'Không thể cập nhật vai trò tài khoản' });
+  if (!assignableStaffRoles.includes(req.body?.role) || !canAssignStaffRole(req.user, req.body.role)) {
+    return res.status(422).json({ success: false, message: 'Bạn không có quyền gán vai trò này' });
   }
+  req.body = { role: req.body?.role };
+  return updateInternalAccount(req, res);
 };
 
 const updateInternalAccount = async (req, res) => {
@@ -244,14 +269,13 @@ const updateInternalAccount = async (req, res) => {
     if (!account) return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản nội bộ' });
     const targetError = canManageInternalTarget(req.user, account);
     if (targetError) return res.status(409).json({ success: false, message: targetError });
-    if (await Employee.exists({ userId: account._id })) {
-      return res.status(409).json({ success: false, message: 'Tài khoản đã gắn hồ sơ nhân sự. Hãy cập nhật thông tin ở mục Nhân sự & Lương.' });
-    }
-
     const { username, password, profile = {}, role, status } = req.body;
-    if (username !== undefined && !usernamePattern.test(String(username))) return res.status(422).json({ success: false, message: 'Tên đăng nhập không hợp lệ' });
+    if (username !== undefined && (typeof username !== 'string' || !usernamePattern.test(username.trim()))) return res.status(422).json({ success: false, message: 'Tên đăng nhập không hợp lệ' });
     if (password !== undefined && (typeof password !== 'string' || password.length < 8 || password.length > 72)) return res.status(422).json({ success: false, message: 'Mật khẩu phải có từ 8 đến 72 ký tự' });
-    if (profile.fullName !== undefined && !String(profile.fullName).trim()) return res.status(422).json({ success: false, message: 'Họ và tên là bắt buộc' });
+    if (!profile || typeof profile !== 'object' || Array.isArray(profile)) return res.status(422).json({ success: false, message: 'Hồ sơ tài khoản không hợp lệ' });
+    if (profile.fullName !== undefined && (typeof profile.fullName !== 'string' || !profile.fullName.trim() || profile.fullName.length > 120)) return res.status(422).json({ success: false, message: 'Họ và tên phải có từ 1 đến 120 ký tự' });
+    if (profile.phone !== undefined && (typeof profile.phone !== 'string' || (profile.phone && !phonePattern.test(profile.phone.trim())))) return res.status(422).json({ success: false, message: 'Số điện thoại không hợp lệ' });
+    if (profile.email !== undefined && (typeof profile.email !== 'string' || (profile.email && (profile.email.length > 254 || !emailPattern.test(profile.email.trim()))))) return res.status(422).json({ success: false, message: 'Email không hợp lệ' });
     if (role !== undefined && (!assignableStaffRoles.includes(role) || !canAssignStaffRole(req.user, role))) return res.status(422).json({ success: false, message: 'Bạn không có quyền gán vai trò này' });
     if (status !== undefined && !manageableStatuses.includes(status)) return res.status(422).json({ success: false, message: 'Trạng thái tài khoản không hợp lệ' });
 
@@ -259,22 +283,55 @@ const updateInternalAccount = async (req, res) => {
     if (nextUsername !== account.username && await User.exists({ username: nextUsername, _id: { $ne: account._id } })) {
       return res.status(409).json({ success: false, message: 'Tên đăng nhập đã tồn tại' });
     }
-    const before = { username: account.username, role: account.role, status: account.status, profile: account.profile?.toObject?.() || account.profile, authVersion: account.authVersion || 0 };
-    account.username = nextUsername;
-    if (profile.fullName !== undefined) account.profile.fullName = String(profile.fullName).trim();
-    if (profile.phone !== undefined) account.profile.phone = String(profile.phone || '').trim();
-    if (profile.email !== undefined) account.profile.email = String(profile.email || '').trim().toLowerCase();
-    if (role !== undefined) account.role = role;
-    if (status !== undefined) account.status = status;
-    if (password !== undefined) account.passwordHash = await hashPassword(password);
-    account.authVersion = (account.authVersion || 0) + 1;
-    await account.save();
-    await writeAudit(req, 'INTERNAL_ACCOUNT_UPDATED', account, before, { username: account.username, role: account.role, status: account.status, profile: account.profile, authVersion: account.authVersion });
-    return res.json({ success: true, message: 'Đã cập nhật tài khoản', data: serializeInternalAccount(account) });
+    const linkedEmployee = await Employee.findOne({ userId: account._id });
+    if (linkedEmployee?.status === 'resigned' && status === 'active') {
+      return res.status(409).json({ success: false, message: 'Nhân viên đã nghỉ việc. Cần xử lý hồ sơ tái tuyển dụng trước khi mở lại tài khoản.' });
+    }
+    if (account.role === 'teacher' && role && role !== 'teacher'
+      && await Classroom.exists({ status: 'active', 'teachers.teacherId': account._id })) {
+      return res.status(409).json({ success: false, message: 'Giáo viên đang được phân công lớp. Hãy chuyển phân công lớp trước khi đổi vai trò.' });
+    }
+
+    const applyUpdate = async (session) => {
+      const target = session ? await User.findById(account._id).session(session) : account;
+      const employee = session ? await Employee.findOne({ userId: account._id }).session(session) : null;
+      if (!target || (session && !employee)) {
+        const error = new Error('Liên kết hồ sơ nhân sự đã thay đổi. Vui lòng tải lại danh sách.');
+        error.statusCode = 409;
+        throw error;
+      }
+      const before = { username: target.username, role: target.role, status: target.status, profile: target.profile?.toObject?.() || target.profile, authVersion: target.authVersion || 0 };
+      target.username = nextUsername;
+      if (profile.fullName !== undefined) target.profile.fullName = profile.fullName.trim();
+      if (profile.phone !== undefined) target.profile.phone = String(profile.phone || '').trim();
+      if (profile.email !== undefined) target.profile.email = String(profile.email || '').trim().toLowerCase();
+      if (role !== undefined) target.role = role;
+      if (status !== undefined) target.status = status;
+      if (password !== undefined) target.passwordHash = await hashPassword(password);
+      target.authVersion = (target.authVersion || 0) + 1;
+
+      if (employee) {
+        employee.fullName = target.profile.fullName;
+        employee.phone = target.profile.phone || '';
+        employee.email = target.profile.email || '';
+        employee.payrollRole = target.role;
+        if (!validPositionsByRole[target.role].includes(employee.position)) {
+          employee.position = positionByRole[target.role];
+        }
+        target.set('employeeInfo.position', employee.position);
+        await employee.save({ session });
+      }
+      await target.save(session ? { session } : {});
+      await writeAudit(req, 'INTERNAL_ACCOUNT_UPDATED', target, before,
+        { username: target.username, role: target.role, status: target.status, profile: target.profile, authVersion: target.authVersion }, '', session);
+      return { target, employee };
+    };
+    const updated = linkedEmployee ? await runLinkedAccountTransaction(applyUpdate) : await applyUpdate(null);
+    return res.json({ success: true, message: 'Đã cập nhật tài khoản', data: serializeInternalAccount(updated.target, updated.employee) });
   } catch (error) {
     if (error?.code === 11000) return res.status(409).json({ success: false, message: 'Tên đăng nhập đã tồn tại' });
     console.error('Update internal account failed:', error.message);
-    return res.status(500).json({ success: false, message: 'Không thể cập nhật tài khoản' });
+    return res.status(error.statusCode || 500).json({ success: false, message: error.statusCode ? error.message : 'Không thể cập nhật tài khoản' });
   }
 };
 

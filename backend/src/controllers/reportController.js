@@ -4,7 +4,8 @@ const Classroom = require('../models/zone3_school/Classroom');
 const StudentAttendance = require('../models/zone3_school/StudentAttendance');
 const TuitionFee = require('../models/zone4_finance/TuitionFee');
 const Payment = require('../models/zone4_finance/Payment');
-const { canAccessClassroom } = require('../services/schoolDataAccessService');
+const { getStaffingSnapshot } = require('../services/staffingService');
+const { canAccessClassroom, getTeacherClassroomIds } = require('../services/schoolDataAccessService');
 const { isValidObjectId } = require('../utils/idValidation');
 const {
     DEFAULT_SCHOOL_TIMEZONE,
@@ -33,14 +34,20 @@ const getDashboardStats = async (req, res) => {
             getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE),
             DEFAULT_SCHOOL_TIMEZONE
         );
-        const attendanceFilter = { attendDate: { $gte: today, $lt: tomorrow } };
+        const teacherClassroomIds = req.user.role === 'teacher' ? await getTeacherClassroomIds(req.user) : null;
+        const classroomFilter = teacherClassroomIds ? { _id: { $in: teacherClassroomIds }, status: 'active' } : { status: 'active' };
+        const studentFilter = teacherClassroomIds ? { classroomId: { $in: teacherClassroomIds }, status: 'enrolled' } : { status: 'enrolled' };
+        const attendanceFilter = {
+            attendDate: { $gte: today, $lt: tomorrow },
+            ...(teacherClassroomIds ? { classroomId: { $in: teacherClassroomIds } } : {})
+        };
 
         const User = require('../models/zone1_system/User');
         const [totalStudents, totalClassrooms, totalTeachers, todayRevenue, attendedToday, recentAttendance, totalAttendance, attendanceSummary] = await Promise.all([
-            Student.countDocuments({ status: 'enrolled' }),
-            Classroom.countDocuments({ status: 'active' }),
-            User.countDocuments({ role: 'teacher', status: 'active' }),
-            Payment.aggregate([
+            Student.countDocuments(studentFilter),
+            Classroom.countDocuments(classroomFilter),
+            req.user.role === 'teacher' ? Promise.resolve(1) : User.countDocuments({ role: 'teacher', status: 'active' }),
+            req.user.role === 'teacher' ? Promise.resolve([]) : Payment.aggregate([
                 { $match: { paidAt: { $gte: today, $lt: tomorrow } } },
                 { $group: { _id: null, total: { $sum: '$amount' } } }
             ]),
@@ -59,6 +66,12 @@ const getDashboardStats = async (req, res) => {
         ]);
 
         const statusCounts = attendanceSummary.reduce((result, item) => ({ ...result, [item._id]: item.count }), {});
+        let staffing = null;
+        let staffingError = false;
+        if (['admin', 'principal'].includes(req.user.role)) {
+            try { staffing = await getStaffingSnapshot(getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE)); }
+            catch (error) { staffingError = true; console.error('Không thể tính phân công nhân sự:', error); }
+        }
 
         res.json({
             message: 'Lấy thống kê tổng quan thành công',
@@ -84,7 +97,10 @@ const getDashboardStats = async (req, res) => {
                     late: statusCounts.late || 0,
                     absent: statusCounts.absent || 0,
                     absent_permission: statusCounts.absent_permission || 0
-                }
+                },
+                staffingError,
+                staffing: staffing ? { date: staffing.date, teacherShortages: staffing.teacherShortages,
+                    missingTeacherTotal: staffing.missingTeacherTotal, uncoveredShifts: staffing.uncoveredShifts } : null
             }
         });
     } catch (err) {

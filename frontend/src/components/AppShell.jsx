@@ -9,6 +9,11 @@ const allNavItems = [
   { to: '/dashboard', label: 'Tổng quan', icon: 'grid', roles: ['admin', 'principal', 'teacher'] },
   { to: '/attendance', label: 'Điểm danh', icon: 'attendance', roles: ['admin', 'principal', 'teacher'] },
   { to: '/timekeeping', label: 'Chấm công nhân sự', icon: 'clock', roles: ['admin', 'principal', 'teacher', 'guard'] },
+  { to: '/my-staffing', label: 'Lịch phân công của tôi', icon: 'calendar', roles: ['teacher', 'chef', 'guard'] },
+  { to: '/my-handovers', label: 'Việc bàn giao của tôi', icon: 'users', roles: ['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard'] },
+  { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar', roles: ['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard'] },
+  { to: '/my-requests', label: 'Yêu cầu của tôi', icon: 'card', roles: ['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard'] },
+  { to: '/professional-reviews', label: 'Đánh giá chuyên môn', icon: 'users', roles: ['teacher', 'principal', 'admin'], positions: ['head_teacher', 'principal', 'vice_principal'] },
   { to: '/my-payroll', label: 'Lương của tôi', icon: 'money', roles: ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'] },
   { to: '/hr', label: 'Nhân sự & Lương', icon: 'users', roles: ['admin', 'principal', 'accountant', 'hr'] },
   { to: '/accounts', label: 'Tài khoản & vai trò', icon: 'shield', roles: ['admin', 'principal', 'hr'] },
@@ -41,6 +46,13 @@ export default function AppShell({ title, subtitle, actions, children }) {
   const [unreadCount, setUnreadCount] = useState(0);
   const [chatUnread, setChatUnread] = useState({ total: 0, data: [] });
   const [showNotifications, setShowNotifications] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [prevPath, setPrevPath] = useState(location.pathname);
+
+  if (prevPath !== location.pathname) {
+    setPrevPath(location.pathname);
+    setMobileNavOpen(false);
+  }
 
   useEffect(() => {
     const fetchUser = async () => {
@@ -135,7 +147,7 @@ export default function AppShell({ title, subtitle, actions, children }) {
   const isAdmin = user?.role === 'admin';
   const roleLabel = { admin: 'Quản trị viên', principal: 'Hiệu trưởng', teacher: 'Giáo viên', accountant: 'Kế toán', chef: 'Nhân viên bếp', hr: 'Nhân sự', parent: 'Phụ huynh', guard: 'Bảo vệ' }[user?.role] || 'Tài khoản trường';
   const totalUnread = unreadCount + chatUnread.total;
-  const homePath = user?.role === 'guard' ? '/guard' : user?.role === 'parent' ? '/parent-dashboard' : '/dashboard';
+  const homePath = user?.role === 'guard' ? '/guard' : user?.role === 'parent' ? '/parent-dashboard' : user?.role === 'hr' ? '/hr' : '/dashboard';
 
   // Lọc menu dựa trên permissions
   const navItems = allNavItems.filter(item => {
@@ -145,6 +157,7 @@ export default function AppShell({ title, subtitle, actions, children }) {
     if (user?.role === 'parent') return Boolean(item.roles?.includes('parent'));
     // Mục khai báo roles là khu vực chuyên biệt: kể cả Admin cũng chỉ nhìn thấy
     // khi vai trò của họ nằm trong danh sách (ví dụ cổng thông tin phụ huynh).
+    if (item.positions && !item.positions.includes(user?.employeeInfo?.position)) return false;
     if (item.roles) return item.roles.includes(user?.role);
     if (isAdmin) return true;
     if (!item.permission) return false;
@@ -159,10 +172,46 @@ export default function AppShell({ title, subtitle, actions, children }) {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      {/* Mobile Drawer Overlay */}
+      {mobileNavOpen && (
+        <div className="mobile-nav-backdrop" onClick={() => setMobileNavOpen(false)} role="presentation">
+          <aside className="sidebar mobile-sidebar" onClick={(e) => e.stopPropagation()}>
+            <div className="mobile-sidebar-header">
+              <NavLink to={homePath} className="brand" onClick={() => setMobileNavOpen(false)} aria-label="Mầm Non Hoa Nắng">
+                <span className="brand-mark"><Icon name="sun" size={22} stroke={2.2} /></span>
+                <span><strong>Hoa Nắng</strong><small>Mầm Non Hạnh Phúc</small></span>
+              </NavLink>
+              <button type="button" className="mobile-nav-close" onClick={() => setMobileNavOpen(false)} aria-label="Đóng menu">
+                <Icon name="close" size={20} />
+              </button>
+            </div>
+            <nav className="sidebar-nav" aria-label="Điều hướng chính di động">
+              <p className="nav-label">QUẢN LÝ</p>
+              {navItems.map((item) => (
+                <NavLink to={item.to} key={item.to} className="nav-link" onClick={() => setMobileNavOpen(false)}>
+                  <Icon name={item.icon} />{item.label}{item.to === '/messages' && chatUnread.total > 0 && <span className="nav-chat-count">{chatUnread.total > 99 ? '99+' : chatUnread.total}</span>}
+                </NavLink>
+              ))}
+            </nav>
+            <div className="sidebar-bottom">
+              {user?.role === 'parent' ? <NavLink to="/parent-settings" className="nav-link" onClick={() => setMobileNavOpen(false)}><Icon name="settings" />Cài đặt</NavLink> : <NavLink to="/staff-settings" className="nav-link" onClick={() => setMobileNavOpen(false)}><Icon name="settings" />Cài đặt tài khoản</NavLink>}
+              <div className="account-card">
+                <span className="avatar">{displayName.charAt(0).toUpperCase()}</span>
+                <span><strong>{displayName}</strong><small>{roleLabel}</small></span>
+              </div>
+              <button className="sidebar-logout" onClick={logout} title="Đăng xuất khỏi hệ thống">
+                <Icon name="logout" size={17} />Đăng xuất
+              </button>
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {/* Desktop Persistent Sidebar */}
+      <aside className="sidebar desktop-sidebar">
         <NavLink to={homePath} className="brand" aria-label="Mầm Non Hoa Nắng">
-          <span className="brand-mark"><Icon name="classes" size={22} stroke={2.2} /></span>
-          <span><strong>Hoa Nắng</strong><small>School Management</small></span>
+          <span className="brand-mark"><Icon name="sun" size={22} stroke={2.2} /></span>
+          <span><strong>Hoa Nắng</strong><small>Mầm Non Hạnh Phúc</small></span>
         </NavLink>
         <nav ref={navRef} className="sidebar-nav" aria-label="Điều hướng chính">
           <p className="nav-label">QUẢN LÝ</p>
@@ -173,7 +222,7 @@ export default function AppShell({ title, subtitle, actions, children }) {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          {user?.role === 'parent' ? <NavLink to="/parent-settings" className="nav-link"><Icon name="settings" />Cài đặt</NavLink> : <span className="nav-link is-disabled"><Icon name="settings" />Cài đặt</span>}
+          {user?.role === 'parent' ? <NavLink to="/parent-settings" className="nav-link"><Icon name="settings" />Cài đặt</NavLink> : <NavLink to="/staff-settings" className="nav-link"><Icon name="settings" />Cài đặt tài khoản</NavLink>}
           <div className="account-card">
             <span className="avatar">{displayName.charAt(0).toUpperCase()}</span>
             <span><strong>{displayName}</strong><small>{roleLabel}</small></span>
@@ -186,8 +235,15 @@ export default function AppShell({ title, subtitle, actions, children }) {
       <main className="main-content">
         <header className="topbar">
           <div className="topbar-copy">
-            <p className="eyebrow">HỆ THỐNG QUẢN LÝ TRƯỜNG</p>
-            <h1>{title}</h1>
+            <div className="topbar-title-row">
+              <button type="button" className="mobile-menu-toggle" onClick={() => setMobileNavOpen(true)} aria-label="Mở menu điều hướng">
+                <Icon name="menu" size={22} />
+              </button>
+              <div>
+                <p className="eyebrow">HỆ THỐNG QUẢN LÝ TRƯỜNG MẦM NON</p>
+                <h1>{title}</h1>
+              </div>
+            </div>
             {subtitle && <p className="page-subtitle">{subtitle}</p>}
           </div>
           <div className="topbar-actions">
@@ -195,7 +251,7 @@ export default function AppShell({ title, subtitle, actions, children }) {
             <div className="notification-menu"><button className="icon-button" aria-label={`Thông báo${totalUnread ? `, ${totalUnread} chưa đọc` : ''}`} onClick={toggleNotifications}>
               <Icon name="bell" />{totalUnread > 0 && <span className="notification-count">{totalUnread > 99 ? '99+' : totalUnread}</span>}
             </button>{showNotifications && <div className="notification-popover"><div><strong>Thông báo</strong>{totalUnread > 0 && <span>{totalUnread} chưa đọc</span>}</div>{chatUnread.data.length > 0 && <><div className="notification-group-label">TIN NHẮN</div>{chatUnread.data.map((item) => <button key={item.conversationId} className="chat-alert unread" onClick={() => openChatAlert(item)}><strong>Bạn có {item.count} tin nhắn từ {user?.role === 'teacher' ? 'phụ huynh' : 'giáo viên'} {item.senderName}</strong><small>Về bé {item.studentName} · Nhấn để xem và đánh dấu đã đọc</small><span className="chat-unread-dot" /></button>)}</>}{notifications.length > 0 && chatUnread.data.length > 0 && <div className="notification-group-label">THÔNG BÁO KHÁC</div>}{notifications.length ? notifications.map((item) => <button key={item._id} className={`${item.isRead ? '' : 'unread'} ${item.metadata?.priority === 'high' ? 'priority' : ''}`.trim()} onClick={() => openNotification(item)}><strong>{item.metadata?.priority === 'high' ? '⚠ ' : ''}{item.title}</strong><small>{item.message}</small></button>) : chatUnread.data.length === 0 && <p>Chưa có thông báo mới.</p>}</div>}</div>
-            <div className="topbar-profile"><span className="avatar">{displayName.charAt(0).toUpperCase()}</span><span><strong>{displayName}</strong><small>{roleLabel}</small></span><Icon name="chevronRight" size={15} /></div>
+            <div className="topbar-profile"><span className="avatar">{displayName.charAt(0).toUpperCase()}</span><span><strong>{displayName}</strong><small className={`role-pill role-pill-${user?.role || 'default'}`}>{roleLabel}</small></span><Icon name="chevronRight" size={15} /></div>
           </div>
         </header>
         <div className="page-content">{children}</div>

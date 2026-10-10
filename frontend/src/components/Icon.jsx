@@ -26,6 +26,8 @@ const paths = {
   mail: <><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 7 9 6 9-6" /></>,
   chat: <path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H7l-4 2v-5.5A7.5 7.5 0 1 1 20 11.5Z" />,
   send: <><path d="M21 3 3 10l7 3 3 7 8-17Z" /><path d="m10 13 5-5" /></>,
+  close: <><path d="M18 6 6 18M6 6l12 12" /></>,
+  sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" /></>,
 };
 
 export default function Icon({ name, size = 20, stroke = 1.8, className = '' }) {
