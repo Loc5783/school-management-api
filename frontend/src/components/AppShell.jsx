@@ -6,6 +6,7 @@ import { getUnreadChat } from '../api/chat';
 
 const allNavItems = [
   { to: '/guard', label: 'Tổng quan trực cổng', icon: 'grid', roles: ['guard'] },
+  { to: '/kitchen', label: 'Bếp hôm nay', icon: 'grid', roles: ['chef'] },
   { to: '/dashboard', label: 'Tổng quan', icon: 'grid', roles: ['admin', 'principal', 'teacher'] },
   { to: '/attendance', label: 'Điểm danh', icon: 'attendance', roles: ['admin', 'principal', 'teacher'] },
   { to: '/timekeeping', label: 'Chấm công nhân sự', icon: 'clock', roles: ['admin', 'principal', 'teacher', 'guard'] },
@@ -147,7 +148,7 @@ export default function AppShell({ title, subtitle, actions, children }) {
   const isAdmin = user?.role === 'admin';
   const roleLabel = { admin: 'Quản trị viên', principal: 'Hiệu trưởng', teacher: 'Giáo viên', accountant: 'Kế toán', chef: 'Nhân viên bếp', hr: 'Nhân sự', parent: 'Phụ huynh', guard: 'Bảo vệ' }[user?.role] || 'Tài khoản trường';
   const totalUnread = unreadCount + chatUnread.total;
-  const homePath = user?.role === 'guard' ? '/guard' : user?.role === 'parent' ? '/parent-dashboard' : user?.role === 'hr' ? '/hr' : '/dashboard';
+  const homePath = user?.role === 'guard' ? '/guard' : user?.role === 'chef' ? '/kitchen' : user?.role === 'parent' ? '/parent-dashboard' : user?.role === 'hr' ? '/hr' : '/dashboard';
 
   // Lọc menu dựa trên permissions
   const navItems = allNavItems.filter(item => {

@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
+import MealServingOperations from '../components/MealServingOperations';
 import api from '../api/axiosConfig';
 import './NutritionManagement.css';
 import {
@@ -88,7 +89,8 @@ const createEmptyDishForm = () => ({
   fat: 6,
   carbs: 10,
   servingSizeGram: 100,
-  allergens: []
+  allergens: [],
+  ingredients: []
 });
 
 const getSessionRole = () => {
@@ -317,7 +319,10 @@ function ClassroomDietaryAlertPanel({ alerts, blockedAllergens = [] }) {
 }
 
 export default function NutritionManagement() {
-  const [activeTab, setActiveTab] = useState('menus');
+  const [activeTab, setActiveTab] = useState(() => {
+    const requested = new URLSearchParams(window.location.search).get('tab');
+    return ['menus', 'menuArchive', 'dishes', 'inventory', 'dailyKitchenReport', 'servings'].includes(requested) ? requested : 'menus';
+  });
   const sessionRole = getSessionRole();
   const isTeacher = sessionRole === 'teacher';
   const canManageMenuContent = ['admin', 'principal', 'chef'].includes(sessionRole);
@@ -452,6 +457,7 @@ export default function NutritionManagement() {
     mealType: 'lunch',
     dishName: '',
     sampleWeightGram: 100,
+    sampleUnit: 'g',
     storageTemperature: 4
   }));
 
@@ -725,6 +731,10 @@ export default function NutritionManagement() {
   // Handler tạo món ăn mới
   const handleCreateDish = async (e) => {
     e.preventDefault();
+    if (newDishForm.ingredients.some((item) => !item.ingredientId || !Number.isFinite(Number(item.quantity)) || Number(item.quantity) <= 0 || !item.unit)) {
+      showFeedback('error', 'Kiểm tra nguyên liệu và định lượng trên một suất trước khi lưu.');
+      return;
+    }
     try {
       if (editingDishId) {
         await updateDish(editingDishId, newDishForm);
@@ -752,7 +762,11 @@ export default function NutritionManagement() {
       fat: Number(dish.fat) || 0,
       carbs: Number(dish.carbs) || 0,
       servingSizeGram: Number(dish.servingSizeGram) || 100,
-      allergens: dish.allergens || []
+      allergens: dish.allergens || [],
+      ingredients: (dish.ingredients || []).map((item) => ({
+        ingredientId: String(item.ingredientId?._id || item.ingredientId || ''),
+        ingredientName: item.ingredientName || '', quantity: item.quantity || '', unit: item.unit || ''
+      }))
     });
     setShowNewDishModal(true);
   };
@@ -1045,7 +1059,8 @@ export default function NutritionManagement() {
       {/* Tabs Navigation */}
       <div className="flex gap-1 border-b border-gray-200 mb-6 overflow-x-auto">
         {(isTeacher ? [
-          { key: 'menus', label: 'Thực Đơn Theo Lớp', icon: 'menu' }
+          { key: 'menus', label: 'Thực Đơn Theo Lớp', icon: 'menu' },
+          { key: 'servings', label: 'Xác Nhận Suất Ăn', icon: 'attendance' }
         ] : [
           { key: 'menus', label: 'Thực Đơn Theo Lớp', icon: 'menu' },
           { key: 'menuArchive', label: 'Lưu Trữ Thực Đơn Tuần', icon: 'calendar' },
@@ -1075,6 +1090,8 @@ export default function NutritionManagement() {
           <span className="inline-block animate-spin mr-2">⟳</span> Đang tải dữ liệu...
         </div>
       )}
+
+      {activeTab === 'servings' && isTeacher && <MealServingOperations role="teacher" />}
 
       {/* ========================================== */}
       {/* TAB 1: THỰC ĐƠN TUẦN THEO LỚP & DỊ ỨNG */}
@@ -1966,7 +1983,7 @@ export default function NutritionManagement() {
       {/* ========================================== */}
       {showNewDishModal && (
         <NutritionModal>
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto">
             <h3 className="font-bold text-gray-900 text-lg mb-4">{editingDishId ? 'Cập Nhật Món Ăn' : 'Thêm Món Ăn Mới'}</h3>
             <form onSubmit={handleCreateDish} className="space-y-4 text-sm">
               <div>
@@ -2053,6 +2070,24 @@ export default function NutritionManagement() {
                     </label>
                   ))}
                 </div>
+              </fieldset>
+
+              <fieldset className="nutrition-allergen-fieldset">
+                <legend>NGUYÊN LIỆU CHO MỘT SUẤT ĂN</legend>
+                <p>Nhập lượng dùng cho một trẻ, cùng đơn vị với nguyên liệu trong kho. Nếu để trống, bếp sẽ báo món chưa có công thức và không tự ước lượng.</p>
+                <div className="space-y-2">
+                  {newDishForm.ingredients.map((item, index) => <div key={index} className="nutrition-recipe-row">
+                    <select value={item.ingredientId} required onChange={(event) => {
+                      const selected = ingredients.find((ingredient) => ingredient._id === event.target.value);
+                      setNewDishForm((old) => ({ ...old, ingredients: old.ingredients.map((current, row) => row === index
+                        ? { ingredientId: selected?._id || '', ingredientName: selected?.name || '', quantity: current.quantity, unit: selected?.unit || '' } : current) }));
+                    }}><option value="">Chọn nguyên liệu</option>{ingredients.map((ingredient) => <option key={ingredient._id} value={ingredient._id}>{ingredient.name}</option>)}</select>
+                    <input type="number" min="0.001" step="any" required value={item.quantity} onChange={(event) => setNewDishForm((old) => ({ ...old, ingredients: old.ingredients.map((current, row) => row === index ? { ...current, quantity: event.target.value } : current) }))} placeholder="Lượng / trẻ" />
+                    <span>{item.unit || 'Đơn vị'}</span>
+                    <button type="button" className="btn-secondary" onClick={() => setNewDishForm((old) => ({ ...old, ingredients: old.ingredients.filter((_, row) => row !== index) }))}>Xóa</button>
+                  </div>)}
+                </div>
+                <button type="button" className="btn-secondary mt-3" onClick={() => setNewDishForm((old) => ({ ...old, ingredients: [...old.ingredients, { ingredientId: '', ingredientName: '', quantity: '', unit: '' }] }))}>+ Thêm nguyên liệu</button>
               </fieldset>
 
               <div className="flex justify-end gap-2 pt-4 border-t">
@@ -2479,14 +2514,16 @@ export default function NutritionManagement() {
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                   >
                     <option value="breakfast">Bữa sáng</option>
+                    <option value="morningSnack">Phụ sáng</option>
                     <option value="lunch">Bữa trưa</option>
                     <option value="afternoonSnack">Xế chiều</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1">TRỌNG LƯỢNG (GRAM)</label>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">LƯỢNG MẪU ({newSampleForm.sampleUnit})</label>
                   <input
                     type="number"
+                    min={newSampleForm.sampleUnit === 'ml' ? 150 : 100}
                     value={newSampleForm.sampleWeightGram}
                     onChange={(e) => setNewSampleForm({ ...newSampleForm, sampleWeightGram: Number(e.target.value) })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg"
@@ -2494,6 +2531,7 @@ export default function NutritionManagement() {
                   />
                 </div>
               </div>
+              <div><label className="block text-xs font-semibold text-gray-600 mb-1">LOẠI MẪU</label><select value={newSampleForm.sampleUnit} onChange={(e) => setNewSampleForm({ ...newSampleForm, sampleUnit: e.target.value, sampleWeightGram: e.target.value === 'ml' ? 150 : 100 })} className="w-full px-3 py-2 border border-gray-300 rounded-lg"><option value="g">Thức ăn đặc (g)</option><option value="ml">Thức ăn lỏng (ml)</option></select></div>
 
               <div className="flex justify-end gap-2 pt-4 border-t">
                 <button type="button" onClick={() => setShowNewSampleModal(false)} className="btn-secondary">Hủy</button>

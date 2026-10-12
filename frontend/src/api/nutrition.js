@@ -48,9 +48,17 @@ export const disposeFoodSample = (id, data) => api.put(`/nutrition/food-samples/
 
 export const getFoodInspections = () => api.get('/nutrition/food-inspections');
 export const createFoodInspection = (data) => api.post('/nutrition/food-inspections', data);
+export const getKitchenSafetyDay = (date) => api.get('/nutrition/safety/day', { params: { date } });
+export const recordKitchenSafetyStep = (mealType, step, data) => api.put(`/nutrition/safety/${mealType}/steps/${step}`, data);
 
 export const getDailyMealFinancials = (date) => api.get('/nutrition/financials/daily', { params: { date } });
 export const getDailyServingPlan = (date) => api.get('/nutrition/servings/daily', { params: { date } });
+export const getMealServingOperations = (date) => api.get('/nutrition/servings/operations', { params: { date } });
+export const getKitchenReconciliation = (date) => api.get('/nutrition/servings/reconciliation', { params: { date } });
+export const closeKitchenReconciliation = (data) => api.post('/nutrition/servings/reconciliation/close', data);
+export const recordCookedServings = (classroomId, data) => api.put(`/nutrition/servings/operations/${classroomId}/cooked`, data);
+export const recordDeliveredServings = (classroomId, data) => api.put(`/nutrition/servings/operations/${classroomId}/delivered`, data);
+export const confirmReceivedServings = (classroomId, data) => api.put(`/nutrition/servings/operations/${classroomId}/received`, data);
 export const getKitchenRequests = (params) => api.get('/nutrition/requests', { params });
 export const createKitchenRequest = (data) => api.post('/nutrition/requests', data);
 export const approveKitchenRequest = (id, data) => api.put(`/nutrition/requests/${id}/approve`, data);

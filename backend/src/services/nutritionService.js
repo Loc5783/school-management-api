@@ -218,6 +218,7 @@ const calculateDailyServingPlan = async (date, classroomIds = null) => {
             unmarkedCount: unmarkedStudents.length,
             recommendedServings: presentStudents.length,
             attendanceComplete: unmarkedStudents.length === 0,
+            presentStudentIds: presentStudents.map((student) => student.studentId),
             absentStudents,
             unmarkedStudents
         };

@@ -1,0 +1,57 @@
+.chef-dashboard { display: grid; gap: 18px; }
+.chef-toolbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; padding: 24px; }
+.chef-toolbar h2, .chef-section-heading h2 { margin: 4px 0 7px; color: #193665; font-size: 22px; }
+.chef-toolbar p:last-child { margin: 0; color: #6c7d98; }
+.chef-toolbar-actions { display: flex; align-items: flex-end; gap: 10px; }
+.chef-toolbar-actions label { display: grid; gap: 6px; color: #536584; font-size: 12px; font-weight: 700; }
+.chef-toolbar-actions input { height: 43px; padding: 0 12px; border: 1px solid #d6e2f5; border-radius: 11px; color: #26416f; background: #fff; }
+.chef-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 13px; }
+.chef-metric { display: grid; gap: 5px; min-width: 0; padding: 20px; border: 1px solid #dce6f6; border-radius: 17px; background: #fff; }
+.chef-metric small { color: #6e81a3; font-size: 11px; font-weight: 800; }
+.chef-metric strong { color: #264b95; font-size: 35px; line-height: 1.1; }
+.chef-metric span { color: #7183a0; font-size: 12px; }
+.chef-metric-main { border-color: #b7d6f8; background: #eef6ff; }
+.chef-metric-alert { border-color: #f1d3ad; background: #fff9ed; }
+.chef-metric-alert strong { color: #a05a1e; }
+.chef-attendance-note { padding: 14px 18px; border: 1px solid #f0d6ad; border-radius: 13px; color: #86582a; background: #fff9ed; line-height: 1.5; }
+.chef-warnings, .chef-classes, .chef-menus, .chef-ingredients { overflow: hidden; }
+.chef-ingredient-hint { margin: 0; padding: 15px 23px 0; color: #667b99; line-height: 1.5; font-size: 13px; }
+.chef-ingredient-warning { margin: 16px 23px; padding: 14px 16px; border: 1px solid #efd5ac; border-radius: 11px; color: #865829; background: #fff9ed; }
+.chef-ingredient-warning p { margin: 7px 0 0; line-height: 1.5; }
+.chef-ingredient-table-wrap { overflow-x: auto; padding: 17px 23px 23px; }
+.chef-ingredient-table { width: 100%; border-collapse: collapse; color: #26416f; font-size: 13px; }
+.chef-ingredient-table th, .chef-ingredient-table td { padding: 13px 12px; border-bottom: 1px solid #e5edf8; text-align: left; }
+.chef-ingredient-table th { color: #627a9e; background: #f5f8fd; font-size: 11px; text-transform: uppercase; }
+.chef-ingredient-table td:first-child { font-weight: 700; }
+.chef-ingredient-table .is-short { color: #bd4753; font-weight: 800; }
+.chef-ingredient-table .is-enough { color: #17805c; }
+.chef-menu-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 15px; padding: 20px 23px; }
+.chef-menu-list article { min-width: 0; padding: 18px; border: 1px solid #dce7f5; border-radius: 14px; background: #fbfdff; }
+.chef-menu-list article.chef-menu-missing { border-color: #f0d7b6; background: #fffaf2; }
+.chef-menu-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 15px; }
+.chef-menu-head strong { color: #244573; font-size: 16px; }
+.chef-menu-head span { flex: none; padding: 5px 9px; border-radius: 99px; color: #315c9f; background: #e9f2ff; font-size: 11px; font-weight: 700; }
+.chef-menu-status { margin: 0; color: #98612a; line-height: 1.5; }
+.chef-meal-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.chef-meal-list div { padding: 10px 12px; border: 1px solid #e5ebf5; border-radius: 10px; background: #fff; }
+.chef-meal-list small { display: block; margin-bottom: 5px; color: #7184a1; font-size: 11px; }
+.chef-meal-list strong { color: #244573; line-height: 1.45; font-size: 13px; }
+.chef-menu-conflict { margin: 14px 0 0; padding: 11px 12px; border-radius: 9px; color: #9e4050; background: #fff0f2; line-height: 1.5; }
+.chef-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 21px 23px; border-bottom: 1px solid #e7edf7; }
+.chef-section-heading span, .chef-section-heading > small { color: #677d9e; font-size: 12px; }
+.chef-warning-list, .chef-class-list { display: grid; gap: 10px; padding: 17px 23px; }
+.chef-warning-list article { display: grid; grid-template-columns: minmax(140px, 210px) 1fr; gap: 16px; padding: 14px 16px; border: 1px solid #f2ddbd; border-radius: 12px; background: #fffbf4; }
+.chef-warning-list strong, .chef-class-list strong { display: block; color: #234372; }
+.chef-warning-list small, .chef-class-list small { display: block; margin-top: 4px; color: #7184a1; }
+.chef-warning-list p { margin: 0 0 5px; color: #725437; line-height: 1.5; }
+.chef-safety-note { margin: 0; padding: 0 23px 20px; color: #7f6071; font-size: 12px; }
+.chef-empty { margin: 0; padding: 20px 23px; color: #7283a0; }
+.chef-class-list { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.chef-class-list article { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px; border: 1px solid #dfe8f7; border-radius: 12px; background: #fbfdff; }
+.chef-class-count { display: flex; align-items: baseline; gap: 4px; white-space: nowrap; }
+.chef-class-count strong { font-size: 24px; }
+.chef-class-count span { color: #7184a1; font-size: 11px; }
+.chef-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.chef-loading { padding: 30px; color: #667b9d; }
+@media (max-width: 1050px) { .chef-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .chef-toolbar, .chef-toolbar-actions, .chef-section-heading { align-items: stretch; flex-direction: column; }.chef-metrics { grid-template-columns: 1fr 1fr; }.chef-warning-list article { grid-template-columns: 1fr; }.chef-class-list, .chef-menu-list, .chef-meal-list { grid-template-columns: 1fr; } }

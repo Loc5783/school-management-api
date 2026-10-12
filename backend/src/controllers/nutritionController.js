@@ -9,6 +9,7 @@ const KitchenStaff = require('../models/zone5_nutrition/KitchenStaff');
 const KitchenEquipment = require('../models/zone5_nutrition/KitchenEquipment');
 const FoodSample = require('../models/zone5_nutrition/FoodSample');
 const FoodInspection = require('../models/zone5_nutrition/FoodInspection');
+const { expectedDishes } = require('./kitchenSafetyController');
 const KitchenRequest = require('../models/zone5_nutrition/KitchenRequest');
 const Classroom = require('../models/zone3_school/Classroom');
 const Student = require('../models/zone3_school/Student');
@@ -617,6 +618,23 @@ const getDishes = async (req, res) => {
     }
 };
 
+const validateDishIngredients = async (items) => {
+    if (!Array.isArray(items)) throw new Error('Danh sách nguyên liệu không hợp lệ');
+    const ids = items.map((item) => String(item?.ingredientId || ''));
+    if (ids.some((value) => !isValidObjectId(value)) || new Set(ids).size !== ids.length) {
+        throw new Error('Nguyên liệu phải thuộc danh mục và không được lặp lại');
+    }
+    const masters = await IngredientMaster.find({ _id: { $in: ids }, status: 'active' }).select('name unit').lean();
+    const byId = new Map(masters.map((item) => [String(item._id), item]));
+    return items.map((item, index) => {
+        const master = byId.get(ids[index]);
+        if (!master || !Number.isFinite(Number(item.quantity)) || Number(item.quantity) <= 0 || item.unit !== master.unit) {
+            throw new Error('Định lượng hoặc đơn vị nguyên liệu trên một suất không hợp lệ');
+        }
+        return { ingredientId: master._id, ingredientName: master.name, quantity: Number(item.quantity), unit: master.unit };
+    });
+};
+
 const createDish = async (req, res) => {
     try {
         const allergens = [...new Set((req.body.allergens || []).map(normalizeAllergen))];
@@ -624,7 +642,8 @@ const createDish = async (req, res) => {
         if (invalidAllergens.length) {
             return res.status(400).json({ message: `Dị nguyên không hợp lệ: ${invalidAllergens.join(', ')}` });
         }
-        const dish = await Dish.create({ ...req.body, allergens: allergens.filter(Boolean) });
+        const ingredients = await validateDishIngredients(req.body.ingredients || []);
+        const dish = await Dish.create({ ...req.body, allergens: allergens.filter(Boolean), ingredients });
         res.status(201).json({ success: true, message: 'Đã thêm món ăn mới', data: dish });
     } catch (err) {
         res.status(400).json({ message: err.message || 'Không thể tạo món ăn' });
@@ -645,11 +664,12 @@ const updateDish = async (req, res) => {
             }
             updates.allergens = allergens;
         }
+        if (updates.ingredients !== undefined) updates.ingredients = await validateDishIngredients(updates.ingredients);
         const dish = await Dish.findByIdAndUpdate(req.params.id, updates, { returnDocument: 'after', runValidators: true });
         if (!dish) return res.status(404).json({ message: 'Không tìm thấy món ăn' });
         res.json({ success: true, message: 'Cập nhật món ăn thành công', data: dish });
     } catch (err) {
-        res.status(400).json({ message: 'Không thể cập nhật món ăn' });
+        res.status(400).json({ message: err.message || 'Không thể cập nhật món ăn' });
     }
 };
 
@@ -1106,29 +1126,48 @@ const getFoodSamples = async (req, res) => {
 
 const createFoodSample = async (req, res) => {
     try {
-        const { sampleCode, mealDate, mealType, dishName, dishCategory, sampleWeightGram, storageTemperature, storageFridge, sensoryEvaluation, notes } = req.body;
-        if (!sampleCode || !mealDate || !dishName || !mealType) {
+        const { sampleCode, mealDate, mealType, dishName, dishCategory, sampleWeightGram, sampleUnit = 'g', storageTemperature, storageFridge, sensoryEvaluation, notes } = req.body || {};
+        if (typeof sampleCode !== 'string' || typeof dishName !== 'string' || !sampleCode.trim() || !dishName.trim() || !mealDate || !mealType) {
             return res.status(400).json({ message: 'Thiếu thông tin lưu mẫu thức ăn' });
         }
+        if (typeof storageFridge !== 'string' || !storageFridge.trim() || storageFridge.trim().length > 100) {
+            return res.status(400).json({ message: 'Cần nhập đúng tên tủ thực tế đang lưu mẫu' });
+        }
+        if (!isValidWorkDate(mealDate) || mealDate !== getWorkDate() || !['breakfast', 'morningSnack', 'lunch', 'afternoonSnack'].includes(mealType)) {
+            return res.status(400).json({ message: 'Chỉ ghi mẫu cho bữa ăn trong ngày hiện tại' });
+        }
+        const amount = Number(sampleWeightGram);
+        const temperature = Number(storageTemperature);
+        if (!['g', 'ml'].includes(sampleUnit) || !Number.isFinite(amount) || amount < (sampleUnit === 'ml' ? 150 : 100)
+            || !Number.isFinite(temperature) || temperature < 2 || temperature > 8) {
+            return res.status(400).json({ message: 'Mẫu đặc tối thiểu 100 g, mẫu lỏng tối thiểu 150 ml; nhiệt độ bảo quản 2–8°C' });
+        }
+        const dishes = await expectedDishes(mealDate);
+        if (!dishes.expected[mealType].some((name) => name.toLocaleLowerCase('vi') === dishName.trim().toLocaleLowerCase('vi'))) {
+            return res.status(409).json({ message: 'Món này không còn trong thực đơn đã công bố của bữa ăn. Hãy tải lại trang bếp.' });
+        }
+        const existing = await FoodSample.exists({ mealDate: { $gte: startOfWorkDate(mealDate), $lt: startOfWorkDate(addWorkDays(mealDate, 1)) }, mealType, dishName: String(dishName).trim() });
+        if (existing) return res.status(409).json({ message: 'Món này đã có mẫu lưu trong bữa hôm nay' });
 
         const sample = await FoodSample.create({
             sampleCode: String(sampleCode).trim().toUpperCase(),
             mealDate: new Date(mealDate),
             mealType,
-            dishName,
+            dishName: dishName.trim(),
             dishCategory: dishCategory || 'Món chính',
-            sampleWeightGram: Number(sampleWeightGram || 100),
-            storageTemperature: Number(storageTemperature || 4),
-            storageFridge: storageFridge || 'Tủ lưu mẫu chuyên dụng 01',
+            sampleWeightGram: amount,
+            sampleUnit,
+            storageTemperature: temperature,
+            storageFridge: storageFridge.trim(),
             storedBy: req.user._id,
             storedByName: req.user.profile?.fullName || req.user.username,
-            sensoryEvaluation: sensoryEvaluation || { color: 'Đạt chuẩn', smell: 'Thơm tự nhiên', taste: 'Bình thường' },
+            sensoryEvaluation: sensoryEvaluation || { color: 'Chưa ghi nhận', smell: 'Chưa ghi nhận', taste: 'Chưa ghi nhận' },
             notes: notes || ''
         });
 
         res.status(201).json({ success: true, message: `Đã lưu mẫu ${dishName} an toàn 24h`, data: sample });
     } catch (err) {
-        res.status(400).json({ message: err.message || 'Lỗi lưu mẫu thức ăn' });
+        res.status(err.code === 11000 ? 409 : 500).json({ message: err.code === 11000 ? 'Mã mẫu vừa được sử dụng. Hãy tải lại trang rồi lưu mẫu.' : 'Không thể lưu mẫu lúc này. Vui lòng thử lại.' });
     }
 };
 
@@ -1138,7 +1177,12 @@ const disposeFoodSample = async (req, res) => {
         const sample = await FoodSample.findById(req.params.id);
         if (!sample) return res.status(404).json({ message: 'Không tìm thấy mẫu lưu' });
 
-        sample.status = status || 'disposed_normal';
+        if (sample.status !== 'stored') return res.status(409).json({ message: 'Mẫu này không còn ở trạng thái đang lưu' });
+        if (status && status !== 'disposed_normal') return res.status(400).json({ message: 'Trạng thái xử lý mẫu không hợp lệ' });
+        if (Date.now() - new Date(sample.storedAt).getTime() < 24 * 60 * 60 * 1000) {
+            return res.status(409).json({ message: 'Chỉ được hủy mẫu sau ít nhất 24 giờ kể từ lúc lưu' });
+        }
+        sample.status = 'disposed_normal';
         sample.disposedAt = new Date();
         sample.disposedBy = req.user._id;
         sample.disposedByName = req.user.profile?.fullName || req.user.username;
@@ -1161,31 +1205,7 @@ const getFoodInspections = async (req, res) => {
 };
 
 const createFoodInspection = async (req, res) => {
-    try {
-        const { mealDate, mealType, step1_rawIngredients, step2_processing, step3_serving, notes } = req.body;
-        if (!mealDate || !mealType) {
-            return res.status(400).json({ message: 'Thiếu ngày và bữa ăn kiểm thực' });
-        }
-
-        const inspection = await FoodInspection.create({
-            mealDate: new Date(mealDate),
-            mealType,
-            step1_rawIngredients: step1_rawIngredients || [],
-            step2_processing: step2_processing || {},
-            step3_serving: step3_serving || {},
-            inspectorId: req.user._id,
-            inspectorName: req.user.profile?.fullName || req.user.username,
-            notes: notes || ''
-        });
-
-        res.status(201).json({
-            success: true,
-            message: 'Đã lưu sổ kiểm thực 3 bước theo chuẩn QĐ 1246/BYT',
-            data: inspection
-        });
-    } catch (err) {
-        res.status(400).json({ message: err.message || 'Lỗi ghi nhận kiểm thực 3 bước' });
-    }
+    res.status(410).json({ message: 'Vui lòng ghi kiểm thực lần lượt từng bước trên trang Bếp hôm nay' });
 };
 
 // ==========================================

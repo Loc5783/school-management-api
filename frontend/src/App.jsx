@@ -10,6 +10,7 @@ import AttendanceAbsenceReport from './pages/AttendanceAbsenceReport';
 import AttendanceLeaveManagement from './pages/AttendanceLeaveManagement';
 import TimekeepingHub from './pages/TimekeepingHub';
 import NutritionManagement from './pages/NutritionManagement';
+import ChefDashboard from './pages/ChefDashboard';
 import StudentList from './pages/StudentList';
 import StudentDetail from './pages/StudentDetail';
 import StudentForm from './pages/StudentForm';
@@ -141,6 +142,7 @@ function App() {
           path="/nutrition"
           element={<ProtectedRoute><NutritionManagement /></ProtectedRoute>}
         />
+        <Route path="/kitchen" element={<RoleRoute roles={['chef', 'admin', 'principal']}><ChefDashboard /></RoleRoute>} />
         <Route path="/students" element={<StudentManagementRoute><StudentList /></StudentManagementRoute>} />
         <Route path="/students/new" element={<StudentManagementRoute><StudentForm /></StudentManagementRoute>} />
         <Route path="/students/:id" element={<StudentManagementRoute><StudentDetail /></StudentManagementRoute>} />

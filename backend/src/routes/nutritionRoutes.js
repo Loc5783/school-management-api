@@ -59,6 +59,9 @@ const {
     createKitchenRequest,
     approveKitchenRequest
 } = require('../controllers/nutritionController');
+const servingOperations = require('../controllers/mealServingController');
+const kitchenSafety = require('../controllers/kitchenSafetyController');
+const kitchenReconciliation = require('../controllers/kitchenReconciliationController');
 
 router.use(auth);
 
@@ -119,9 +122,17 @@ router.put('/food-samples/:id/dispose', roleCheck(['admin', 'principal', 'chef']
 
 router.get('/food-inspections', roleCheck(['admin', 'principal', 'chef']), getFoodInspections);
 router.post('/food-inspections', roleCheck(['admin', 'principal', 'chef']), createFoodInspection);
+router.get('/safety/day', roleCheck(['admin', 'principal', 'chef']), kitchenSafety.getKitchenSafetyDay);
+router.put('/safety/:mealType/steps/:step', roleCheck(['chef']), kitchenSafety.recordKitchenSafetyStep);
 
 // ===== TÀI CHÍNH NHÀ ĂN & ĐỀ XUẤT MUA SẮM =====
 router.get('/servings/daily', roleCheck(['admin', 'principal', 'chef', 'teacher']), getDailyServingPlan);
+router.get('/servings/operations', roleCheck(['admin', 'principal', 'chef', 'teacher']), servingOperations.getMealServings);
+router.get('/servings/reconciliation', roleCheck(['admin', 'principal', 'chef']), kitchenReconciliation.getReconciliation);
+router.post('/servings/reconciliation/close', roleCheck(['chef']), kitchenReconciliation.closeReconciliation);
+router.put('/servings/operations/:classroomId/cooked', roleCheck(['chef']), servingOperations.recordCooked);
+router.put('/servings/operations/:classroomId/delivered', roleCheck(['chef']), servingOperations.recordDelivered);
+router.put('/servings/operations/:classroomId/received', roleCheck(['teacher']), servingOperations.confirmReceived);
 router.get('/financials/daily', roleCheck(['admin', 'principal']), getDailyFinancialReport);
 router.get('/requests', roleCheck(['admin', 'principal', 'accountant', 'chef']), getKitchenRequests);
 router.post('/requests', roleCheck(['admin', 'principal', 'chef']), createKitchenRequest);
