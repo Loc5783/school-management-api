@@ -14,7 +14,7 @@ export default function StudentDetail() {
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
   const role = JSON.parse(localStorage.getItem('user') || '{}').role;
-  const manager = ['admin', 'principal'].includes(role);
+  const manager = role === 'admin';
   const load = useCallback(() => getStudent(id).then((response) => { const data = response.data.data; setStudent(data); setStatus(transitions[data.status]?.[0] || data.status); }).catch((requestError) => setError(requestError.response?.data?.message || 'Không thể tải hồ sơ học sinh.')), [id]);
   useEffect(() => { load(); }, [load]);
   const saveStatus = async () => { try { await changeStudentStatus(id, { status, effectiveDate: new Date().toISOString() }); load(); } catch (requestError) { setError(requestError.response?.data?.message || 'Không thể đổi trạng thái.'); } };
@@ -31,7 +31,7 @@ export default function StudentDetail() {
       {error && <div className="form-error">{error}</div>}
       {!student && !error && <div className="empty-state">Đang tải hồ sơ...</div>}
       {student && <>
-        <div className="student-profile-head"><div className="student-avatar large">{student.fullName.charAt(0)}</div><div><p className="card-kicker">{student.studentCode}</p><h2>{student.fullName}</h2><p>{student.currentClassName || 'Chưa xếp lớp'} · {labels[student.status]}</p></div><div className="student-head-actions"><Link className="button button-secondary" to="/students">Quay lại</Link>{['admin', 'principal', 'teacher'].includes(role) && <Link className="button button-primary" to={`/students/${id}/edit`}>Chỉnh sửa</Link>}</div></div>
+        <div className="student-profile-head"><div className="student-avatar large">{student.fullName.charAt(0)}</div><div><p className="card-kicker">{student.studentCode}</p><h2>{student.fullName}</h2><p>{student.currentClassName || 'Chưa xếp lớp'} · {labels[student.status]}</p></div><div className="student-head-actions"><Link className="button button-secondary" to="/students">Quay lại</Link>{['admin', 'teacher'].includes(role) && <Link className="button button-primary" to={`/students/${id}/edit`}>Chỉnh sửa</Link>}</div></div>
         <div className="student-detail-grid">
           <article className="student-qr-card"><QRCodeImage value={`STUDENT:${student.studentCode}`} size={126} label={`QR học sinh ${student.fullName}`} /><div><h3>QR qua cổng</h3><p>Bảo vệ quét mã này để tìm đúng hồ sơ và ghi nhận học sinh vào trường.</p><small>{student.studentCode}</small></div></article>
           <article><h3>Thông tin tổng quan</h3><dl><dt>Ngày sinh</dt><dd>{new Date(student.birthDate).toLocaleDateString('vi-VN')}</dd><dt>Giới tính</dt><dd>{student.gender === 'female' ? 'Nữ' : 'Nam'}</dd><dt>Ngày nhập học</dt><dd>{student.admissionDate ? new Date(student.admissionDate).toLocaleDateString('vi-VN') : '—'}</dd><dt>Năm học</dt><dd>{student.schoolYear || '—'}</dd><dt>Địa chỉ</dt><dd>{student.address || '—'}</dd></dl></article>

@@ -321,12 +321,13 @@ function ClassroomDietaryAlertPanel({ alerts, blockedAllergens = [] }) {
 export default function NutritionManagement() {
   const [activeTab, setActiveTab] = useState(() => {
     const requested = new URLSearchParams(window.location.search).get('tab');
+    if (getSessionRole() === 'principal') return ['menus', 'menuArchive', 'dailyKitchenReport', 'finance'].includes(requested) ? requested : 'menus';
     return ['menus', 'menuArchive', 'dishes', 'inventory', 'dailyKitchenReport', 'servings'].includes(requested) ? requested : 'menus';
   });
   const sessionRole = getSessionRole();
   const isTeacher = sessionRole === 'teacher';
-  const canManageMenuContent = ['admin', 'principal', 'chef'].includes(sessionRole);
-  const canReconcileInventory = ['admin', 'principal'].includes(getSessionRole());
+  const canManageMenuContent = ['admin', 'chef'].includes(sessionRole);
+  const canReconcileInventory = getSessionRole() === 'admin';
   const canApproveKitchenRequest = ['admin', 'principal', 'accountant'].includes(getSessionRole());
   const canViewFinance = ['admin', 'principal'].includes(getSessionRole());
   const canApproveMenus = ['admin', 'principal'].includes(getSessionRole());
@@ -1061,6 +1062,11 @@ export default function NutritionManagement() {
         {(isTeacher ? [
           { key: 'menus', label: 'Thực Đơn Theo Lớp', icon: 'menu' },
           { key: 'servings', label: 'Xác Nhận Suất Ăn', icon: 'attendance' }
+        ] : sessionRole === 'principal' ? [
+          { key: 'menus', label: 'Duyệt thực đơn', icon: 'menu' },
+          { key: 'menuArchive', label: 'Lưu trữ thực đơn', icon: 'calendar' },
+          { key: 'dailyKitchenReport', label: 'Báo cáo bếp', icon: 'chart' },
+          { key: 'finance', label: 'Tài chính suất ăn', icon: 'money' }
         ] : [
           { key: 'menus', label: 'Thực Đơn Theo Lớp', icon: 'menu' },
           { key: 'menuArchive', label: 'Lưu Trữ Thực Đơn Tuần', icon: 'calendar' },

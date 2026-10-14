@@ -1,0 +1,20 @@
+.accounting-cashbook { display: grid; gap: 20px; }
+.cashbook-toolbar { display: flex; justify-content: space-between; align-items: end; gap: 20px; flex-wrap: wrap; padding: 24px; }
+.cashbook-toolbar h2 { margin: 5px 0; color: #1e3b70; }
+.cashbook-toolbar p:last-child { color: #667b9b; }
+.cashbook-filters { display: flex; align-items: end; gap: 10px; flex-wrap: wrap; }
+.cashbook-filters label { display: grid; gap: 6px; color: #536b91; font-weight: 700; }
+.cashbook-filters input { min-height: 44px; padding: 8px 12px; border: 1px solid #d3e1f5; border-radius: 10px; }
+.cashbook-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.cashbook-totals article { display: grid; gap: 8px; padding: 18px; }
+.cashbook-totals small { color: #7083a2; }
+.cashbook-totals strong { color: #244677; font-size: 21px; }
+.cashbook-status { display: inline-block; padding: 5px 10px; border-radius: 999px; background: #edf3ff; color: #345d9f; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.cashbook-status.matched { background: #e4f7ec; color: #25805a; }
+.cashbook-status.difference, .cashbook-status.needs_review { background: #fff1dd; color: #a65c20; }
+.cashbook-status.stale { background: #ffe8e8; color: #aa4040; }
+.cashbook-modal { max-height: min(90vh, 900px); overflow-y: auto; }
+.cashbook-history { padding: 18px 24px; border-top: 1px solid #e4ecf8; color: #526a91; }
+.cashbook-history p { margin: 8px 0 0; }
+@media (max-width: 720px) { .cashbook-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 480px) { .cashbook-totals { grid-template-columns: 1fr; } }

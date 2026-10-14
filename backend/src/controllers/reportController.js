@@ -187,7 +187,7 @@ const getFinanceReport = async (req, res) => {
         }
 
         // Tất cả hóa đơn trong kỳ
-        const invoices = await TuitionFee.find({ period });
+        const invoices = await TuitionFee.find({ period, status: { $ne: 'cancelled' } });
 
         const totalInvoices = invoices.length;
         const totalAmount = invoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
@@ -200,7 +200,7 @@ const getFinanceReport = async (req, res) => {
 
         // Chi tiết theo lớp
         const byClass = await TuitionFee.aggregate([
-            { $match: { period } },
+            { $match: { period, status: { $ne: 'cancelled' } } },
             {
                 $group: {
                     _id: '$classroomId',

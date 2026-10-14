@@ -30,7 +30,9 @@ beforeEach(async () => {
 });
 
 test('generates payroll from attendance and protects personal notifications', async () => {
-  await AttendanceRecord.create({ userId: teacher._id, employeeName: 'Cô Mai', workDate: new Date('2026-09-01'), workday: 1, status: 'present' });
+  await AttendanceRecord.create({ userId: teacher._id, employeeName: 'Cô Mai', workDate: new Date('2026-09-01'),
+    checkInTime: new Date('2026-09-01T01:00:00Z'), checkOutTime: new Date('2026-09-01T09:00:00Z'),
+    workday: 1, status: 'present', finalized: true });
   const payroll = await request(app).post('/api/hr/payroll/generate').set(header(admin)).send({ month: 9, year: 2026 }).expect(200);
   expect(payroll.body.data.results).toHaveLength(1);
   expect((await Payroll.findOne({ employeeId: employee._id })).actualWorkDays).toBe(1);

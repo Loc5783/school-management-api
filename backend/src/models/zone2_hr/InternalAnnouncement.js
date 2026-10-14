@@ -1,9 +1,11 @@
 const mongoose = require('mongoose');
 
 const schema = new mongoose.Schema({
-  category: { type: String, enum: ['shift', 'meeting', 'general'], required: true },
+  category: { type: String, enum: ['shift', 'meeting', 'general', 'directive'], required: true },
   title: { type: String, trim: true, required: true, maxlength: 160 },
   message: { type: String, trim: true, required: true, maxlength: 2000 },
+  priority: { type: String, enum: ['normal', 'high', 'urgent'], default: 'normal' },
+  targetRoles: [{ type: String, trim: true }],
   eventAt: { type: Date, default: null },
   location: { type: String, trim: true, maxlength: 160, default: '' },
   recipientIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],

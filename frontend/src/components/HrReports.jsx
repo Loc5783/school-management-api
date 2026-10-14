@@ -4,7 +4,7 @@ import Icon from './Icon';
 import { exportHrReport, getHrReports } from '../api/hr';
 import './HrReports.css';
 
-const ROLE_LABELS = { principal: 'Hiệu trưởng / Quản trị', teacher: 'Giáo viên', accountant: 'Kế toán', chef: 'Nhân viên bếp', guard: 'Bảo vệ', hr: 'Nhân sự', unclassified: 'Chưa xác định vai trò' };
+const ROLE_LABELS = { principal: 'Hiệu trưởng', teacher: 'Giáo viên', accountant: 'Kế toán', chef: 'Nhân viên bếp', guard: 'Bảo vệ', hr: 'Nhân sự', unclassified: 'Chưa xác định vai trò' };
 const STATUSES = { active: 'Đang làm việc', on_leave: 'Đang nghỉ phép', resigned: 'Đã nghỉ việc', unlinked: 'Chưa liên kết', inactive: 'Đã khóa', pending: 'Chờ duyệt', approved: 'Đã duyệt', rejected: 'Từ chối', cancelled: 'Đã hủy', draft: 'Nháp', reviewed: 'Đã đối soát', confirmed: 'Đã duyệt lương', paid: 'Đã ghi nhận chi trả' };
 const ACCOUNT_STATUSES = { active: 'Hoạt động', inactive: 'Đã khóa', pending: 'Chờ duyệt', rejected: 'Đã từ chối', unlinked: 'Chưa liên kết' };
 const LEAVE_TYPES = { annual: 'Phép năm', sick: 'Ốm', maternity: 'Thai sản', personal: 'Việc riêng', unpaid: 'Không lương', compensatory: 'Nghỉ bù' };

@@ -252,6 +252,15 @@ a { color: inherit; text-decoration: none; }
 .sidebar { overflow: hidden; }
 .sidebar-nav { min-height: 0; flex: 1 1 auto; margin-bottom: 9px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(222,238,255,.42) transparent; }
 .sidebar-nav::-webkit-scrollbar { width: 5px; }.sidebar-nav::-webkit-scrollbar-thumb { border-radius: 8px; background: rgba(222,238,255,.35); }
+.admin-nav-switch { margin: 0 2px 16px; padding: 13px; border: 1px solid rgba(255,255,255,.2); border-radius: 16px; background: rgba(9,44,123,.26); box-shadow: inset 0 1px 0 rgba(255,255,255,.1); }
+.admin-nav-switch-kicker { display: block; margin-bottom: 9px; color: #b9d8ff; font-size: 10px; font-weight: 800; letter-spacing: 1px; }
+.admin-nav-switch-control { display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 0 11px; border: 1px solid rgba(255,255,255,.25); border-radius: 11px; color: #fff; background: rgba(255,255,255,.12); }
+.admin-nav-switch-control select { width: 100%; min-width: 0; height: 42px; appearance: none; border: 0; outline: 0; color: #fff; background: transparent; font: 750 13px 'Plus Jakarta Sans', sans-serif; cursor: pointer; }
+.admin-nav-switch-control::after { content: '⌄'; flex: none; color: #d4e5ff; font-size: 19px; line-height: 1; pointer-events: none; }
+.admin-nav-switch-control select option { color: #193b77; background: #fff; }
+.admin-nav-switch-control:focus-within { outline: 3px solid rgba(255,224,116,.5); outline-offset: 2px; }
+.admin-nav-switch small { display: block; margin-top: 9px; color: #c3dcff; font-size: 10px; line-height: 1.45; }
+.admin-nav-switch + .nav-label { padding-top: 0; }
 .sidebar-bottom { position: relative; z-index: 2; flex: 0 0 auto; margin-top: 0; padding-bottom: 1px; background: linear-gradient(180deg, transparent, rgba(20,70,163,.12) 28%); }
 .sidebar-bottom .nav-link { margin-top: 0; }
 .sidebar-bottom .account-card { min-height: 53px; cursor: default; }
@@ -1094,3 +1103,28 @@ textarea:focus {
 .salary-unit-warning label { display: flex; align-items: center; gap: 9px; margin-top: 10px; font-weight: 600; }
 .salary-unit-warning input[type="checkbox"] { width: 18px; height: 18px; flex: none; }
 .salary-review-text { color: #a65414 !important; font-weight: 700; }
+.principal-action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  padding: 0 24px 24px;
+}
+
+.principal-action-grid .quick-action {
+  min-width: 0;
+  border: 1px solid #e4eaf7;
+  border-radius: 16px;
+}
+
+.principal-work-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 34px;
+  padding: 0 8px;
+  border-radius: 12px;
+  background: #ecf1ff;
+  color: #355bd5;
+  font-size: 16px;
+}

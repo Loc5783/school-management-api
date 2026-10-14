@@ -54,7 +54,7 @@ router.get('/overtime/me', roleCheck(employeeRoles), overtime.myOvertime);
 router.get('/overtime', roleCheck(['admin', 'principal', 'hr']), overtime.listOvertime);
 router.patch('/overtime/:id/review', roleCheck(['admin', 'principal']), overtime.reviewOvertime);
 router.get('/overtime-rates', roleCheck(['admin', 'principal', 'hr']), overtime.listRates);
-router.put('/overtime-rates/:employeeId', roleCheck(['admin', 'principal', 'hr']), overtime.setRate);
+router.put('/overtime-rates/:employeeId', roleCheck(['admin', 'hr']), overtime.setRate);
 
 router.get('/corrections/pending', roleCheck([...approvalRoles, 'hr']), getPendingCorrectionRequests);
 router.patch('/corrections/:id/approve', roleCheck(approvalRoles), approveCorrectionRequest);

@@ -40,13 +40,18 @@ const LOW_MONTHLY_SALARY = 1000000;
 const salaryInMonth = (form) => Number(form.baseSalary || 0) * (form.salaryUnit === 'daily' ? Number(form.standardWorkDays || 26) : 1);
 const currentMonth = new Date().getMonth() + 1;
 const currentYear = new Date().getFullYear();
+const schoolToday = () => {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+  const value = (type) => parts.find((part) => part.type === type).value;
+  return `${value('year')}-${value('month')}-${value('day')}`;
+};
 const statusText = { draft: 'HR đã lập nháp', reviewed: 'Kế toán đã đối soát', confirmed: 'Hiệu trưởng đã duyệt', paid: 'Đã ghi nhận chi trả' };
 const positionText = {
   principal: 'Hiệu trưởng', vice_principal: 'Phó hiệu trưởng', teacher: 'Giáo viên',
   head_teacher: 'Tổ trưởng chuyên môn', assistant_teacher: 'Trợ giảng',
   accountant: 'Kế toán', chef: 'Nhân viên bếp', hr: 'Nhân sự (HR)', security: 'Bảo vệ'
 };
-const roleText = { admin: 'Hiệu trưởng / Quản trị hệ thống', principal: 'Hiệu trưởng', teacher: 'Giáo viên', accountant: 'Kế toán', chef: 'Nhân viên bếp', guard: 'Bảo vệ', hr: 'Nhân sự (HR)' };
+const roleText = { admin: 'Quản trị hệ thống', principal: 'Hiệu trưởng', teacher: 'Giáo viên', accountant: 'Kế toán', chef: 'Nhân viên bếp', guard: 'Bảo vệ', hr: 'Nhân sự (HR)' };
 const payrollRoleText = { principal: 'Hiệu trưởng', teacher: 'Giáo viên', accountant: 'Kế toán', chef: 'Nhân viên bếp', guard: 'Bảo vệ', hr: 'Nhân sự (HR)' };
 const payrollRoleFromAccountRole = (role) => ({
   admin: 'principal', principal: 'principal', teacher: 'teacher', accountant: 'accountant', chef: 'chef', guard: 'guard', hr: 'hr'
@@ -80,13 +85,32 @@ export default function EmployeeManagement() {
   const [form, setForm] = useState(emptyEmployeeForm);
   const [adjustingPayroll, setAdjustingPayroll] = useState(null);
   const [reopeningPayroll, setReopeningPayroll] = useState(null);
+  const [payingPayroll, setPayingPayroll] = useState(null);
+  const [payForm, setPayForm] = useState({ paymentMethod: 'bank_transfer', paymentReference: '', paidDate: schoolToday() });
+  const [payError, setPayError] = useState('');
+  const [paySaving, setPaySaving] = useState(false);
   const [reopenReason, setReopenReason] = useState('');
   const [reopenError, setReopenError] = useState('');
   const [handoverEmployee, setHandoverEmployee] = useState(null);
   const [adjustmentForm, setAdjustmentForm] = useState({ bonus: 0, advancePayment: 0, otherDeduction: 0, insurance: 0, insuranceBasisNote: '', insuranceConfirmed: false, note: '' });
+  const submitPayrollPayment = async (event) => {
+    event.preventDefault();
+    if (!payingPayroll || paySaving) return;
+    if (!window.confirm(`Xác nhận đã chi ${money(payingPayroll.netSalary)} cho ${payingPayroll.employeeName} ngày ${payForm.paidDate}?`)) return;
+    setPaySaving(true); setPayError('');
+    try {
+      await updatePayrollStatus(payingPayroll._id, { status: 'paid', paymentMethod: payForm.paymentMethod, paymentReference: payForm.paymentReference.trim(), paidDate: payForm.paidDate });
+      setPayingPayroll(null);
+      const loaded = await load();
+      if (loaded) setNotice(`Đã ghi nhận chi lương cho ${payingPayroll.employeeName}.`);
+    } catch (error) { setPayError(error.response?.data?.message || 'Chưa rõ trạng thái phiếu lương. Hãy tải lại bảng lương trước khi ghi nhận lần nữa.'); }
+    finally { setPaySaving(false); }
+  };
   const role = JSON.parse(localStorage.getItem('user') || '{}').role;
   const currentUserId = JSON.parse(localStorage.getItem('user') || '{}')._id;
-  const canManageHr = ['admin', 'principal', 'hr'].includes(role);
+  const canOperateHr = ['admin', 'hr'].includes(role);
+  const canManageHr = canOperateHr;
+  const canReviewHr = canOperateHr || role === 'principal';
   const canApproveTimekeeping = ['admin', 'principal'].includes(role);
   const canGeneratePayroll = ['admin', 'hr'].includes(role);
   const canAdjustPayroll = ['admin', 'accountant'].includes(role);
@@ -98,7 +122,7 @@ export default function EmployeeManagement() {
     try {
       const [employeeRes, correctionRes, payrollRes, staffAccountRes] = await Promise.all([
         getEmployees(),
-        canManageHr ? getPendingCorrections() : Promise.resolve({ data: { data: [] } }),
+        canApproveTimekeeping ? getPendingCorrections() : Promise.resolve({ data: { data: [] } }),
         getPayroll(period),
         canManageHr ? getStaffAccounts() : Promise.resolve({ data: { data: [] } })
       ]);
@@ -108,18 +132,20 @@ export default function EmployeeManagement() {
       setPayrollSummary(payrollRes.data.data?.summary || { totalEmployees: 0, totalNet: 0, byRole: [] });
       setStaffAccounts(staffAccountRes.data.data || []);
       setNotice('');
+      return true;
     } catch (err) {
       setNotice(err.response?.data?.message || 'Không thể tải dữ liệu nhân sự.');
+      return false;
     } finally {
       setLoading(false);
     }
-  }, [canManageHr, period]);
+  }, [canManageHr, canApproveTimekeeping, period]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
-    const allowed = ['employees', 'timekeeping', 'payroll', 'requests', 'audit', ...(canManageHr ? ['staffing', 'leave', 'credentials', 'recruitment', 'development', 'handover', 'internal', 'reports'] : [])];
+    const allowed = ['employees', 'timekeeping', 'payroll', 'requests', 'audit', ...(canManageHr ? ['staffing', 'credentials', 'development', 'handover', 'internal'] : []), ...(canReviewHr ? ['leave', 'recruitment', 'reports'] : [])];
     setTab(allowed.includes(initialTab) ? initialTab : 'employees');
-  }, [initialTab, canManageHr]);
+  }, [initialTab, canManageHr, canReviewHr]);
 
   const changeTab = (nextTab) => {
     setTab(nextTab);
@@ -306,7 +332,7 @@ export default function EmployeeManagement() {
     <AppShell
       title="Nhân sự & Bảng lương"
       subtitle="Quản lý hồ sơ nhân viên, phê duyệt chấm công và tính lương theo vai trò."
-      actions={canManageHr && <button className="button button-primary" onClick={() => openEmployeeForm()}><Icon name="plus" size={15} /> Thêm nhân viên</button>}
+      actions={canOperateHr && <button className="button button-primary" onClick={() => openEmployeeForm()}><Icon name="plus" size={15} /> Thêm nhân viên</button>}
     >
       <section className="hr-workspace">
         {notice && <div className="form-error">{notice}</div>}
@@ -322,13 +348,13 @@ export default function EmployeeManagement() {
             {[
               ['employees', 'Hồ sơ nhân sự', 'users'],
               ...(canManageHr ? [['staffing', 'Phân công công việc', 'classes']] : []),
-              ...(canManageHr ? [['leave', 'Nghỉ phép nhân viên', 'calendar']] : []),
+              ...(canReviewHr ? [['leave', 'Nghỉ phép nhân viên', 'calendar']] : []),
               ...(canManageHr ? [['credentials', 'Năng lực & giấy tờ', 'users']] : []),
-              ...(canManageHr ? [['recruitment', 'Tuyển dụng & tiếp nhận', 'users']] : []),
+              ...(canReviewHr ? [['recruitment', 'Tuyển dụng & tiếp nhận', 'users']] : []),
               ...(canManageHr ? [['development', 'Đào tạo & đánh giá', 'users']] : []),
               ...(canManageHr ? [['handover', 'Bàn giao & nghỉ việc', 'users']] : []),
               ...(canManageHr ? [['internal', 'Thông báo nội bộ', 'calendar']] : []),
-              ...(canManageHr ? [['reports', 'Báo cáo nhân sự', 'chart']] : []),
+              ...(canReviewHr ? [['reports', 'Báo cáo nhân sự', 'chart']] : []),
               ['requests', role === 'accountant' ? 'Phản hồi phiếu lương' : 'Yêu cầu nhân viên', 'card'],
               ['audit', 'Nhật ký & Quyền dữ liệu', 'clock'],
               ['timekeeping', canApproveTimekeeping ? 'Quản lý & duyệt chấm công' : 'Theo dõi chấm công', 'clock'],
@@ -345,32 +371,32 @@ export default function EmployeeManagement() {
           <section className="content-card student-list-card">
             <div className="list-toolbar">
               <div><p className="card-kicker">DANH SÁCH NHÂN SỰ</p><h2>Hồ sơ nhân viên theo vai trò</h2><p>Vai trò là căn cứ phân loại và tổng hợp lương; tổ/bộ phận không tác động đến lương.</p></div>
-              {canManageHr && <button className="button button-primary" onClick={() => openEmployeeForm()}><Icon name="plus" size={15} /> Thêm nhân viên</button>}
+              {canOperateHr && <button className="button button-primary" onClick={() => openEmployeeForm()}><Icon name="plus" size={15} /> Thêm nhân viên</button>}
             </div>
             {loading ? <div className="inline-loader">Đang tải danh sách nhân sự...</div> : (
-              <div className="table-wrap"><table className="data-table"><thead><tr><th>MÃ</th><th>NHÂN VIÊN</th><th>TÀI KHOẢN</th><th>VAI TRÒ TÍNH LƯƠNG</th><th>CHỨC DANH</th><th>TRẠNG THÁI</th>{canManageHr && <th>THAO TÁC</th>}</tr></thead>
-                <tbody>{employees.length ? employees.map((item) => { const effectiveRole = item.userId?.role ? payrollRoleFromAccountRole(item.userId.role) : item.payrollRole; const canResign = canManageHr && item.status !== 'resigned' && String(item.userId?._id || item.userId || '') !== String(currentUserId) && !(role === 'hr' && ['admin', 'principal'].includes(item.userId?.role)); return <tr key={item._id}><td><strong>{item.employeeCode}</strong></td><td><strong>{item.fullName}</strong><small>{item.phone || 'Chưa có số điện thoại'}</small></td><td>{item.userId ? <><strong>@{item.userId.username}</strong><small>{roleText[item.userId.role] || item.userId.role}</small></> : <span className="account-unlinked">Chưa liên kết</span>}</td><td><span className="account-role-badge">{payrollRoleText[effectiveRole] || payrollRoleText.teacher}</span></td><td>{positionText[item.position] || item.position}</td><td><span className={`student-status ${item.status === 'active' ? 'enrolled' : 'temporarily_absent'}`}>{item.status === 'active' ? 'Đang làm việc' : item.status === 'resigned' ? 'Đã nghỉ việc' : 'Đang nghỉ phép'}</span></td>{canManageHr && <td><div className="classroom-actions"><button className="button button-secondary" onClick={() => openProfileHistory(item)}>Hồ sơ / Lịch sử</button>{item.status !== 'resigned' && <button className="button button-secondary department-edit" onClick={() => openEmployeeForm(item)}>Sửa / Gán TK</button>}{canResign && <button className="button button-danger" onClick={() => { setHandoverEmployee(item); changeTab('handover'); }}>Bàn giao / Nghỉ việc</button>}</div></td>}</tr>; }) : <tr><td colSpan={canManageHr ? '7' : '6'} className="history-empty">Chưa có hồ sơ nhân viên.</td></tr>}</tbody>
+              <div className="table-wrap"><table className="data-table"><thead><tr><th>MÃ</th><th>NHÂN VIÊN</th><th>TÀI KHOẢN</th><th>VAI TRÒ TÍNH LƯƠNG</th><th>CHỨC DANH</th><th>TRẠNG THÁI</th>{canOperateHr && <th>THAO TÁC</th>}</tr></thead>
+                <tbody>{employees.length ? employees.map((item) => { const effectiveRole = item.userId?.role ? payrollRoleFromAccountRole(item.userId.role) : item.payrollRole; const canResign = canOperateHr && item.status !== 'resigned' && String(item.userId?._id || item.userId || '') !== String(currentUserId) && !(role === 'hr' && ['admin', 'principal'].includes(item.userId?.role)); return <tr key={item._id}><td><strong>{item.employeeCode}</strong></td><td><strong>{item.fullName}</strong><small>{item.phone || 'Chưa có số điện thoại'}</small></td><td>{item.userId ? <><strong>@{item.userId.username}</strong><small>{roleText[item.userId.role] || item.userId.role}</small></> : <span className="account-unlinked">Chưa liên kết</span>}</td><td><span className="account-role-badge">{payrollRoleText[effectiveRole] || payrollRoleText.teacher}</span></td><td>{positionText[item.position] || item.position}</td><td><span className={`student-status ${item.status === 'active' ? 'enrolled' : 'temporarily_absent'}`}>{item.status === 'active' ? 'Đang làm việc' : item.status === 'resigned' ? 'Đã nghỉ việc' : 'Đang nghỉ phép'}</span></td>{canOperateHr && <td><div className="classroom-actions"><button className="button button-secondary" onClick={() => openProfileHistory(item)}>Hồ sơ / Lịch sử</button>{item.status !== 'resigned' && <button className="button button-secondary department-edit" onClick={() => openEmployeeForm(item)}>Sửa / Gán TK</button>}{canResign && <button className="button button-danger" onClick={() => { setHandoverEmployee(item); changeTab('handover'); }}>Bàn giao / Nghỉ việc</button>}</div></td>}</tr>; }) : <tr><td colSpan={canOperateHr ? '7' : '6'} className="history-empty">Chưa có hồ sơ nhân viên.</td></tr>}</tbody>
               </table></div>
             )}
-            {canManageHr && <section className="staff-account-panel"><div><p className="card-kicker">TÀI KHOẢN NỘI BỘ & BẢNG LƯƠNG</p><h3>{unlinkedAccounts.length ? `${unlinkedAccounts.length} tài khoản chưa có hồ sơ nhân sự` : 'Tất cả tài khoản nội bộ đã được liên kết'}</h3><p>Lương được tổng hợp theo vai trò: Hiệu trưởng, Giáo viên, Kế toán, Bếp, Bảo vệ và Nhân sự. Phụ huynh luôn bị loại trừ.</p>{unlinkedAccounts.length > 0 && <button className="button button-primary staff-sync-button" onClick={synchronizeStaffAccounts}><Icon name="users" size={15} /> Đồng bộ {unlinkedAccounts.length} tài khoản</button>}</div>{unlinkedAccounts.length > 0 && <div className="staff-account-list">{unlinkedAccounts.map((account) => <article key={account._id}><span className="staff-account-avatar">{(account.profile?.fullName || account.username).slice(0, 1).toUpperCase()}</span><div><strong>{account.profile?.fullName || account.username}</strong><small>@{account.username} · {roleText[account.role] || account.role}{account.employeeInfo?.baseSalary > 0 ? ' · Đã có mức lương' : ' · Chưa đặt lương'}</small></div><button className="button button-secondary" onClick={() => openEmployeeForm(null, account)}>Thiết lập riêng</button></article>)}</div>}</section>}
+            {canOperateHr && <section className="staff-account-panel"><div><p className="card-kicker">TÀI KHOẢN NỘI BỘ & BẢNG LƯƠNG</p><h3>{unlinkedAccounts.length ? `${unlinkedAccounts.length} tài khoản chưa có hồ sơ nhân sự` : 'Tất cả tài khoản nội bộ đã được liên kết'}</h3><p>Lương được tổng hợp theo vai trò: Hiệu trưởng, Giáo viên, Kế toán, Bếp, Bảo vệ và Nhân sự. Phụ huynh luôn bị loại trừ.</p>{unlinkedAccounts.length > 0 && <button className="button button-primary staff-sync-button" onClick={synchronizeStaffAccounts}><Icon name="users" size={15} /> Đồng bộ {unlinkedAccounts.length} tài khoản</button>}</div>{unlinkedAccounts.length > 0 && <div className="staff-account-list">{unlinkedAccounts.map((account) => <article key={account._id}><span className="staff-account-avatar">{(account.profile?.fullName || account.username).slice(0, 1).toUpperCase()}</span><div><strong>{account.profile?.fullName || account.username}</strong><small>@{account.username} · {roleText[account.role] || account.role}{account.employeeInfo?.baseSalary > 0 ? ' · Đã có mức lương' : ' · Chưa đặt lương'}</small></div><button className="button button-secondary" onClick={() => openEmployeeForm(null, account)}>Thiết lập riêng</button></article>)}</div>}</section>}
           </section>
         )}
 
         {tab === 'staffing' && canManageHr && <StaffingManagement employees={employees} initialDate={staffingDate} />}
         {tab === 'credentials' && canManageHr && <CredentialManagement />}
-        {tab === 'recruitment' && canManageHr && <RecruitmentManagement employees={employees} onOpenStaffing={() => changeTab('staffing')} />}
+        {tab === 'recruitment' && canReviewHr && <RecruitmentManagement employees={employees} onOpenStaffing={() => changeTab('staffing')} />}
         {tab === 'development' && canManageHr && <StaffDevelopment />}
         {tab === 'handover' && canManageHr && <StaffHandoverManagement preselectedEmployee={handoverEmployee} />}
         {tab === 'internal' && canManageHr && <InternalCommunicationManagement />}
-        {tab === 'reports' && canManageHr && <HrReports />}
+        {tab === 'reports' && canReviewHr && <HrReports />}
         {tab === 'audit' && <HrAuditJournal />}
         {tab === 'requests' && <StaffPersonalRequests mode="manage" />}
-        {tab === 'leave' && canManageHr && <EmployeeLeaveManagement canApprove={canApproveTimekeeping} onOpenStaffing={(date) => { setStaffingDate(date); changeTab('staffing'); }} />}
+        {tab === 'leave' && canReviewHr && <EmployeeLeaveManagement canApprove={canApproveTimekeeping} onOpenStaffing={(date) => { setStaffingDate(date); changeTab('staffing'); }} />}
 
         {tab === 'timekeeping' && (
           <div className="timekeeping-management-container">
             {canManageHr && <DailyTimekeeping />}
-            {canManageHr && <OvertimeManagement employees={employees} canApprove={canApproveTimekeeping} />}
+            {canApproveTimekeeping && <OvertimeManagement employees={employees} canApprove={canApproveTimekeeping} />}
             <section className="content-card student-list-card">
               <div className="card-heading">
                 <div>
@@ -456,6 +482,7 @@ export default function EmployeeManagement() {
               {payrolls.length ? payrolls.map((item) => {
                 const allowanceTotal = (item.allowances?.position || 0) + (item.allowances?.lunch || 0) + (item.allowances?.other || 0);
                 const deductionTotal = (item.deductions?.insurance || 0) + (item.deductions?.advancePayment || 0) + (item.deductions?.other || 0);
+                const ownPayroll = employees.some((employee) => String(employee._id) === String(item.employeeId) && String(employee.userId?._id || employee.userId) === String(currentUserId));
                 const advanceStatus = async (status) => {
                   try {
                     await updatePayrollStatus(item._id, { status });
@@ -473,19 +500,28 @@ export default function EmployeeManagement() {
                   <td><div className="classroom-actions">
                     {canAdjustPayroll && item.status === 'draft' && <button className="button button-secondary" onClick={() => openPayrollAdjustment(item)}>Đối soát khoản tiền</button>}
                     {canReviewPayroll && item.status === 'draft' && <button className="button button-secondary" onClick={() => advanceStatus('reviewed')}>Hoàn tất đối soát</button>}
-                    {canConfirmPayroll && item.status === 'reviewed' && <button className="button button-secondary" onClick={() => advanceStatus('confirmed')}>Duyệt bảng lương</button>}
+                    {canConfirmPayroll && item.status === 'reviewed' && (ownPayroll ? <small>Cần người khác duyệt phiếu của bạn</small> : <button className="button button-secondary" onClick={() => advanceStatus('confirmed')}>Duyệt bảng lương</button>)}
                   </div></td>
                 </tr>;
               }) : <tr><td colSpan="9" className="history-empty">Chưa có bảng lương cho kỳ này.</td></tr>}
             </tbody></table></div>
             <p className="department-form-note">Lương nháp chỉ hiển thị cho bộ phận phụ trách. Khoản bảo hiểm 10,5% hiện là ước tính; phải đối soát mức đóng thực tế và căn cứ trước khi hiệu trưởng xác nhận. Kế toán chỉ ghi nhận đã chi trả sau khi có chứng từ.</p>
-            {payrolls.filter((item) => item.status === 'confirmed' && ['admin', 'accountant'].includes(role)).map((item) => <div className="list-toolbar" key={`pay-${item._id}`}><span>{item.employeeName} · {money(item.netSalary)} · Chờ chi trả</span><button className="button button-secondary" onClick={async () => { const paymentReference = window.prompt(`Số chứng từ hoặc mã giao dịch chi trả cho ${item.employeeName}:`); if (!paymentReference?.trim()) return; try { await updatePayrollStatus(item._id, { status: 'paid', paymentReference: paymentReference.trim() }); await load(); } catch (error) { setNotice(error.response?.data?.message || 'Không ghi nhận được chi trả.'); } }}>Ghi nhận đã chi trả</button></div>)}
+            {payrolls.filter((item) => item.status === 'confirmed' && ['admin', 'accountant'].includes(role)).map((item) => <div className="list-toolbar" key={`pay-${item._id}`}><span>{item.employeeName} · {money(item.netSalary)} · Chờ chi trả</span><button className="button button-secondary" onClick={() => { setPayingPayroll(item); setPayForm({ paymentMethod: 'bank_transfer', paymentReference: '', paidDate: schoolToday() }); setPayError(''); }}>Ghi nhận đã chi trả</button></div>)}
             {payrolls.filter((item) => item.status === 'confirmed' && ['admin', 'principal'].includes(role)).map((item) => <div className="list-toolbar" key={`reopen-${item._id}`}><span>{item.employeeName} · Phiếu đã xác nhận {item.month}/{item.year}</span><button className="button button-secondary" onClick={() => { setReopeningPayroll(item); setReopenReason(''); setReopenError(''); }}>Mở lại để đối soát</button></div>)}
             {payrolls.some((item) => item.overtimeMinutes > 0) && <div className="payroll-self-view" style={{ padding: 20 }}><strong>Chi tiết làm thêm đã duyệt trong kỳ</strong><div className="table-wrap"><table className="data-table"><thead><tr><th>Nhân viên</th><th>Số phút</th><th>Đơn giá/giờ</th><th>Tiền làm thêm</th></tr></thead><tbody>{payrolls.filter((item) => item.overtimeMinutes > 0).map((item) => <tr key={item._id}><td>{item.employeeName}</td><td>{item.overtimeMinutes}</td><td>{money(item.overtimeHourlyAmount)}</td><td>{money(item.overtimePay)}</td></tr>)}</tbody></table></div></div>}
           </section>
         )}
       </section>
 
+      {payingPayroll && <div className="modal-backdrop"><form className="content-card student-form hr-modal payroll-adjustment-modal" onSubmit={submitPayrollPayment}>
+        <div className="card-heading"><div><p className="card-kicker">CHI TRẢ LƯƠNG</p><h2>{payingPayroll.employeeName} · {payingPayroll.month}/{payingPayroll.year}</h2><p>Phiếu đã được hiệu trưởng duyệt. Chỉ ghi nhận sau khi tiền thực sự được chi.</p></div><button type="button" className="button button-secondary" disabled={paySaving} onClick={() => setPayingPayroll(null)}>Đóng</button></div>
+        {payError && <div className="form-error" role="alert">{payError}</div>}
+        <div className="student-form-grid"><div className="form-wide department-form-note">Số tiền chi trả <strong>{money(payingPayroll.netSalary)}</strong></div>
+          <label>Ngày chi trả<input type="date" required max={schoolToday()} value={payForm.paidDate} onChange={(event) => setPayForm({ ...payForm, paidDate: event.target.value })} /></label>
+          <label>Hình thức chi<select value={payForm.paymentMethod} onChange={(event) => setPayForm({ ...payForm, paymentMethod: event.target.value, paymentReference: '' })}><option value="bank_transfer">Chuyển khoản</option><option value="cash">Tiền mặt</option></select></label>
+          <label className="form-wide">{payForm.paymentMethod === 'cash' ? 'Số phiếu chi' : 'Mã giao dịch ngân hàng'}<input required maxLength="120" value={payForm.paymentReference} onChange={(event) => setPayForm({ ...payForm, paymentReference: event.target.value })} placeholder={payForm.paymentMethod === 'cash' ? 'Ví dụ: PC-LUONG-001' : 'Mã trên sao kê'} /></label>
+        </div><div className="form-actions"><button className="button button-primary" disabled={paySaving}>{paySaving ? 'Đang ghi nhận...' : 'Xác nhận đã chi trả'}</button></div>
+      </form></div>}
       {reopeningPayroll && <div className="modal-backdrop"><form className="content-card student-form hr-modal payroll-adjustment-modal" onSubmit={submitReopenPayroll}>
         <div className="card-heading"><div><p className="card-kicker">ĐỐI SOÁT LẠI PHIẾU LƯƠNG</p><h2>{reopeningPayroll.employeeName} · {reopeningPayroll.month}/{reopeningPayroll.year}</h2></div><button type="button" className="button button-secondary" onClick={() => setReopeningPayroll(null)}>Đóng</button></div>
         <p>Phiếu sẽ trở về bản nháp. HR tính lại theo hồ sơ hiện tại, kế toán đối soát và hiệu trưởng duyệt lại. Phiếu đã chi trả không thể mở theo cách này.</p>

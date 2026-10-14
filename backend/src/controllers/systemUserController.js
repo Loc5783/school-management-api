@@ -56,7 +56,7 @@ const serializeInternalAccount = (user, employee = null) => ({
 });
 
 const canAssignStaffRole = (actor, role) => actor?.role === 'admin'
-  || (['principal', 'hr'].includes(actor?.role) && ['teacher', 'accountant', 'chef', 'guard', 'hr'].includes(role));
+  || (actor?.role === 'hr' && ['teacher', 'accountant', 'chef', 'guard', 'hr'].includes(role));
 
 const validateInternalAccount = ({ username, password, profile, role }, actor) => {
   if (typeof username !== 'string' || !usernamePattern.test(username.trim())) return 'Tên đăng nhập chỉ gồm chữ, số, dấu chấm, gạch dưới hoặc gạch ngang (3-50 ký tự)';

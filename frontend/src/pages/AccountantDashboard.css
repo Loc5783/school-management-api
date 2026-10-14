@@ -1,0 +1,39 @@
+.accounting-dashboard { display: grid; gap: 20px; }
+.accounting-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 24px; }
+.accounting-toolbar h2, .accounting-section h2 { margin: 4px 0 8px; color: #1e3b70; }
+.accounting-toolbar p:last-child, .accounting-footnote { margin: 0; color: #667b9b; line-height: 1.5; }
+.accounting-toolbar-actions { display: flex; align-items: end; gap: 10px; flex-wrap: wrap; }
+.accounting-toolbar-actions label { display: grid; gap: 6px; color: #556d92; font-size: 12px; font-weight: 700; }
+.accounting-toolbar-actions input { min-height: 44px; padding: 0 12px; border: 1px solid #d3e1f5; border-radius: 11px; background: #fff; color: #254675; font: inherit; }
+.accounting-loading, .accounting-empty { padding: 24px; color: #7085a2; }
+.accounting-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.accounting-metrics article { display: grid; gap: 8px; padding: 20px; }
+.accounting-metrics small, .accounting-payroll-grid small { color: #7588a4; font-size: 11px; font-weight: 800; letter-spacing: .04em; }
+.accounting-metrics strong { color: #20417b; font-size: clamp(20px, 2vw, 27px); }
+.accounting-metrics span, .accounting-payroll-grid span { color: #6b7f9e; font-size: 12px; }
+.accounting-metrics a { color: #416bdd; font-size: 12px; font-weight: 700; text-decoration: none; }
+.accounting-metric-warning { background: #fff9ee; }
+.accounting-metric-warning strong { color: #a3602a; }
+.accounting-section { overflow: hidden; }
+.accounting-section-heading { display: flex; justify-content: space-between; align-items: center; gap: 15px; padding: 22px 24px; border-bottom: 1px solid #e3ebf8; }
+.accounting-table-wrap { overflow-x: auto; padding: 16px 24px 24px; }
+.accounting-table-wrap table { width: 100%; border-collapse: collapse; min-width: 650px; }
+.accounting-table-wrap th, .accounting-table-wrap td { padding: 13px; border-bottom: 1px solid #e4ecf8; text-align: left; }
+.accounting-table-wrap th { color: #6a7f9f; background: #f5f8fd; font-size: 11px; text-transform: uppercase; }
+.accounting-table-wrap td { color: #2b4773; font-size: 13px; }
+.accounting-table-wrap td:first-child { font-weight: 700; }
+.accounting-payroll-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 20px 24px; }
+.accounting-payroll-grid div { display: grid; gap: 7px; padding: 15px; border: 1px solid #e1eaf7; border-radius: 12px; background: #fbfdff; }
+.accounting-procurement-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 20px 24px; }
+.accounting-procurement-summary div { display: grid; gap: 6px; padding: 15px; border: 1px solid #e1eaf7; border-radius: 12px; background: #fbfdff; }
+.accounting-procurement-summary small, .accounting-procurement-summary span { color: #6a7f9f; font-size: 12px; }
+.accounting-procurement-summary strong { color: #244677; font-size: 25px; }
+.accounting-payroll-grid strong { color: #244677; font-size: 26px; }
+.accounting-footnote { padding: 0 24px 22px; font-size: 12px; }
+.accounting-expense-total { display: grid; gap: 6px; padding: 20px 24px; }
+.accounting-expense-total strong { color: #20417b; font-size: 27px; }
+.accounting-expense-total span { color: #6b7f9e; font-size: 12px; }
+.accounting-error { margin: 0; padding: 14px 17px; border: 1px solid #f2c9c9; border-radius: 12px; color: #a34b4b; background: #fff3f3; }
+.accounting-section .accounting-error { margin: 18px 24px; }
+@media (max-width: 1100px) { .accounting-metrics, .accounting-payroll-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 680px) { .accounting-toolbar, .accounting-section-heading { align-items: stretch; flex-direction: column; }.accounting-metrics, .accounting-payroll-grid, .accounting-procurement-summary { grid-template-columns: 1fr; } }

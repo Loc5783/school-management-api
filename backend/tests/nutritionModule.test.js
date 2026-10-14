@@ -653,13 +653,27 @@ describe('Module Quản lý Nhà ăn & Dinh dưỡng (Nutrition & Kitchen)', () 
     });
 
     describe('4. An toàn thực phẩm: Lưu mẫu 24h & Kiểm thực 3 bước', () => {
+        const prepareCurrentLunch = async () => {
+            const today = getWorkDate();
+            const dayOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][new Date(`${today}T00:00:00Z`).getUTCDay()];
+            const dish = await Dish.create({ name: 'Thịt bò xào rau củ', category: 'main_course' });
+            await StudentAttendance.create({ studentId: studentAllergic._id, studentName: studentAllergic.fullName,
+                classroomId: classroom1._id, className: classroom1.name, attendDate: new Date(today), attendanceDateKey: today,
+                status: 'present', recordedBy: chefUser._id, recordedByName: chefUser.profile.fullName });
+            await Menu.create({ classroomId: classroom1._id, className: classroom1.name, schoolYear: '2025-2026',
+                weekNumber: 1, startDate: new Date(`${today}T00:00:00Z`), endDate: new Date(`${addWorkDays(today, 1)}T00:00:00Z`),
+                days: [{ dayOfWeek, lunch: { mainDishes: [{ dishId: dish._id, dishName: dish.name }] } }], status: 'published' });
+            return { today, dish };
+        };
+
         it('Lưu mẫu thức ăn 24h và ghi nhận hủy an toàn sau 24h', async () => {
+            const { today } = await prepareCurrentLunch();
             const sampleRes = await request(app)
                 .post('/api/nutrition/food-samples')
                 .set(authHeader(chefUser))
                 .send({
-                    sampleCode: 'MAU-20260905-LUNCH-01',
-                    mealDate: '2026-09-05',
+                    sampleCode: `MAU-${today.replaceAll('-', '')}-LUNCH-01`,
+                    mealDate: today,
                     mealType: 'lunch',
                     dishName: 'Thịt bò xào rau củ',
                     sampleWeightGram: 120,
@@ -668,10 +682,13 @@ describe('Module Quản lý Nhà ăn & Dinh dưỡng (Nutrition & Kitchen)', () 
                 });
 
             expect(sampleRes.status).toBe(201);
-            expect(sampleRes.body.data.sampleCode).toBe('MAU-20260905-LUNCH-01');
+            expect(sampleRes.body.data.sampleCode).toBe(`MAU-${today.replaceAll('-', '')}-LUNCH-01`);
             expect(sampleRes.body.data.status).toBe('stored');
 
-            // Hủy mẫu an toàn
+            await request(app).put(`/api/nutrition/food-samples/${sampleRes.body.data._id}/dispose`)
+                .set(authHeader(chefUser)).send({ status: 'disposed_normal' }).expect(409);
+            await FoodSample.updateOne({ _id: sampleRes.body.data._id }, { $set: { storedAt: new Date(Date.now() - 25 * 60 * 60 * 1000) } });
+            // Mô phỏng mẫu đã lưu quá 24 giờ để kiểm tra quyền hủy.
             const disposeRes = await request(app)
                 .put(`/api/nutrition/food-samples/${sampleRes.body.data._id}/dispose`)
                 .set(authHeader(chefUser))
@@ -684,32 +701,21 @@ describe('Module Quản lý Nhà ăn & Dinh dưỡng (Nutrition & Kitchen)', () 
             expect(disposeRes.body.data.status).toBe('disposed_normal');
         });
 
-        it('Ghi nhận sổ kiểm thực 3 bước theo QĐ 1246/QĐ-BYT', async () => {
-            const inspectRes = await request(app)
+        it('Ghi nhận kiểm thực tuần tự và chặn API cũ', async () => {
+            const { today, dish } = await prepareCurrentLunch();
+            await request(app)
                 .post('/api/nutrition/food-inspections')
                 .set(authHeader(chefUser))
-                .send({
-                    mealDate: '2026-09-05',
-                    mealType: 'lunch',
-                    step1_rawIngredients: [{
-                        ingredientName: 'Thịt bò tươi',
-                        quantity: 10,
-                        unit: 'kg',
-                        decision: 'accept'
-                    }],
-                    step2_processing: {
-                        kitchenHygiene: 'Sạch sẽ',
-                        staffHygiene: 'Bảo hộ đầy đủ',
-                        cookingTemperaturePassed: true
-                    },
-                    step3_serving: {
-                        foodSampleStored: true,
-                        decision: 'approved_for_eating'
-                    }
-                });
-
-            expect(inspectRes.status).toBe(201);
-            expect(inspectRes.body.data.step3_serving.decision).toBe('approved_for_eating');
+                .send({ mealDate: today, mealType: 'lunch' }).expect(410);
+            await FoodSample.create({ sampleCode: `MAU-${today.replaceAll('-', '')}-LUNCH-02`, mealDate: new Date(today),
+                mealType: 'lunch', dishName: dish.name, sampleWeightGram: 120, storageTemperature: 4,
+                storedBy: chefUser._id, storedByName: chefUser.profile.fullName });
+            const base = `/api/nutrition/safety/lunch/steps/`;
+            const step = (number, checks) => request(app).put(`${base}${number}`).set(authHeader(chefUser)).send({ date: today, checks });
+            await step(1, { sourceVerified: true, packagingPassed: true, sensoryPassed: true }).expect(200);
+            await step(2, { kitchenHygiene: true, equipmentHygiene: true, staffHygiene: true, rawCookedSeparated: true, cookingVerified: true }).expect(200);
+            const inspectRes = await step(3, { sensoryPassed: true, utensilsHygiene: true }).expect(200);
+            expect(inspectRes.body.data.stage).toBe('ready');
         });
     });
 

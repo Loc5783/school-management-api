@@ -365,14 +365,19 @@ describe('parent student data scope', () => {
             .expect(403);
     });
 
-    test('scopes teacher updates and ignores student fields outside the allowlist', async () => {
-        const response = await request(app)
+    test('scopes teacher updates and rejects sensitive student fields', async () => {
+        await request(app)
             .put(`/api/students/${studentA._id}`)
             .set(authHeader(teacher))
             .send({ fullName: 'Bé An đã cập nhật' })
+            .expect(403);
+        const response = await request(app)
+            .put(`/api/students/${studentA._id}`)
+            .set(authHeader(teacher))
+            .send({ notes: 'Lưu ý chăm sóc tại lớp' })
             .expect(200);
 
-        expect(response.body.data.fullName).toBe('Bé An đã cập nhật');
+        expect(response.body.data.notes).toBe('Lưu ý chăm sóc tại lớp');
         expect(response.body.data.status).toBe('enrolled');
 
         await request(app)

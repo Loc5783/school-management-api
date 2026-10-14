@@ -11,10 +11,20 @@ export default function Dashboard() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [principalWork, setPrincipalWork] = useState(null);
+  const [principalWorkError, setPrincipalWorkError] = useState('');
   const [attendancePage, setAttendancePage] = useState(1);
   const navigate = useNavigate();
   const role = JSON.parse(localStorage.getItem('user') || '{}').role;
   const isTeacher = role === 'teacher';
+  const isPrincipal = role === 'principal';
+
+  useEffect(() => {
+    if (!isPrincipal) return;
+    api.get('/reports/principal-work')
+      .then((response) => setPrincipalWork(response.data.data))
+      .catch(() => setPrincipalWorkError('Không tải được số việc chờ xử lý. Vui lòng tải lại trang.'));
+  }, [isPrincipal]);
 
   useEffect(() => {
     const fetchDashboard = async () => {
@@ -40,6 +50,15 @@ export default function Dashboard() {
 
   const summary = data?.summary || {};
   const staffing = data?.staffing;
+  const principalWorkItems = [
+    { key: 'payroll', label: 'Bảng lương kỳ này', detail: 'Đã đối soát, chờ duyệt', to: '/hr?tab=payroll', icon: 'money', tone: 'blue' },
+    { key: 'leave', label: 'Đơn nghỉ nhân sự', detail: 'Chờ người phụ trách xử lý', to: '/hr?tab=leave', icon: 'calendar', tone: 'orange' },
+    { key: 'recruitment', label: 'Ứng viên được đề xuất', detail: 'Chờ quyết định tiếp nhận', to: '/hr?tab=recruitment', icon: 'users', tone: 'violet' },
+    { key: 'refunds', label: 'Yêu cầu hoàn học phí', detail: 'Chờ duyệt hoàn tiền', to: '/finance?tab=refunds', icon: 'money', tone: 'green' },
+    { key: 'operatingExpenses', label: 'Đề nghị chi vận hành', detail: 'Chờ duyệt trước khi chi', to: '/accounting/operating-expenses', icon: 'money', tone: 'orange' },
+    { key: 'profileChanges', label: 'Cập nhật hồ sơ học sinh', detail: 'Thay đổi nhạy cảm chờ duyệt', to: '/student-profile-change-requests', icon: 'card', tone: 'blue' },
+    { key: 'parentFeedback', label: 'Ý kiến phụ huynh', detail: 'Chờ tiếp nhận', to: '/parent-feedback', icon: 'chat', tone: 'violet' },
+  ];
   const cards = isTeacher ? [
     { label: 'Học sinh lớp tôi', value: summary.totalStudents || 0, note: 'Đang theo học', icon: 'students', tone: 'blue', to: '/students', detailLabel: 'Xem học sinh được phân công' },
     { label: 'Lớp được phân công', value: summary.totalClassrooms || 0, note: 'Đang hoạt động', icon: 'classes', tone: 'orange', to: '/attendance', detailLabel: 'Điểm danh lớp được phân công' },
@@ -73,8 +92,9 @@ export default function Dashboard() {
   const todayText = new Intl.DateTimeFormat('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date());
 
   return (
-    <AppShell title="Tổng quan" subtitle={`Chào buổi sáng! Hôm nay là ${todayText}.`} actions={<Link className="button button-primary" to="/attendance"><Icon name="attendance" size={18} />Điểm danh hôm nay</Link>}>
+    <AppShell title={isPrincipal ? 'Tổng quan hiệu trưởng' : 'Tổng quan'} subtitle={`Hôm nay là ${todayText}.`} actions={<Link className="button button-primary" to={isPrincipal ? '/reports' : '/attendance'}><Icon name={isPrincipal ? 'chart' : 'attendance'} size={18} />{isPrincipal ? 'Xem báo cáo trường' : 'Điểm danh hôm nay'}</Link>}>
       {error && <div className="notice notice-warning"><span>!</span>{error}</div>}
+      {isPrincipal && <section className="content-card" aria-label="Công việc cần hiệu trưởng xem xét"><div className="card-heading"><div><p className="card-kicker">ĐIỀU HÀNH NHÀ TRƯỜNG</p><h2>Việc cần xem xét</h2><p>Số lượng đang chờ xử lý trên toàn trường. Chọn một mục để mở đúng quy trình.</p></div></div>{principalWorkError && <div className="notice notice-warning" role="alert">{principalWorkError}</div>}<div className="principal-action-grid">{principalWorkItems.map((item) => <Link className="quick-action" to={item.to} key={item.key}><span className={`quick-icon ${item.tone}`}><Icon name={item.icon} /></span><span><strong>{item.label}</strong><small>{item.detail}</small></span><b className="principal-work-count" aria-label={`${principalWork?.[item.key] ?? 'Đang tải'} việc`}>{principalWork ? principalWork[item.key] : '—'}</b><Icon name="chevronRight" size={18} /></Link>)}</div></section>}
       <section className="stat-grid" aria-label="Chỉ số tổng quan">
         {cards.map((card) => <Link className="stat-card stat-card-link" to={card.to} key={card.label} aria-label={card.detailLabel}><div className={`stat-icon ${card.tone}`}><Icon name={card.icon} size={23} /></div><div><p>{card.label}</p><strong>{card.value}</strong><small>{card.note}</small><span className="stat-card-link-hint">{card.detailLabel}<Icon name="chevronRight" size={14} /></span></div></Link>)}
       </section>

@@ -4,6 +4,7 @@ import Register from './pages/Register';
 import ParentAccountManagement from './pages/ParentAccountManagement';
 import AccountManagement from './pages/AccountManagement';
 import Dashboard from './pages/Dashboard';
+import PrincipalOverview from './pages/PrincipalOverview';
 import AttendanceClassList from './pages/AttendanceClassList';
 import AttendanceDetail from './pages/AttendanceDetail';
 import AttendanceAbsenceReport from './pages/AttendanceAbsenceReport';
@@ -11,6 +12,11 @@ import AttendanceLeaveManagement from './pages/AttendanceLeaveManagement';
 import TimekeepingHub from './pages/TimekeepingHub';
 import NutritionManagement from './pages/NutritionManagement';
 import ChefDashboard from './pages/ChefDashboard';
+import AccountantDashboard from './pages/AccountantDashboard';
+import AccountingExpenses from './pages/AccountingExpenses';
+import OperatingExpenses from './pages/OperatingExpenses';
+import AccountingCashbook from './pages/AccountingCashbook';
+import AccountingReport from './pages/AccountingReport';
 import StudentList from './pages/StudentList';
 import StudentDetail from './pages/StudentDetail';
 import StudentForm from './pages/StudentForm';
@@ -96,8 +102,9 @@ function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
-        <Route path="/parent-accounts" element={<RoleRoute roles={['admin', 'principal']}><ParentAccountManagement /></RoleRoute>} />
-        <Route path="/accounts" element={<RoleRoute roles={['admin', 'principal', 'hr']}><AccountManagement /></RoleRoute>} />
+        <Route path="/parent-accounts" element={<RoleRoute roles={['admin']}><ParentAccountManagement /></RoleRoute>} />
+        <Route path="/accounts" element={<RoleRoute roles={['admin', 'hr']}><AccountManagement /></RoleRoute>} />
+        <Route path="/principal" element={<RoleRoute roles={['admin', 'principal']}><PrincipalOverview /></RoleRoute>} />
         <Route
           path="/dashboard"
           element={<ProtectedRoute><Dashboard /></ProtectedRoute>}
@@ -108,7 +115,7 @@ function App() {
         />
         <Route
           path="/attendance/class/:classroomId"
-          element={<ProtectedRoute><AttendanceDetail /></ProtectedRoute>}
+          element={<RoleRoute roles={['admin', 'teacher']}><AttendanceDetail /></RoleRoute>}
         />
         <Route
           path="/attendance/reports"
@@ -142,11 +149,16 @@ function App() {
           path="/nutrition"
           element={<ProtectedRoute><NutritionManagement /></ProtectedRoute>}
         />
-        <Route path="/kitchen" element={<RoleRoute roles={['chef', 'admin', 'principal']}><ChefDashboard /></RoleRoute>} />
+        <Route path="/kitchen" element={<RoleRoute roles={['chef', 'admin']}><ChefDashboard /></RoleRoute>} />
+        <Route path="/accounting" element={<RoleRoute roles={['accountant']}><AccountantDashboard /></RoleRoute>} />
+        <Route path="/accounting/expenses" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><AccountingExpenses /></RoleRoute>} />
+        <Route path="/accounting/operating-expenses" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><OperatingExpenses /></RoleRoute>} />
+        <Route path="/accounting/cashbook" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><AccountingCashbook /></RoleRoute>} />
+        <Route path="/accounting/report" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><AccountingReport /></RoleRoute>} />
         <Route path="/students" element={<StudentManagementRoute><StudentList /></StudentManagementRoute>} />
-        <Route path="/students/new" element={<StudentManagementRoute><StudentForm /></StudentManagementRoute>} />
+        <Route path="/students/new" element={<RoleRoute roles={['admin', 'teacher']}><StudentForm /></RoleRoute>} />
         <Route path="/students/:id" element={<StudentManagementRoute><StudentDetail /></StudentManagementRoute>} />
-        <Route path="/students/:id/edit" element={<StudentManagementRoute><StudentForm /></StudentManagementRoute>} />
+        <Route path="/students/:id/edit" element={<RoleRoute roles={['admin', 'teacher']}><StudentForm /></RoleRoute>} />
         <Route path="/classrooms" element={<ClassroomRoute><ClassroomManagement /></ClassroomRoute>} />
         <Route path="/finance" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><FinanceManagement /></RoleRoute>} />
         <Route path="/reports" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><Reports /></RoleRoute>} />
@@ -157,7 +169,7 @@ function App() {
         <Route path="/parent-settings" element={<ParentRoute><ParentSettings /></ParentRoute>} />
         <Route path="/parent-care" element={<ParentRoute><ParentCare /></ParentRoute>} />
         <Route path="/pickups" element={<PickupRoute><PickupManagement /></PickupRoute>} />
-        <Route path="/guard" element={<RoleRoute roles={['guard', 'admin', 'principal']}><GuardOperations /></RoleRoute>} />
+        <Route path="/guard" element={<RoleRoute roles={['guard', 'admin']}><GuardOperations /></RoleRoute>} />
         <Route path="/student-profile-change-requests" element={<RoleRoute roles={['admin', 'principal']}><StudentProfileChangeRequests /></RoleRoute>} />
         <Route path="/parent-feedback" element={<RoleRoute roles={['admin', 'principal']}><ParentFeedbackManagement /></RoleRoute>} />
         <Route path="/messages" element={<ChatRoute><Messages /></ChatRoute>} />

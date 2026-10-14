@@ -21,6 +21,13 @@ const SecurityIncidentSchema = new mongoose.Schema({
   nextReminderAt: { type: Date, default: null },
   reminderCount: { type: Number, min: 0, default: 0 },
   resolutionNote: { type: String, trim: true, maxlength: 1000, default: '' },
+  managementNotes: [{
+    authorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    authorName: { type: String, required: true, trim: true },
+    authorRole: { type: String, required: true, trim: true },
+    note: { type: String, required: true, trim: true, maxlength: 1000 },
+    createdAt: { type: Date, default: Date.now }
+  }],
   clientEventId: { type: String, trim: true, maxlength: 100 }
 }, { timestamps: true });
 

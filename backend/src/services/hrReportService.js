@@ -7,7 +7,7 @@ const AuditLog = require('../models/zone1_system/AuditLog');
 const { getStaffingSnapshot } = require('./staffingService');
 const { getWorkDate, startOfWorkDate, addWorkDays, isValidWorkDate } = require('../utils/dateHelpers');
 
-const ROLE_LABELS = { principal: 'Hiệu trưởng / Quản trị', teacher: 'Giáo viên', accountant: 'Kế toán', chef: 'Nhân viên bếp', guard: 'Bảo vệ', hr: 'Nhân sự', unclassified: 'Chưa xác định vai trò' };
+const ROLE_LABELS = { principal: 'Hiệu trưởng', teacher: 'Giáo viên', accountant: 'Kế toán', chef: 'Nhân viên bếp', guard: 'Bảo vệ', hr: 'Nhân sự', unclassified: 'Chưa xác định vai trò' };
 const SECTIONS = ['people', 'movements', 'staffing', 'leave', 'overtime', 'payroll'];
 const problem = (message) => Object.assign(new Error(message), { statusCode: 422 });
 const roleOf = (employee) => {

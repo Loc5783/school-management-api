@@ -97,6 +97,7 @@ const PayrollSchema = new mongoose.Schema({
     reviewedAt: Date,
     reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     paidBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    paymentMethod: { type: String, enum: ['cash', 'bank_transfer'] },
     paymentReference: { type: String, trim: true, maxlength: 120, default: '' },
     note: {
         type: String,

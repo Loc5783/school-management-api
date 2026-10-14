@@ -15,6 +15,7 @@ const { datesBetween, scheduledLeaveDates, leaveDatesInYear } = require('../serv
 const { getWorkDate, isValidWorkDate, startOfWorkDate } = require('../utils/dateHelpers');
 const { getStaffingSnapshot } = require('../services/staffingService');
 const { REVIEW_MONTHLY_SALARY_BELOW, isUnverifiedLowMonthlySalary } = require('../services/salaryPolicy');
+const { lockOpenPeriod } = require('../services/accountingPeriodService');
 
 // `admin` is retained as the legacy system-owner role and is treated as the principal
 // for HR purposes. Parent accounts must never enter the employee/payroll workflow.
@@ -674,6 +675,7 @@ const generateMonthlyPayroll = async (req, res) => {
 
                 if (existing) {
                     await runHrTransaction(async (session) => {
+                      await lockOpenPeriod(`${year}-${String(month).padStart(2, '0')}`, session);
                       const saved = await Payroll.findOneAndUpdate({ _id: existing._id, status: 'draft', updatedAt: existing.updatedAt }, { $set: payrollData }, { new: true, runValidators: true, session });
                       if (!saved) throw httpError('Bảng lương vừa thay đổi. Hãy tải lại.', 409);
                       await PayrollEvent.create([{ payrollId: saved._id, actorId: req.user._id, action: 'generated', before: existing.toObject ? existing.toObject() : existing, after: saved.toObject(), reason: 'Tính lại bảng lương nháp' }], { session });
@@ -681,6 +683,7 @@ const generateMonthlyPayroll = async (req, res) => {
                     results.push({ employee: employee.fullName, action: 'updated', netSalary });
                 } else {
                     await runHrTransaction(async (session) => {
+                      await lockOpenPeriod(`${year}-${String(month).padStart(2, '0')}`, session);
                       const [created] = await Payroll.create([payrollData], { session });
                       await PayrollEvent.create([{ payrollId: created._id, actorId: req.user._id, action: 'generated', after: created.toObject(), reason: 'Lập bảng lương nháp' }], { session });
                     });
@@ -801,6 +804,8 @@ const updatePayrollStatus = async (req, res) => {
         }
         if (status === 'confirmed') {
             if (!['admin', 'principal'].includes(req.user.role) || payroll.status !== 'reviewed') return res.status(403).json({ message: 'Hiệu trưởng chỉ xác nhận bảng lương đã được kế toán đối soát' });
+            const payrollEmployee = await Employee.findById(payroll.employeeId).select('userId');
+            if (payrollEmployee?.userId && String(payrollEmployee.userId) === String(req.user._id)) return res.status(403).json({ message: 'Không được tự duyệt phiếu lương của mình. Cần người có quyền duyệt khác xử lý.' });
             const periodPrefix = `${payroll.year}-${String(payroll.month).padStart(2, '0')}-`;
             const approved = await OvertimeRequest.find({ employeeId: payroll.employeeId, status: 'approved', workDate: { $regex: `^${periodPrefix}` } }).lean();
             const minutes = approved.reduce((sum, request) => sum + request.approvedMinutes, 0);
@@ -813,14 +818,21 @@ const updatePayrollStatus = async (req, res) => {
         const paymentReference = String(req.body.paymentReference || '').trim();
         if (status === 'paid' && !paymentReference) return res.status(422).json({ message: 'Cần nhập số chứng từ hoặc mã giao dịch trước khi ghi nhận chi trả.' });
         if (status === 'paid' && paymentReference.length > 120) return res.status(422).json({ message: 'Số chứng từ tối đa 120 ký tự.' });
+        const paymentMethod = String(req.body.paymentMethod || '');
+        const paidDate = String(req.body.paidDate || '');
+        if (status === 'paid' && !['cash', 'bank_transfer'].includes(paymentMethod)) return res.status(422).json({ message: 'Chọn hình thức chi trả lương.' });
+        if (status === 'paid' && (!isValidWorkDate(paidDate) || paidDate > getWorkDate())) return res.status(422).json({ message: 'Ngày chi trả không hợp lệ hoặc ở tương lai.' });
 
         const before = { status: payroll.status };
         const fields = status === 'reviewed'
             ? { status, reviewedAt: new Date(), reviewedBy: req.user._id }
             : status === 'confirmed'
                 ? { status, confirmedAt: new Date(), confirmedBy: req.user._id }
-                : { status, paidAt: new Date(), paidBy: req.user._id, paymentReference };
+                : { status, paidAt: new Date(`${paidDate}T12:00:00+07:00`), paidBy: req.user._id, paymentMethod, paymentReference };
         const updated = await runHrTransaction(async (session) => {
+          const months = [`${payroll.year}-${String(payroll.month).padStart(2, '0')}`];
+          if (status === 'paid') months.push(paidDate.slice(0, 7));
+          for (const month of [...new Set(months)].sort()) await lockOpenPeriod(month, session);
           const saved = await Payroll.findOneAndUpdate({ _id: payroll._id, status: payroll.status, updatedAt: payroll.updatedAt }, { $set: fields }, { new: true, session });
           if (!saved) throw httpError('Trạng thái bảng lương vừa thay đổi. Hãy tải lại trang.', 409);
           await PayrollEvent.create([{ payrollId: payroll._id, actorId: req.user._id, action: status, before, after: fields }], { session });
@@ -828,7 +840,7 @@ const updatePayrollStatus = async (req, res) => {
         });
         res.json({ message: 'Cập nhật trạng thái bảng lương thành công', data: updated });
     } catch (error) {
-        res.status(500).json({ message: 'Lỗi máy chủ', error: error.message });
+        res.status(error.statusCode || 500).json({ message: error.statusCode ? error.message : 'Không thể cập nhật trạng thái bảng lương' });
     }
 };
 
@@ -838,6 +850,8 @@ const reopenConfirmedPayroll = async (req, res) => {
         const reason = String(req.body?.reason || '').trim();
         if (reason.length < 10 || reason.length > 500) return res.status(422).json({ message: 'Cần ghi lý do mở lại phiếu từ 10 đến 500 ký tự.' });
         const payroll = await runHrTransaction(async (session) => {
+            const periodPayroll = await Payroll.findById(req.params.id).select('month year').session(session);
+            if (periodPayroll) await lockOpenPeriod(`${periodPayroll.year}-${String(periodPayroll.month).padStart(2, '0')}`, session);
             const current = await Payroll.findOne({ _id: req.params.id, status: 'confirmed' }).session(session);
             if (!current) throw httpError('Chỉ mở lại được phiếu đã xác nhận nhưng chưa chi trả.', 409);
             const result = await Payroll.findOneAndUpdate({ _id: current._id, status: 'confirmed', updatedAt: current.updatedAt }, {
@@ -894,6 +908,7 @@ const updatePayrollAdjustment = async (req, res) => {
         payroll.netSalary = Math.max(0, payroll.grossSalary - deductionTotal);
 
         const updated = await runHrTransaction(async (session) => {
+          await lockOpenPeriod(`${payroll.year}-${String(payroll.month).padStart(2, '0')}`, session);
           const fields = Object.fromEntries(['allowances', 'deductions', 'insuranceConfirmed', 'insuranceBasisNote', 'note', 'grossSalary', 'netSalary', 'deductionShortfall'].map((key) => [key, payroll.toObject()[key]]));
           const saved = await Payroll.findOneAndUpdate({ _id: payroll._id, status: 'draft', updatedAt: payroll.updatedAt }, { $set: fields }, { new: true, runValidators: true, session });
           if (!saved) throw httpError('Bảng lương vừa thay đổi. Hãy tải lại.', 409);

@@ -64,6 +64,7 @@ const PurchaseOrderSchema = new mongoose.Schema({
         required: true,
         min: 0
     },
+    paidAmount: { type: Number, default: 0, min: 0 },
     status: {
         type: String,
         enum: ['pending', 'ordered', 'delivered', 'cancelled'],

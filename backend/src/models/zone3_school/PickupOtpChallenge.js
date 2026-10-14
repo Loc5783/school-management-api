@@ -16,7 +16,7 @@ const PickupOtpChallengeSchema = new mongoose.Schema({
     vehiclePlate: { type: String, trim: true, uppercase: true, maxlength: 20, default: '' }
   },
   codeHash: { type: String, required: true, select: false },
-  expiresAt: { type: Date, required: true, index: true },
+  expiresAt: { type: Date, required: true },
   attempts: { type: Number, min: 0, default: 0 },
   status: { type: String, enum: ['pending', 'verified', 'expired', 'cancelled'], default: 'pending', index: true },
   requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },

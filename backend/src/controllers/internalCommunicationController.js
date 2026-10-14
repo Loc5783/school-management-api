@@ -38,7 +38,14 @@ const overview = handle(async (req, res) => {
     timesheetPagination: { page: timesheetPage, total: timesheetCount, totalPages: Math.max(1, Math.ceil(timesheetCount / 10)) } } });
 });
 const sendAnnouncement = handle(async (req, res) => {
-  if (!['shift', 'meeting', 'general'].includes(req.body.category)) throw fail('Loại thông báo không hợp lệ');
+  if (!['shift', 'meeting', 'general', 'directive'].includes(req.body.category)) throw fail('Loại thông báo không hợp lệ');
+  if (req.body.category === 'directive' && !['admin', 'principal'].includes(req.user.role)) {
+    throw fail('Chỉ hiệu trưởng hoặc quản trị viên mới được gửi thông báo chỉ đạo', 403);
+  }
+  const priority = ['normal', 'high', 'urgent'].includes(req.body.priority) ? req.body.priority : 'normal';
+  if (['high', 'urgent'].includes(priority) && !['admin', 'principal'].includes(req.user.role)) {
+    throw fail('Chỉ hiệu trưởng hoặc quản trị viên mới được gửi thông báo mức độ khẩn cấp/cao', 403);
+  }
   const title = text(req.body.title, 160, 'Tiêu đề', true);
   const message = text(req.body.message, 2000, 'Nội dung', true);
   const requestId = text(req.body.requestId, 100, 'Mã lần gửi', true);
@@ -55,9 +62,9 @@ const sendAnnouncement = handle(async (req, res) => {
     const selected = employees.filter((employee) => employee.userId?.status === 'active' && (employeeIds.includes(String(employee._id)) || roles.includes(employee.userId.role)));
     if (!selected.length || selected.length > 1000 || employeeIds.some((id) => !selected.some((employee) => String(employee._id) === id))) throw fail('Danh sách người nhận không hợp lệ hoặc vượt 1.000 người');
     const recipientIds = [...new Set(selected.map((employee) => String(employee.userId._id)))];
-    const [announcement] = await Announcement.create([{ category: req.body.category, title, message, eventAt, location, recipientIds, requestId, createdBy: req.user._id }], { session });
-    await Notification.insertMany(recipientIds.map((recipientId) => ({ recipientId, title, message: `${message}${eventAt ? ` · ${eventAt.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour12: false })}` : ''}${location ? ` · ${location}` : ''}`, type: 'info', link: '/internal-notices', createdBy: req.user._id, metadata: { announcementId: announcement._id, category: announcement.category } })), { session });
-    await audit(req.user, 'INTERNAL_ANNOUNCEMENT_SENT', 'InternalAnnouncement', announcement._id, {}, { category: announcement.category, recipientCount: recipientIds.length, eventAt }, session);
+    const [announcement] = await Announcement.create([{ category: req.body.category, title, message, priority, targetRoles: roles, eventAt, location, recipientIds, requestId, createdBy: req.user._id }], { session });
+    await Notification.insertMany(recipientIds.map((recipientId) => ({ recipientId, title: `${priority === 'urgent' ? '[KHẨN] ' : priority === 'high' ? '[QUAN TRỌNG] ' : ''}${title}`, message: `${message}${eventAt ? ` · ${eventAt.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour12: false })}` : ''}${location ? ` · ${location}` : ''}`, type: priority === 'urgent' ? 'warning' : 'info', link: '/internal-notices', createdBy: req.user._id, metadata: { announcementId: announcement._id, category: announcement.category, priority } })), { session });
+    await audit(req.user, 'INTERNAL_ANNOUNCEMENT_SENT', 'InternalAnnouncement', announcement._id, {}, { category: announcement.category, priority, recipientCount: recipientIds.length, eventAt }, session);
     return { announcement, recipientCount: recipientIds.length };
   });
   res.json({ message: `Đã gửi thông báo tới ${data.recipientCount} nhân viên`, data });
@@ -120,4 +127,44 @@ const respondTimesheet = handle(async (req, res) => {
   });
   res.json({ message: req.body.status === 'confirmed' ? 'Đã xác nhận bảng công' : 'Đã gửi phản hồi tới HR', data });
 });
-module.exports = { overview, sendAnnouncement, myAnnouncements, publishTimesheet, myTimesheets, respondTimesheet };
+
+const getAnnouncementReceipts = handle(async (req, res) => {
+  if (!['admin', 'principal', 'hr'].includes(req.user.role)) {
+    throw fail('Bạn không có quyền xem biên nhận thông báo', 403);
+  }
+  checkId(req.params.id);
+  const announcement = await Announcement.findById(req.params.id)
+    .populate('createdBy', 'username role profile.fullName')
+    .lean();
+  if (!announcement) throw fail('Không tìm thấy thông báo', 404);
+
+  const notifications = await Notification.find({ 'metadata.announcementId': announcement._id })
+    .populate('recipientId', 'username role profile.fullName')
+    .lean();
+
+  const total = notifications.length;
+  const readCount = notifications.filter((n) => n.isRead).length;
+  const unreadCount = total - readCount;
+  const readPercent = total > 0 ? Math.round((readCount / total) * 100) : 0;
+
+  const recipients = notifications.map((n) => ({
+    userId: n.recipientId?._id,
+    fullName: n.recipientId?.profile?.fullName || n.recipientId?.username || 'Chưa rõ',
+    role: n.recipientId?.role || '',
+    isRead: Boolean(n.isRead),
+    readAt: n.readAt || null
+  })).sort((a, b) => (b.isRead ? 1 : 0) - (a.isRead ? 1 : 0) || a.fullName.localeCompare(b.fullName));
+
+  res.json({
+    data: {
+      announcement,
+      total,
+      readCount,
+      unreadCount,
+      readPercent,
+      recipients
+    }
+  });
+});
+
+module.exports = { overview, sendAnnouncement, myAnnouncements, publishTimesheet, myTimesheets, respondTimesheet, getAnnouncementReceipts };

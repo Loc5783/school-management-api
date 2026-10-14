@@ -1,0 +1,22 @@
+.accounting-expenses { display: grid; gap: 20px; }
+.accounting-expense-summary { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 20px; padding: 24px; }
+.accounting-expense-summary h2 { margin: 5px 0; color: #1e3b70; }
+.accounting-expense-summary span { color: #6a7f9f; }
+.accounting-expense-summary label { display: grid; gap: 6px; font-weight: 700; color: #516b94; }
+.accounting-expense-summary input { min-height: 44px; padding: 8px 12px; border: 1px solid #d3e1f5; border-radius: 10px; }
+.accounting-order-balance { padding: 14px 16px; border-radius: 12px; background: #f1f6ff; color: #3d5c90; }
+.accounting-request-list { display: grid; gap: 10px; padding: 18px 22px 24px; }
+.accounting-request-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 16px; border: 1px solid #dce8fb; border-radius: 14px; background: #f9fbff; }
+.accounting-request-item > div:first-child { min-width: 0; }
+.accounting-request-item strong { color: #1f3a70; }
+.accounting-request-item p { margin: 6px 0; color: #526b92; }
+.accounting-request-item small { display: block; margin-top: 5px; color: #7890ae; }
+.accounting-request-item > div:last-child { display: grid; justify-items: end; gap: 10px; }
+.accounting-request-status { padding: 5px 10px; border-radius: 999px; color: #8a6516; background: #fff1cf; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.accounting-request-status.approved { color: #345ac3; background: #e9efff; }
+.accounting-request-status.paid { color: #17805a; background: #e5f7ef; }
+.accounting-request-status.rejected { color: #b44e5d; background: #ffecef; }
+.accounting-review-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.accounting-review-actions input { min-height: 38px; padding: 0 10px; border: 1px solid #d6e2f5; border-radius: 9px; }
+.accounting-legacy-note { margin: 0 22px 12px; padding: 10px 12px; border: 1px solid #f0dcaa; border-radius: 10px; color: #805f1b; background: #fff9e9; font-size: 11px; }
+@media (max-width: 700px) { .accounting-request-item { flex-direction: column; }.accounting-request-item > div:last-child { justify-items: start; width: 100%; }.accounting-review-actions { justify-content: flex-start; } }
