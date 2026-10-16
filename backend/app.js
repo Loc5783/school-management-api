@@ -34,7 +34,7 @@ const createApp = () => {
             return callback(new Error('Origin không được phép truy cập API'));
         },
         methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-        allowedHeaders: ['Authorization', 'Content-Type', 'X-Device-Api-Key']
+        allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key', 'X-Device-Api-Key']
     }));
     app.use(express.json());
 
