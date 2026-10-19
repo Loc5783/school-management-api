@@ -12,7 +12,7 @@ const allNavItems = [
   { to: '/classrooms', label: 'Lớp học', icon: 'classes', roles: ['admin', 'principal'] },
   { to: '/attendance', label: 'Điểm danh', icon: 'attendance', roles: ['admin', 'teacher'] },
   { to: '/attendance/reports', label: 'Báo cáo điểm danh', icon: 'attendance', roles: ['principal'] },
-  { to: '/timekeeping', label: 'Chấm công nhân sự', icon: 'clock', roles: ['admin', 'principal', 'teacher', 'guard'] },
+  { to: '/timekeeping', label: 'Chấm công nhân sự', icon: 'clock', roles: ['admin', 'principal', 'guard'] },
   { to: '/hr', label: 'Nhân sự & Lương', icon: 'users', roles: ['admin', 'principal', 'accountant', 'hr'] },
   { to: '/finance', label: 'Tài chính', icon: 'money', roles: ['admin', 'principal', 'accountant'] },
   { to: '/accounting', label: 'Tổng quan kế toán', icon: 'grid', roles: ['accountant'] },
@@ -23,7 +23,7 @@ const allNavItems = [
   { to: '/kitchen', label: 'Bếp hôm nay', icon: 'grid', roles: ['chef', 'admin'] },
   { to: '/nutrition', label: 'Bếp ăn & Bán trú', icon: 'utensils', roles: ['admin', 'principal', 'chef', 'teacher'] },
   { to: '/guard', label: 'Tổng quan trực cổng', icon: 'grid', roles: ['guard', 'admin'] },
-  { to: '/pickups', label: 'Đón trẻ', icon: 'users', roles: ['parent', 'teacher', 'guard', 'admin', 'principal'] },
+  { to: '/pickups', label: 'Đón trẻ', icon: 'users', roles: ['parent', 'guard', 'admin', 'principal'] },
   { to: '/assets', label: 'Đề xuất mua sắm', icon: 'settings', roles: ['teacher'] },
   { to: '/assets', label: 'Cơ sở vật chất', icon: 'settings', roles: ['admin', 'principal'] },
   { to: '/reports', label: 'Báo cáo', icon: 'chart', roles: ['admin', 'principal', 'accountant'] },
@@ -108,6 +108,60 @@ const principalNavSections = [
   },
 ];
 
+const TEACHER_SIDEBAR_STORAGE_KEY = 'teacher_sidebar_open_groups';
+
+const teacherNavSections = [
+  {
+    id: 'teacher-overview',
+    label: 'TỔNG QUAN',
+    icon: 'grid',
+    items: [
+      { to: '/dashboard', label: 'Tổng quan', icon: 'grid' },
+    ],
+  },
+  {
+    id: 'teacher-classroom-care',
+    label: 'LỚP HỌC & CHĂM SÓC',
+    icon: 'classes',
+    items: [
+      { to: '/students', label: 'Học sinh', icon: 'students' },
+      { to: '/attendance', label: 'Điểm danh', icon: 'attendance' },
+      { to: '/daily-care', label: 'Sổ chăm sóc lớp', icon: 'attendance' },
+      { to: '/nutrition', label: 'Bếp ăn & Bán trú', icon: 'utensils' },
+    ],
+  },
+  {
+    id: 'teacher-communication',
+    label: 'TRAO ĐỔI',
+    icon: 'chat',
+    items: [
+      { to: '/messages', label: 'Tin nhắn', icon: 'chat' },
+      { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar' },
+    ],
+  },
+  {
+    id: 'teacher-work',
+    label: 'CÔNG VIỆC',
+    icon: 'calendar',
+    items: [
+      { to: '/my-staffing', label: 'Lịch phân công của tôi', icon: 'calendar' },
+      { to: '/my-handovers', label: 'Việc bàn giao của tôi', icon: 'users' },
+      { to: '/assets', label: 'Đề xuất mua sắm', icon: 'settings' },
+      { to: '/professional-reviews', label: 'Đánh giá chuyên môn', icon: 'users', positions: ['head_teacher'] },
+    ],
+  },
+  {
+    id: 'teacher-personal',
+    label: 'CÁ NHÂN',
+    icon: 'users',
+    items: [
+      { to: '/my-leave-requests', label: 'Nghỉ phép cá nhân', icon: 'calendar' },
+      { to: '/my-requests', label: 'Yêu cầu của tôi', icon: 'card' },
+      { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
+    ],
+  },
+];
+
 const isNavItemActive = (itemTo, pathname, search) => {
   const [targetPath, targetQuery] = itemTo.split('?');
   const targetParams = new URLSearchParams(targetQuery || '');
@@ -173,6 +227,26 @@ export default function AppShell({ title, subtitle, actions, children }) {
       console.error('Lỗi đọc trạng thái menu hiệu trưởng:', e);
     }
     const activeSectionId = getActiveSectionId(principalNavSections, location.pathname, location.search);
+    if (activeSectionId && !initialOpen.includes(activeSectionId)) {
+      initialOpen = [...initialOpen, activeSectionId];
+    }
+    return initialOpen;
+  });
+
+  const [teacherOpenSections, setTeacherOpenSections] = useState(() => {
+    let initialOpen = teacherNavSections.map((s) => s.id);
+    try {
+      const saved = localStorage.getItem(TEACHER_SIDEBAR_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          initialOpen = parsed;
+        }
+      }
+    } catch (e) {
+      console.error('Lỗi đọc trạng thái menu giáo viên:', e);
+    }
+    const activeSectionId = getActiveSectionId(teacherNavSections, location.pathname, location.search);
     if (activeSectionId && !initialOpen.includes(activeSectionId)) {
       initialOpen = [...initialOpen, activeSectionId];
     }
@@ -249,6 +323,7 @@ export default function AppShell({ title, subtitle, actions, children }) {
   }, [user, loadNotifications, loadUnreadChat]);
 
   const isPrincipal = user?.role === 'principal';
+  const isTeacher = user?.role === 'teacher';
   const currentLocationKey = `${location.pathname}${location.search}`;
   const [prevLocationKey, setPrevLocationKey] = useState(currentLocationKey);
 
@@ -266,6 +341,18 @@ export default function AppShell({ title, subtitle, actions, children }) {
         }
       }
     }
+    if (isTeacher) {
+      const activeSectionId = getActiveSectionId(teacherNavSections, location.pathname, location.search);
+      if (activeSectionId && !teacherOpenSections.includes(activeSectionId)) {
+        const next = [...teacherOpenSections, activeSectionId];
+        setTeacherOpenSections(next);
+        try {
+          localStorage.setItem(TEACHER_SIDEBAR_STORAGE_KEY, JSON.stringify(next));
+        } catch (e) {
+          console.error('Lỗi lưu trạng thái menu giáo viên:', e);
+        }
+      }
+    }
   }
 
   const toggleSection = (sectionId) => {
@@ -277,6 +364,20 @@ export default function AppShell({ title, subtitle, actions, children }) {
         localStorage.setItem(PRINCIPAL_SIDEBAR_STORAGE_KEY, JSON.stringify(next));
       } catch (e) {
         console.error('Lỗi lưu trạng thái menu hiệu trưởng:', e);
+      }
+      return next;
+    });
+  };
+
+  const toggleTeacherSection = (sectionId) => {
+    setTeacherOpenSections((prev) => {
+      const next = prev.includes(sectionId)
+        ? prev.filter((id) => id !== sectionId)
+        : [...prev, sectionId];
+      try {
+        localStorage.setItem(TEACHER_SIDEBAR_STORAGE_KEY, JSON.stringify(next));
+      } catch (e) {
+        console.error('Lỗi lưu trạng thái menu giáo viên:', e);
       }
       return next;
     });
@@ -315,20 +416,19 @@ export default function AppShell({ title, subtitle, actions, children }) {
 
   // Lọc menu dựa trên permissions và vai trò
   // Đảm bảo không trùng lặp route trong danh sách
-  // Lọc menu dựa trên permissions
-  const navItems = allNavItems.filter(item => {
-    // Phụ huynh chỉ dùng cổng thông tin của con và tin nhắn giáo viên.
-    // Không hiển thị trang quản lý/danh sách học sinh, kể cả khi tài khoản
-    // cũ còn mang permission student.read.
+  const seenPaths = new Set();
+  const navItems = allNavItems.filter((item) => {
     if (user?.role === 'parent') return Boolean(item.roles?.includes('parent'));
-    // Mục khai báo roles là khu vực chuyên biệt: kể cả Admin cũng chỉ nhìn thấy
-    // khi vai trò của họ nằm trong danh sách (ví dụ cổng thông tin phụ huynh).
     if (item.positions && !item.positions.includes(user?.employeeInfo?.position)) return false;
-    if (item.roles) return item.roles.includes(user?.role);
-    if (isAdmin) return true;
-    if (!item.permission) return false;
-    return permissions.includes(item.permission);
+    if (item.roles && !item.roles.includes(user?.role)) return false;
+    if (!item.roles && !isAdmin) {
+      if (!item.permission || !permissions.includes(item.permission)) return false;
+    }
+    if (seenPaths.has(item.to)) return false;
+    seenPaths.add(item.to);
+    return true;
   });
+
   const renderNavigation = (mobile = false) => {
     if (isPrincipal) {
       const prefix = mobile ? 'mobile' : 'desktop';
@@ -386,6 +486,71 @@ export default function AppShell({ title, subtitle, actions, children }) {
       );
     }
 
+    if (isTeacher) {
+      const prefix = mobile ? 'mobile' : 'desktop';
+      return (
+        <div
+          className="principal-nav-accordion teacher-nav-accordion"
+          role="region"
+          aria-label={mobile ? 'Menu chức năng giáo viên di động' : 'Menu chức năng giáo viên'}
+        >
+          {teacherNavSections.map((section) => {
+            const visibleItems = section.items.filter(
+              (item) => !item.positions || item.positions.includes(user?.employeeInfo?.position)
+            );
+            if (!visibleItems.length) return null;
+
+            const isOpen = teacherOpenSections.includes(section.id);
+            const contentId = `${prefix}-teacher-nav-section-${section.id}`;
+            return (
+              <div key={section.id} className="nav-accordion-section">
+                <button
+                  type="button"
+                  className={`nav-accordion-header ${isOpen ? 'is-open' : ''}`}
+                  aria-expanded={isOpen}
+                  aria-controls={contentId}
+                  onClick={() => toggleTeacherSection(section.id)}
+                >
+                  <span className="nav-accordion-header-title">
+                    {section.icon && <Icon name={section.icon} size={15} />}
+                    <span>{section.label}</span>
+                  </span>
+                  <span className={`nav-accordion-chevron ${isOpen ? 'expanded' : ''}`}>
+                    <Icon name="chevronRight" size={14} />
+                  </span>
+                </button>
+                <div
+                  id={contentId}
+                  className="nav-accordion-content"
+                  hidden={!isOpen}
+                >
+                  {visibleItems.map((item) => {
+                    const isActive = isNavItemActive(item.to, location.pathname, location.search);
+                    return (
+                      <NavLink
+                        to={item.to}
+                        key={item.to}
+                        aria-current={isActive ? 'page' : undefined}
+                        className={() => `nav-link nav-sub-link ${isActive ? 'active' : ''}`.trim()}
+                        onClick={mobile ? () => setMobileNavOpen(false) : undefined}
+                      >
+                        <Icon name={item.icon} />
+                        {item.label}
+                        {item.to === '/messages' && chatUnread.total > 0 && (
+                          <span className="nav-chat-count">
+                            {chatUnread.total > 99 ? '99+' : chatUnread.total}
+                          </span>
+                        )}
+                      </NavLink>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
 
     return (
       <>

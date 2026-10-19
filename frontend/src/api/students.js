@@ -8,3 +8,10 @@ export const changeStudentStatus = (id, data) => api.patch(`/students/${id}/stat
 export const deleteStudent = (id, reason) => api.delete(`/students/${id}`, { data: { reason } });
 export const getDailyReports = (id) => api.get(`/students/${id}/daily-reports`);
 export const saveDailyReport = (id, data) => api.put(`/students/${id}/daily-reports`, data);
+export const downloadExcelTemplate = () => api.get('/students/excel/template', { responseType: 'blob' });
+export const previewExcelImport = (formData) => api.post('/students/excel/preview', formData, {
+  headers: { 'Content-Type': 'multipart/form-data' }
+});
+export const confirmExcelImport = (data, idempotencyKey) => api.post('/students/excel/confirm', data, {
+  headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}
+});

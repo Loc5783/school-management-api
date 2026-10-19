@@ -1,4 +1,4 @@
-import { useSearchParams } from 'react-router-dom';
+import { Navigate, useSearchParams } from 'react-router-dom';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
 import SmartAttendance from './SmartAttendance';
@@ -16,6 +16,9 @@ const tabs = [
 export default function TimekeepingHub() {
   const [searchParams, setSearchParams] = useSearchParams();
   const role = JSON.parse(localStorage.getItem('user') || '{}').role;
+  if (role === 'teacher') {
+    return <Navigate to="/my-leave-requests" replace />;
+  }
   const visibleTabs = tabs.filter((tab) => (role !== 'guard' || tab.id !== 'corrections') && (!tab.roles || tab.roles.includes(role)));
   const requested = searchParams.get('tab');
   const active = visibleTabs.some((tab) => tab.id === requested) ? requested : visibleTabs[0]?.id;

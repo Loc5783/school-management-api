@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import AccountManagement from './pages/AccountManagement';
@@ -40,6 +40,7 @@ import ProfessionalReviews from './pages/ProfessionalReviews';
 import MyHandovers from './pages/MyHandovers';
 import InternalNotices from './pages/InternalNotices';
 import MyStaffRequests from './pages/MyStaffRequests';
+import TeacherLeavePage from './pages/TeacherLeavePage';
 
 function ProtectedRoute({ children }) {
   return localStorage.getItem('token') ? children : <Navigate to="/login" replace />;
@@ -67,8 +68,21 @@ function ChatRoute({ children }) {
 
 function PickupRoute({ children }) {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const location = useLocation();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
-  return ['parent', 'teacher', 'guard', 'admin', 'principal'].includes(user.role) ? children : <Navigate to="/dashboard" replace />;
+  if (user.role === 'teacher') {
+    const searchParams = new URLSearchParams(location.search);
+    const classroomId = searchParams.get('classroomId');
+    searchParams.set('tab', 'departure');
+    if (classroomId) {
+      searchParams.delete('classroomId');
+      const search = searchParams.toString();
+      return <Navigate to={`/attendance/class/${classroomId}${search ? `?${search}` : ''}`} replace />;
+    }
+    const search = searchParams.toString();
+    return <Navigate to={`/attendance${search ? `?${search}` : ''}`} replace />;
+  }
+  return ['parent', 'guard', 'admin', 'principal'].includes(user.role) ? children : <Navigate to="/dashboard" replace />;
 }
 
 function StaffRoute({ children }) {
@@ -148,6 +162,7 @@ function App() {
           path="/timekeeping"
           element={<ProtectedRoute><TimekeepingHub /></ProtectedRoute>}
         />
+        <Route path="/my-leave-requests" element={<StaffRoute><TeacherLeavePage /></StaffRoute>} />
         <Route path="/my-payroll" element={<StaffRoute><MyPayroll /></StaffRoute>} />
         <Route path="/staff-settings" element={<StaffRoute><StaffSettings /></StaffRoute>} />
         <Route path="/my-staffing" element={<StaffRoute><MyStaffing /></StaffRoute>} />

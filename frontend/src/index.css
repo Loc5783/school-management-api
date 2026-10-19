@@ -261,9 +261,9 @@ a { color: inherit; text-decoration: none; }
 @media (max-height: 780px) and (min-width: 801px) { .sidebar { padding-top: 17px; padding-bottom: 12px; }.sidebar-nav { margin-top: 22px; }.nav-link { min-height: 41px; margin: 2px 0; }.sidebar-bottom .nav-link { display: none; }.account-card { padding: 8px 10px; }.sidebar-logout { min-height: 34px; margin-top: 6px; } }
 @media (max-width: 800px) { .sidebar-nav { overflow: hidden; }.sidebar-bottom { padding-top: 8px; }.sidebar-bottom .account-card, .sidebar-logout { font-size: 0; }.sidebar-logout svg { width: 19px; height: 19px; }.sidebar-logout { min-height: 38px; padding: 0; gap: 0; } }
 
-/* Dashboard attendance insight. */
-/* Principal Navigation Accordion */
-.principal-nav-accordion { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+/* Principal & Teacher Navigation Accordion */
+.principal-nav-accordion,
+.teacher-nav-accordion { display: flex; flex-direction: column; gap: 6px; width: 100%; }
 .nav-accordion-section { display: flex; flex-direction: column; width: 100%; }
 .nav-accordion-header {
   width: 100%;
@@ -370,6 +370,7 @@ a { color: inherit; text-decoration: none; }
   }
 }
 
+/* Dashboard attendance insight. */
 .attendance-chart-section { display: grid; grid-template-columns: minmax(175px, 1fr) 128px minmax(180px, 1fr); align-items: center; gap: 25px; margin: 2px 22px 22px; padding: 21px 23px; border: 1px solid #e4ebfa; border-radius: 17px; background: linear-gradient(115deg, #fbfdff, #f3f6ff 66%, #f8f5ff); }.attendance-chart-copy p { margin: 0; color: #7186c7; font-size: 9px; font-weight: 800; letter-spacing: .11em; }.attendance-chart-copy h3 { margin: 6px 0 6px; color: #233d79; font: 700 14px 'Plus Jakarta Sans', sans-serif; letter-spacing: -.35px; }.attendance-chart-copy span { color: #8a99b2; font-size: 10px; line-height: 1.45; }.attendance-donut { display: grid; width: 122px; height: 122px; place-items: center; border-radius: 50%; background: conic-gradient(var(--attendance-chart)); box-shadow: 0 10px 19px rgba(84, 103, 188, .12); transition: background .35s ease; }.attendance-donut > div { display: grid; width: 88px; height: 88px; place-items: center; align-content: center; border-radius: 50%; background: #fff; box-shadow: inset 0 0 0 1px #eef1f9; }.attendance-donut strong { color: #2a477f; font: 800 20px/1 'Plus Jakarta Sans', sans-serif; }.attendance-donut small { margin-top: 5px; color: #8c9ab3; font-size: 9px; font-weight: 700; }.attendance-chart-legend { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }.attendance-chart-legend li { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: center; gap: 8px; color: #657798; font-size: 10px; }.attendance-chart-legend i { display: block; width: 8px; height: 8px; border-radius: 50%; }.attendance-chart-legend b { min-width: 22px; padding: 3px 7px; border-radius: 9px; color: #4b6090; background: #eaf0fc; font-size: 9px; text-align: center; }
 @media (max-width: 650px) { .attendance-chart-section { grid-template-columns: 1fr; justify-items: center; gap: 17px; margin: 2px 14px 14px; padding: 20px; text-align: center; }.attendance-chart-copy { display: grid; justify-items: center; }.attendance-chart-legend { width: min(100%, 245px); grid-template-columns: 1fr 1fr; column-gap: 15px; text-align: left; } }
 .dashboard-pagination { display: flex; align-items: center; justify-content: space-between; gap: 13px; padding: 14px 22px 18px; border-top: 1px solid #edf2fb; color: #8392aa; font-size: 10px; }.dashboard-pagination > div { display: flex; gap: 7px; }.dashboard-pagination button { display: inline-flex; min-height: 32px; align-items: center; gap: 4px; padding: 0 11px; border: 1px solid #dce6f8; border-radius: 9px; color: #4b669c; background: #fff; font-size: 10px; font-weight: 800; }.dashboard-pagination button:hover:not(:disabled) { border-color: #aebff1; color: #3e56ca; background: #f5f7ff; }.dashboard-pagination button:disabled { cursor: not-allowed; opacity: .45; }
@@ -1325,3 +1326,294 @@ textarea:focus {
   color: #355bd5;
   font-size: 16px;
 }
+
+/* Attendance Workflow Tabs (Đón trẻ vs Trả trẻ) */
+.attendance-workflow-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+  background: #f1f5f9;
+  padding: 6px;
+  border-radius: 14px;
+  width: fit-content;
+}
+.attendance-workflow-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 18px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #64748b;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+.attendance-workflow-tab:hover {
+  color: #1e3a8a;
+}
+.attendance-workflow-tab.active {
+  background: #ffffff;
+  color: #1e3a8a;
+  box-shadow: 0 2px 8px rgba(30, 58, 138, 0.08);
+}
+.attendance-departure-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Student Excel Import Modal */
+.student-excel-import-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  overflow-y: auto;
+}
+.student-excel-import-dialog {
+  position: relative;
+  width: min(100%, 1020px);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  border-radius: 24px;
+  background: #ffffff;
+  box-shadow: 0 25px 60px rgba(15, 23, 42, 0.25);
+  display: flex;
+  flex-direction: column;
+}
+.student-excel-import-dialog:focus {
+  outline: none;
+}
+.excel-import-step-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 18px 20px;
+  margin-bottom: 16px;
+  background: #f8fafc;
+}
+.step-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.step-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: #3b82f6;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+}
+.step-title-row h4 {
+  margin: 0;
+  font-size: 15px;
+  color: #1e293b;
+  font-weight: 700;
+}
+.import-setup-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+.import-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.import-field span {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #334155;
+}
+.import-field select {
+  height: 42px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 0 12px;
+  font-size: 13.5px;
+  background: #ffffff;
+}
+.field-hint {
+  font-size: 11px;
+  color: #64748b;
+  line-height: 1.4;
+}
+.text-danger {
+  color: #dc2626 !important;
+}
+.step-upload-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+}
+.selected-file-info {
+  font-size: 13px;
+  color: #334155;
+  background: #e2e8f0;
+  padding: 6px 12px;
+  border-radius: 8px;
+}
+.excel-import-preview-section {
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 18px 20px;
+  margin-bottom: 16px;
+  background: #ffffff;
+}
+.preview-summary-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.summary-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.summary-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.summary-item.total {
+  background: #f1f5f9;
+  color: #334155;
+}
+.summary-item.valid {
+  background: #ecfdf5;
+  color: #059669;
+}
+.summary-item.error {
+  background: #fef2f2;
+  color: #dc2626;
+}
+.preview-capacity-alert {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #b45309;
+  font-size: 12px;
+  font-weight: 600;
+}
+.preview-table-wrap {
+  overflow-x: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  margin-bottom: 14px;
+}
+.preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.preview-table th,
+.preview-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid #e2e8f0;
+}
+.preview-table th {
+  background: #f8fafc;
+  color: #475569;
+  font-weight: 700;
+}
+.row-invalid {
+  background: #fff5f5;
+}
+.row-error-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.badge-success {
+  background: #ecfdf5;
+  color: #059669;
+}
+.badge-danger {
+  background: #fef2f2;
+  color: #dc2626;
+}
+.preview-confirm-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #e2e8f0;
+}
+.policy-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #475569;
+  font-size: 12px;
+  flex: 1;
+  min-width: 260px;
+}
+.footer-actions {
+  display: flex;
+  gap: 10px;
+}
+.excel-import-success-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 36px 20px;
+  gap: 14px;
+}
+.success-icon-wrap {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: #dcfce7;
+  color: #16a34a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.success-stats {
+  display: flex;
+  gap: 20px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 12px 24px;
+  margin-top: 8px;
+}
+

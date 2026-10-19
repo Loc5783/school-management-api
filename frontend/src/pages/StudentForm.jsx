@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import AppShell from "../components/AppShell";
+import Icon from "../components/Icon";
+import StudentExcelImportModal from "../components/StudentExcelImportModal";
 import { createStudent, getStudent, updateStudent } from "../api/students";
 import api from "../api/axiosConfig";
 
@@ -72,6 +74,7 @@ export default function StudentForm() {
   const [classes, setClasses] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [showExcelModal, setShowExcelModal] = useState(false);
   const editing = Boolean(id);
   const role = JSON.parse(localStorage.getItem("user") || "{}").role;
   const manager = ["admin", "principal"].includes(role);
@@ -191,6 +194,15 @@ export default function StudentForm() {
             <p className="card-kicker">HỒ SƠ HỌC SINH</p>
             <h2>{editing ? "Cập nhật thông tin" : "Tạo hồ sơ mới"}</h2>
           </div>
+          {!editing && (
+            <button
+              type="button"
+              className="button button-secondary"
+              onClick={() => setShowExcelModal(true)}
+            >
+              <Icon name="calendar" size={16} /> Nhập từ Excel
+            </button>
+          )}
         </div>
         {error && <p className="form-error">{error}</p>}
         <div className="student-form-grid">
@@ -393,6 +405,18 @@ export default function StudentForm() {
           </button>
         </div>
       </form>
+      {showExcelModal && (
+        <StudentExcelImportModal
+          isOpen={showExcelModal}
+          onClose={() => setShowExcelModal(false)}
+          defaultClassroomId={form.classroomId}
+          classrooms={classes}
+          onSuccess={(result) => {
+            setShowExcelModal(false);
+            navigate(`/students?classroomId=${result.classroom?._id || form.classroomId || ''}`);
+          }}
+        />
+      )}
     </AppShell>
   );
 }

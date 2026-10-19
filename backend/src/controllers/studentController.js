@@ -1,8 +1,10 @@
+const crypto = require('crypto');
 const Student = require('../models/zone3_school/Student');
 const Classroom = require('../models/zone3_school/Classroom');
 const AuditLog = require('../models/zone1_system/AuditLog');
 const User = require('../models/zone1_system/User');
 const Notification = require('../models/zone1_system/Notification');
+const ImportIdempotency = require('../models/zone1_system/ImportIdempotency');
 const { applyStudentListScope, canAccessStudent, isParent, isValidStudentId } = require('../services/studentAccessService');
 const { canAccessClassroom, getTeacherClassroomIds, hasSchoolWideReadAccess } = require('../services/schoolDataAccessService');
 const { STUDENT_STATUSES, isClassroomCountedStatus, canTransitionStudentStatus, generateStudentCode, runStudentTransaction, serializeStudent } = require('../services/studentCoreService');
@@ -243,4 +245,379 @@ const saveDailyReport = async (req, res) => {
     } catch (err) { console.error(err); return respondError(res, err); }
 };
 
-module.exports = { createStudent, getAllStudents, getStudentById, updateStudent, changeStudentStatus, deleteStudent, getDailyReports, saveDailyReport };
+const {
+    MAX_FILE_SIZE,
+    MAX_ROWS,
+    generateTemplateWorkbook,
+    parseAndValidateExcelBuffer,
+    validateStudentRowStrict,
+    computeBatchFingerprint
+} = require('../services/studentExcelImportService');
+
+const downloadExcelTemplate = async (req, res) => {
+    try {
+        const workbook = await generateTemplateWorkbook();
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename="Mau_Nhap_Hoc_Sinh_Hoa_Nang.xlsx"');
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (err) {
+        console.error('Lỗi tạo file Excel mẫu:', err);
+        return res.status(500).json({ success: false, message: 'Không thể tạo file Excel mẫu' });
+    }
+};
+
+const previewExcelImport = async (req, res) => {
+    try {
+        const { classroomId } = req.body || {};
+        if (!classroomId || !isValidStudentId(classroomId)) {
+            return res.status(400).json({ success: false, message: 'Vui lòng chọn lớp học hợp lệ để nhập học sinh.' });
+        }
+
+        const classroom = await Classroom.findOne({ _id: classroomId, status: 'active' });
+        if (!classroom) {
+            return res.status(404).json({ success: false, message: 'Không tìm thấy lớp học hoặc lớp đã bị lưu trữ/khóa.' });
+        }
+
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, classroom._id)) {
+            return res.status(403).json({ success: false, message: 'Bạn không có quyền quản lý lớp học này.' });
+        }
+
+        if (!req.file || !req.file.buffer) {
+            return res.status(400).json({ success: false, message: 'Vui lòng chọn tập tin Excel (.xlsx) để tải lên.' });
+        }
+
+        const parsedResult = await parseAndValidateExcelBuffer(req.file.buffer, classroomId, req.user);
+
+        // Kiểm tra sĩ số lớp hiện tại với số lượng dòng hợp lệ
+        const currentCount = Number(classroom.statistics?.currentStudents || 0);
+        const maxSize = Number(classroom.maxSize || 25);
+        const prospectiveCount = currentCount + parsedResult.totalValid;
+        let capacityWarning = null;
+        let capacityExceeded = false;
+        if (prospectiveCount > maxSize) {
+            capacityExceeded = true;
+            capacityWarning = `Lớp hiện có ${currentCount}/${maxSize} học sinh. Thêm ${parsedResult.totalValid} học sinh sẽ vượt sĩ số tối đa (${prospectiveCount}/${maxSize}).`;
+            // Chặn import khi vượt quá sĩ số tối đa
+            parsedResult.canImport = false;
+            parsedResult.isValid = false;
+            parsedResult.totalErrors += 1;
+        }
+
+        return res.json({
+            success: true,
+            data: {
+                fileName: req.file.originalname,
+                classroomId: classroom._id,
+                className: classroom.name,
+                currentStudents: currentCount,
+                maxSize,
+                capacityWarning,
+                capacityExceeded,
+                ...parsedResult
+            }
+        });
+    } catch (err) {
+        console.error('Lỗi xem trước import Excel:', err);
+        return res.status(err.statusCode || 500).json({
+            success: false,
+            message: err.message || 'Không thể xử lý tập tin Excel.'
+        });
+    }
+};
+
+const confirmExcelImport = async (req, res) => {
+    let idempotencyDoc = null;
+    const currentLockToken = crypto.randomUUID();
+    try {
+        const { classroomId, students: rawStudents } = req.body || {};
+        const idempotencyKey = String(req.get('Idempotency-Key') || req.body.idempotencyKey || '').trim();
+
+        if (!idempotencyKey) {
+            return res.status(400).json({ success: false, message: 'Yêu cầu thiếu mã chống ghi lặp (Idempotency-Key).' });
+        }
+
+        if (!classroomId || !isValidStudentId(classroomId)) {
+            return res.status(400).json({ success: false, message: 'Vui lòng chọn lớp học hợp lệ.' });
+        }
+
+        const classroom = await Classroom.findOne({ _id: classroomId, status: 'active' });
+        if (!classroom) {
+            return res.status(404).json({ success: false, message: 'Không tìm thấy lớp học hoặc lớp đã bị lưu trữ.' });
+        }
+
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, classroom._id)) {
+            return res.status(403).json({ success: false, message: 'Bạn không có quyền thêm học sinh vào lớp này.' });
+        }
+
+        if (!Array.isArray(rawStudents) || rawStudents.length === 0) {
+            return res.status(400).json({ success: false, message: 'Danh sách học sinh để nhập không được để trống.' });
+        }
+
+        if (rawStudents.length > MAX_ROWS) {
+            return res.status(422).json({ success: false, message: `Vượt quá giới hạn tối đa ${MAX_ROWS} học sinh/lần import.` });
+        }
+
+        // Kiểm tra tính hợp lệ nghiêm ngặt của từng học sinh bằng hàm validate chuẩn
+        const validatedStudents = [];
+        const inMemoryCheck = new Set();
+        const currentYear = deriveSchoolYear(new Date());
+
+        for (let i = 0; i < rawStudents.length; i++) {
+            const rowNumber = rawStudents[i]?.rowNumber || (i + 2);
+            const { isValid, errors, parsedData } = validateStudentRowStrict(rawStudents[i], rowNumber);
+            if (!isValid || !parsedData) {
+                return res.status(422).json({
+                    success: false,
+                    message: `Dòng ${rowNumber}: ${(errors && errors.length) ? errors.join('; ') : 'Dữ liệu không hợp lệ'}`
+                });
+            }
+
+            const uniqueKey = `${parsedData.fullName.toLowerCase()}||${parsedData.birthDateStr || parsedData.birthDate}||${parsedData.gender}`;
+            if (inMemoryCheck.has(uniqueKey)) {
+                return res.status(422).json({
+                    success: false,
+                    message: `Dòng ${rowNumber}: Học sinh "${parsedData.fullName}" bị trùng lặp thông tin với một dòng khác trong cùng danh sách import.`
+                });
+            }
+            inMemoryCheck.add(uniqueKey);
+
+            validatedStudents.push({
+                fullName: parsedData.fullName,
+                birthDate: parsedData.birthDateObj || new Date(parsedData.birthDate),
+                birthDateStr: parsedData.birthDateStr || parsedData.birthDate,
+                gender: parsedData.gender,
+                address: parsedData.address,
+                nationality: parsedData.nationality,
+                ethnicity: parsedData.ethnicity,
+                birthPlace: parsedData.birthPlace,
+                notes: parsedData.notes,
+                classroomId: classroom._id,
+                className: classroom.name,
+                status: 'enrolled',
+                admissionDate: new Date(),
+                enrollmentDate: new Date(),
+                schoolYear: currentYear
+            });
+        }
+
+        // Tính fingerprint SHA-256 toàn diện cho cả lô
+        const fingerprint = computeBatchFingerprint(classroomId, validatedStudents);
+
+        // Khóa nguyên tử Idempotency: tạo mới hoặc cập nhật có điều kiện nếu retry
+        const STALE_PROCESSING_MS = 2 * 60 * 1000; // 2 phút phục hồi yêu cầu bị treo do server gián đoạn
+        try {
+            idempotencyDoc = await ImportIdempotency.create({
+                idempotencyKey,
+                fingerprint,
+                userId: req.user._id,
+                classroomId: classroom._id,
+                status: 'processing',
+                lockToken: currentLockToken
+            });
+        } catch (dupErr) {
+            if (dupErr.code === 11000) {
+                const existingRecord = await ImportIdempotency.findOne({ idempotencyKey });
+                if (!existingRecord) {
+                    return res.status(409).json({ success: false, message: 'Yêu cầu đang được xử lý, vui lòng chờ trong giây lát.' });
+                }
+
+                // Ràng buộc người thực hiện (chủ sở hữu yêu cầu)
+                if (String(existingRecord.userId) !== String(req.user._id)) {
+                    return res.status(403).json({
+                        success: false,
+                        message: 'Mã yêu cầu (Idempotency-Key) thuộc về người dùng khác. Vui lòng thử lại với yêu cầu mới.'
+                    });
+                }
+
+                // Đối chiếu fingerprint
+                if (existingRecord.fingerprint !== fingerprint) {
+                    return res.status(409).json({
+                        success: false,
+                        message: 'Mã yêu cầu (Idempotency-Key) đã được dùng cho một lô dữ liệu khác.'
+                    });
+                }
+
+                // Nếu đã hoàn thành thành công -> trả về kết quả đã lưu kèm replayed: true
+                if (existingRecord.status === 'completed') {
+                    return res.status(200).json({
+                        ...(existingRecord.response || {}),
+                        replayed: true
+                    });
+                }
+
+                // Cập nhật có điều kiện nguyên tử để chuyển failed hoặc processing quá hạn sang processing với lockToken mới
+                const staleThreshold = new Date(Date.now() - STALE_PROCESSING_MS);
+                const acquired = await ImportIdempotency.findOneAndUpdate(
+                    {
+                        idempotencyKey,
+                        userId: req.user._id,
+                        fingerprint,
+                        $or: [
+                            { status: 'failed' },
+                            { status: 'processing', updatedAt: { $lt: staleThreshold } }
+                        ]
+                    },
+                    {
+                        $set: {
+                            status: 'processing',
+                            lockToken: currentLockToken,
+                            updatedAt: new Date()
+                        }
+                    },
+                    { returnDocument: 'after' }
+                );
+
+                if (!acquired) {
+                    return res.status(409).json({
+                        success: false,
+                        message: 'Yêu cầu nhập học sinh này đang được xử lý bởi hệ thống. Vui lòng không gửi lặp lại.'
+                    });
+                }
+
+                idempotencyDoc = acquired;
+            } else {
+                throw dupErr;
+            }
+        }
+
+        // Kiểm tra sơ bộ sĩ số lớp trước khi vào transaction
+        const initialCount = Number(classroom.statistics?.currentStudents || 0);
+        const maxSize = Number(classroom.maxSize || 25);
+        if (initialCount + validatedStudents.length > maxSize) {
+            if (idempotencyDoc) {
+                await ImportIdempotency.updateOne(
+                    { _id: idempotencyDoc._id, lockToken: currentLockToken, status: 'processing' },
+                    { $set: { status: 'failed' } }
+                ).catch(() => {});
+            }
+            return res.status(422).json({
+                success: false,
+                message: `Lớp hiện có ${initialCount}/${maxSize} học sinh. Thêm ${validatedStudents.length} học sinh sẽ vượt quá sĩ số tối đa (${initialCount + validatedStudents.length}/${maxSize}).`
+            });
+        }
+
+        // Thực hiện transaction: Kiểm tra khóa sĩ số, trùng lặp DB và lưu Idempotency nguyên khối
+        const now = new Date();
+        const resultPayload = await runStudentTransaction(async (session) => {
+            // Khóa và kiểm tra lại sĩ số lớp trong transaction
+            const lockedClassroom = await Classroom.findById(classroom._id).session(session);
+            if (!lockedClassroom || lockedClassroom.status !== 'active') {
+                throw httpError('Không tìm thấy lớp học hoặc lớp không còn hoạt động.', 404);
+            }
+
+            const currentCount = Number(lockedClassroom.statistics?.currentStudents || 0);
+            const classMax = Number(lockedClassroom.maxSize || 25);
+            if (currentCount + validatedStudents.length > classMax) {
+                throw httpError(`Sĩ số lớp sẽ vượt quá mức tối đa cho phép (${currentCount + validatedStudents.length}/${classMax}). Không thể hoàn tất nhập học sinh.`, 422);
+            }
+
+            // Kiểm tra trùng lặp DB với session
+            const candidateNames = validatedStudents.map(s => s.fullName);
+            const existing = await Student.find({
+                fullName: { $in: candidateNames }
+            }).select('fullName birthDate gender className studentCode classroomId').session(session).lean();
+
+            for (const candidate of validatedStudents) {
+                const candDate = candidate.birthDateStr;
+                const match = existing.find(s => {
+                    if (s.fullName.toLowerCase() !== candidate.fullName.toLowerCase()) return false;
+                    if (s.gender !== candidate.gender) return false;
+                    const sDate = s.birthDate instanceof Date ? s.birthDate.toISOString().slice(0, 10) : String(s.birthDate || '').slice(0, 10);
+                    return sDate === candDate;
+                });
+
+                if (match) {
+                    const isAuthorized = req.user.role !== 'teacher' || (match.classroomId && (await canAccessClassroom(req.user, match.classroomId)));
+                    const errorDetail = isAuthorized
+                        ? `Học sinh "${candidate.fullName}" nghi trùng với hồ sơ đã có (${match.studentCode || 'Đã có'}, lớp ${match.className || 'Chưa xếp lớp'}). Vui lòng kiểm tra lại.`
+                        : `Học sinh "${candidate.fullName}" nghi trùng với hồ sơ học sinh đã có trong toàn trường. Vui lòng kiểm tra lại.`;
+                    throw httpError(errorDetail, 409);
+                }
+            }
+
+            // Lưu học sinh hàng loạt
+            const createdStudents = [];
+            for (const data of validatedStudents) {
+                const studentCode = await generateStudentCode(now, session);
+                const created = (await Student.create([{
+                    ...data,
+                    studentCode,
+                    admissionDate: now,
+                    enrollmentDate: now,
+                    createdBy: req.user._id,
+                    updatedBy: req.user._id,
+                    statusHistory: [{
+                        toStatus: 'enrolled',
+                        reason: 'Nhập học sinh hàng loạt từ Excel',
+                        effectiveDate: now,
+                        changedBy: req.user._id,
+                        changedByName: actorName(req.user)
+                    }]
+                }], { session }))[0];
+
+                await audit(req, 'STUDENT_CREATED', created, {}, { studentCode, status: 'enrolled', importSource: 'excel' }, session);
+                createdStudents.push(created);
+            }
+
+            // Cập nhật thống kê sĩ số lớp trong transaction
+            lockedClassroom.statistics = lockedClassroom.statistics || {};
+            lockedClassroom.statistics.currentStudents = currentCount + createdStudents.length;
+            await lockedClassroom.save({ session });
+
+            const serialized = createdStudents.map(s => serializeStudent(s, req.user.role));
+            const responsePayload = {
+                success: true,
+                message: `Nhập thành công ${createdStudents.length} học sinh vào lớp ${classroom.name}.`,
+                data: serialized
+            };
+
+            // LƯU TRẠNG THÁI COMPLETED CỦA IDEMPOTENCY NGUYÊN KHỐI NGAY TRONG TRANSACTION
+            const updateResult = await ImportIdempotency.updateOne(
+                {
+                    _id: idempotencyDoc._id,
+                    lockToken: currentLockToken,
+                    status: 'processing'
+                },
+                {
+                    $set: {
+                        status: 'completed',
+                        response: responsePayload
+                    }
+                },
+                { session }
+            );
+
+            if (updateResult.matchedCount === 0) {
+                throw httpError('Tiến trình xử lý đã mất quyền sở hữu độc quyền hoặc bị tiếp quản bởi một yêu cầu khác.', 409);
+            }
+
+            return responsePayload;
+        });
+
+        return res.status(201).json(resultPayload);
+    } catch (err) {
+        if (idempotencyDoc) {
+            await ImportIdempotency.updateOne(
+                { _id: idempotencyDoc._id, lockToken: currentLockToken, status: 'processing' },
+                { $set: { status: 'failed' } }
+            ).catch(() => {});
+        }
+        console.error('Lỗi xác nhận import học sinh từ Excel:', err);
+        return respondError(res, err, 'Không thể nhập học sinh từ Excel.');
+    }
+};
+
+module.exports = {
+    createStudent,
+    getAllStudents,
+    getStudentById,
+    updateStudent,
+    changeStudentStatus,
+    deleteStudent,
+    getDailyReports,
+    saveDailyReport,
+    downloadExcelTemplate,
+    previewExcelImport,
+    confirmExcelImport
+};

@@ -41,6 +41,16 @@ const listPickupRecords = async (req, res) => {
       if (isParent(req.user) && !canAccessStudent(req.user, req.query.studentId)) return res.status(403).json({ success: false, message: 'Bạn không có quyền xem lịch đón của học sinh này' });
       filter.studentId = req.query.studentId;
     }
+    if (req.query.classroomId) {
+      if (!isValidObjectId(req.query.classroomId)) return res.status(400).json({ success: false, message: 'ID lớp không hợp lệ' });
+      if (req.user.role === 'teacher') {
+        const teacherClassIds = await getTeacherClassroomIds(req.user);
+        if (!teacherClassIds.map(String).includes(String(req.query.classroomId))) {
+          return res.status(403).json({ success: false, message: 'Bạn không có quyền truy cập lớp học này' });
+        }
+      }
+      filter.classroomId = req.query.classroomId;
+    }
     const records = await PickupRecord.find(filter).sort({ expectedPickupTime: 1, createdAt: -1 }).lean();
     const data = records.map((record) => {
       const { pickupCode, ...safeRecord } = record;
