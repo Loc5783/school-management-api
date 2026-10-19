@@ -1,0 +1,8 @@
+.fee-schedule-layout { display: grid; gap: 20px; }
+.fee-schedule-total { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px; border-radius: 14px; background: #f1f6ff; color: #2d4c80; }
+.fee-schedule-total strong { font-size: 22px; }
+.fee-schedule-list { display: grid; gap: 12px; padding: 20px; }
+.fee-schedule-list article { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; justify-content: space-between; padding: 16px; border: 1px solid #dce7fa; border-radius: 14px; }
+.fee-schedule-list article > div:first-child { display: grid; gap: 5px; }
+.fee-schedule-list small { color: #6d7f9d; }
+.fee-schedule-actions { display: flex; gap: 8px; flex-wrap: wrap; }

@@ -8,6 +8,7 @@ export default function SmartAttendance({ embedded = false }) {
   const [cameraReady, setCameraReady] = useState(false);
   const [message, setMessage] = useState(null);
   const [employeeCode, setEmployeeCode] = useState('');
+  const [attendanceAction, setAttendanceAction] = useState('check-in');
   const [submittingCode, setSubmittingCode] = useState(false);
   const [activity, setActivity] = useState([]);
   const videoRef = useRef(null);
@@ -50,7 +51,7 @@ export default function SmartAttendance({ embedded = false }) {
     setSubmittingCode(true);
     setMessage(null);
     try {
-      const response = await kioskCheckIn(employeeCode.trim());
+      const response = await kioskCheckIn(employeeCode.trim(), attendanceAction);
       const result = response.data.data;
       setMessage({
         type: result.alreadyCheckedIn ? 'info' : 'success',
@@ -61,6 +62,7 @@ export default function SmartAttendance({ embedded = false }) {
         name: result.employee.name,
         employeeId: result.employee.employeeId,
         duplicate: result.alreadyCheckedIn,
+        action: attendanceAction,
         time: result.event.occurredAt
       }, ...current.filter((item) => item.id !== result.event._id)].slice(0, 6));
       if (!result.alreadyCheckedIn) setEmployeeCode('');
@@ -128,9 +130,11 @@ export default function SmartAttendance({ embedded = false }) {
             <div className="kiosk-mode">
               <span className="kiosk-icon"><Icon name="clock" size={30} /></span>
               <p className="card-kicker">DÀNH CHO NHÂN VIÊN</p>
-              <h3>Nhập mã chấm công</h3>
+              <h3>Ghi nhận giờ vào / ra ca</h3>
               <p>Chỉ dùng khi quẹt thẻ hoặc nhận diện khuôn mặt không khả dụng. Mỗi nhân viên có một mã riêng.</p>
               <form onSubmit={submitEmployeeCode} className="kiosk-code-form">
+                <label htmlFor="attendance-action">Loại ghi nhận</label>
+                <select id="attendance-action" value={attendanceAction} onChange={(event) => setAttendanceAction(event.target.value)}><option value="check-in">Vào ca</option><option value="check-out">Ra ca</option></select>
                 <label htmlFor="employee-code">Mã nhân viên</label>
                 <div>
                   <input
@@ -143,7 +147,7 @@ export default function SmartAttendance({ embedded = false }) {
                     maxLength="50"
                   />
                   <button className="button button-primary" type="submit" disabled={submittingCode}>
-                    <Icon name="check" size={17} />{submittingCode ? 'Đang ghi nhận...' : 'Xác nhận check-in'}
+                    <Icon name="check" size={17} />{submittingCode ? 'Đang ghi nhận...' : `Xác nhận ${attendanceAction === 'check-out' ? 'ra ca' : 'vào ca'}`}
                   </button>
                 </div>
               </form>
@@ -155,8 +159,8 @@ export default function SmartAttendance({ embedded = false }) {
         </section>
 
         <aside className="scan-activity content-card">
-          <div className="activity-heading"><div><p className="card-kicker">PHIÊN LÀM VIỆC NÀY</p><h2>Check-in vừa ghi nhận</h2></div><span>{activity.length}</span></div>
-          {activity.length ? <div className="scan-log">{activity.map((item) => <article key={item.id}><span className="student-avatar">{item.name.charAt(0)}</span><div><strong>{item.name}</strong><small>{item.employeeId} · {new Date(item.time).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</small></div><span className={`log-status ${item.duplicate ? 'duplicate' : ''}`}>{item.duplicate ? 'Đã có' : 'Đã ghi'}</span></article>)}</div> : <div className="empty-state"><span className="empty-icon"><Icon name="attendance" /></span><strong>Chưa có lượt check-in</strong><p>Nhập mã nhân viên hoặc chờ thiết bị gửi dữ liệu.</p></div>}
+          <div className="activity-heading"><div><p className="card-kicker">PHIÊN LÀM VIỆC NÀY</p><h2>Lượt chấm công vừa ghi nhận</h2></div><span>{activity.length}</span></div>
+          {activity.length ? <div className="scan-log">{activity.map((item) => <article key={item.id}><span className="student-avatar">{item.name.charAt(0)}</span><div><strong>{item.name}</strong><small>{item.employeeId} · {item.action === 'check-out' ? 'Ra ca' : 'Vào ca'} · {new Date(item.time).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</small></div><span className={`log-status ${item.duplicate ? 'duplicate' : ''}`}>{item.duplicate ? 'Đã có' : 'Đã ghi'}</span></article>)}</div> : <div className="empty-state"><span className="empty-icon"><Icon name="attendance" /></span><strong>Chưa có lượt chấm công</strong><p>Nhập mã nhân viên hoặc chờ thiết bị gửi dữ liệu.</p></div>}
         </aside>
       </div>
       <section className="setup-note"><Icon name="shield" size={19} /><div><strong>Ghi nhận thay thế có kiểm soát</strong><p>Thẻ và khuôn mặt vẫn là nguồn ưu tiên. Nhập mã nhân viên là phương án dự phòng, được lưu tách biệt với nguồn <code>MANUAL_CODE</code> để đối soát.</p></div></section>

@@ -251,6 +251,27 @@ const acknowledgeIncident = async (req, res) => {
   } catch (error) { return sendError(res, error, 'Không thể tiếp nhận cảnh báo'); }
 };
 
+const addManagementInstruction = async (req, res) => {
+  try {
+    if (!['admin', 'principal'].includes(req.user.role)) throw fail('Chỉ ban giám hiệu/quản trị viên mới được ghi chỉ đạo', 403);
+    if (!isValidObjectId(req.params.id)) throw fail('ID sự cố không hợp lệ');
+    const note = clean(req.body?.note, 1000);
+    if (!note) throw fail('Nội dung chỉ đạo không được để trống');
+    const item = await SecurityIncident.findById(req.params.id);
+    if (!item) throw fail('Không tìm thấy sự cố', 404);
+    if (!item.managementNotes) item.managementNotes = [];
+    item.managementNotes.push({
+      authorId: req.user._id,
+      authorName: actorName(req.user),
+      authorRole: req.user.role,
+      note,
+      createdAt: new Date()
+    });
+    await item.save();
+    return res.json({ success: true, message: 'Đã thêm chỉ đạo quản lý cho sự cố', data: item });
+  } catch (error) { return sendError(res, error, 'Không thể ghi chỉ đạo quản lý'); }
+};
+
 const listReceivers = async (req, res) => {
   try {
     const data = await User.find({ role: { $in: ['guard', 'admin', 'principal'] }, status: 'active', _id: { $ne: req.user._id } }).select('_id username role profile.fullName').sort({ 'profile.fullName': 1 }).lean();
@@ -482,4 +503,4 @@ const getGuardReport = async (req, res) => {
   } catch (error) { return sendError(res, error, 'Không thể lập báo cáo cổng trường'); }
 };
 
-module.exports = { getDashboard, searchStudents, listGateEvents, recordGateEvent, listVisitors, createVisitor, checkoutVisitor, listIncidents, createIncident, updateIncident, acknowledgeIncident, listHandovers, listReceivers, createHandover, acceptHandover, resolveQrCode, requestPickupOtp, verifyPickupOtp, listSupplierDeliveries, listExpectedDeliveries, createSupplierDelivery, checkoutSupplierDelivery, getEmergencyMode, activateEmergencyMode, resolveEmergencyMode, getGuardReport };
+module.exports = { getDashboard, searchStudents, listGateEvents, recordGateEvent, listVisitors, createVisitor, checkoutVisitor, listIncidents, createIncident, updateIncident, acknowledgeIncident, addManagementInstruction, listHandovers, listReceivers, createHandover, acceptHandover, resolveQrCode, requestPickupOtp, verifyPickupOtp, listSupplierDeliveries, listExpectedDeliveries, createSupplierDelivery, checkoutSupplierDelivery, getEmergencyMode, activateEmergencyMode, resolveEmergencyMode, getGuardReport };

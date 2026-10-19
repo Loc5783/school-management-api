@@ -30,6 +30,7 @@ const NotificationSchema = new mongoose.Schema({
         default: false
     },
     readAt: Date,
+    deduplicationKey: { type: String, maxlength: 200 },
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
@@ -44,5 +45,6 @@ const NotificationSchema = new mongoose.Schema({
 
 NotificationSchema.index({ recipientId: 1, isRead: 1 });
 NotificationSchema.index({ recipientId: 1, createdAt: -1 });
+NotificationSchema.index({ deduplicationKey: 1 }, { unique: true, partialFilterExpression: { deduplicationKey: { $type: 'string' } } });
 
 module.exports = mongoose.model('Notification', NotificationSchema);

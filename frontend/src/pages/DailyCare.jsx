@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AppShell from "../components/AppShell";
 import Icon from "../components/Icon";
+import StudentPagination from "../components/StudentPagination";
 import { listStudents } from "../api/students";
 import api from "../api/axiosConfig";
 
@@ -19,6 +20,9 @@ export default function DailyCare() {
   const [students, setStudents] = useState([]);
   const [careReports, setCareReports] = useState([]);
   const [care, setCare] = useState(emptyCare);
+  const [notePage, setNotePage] = useState(1);
+  const currentNotePage = Math.min(notePage, Math.max(1, Math.ceil(care.studentNotes.length / 10)));
+  const visibleStudentNotes = care.studentNotes.map((item, index) => ({ item, index })).slice((currentNotePage - 1) * 10, currentNotePage * 10);
   const [announcements, setAnnouncements] = useState([]);
   const [announcement, setAnnouncement] = useState({
     classroomId: "",
@@ -81,9 +85,12 @@ export default function DailyCare() {
     load();
   }, [load]);
 
-  const setClassroom = (classroomId) =>
+  const setClassroom = (classroomId) => {
+    setNotePage(1);
     setCare((current) => ({ ...current, classroomId, studentNotes: [] }));
+  };
   const addStudentNote = () => {
+    setNotePage(Math.ceil((care.studentNotes.length + 1) / 10));
     const used = new Set(care.studentNotes.map((item) => item.studentId));
     const student = classStudents.find((item) => !used.has(item._id));
     if (student)
@@ -270,7 +277,7 @@ export default function DailyCare() {
                   </button>
                 </div>
                 {care.studentNotes.length ? (
-                  care.studentNotes.map((item, index) => (
+                  visibleStudentNotes.map(({ item, index }) => (
                     <div
                       className="care-note-row"
                       key={`${item.studentId}-${index}`}
@@ -321,6 +328,7 @@ export default function DailyCare() {
                 ) : (
                   <p>Không có học sinh cần lưu ý riêng.</p>
                 )}
+                <StudentPagination total={care.studentNotes.length} page={currentNotePage} onChange={setNotePage} />
               </div>
               <div className="form-actions form-wide">
                 <button

@@ -64,6 +64,7 @@ const PurchaseOrderSchema = new mongoose.Schema({
         required: true,
         min: 0
     },
+    paidAmount: { type: Number, default: 0, min: 0 },
     status: {
         type: String,
         enum: ['pending', 'ordered', 'delivered', 'cancelled'],
@@ -87,7 +88,6 @@ const PurchaseOrderSchema = new mongoose.Schema({
 // ==============================
 // Đảm bảo mỗi đề xuất chỉ tạo được 1 đơn hàng
 PurchaseOrderSchema.index({ requestId: 1 }, { unique: true });
-PurchaseOrderSchema.index({ orderCode: 1 }, { unique: true });
 
 // Tối ưu truy vấn theo nhà cung cấp và trạng thái
 PurchaseOrderSchema.index({ supplierId: 1 });

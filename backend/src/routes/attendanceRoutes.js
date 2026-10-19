@@ -21,9 +21,9 @@ const router = express.Router();
 router.use(auth);
 
 // Điểm danh
-router.post('/', roleCheck(['teacher', 'admin', 'principal']), createAttendance);
-router.post('/bulk', roleCheck(['teacher', 'admin', 'principal']), createBulkAttendance);
-router.post('/check-in', roleCheck(['teacher', 'admin', 'principal', 'guard']), automaticCheckIn);
+router.post('/', roleCheck(['teacher', 'admin']), createAttendance);
+router.post('/bulk', roleCheck(['teacher', 'admin']), createBulkAttendance);
+router.post('/check-in', roleCheck(['teacher', 'admin', 'guard']), automaticCheckIn);
 
 // Đơn xin nghỉ và báo cáo vắng mặt. Các kiểm tra liên kết phụ huynh/lớp giáo
 // viên tiếp tục nằm ở controller để không tin tưởng riêng vào giao diện.
@@ -37,8 +37,8 @@ router.get('/student/:studentId', getAttendanceByStudent);
 router.get('/class/:classroomId', getAttendanceByClass);
 
 // Giáo viên chỉ được cập nhật bản ghi thuộc lớp được phân công (controller kiểm tra scope).
-// Xóa vẫn chỉ dành cho admin/principal để tránh mất lịch sử điểm danh.
-router.put('/:id', roleCheck(['admin', 'principal', 'teacher']), updateAttendance);
-router.delete('/:id', roleCheck(['admin', 'principal']), deleteAttendance);
+// Xóa chỉ dành cho admin để tránh mất lịch sử điểm danh.
+router.put('/:id', roleCheck(['admin', 'teacher']), updateAttendance);
+router.delete('/:id', roleCheck(['admin']), deleteAttendance);
 
 module.exports = router;

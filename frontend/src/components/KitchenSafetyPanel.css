@@ -1,0 +1,30 @@
+.kitchen-safety-panel { overflow: hidden; }
+.kitchen-safety-heading { padding: 22px 23px; border-bottom: 1px solid #e5edf8; }
+.kitchen-safety-heading h2 { margin: 4px 0 7px; color: #203c72; font-size: 21px; }
+.kitchen-safety-heading p:last-child { margin: 0; color: #6d809f; font-size: 13px; }
+.kitchen-safety-meals { display: grid; gap: 15px; padding: 20px 23px; }
+.kitchen-safety-meals > article { padding: 17px; border: 1px solid #dce7f5; border-radius: 13px; background: #fbfdff; }
+.kitchen-safety-meal-head { display: flex; justify-content: space-between; gap: 12px; }
+.kitchen-safety-meal-head strong { color: #254678; font-size: 16px; }
+.kitchen-safety-meal-head span { color: #5b76ab; font-size: 12px; font-weight: 700; }
+.kitchen-safety-dishes { margin: 13px 0; color: #5d7192; font-size: 13px; line-height: 1.5; }
+.kitchen-safety-samples { display: grid; gap: 8px; }
+.kitchen-safety-samples > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid #e3eaf5; border-radius: 10px; background: #fff; }
+.kitchen-safety-samples strong { color: #284779; font-size: 13px; }
+.kitchen-safety-samples span { color: #9a622e; font-size: 12px; }
+.kitchen-safety-samples .is-stored { color: #17805c; font-weight: 700; }
+.kitchen-safety-sample-form { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.kitchen-safety-sample-form select, .kitchen-safety-sample-form input, .kitchen-safety-checks textarea { padding: 9px; border: 1px solid #d6e2f5; border-radius: 9px; color: #284779; background: #fff; }
+.kitchen-safety-sample-form input { width: 76px; }
+.kitchen-safety-sample-form input[type="text"] { width: 150px; }
+.kitchen-safety-alert { margin: 0; padding: 13px 15px; border: 1px solid #f1d7b2; border-radius: 10px; color: #93602e; background: #fff9ed; }
+.kitchen-safety-checks { display: grid; gap: 10px; margin-top: 15px; padding: 15px; border: 1px solid #dce7f5; border-radius: 11px; background: #fff; }
+.kitchen-safety-checks > strong { color: #244573; }
+.kitchen-safety-checks label { display: flex; align-items: center; gap: 9px; color: #526b8e; font-size: 13px; }
+.kitchen-safety-checks textarea { min-height: 68px; resize: vertical; }
+.kitchen-safety-checks .button { justify-self: start; }
+.kitchen-safety-meals details { margin-top: 12px; color: #61789a; font-size: 12px; }
+.kitchen-safety-meals summary { cursor: pointer; }
+.kitchen-safety-meals ul { line-height: 1.6; }
+.kitchen-safety-empty { padding: 22px 23px; color: #7183a0; }
+@media (max-width: 700px) { .kitchen-safety-samples > div, .kitchen-safety-meal-head { align-items: flex-start; flex-direction: column; }.kitchen-safety-sample-form { width: 100%; } }

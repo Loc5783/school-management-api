@@ -31,6 +31,7 @@ const FoodSampleSchema = new mongoose.Schema({
         required: true,
         default: 100 // Tối thiểu 100g thức ăn đặc hoặc 150ml thức ăn lỏng
     },
+    sampleUnit: { type: String, enum: ['g', 'ml'], default: 'g' },
     storageTemperature: {
         type: Number,
         default: 4 // Nhiệt độ 2 - 8 độ C

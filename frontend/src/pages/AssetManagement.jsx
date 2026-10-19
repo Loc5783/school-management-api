@@ -46,7 +46,7 @@ const requestStatus = (status) => ({
 
 export default function AssetManagement() {
   const role = JSON.parse(localStorage.getItem('user') || '{}').role;
-  const canManageAssets = ['admin', 'principal'].includes(role);
+  const canManageAssets = role === 'admin';
   const canReviewRequests = ['admin', 'principal'].includes(role);
   const [activeTab, setActiveTab] = useState(canManageAssets ? 'assets' : 'requests');
   const [loading, setLoading] = useState(true);
@@ -250,7 +250,7 @@ export default function AssetManagement() {
     ['assets', 'Tài sản & thiết bị', 'classes', assets.length],
     ['requests', 'Đề xuất mua sắm', 'grid', summary.pending],
     ['orders', 'Đơn đặt hàng', 'money', orders.length]
-  ] : [['requests', 'Đề xuất mua sắm của tôi', 'grid', requests.length]];
+  ] : [['requests', role === 'principal' ? 'Duyệt đề xuất mua sắm' : 'Đề xuất mua sắm của tôi', 'grid', requests.length]];
 
   return (
     <AppShell

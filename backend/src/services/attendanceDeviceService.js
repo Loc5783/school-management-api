@@ -1,10 +1,14 @@
 const User = require('../models/zone1_system/User');
 const AttendanceAuditLog = require('../models/zone2_hr/AttendanceAuditLog');
 const RawAttendanceEvent = require('../models/zone2_hr/RawAttendanceEvent');
+const Employee = require('../models/zone2_hr/Employee');
+const StaffShift = require('../models/zone2_hr/StaffShift');
 const OutboxEvent = require('../models/zone1_system/OutboxEvent');
 const { queueRecalculation, withTransaction, TimekeepingError } = require('./attendanceAdjustmentService');
 const {
   DEFAULT_SCHOOL_TIMEZONE,
+  addWorkDays,
+  createDateTime,
   getWorkDate,
   isValidWorkDate,
   startOfWorkDate
@@ -77,7 +81,8 @@ const ingestDeviceEvent = async (input) => {
   }
 };
 
-const kioskCheckInByIdentifier = async (actor, identifier) => {
+const kioskCheckInByIdentifier = async (actor, identifier, eventType = 'CHECK_IN') => {
+  if (!['CHECK_IN', 'CHECK_OUT'].includes(eventType)) throw new TimekeepingError('Loại chấm công không hợp lệ');
   const code = String(identifier || '').trim().toUpperCase();
   if (!code) throw new TimekeepingError('Vui lòng nhập mã nhân viên');
   if (code.length > 50) throw new TimekeepingError('Mã nhân viên không hợp lệ');
@@ -97,12 +102,31 @@ const kioskCheckInByIdentifier = async (actor, identifier) => {
   }
 
   const now = new Date();
-  const workDateLabel = getWorkDate(now, DEFAULT_SCHOOL_TIMEZONE);
-  const workDate = startOfWorkDate(workDateLabel, DEFAULT_SCHOOL_TIMEZONE);
+  let workDateLabel = getWorkDate(now, DEFAULT_SCHOOL_TIMEZONE);
+  let workDate = startOfWorkDate(workDateLabel, DEFAULT_SCHOOL_TIMEZONE);
+  let checkIn = await RawAttendanceEvent.findOne({ userId: employee._id, workDate, eventType: 'CHECK_IN', isValid: true });
+  if (eventType === 'CHECK_OUT' && !checkIn) {
+    const previousDate = addWorkDays(workDateLabel, -1);
+    const profile = await Employee.findOne({ userId: employee._id }).select('_id');
+    const previousWeekday = new Date(`${previousDate}T00:00:00.000Z`).getUTCDay();
+    const overnightShift = profile && await StaffShift.findOne({ employeeId: profile._id, status: 'active', validFrom: { $lte: previousDate }, validUntil: { $gte: previousDate }, weekdays: previousWeekday, $expr: { $lt: ['$endTime', '$startTime'] } });
+    if (overnightShift) {
+      const previousWorkDate = startOfWorkDate(previousDate, DEFAULT_SCHOOL_TIMEZONE);
+      const priorCheckIn = await RawAttendanceEvent.findOne({ userId: employee._id, workDate: previousWorkDate, eventType: 'CHECK_IN', isValid: true });
+      const priorCheckOut = await RawAttendanceEvent.exists({ userId: employee._id, workDate: previousWorkDate, eventType: 'CHECK_OUT', isValid: true });
+      const shiftEnd = createDateTime(workDateLabel, overnightShift.endTime, DEFAULT_SCHOOL_TIMEZONE);
+      if (priorCheckIn && !priorCheckOut && now >= priorCheckIn.occurredAt && now.getTime() <= shiftEnd.getTime() + 12 * 60 * 60 * 1000) {
+        workDateLabel = previousDate;
+        workDate = previousWorkDate;
+        checkIn = priorCheckIn;
+      }
+    }
+  }
+  if (eventType === 'CHECK_OUT' && !checkIn) throw new TimekeepingError('Chưa có giờ vào ca hôm nay. Hãy kiểm tra hoặc gửi phiếu bổ sung giờ vào.', 409, 'CHECK_IN_REQUIRED');
   const existing = await RawAttendanceEvent.findOne({
     userId: employee._id,
     workDate,
-    eventType: 'CHECK_IN',
+    eventType,
     isValid: true
   });
   if (existing) {
@@ -112,12 +136,15 @@ const kioskCheckInByIdentifier = async (actor, identifier) => {
       employee: { id: employee._id, name: employee.profile?.fullName || employee.username, employeeId: employee.employeeInfo?.employeeId || employee.username }
     };
   }
+  if (eventType === 'CHECK_OUT' && new Date() <= checkIn.occurredAt) {
+    throw new TimekeepingError('Giờ ra phải sau giờ vào ca', 409, 'INVALID_CHECK_OUT');
+  }
 
   const result = await ingestDeviceEvent({
     deviceId: 'WEB_KIOSK',
-    externalEventId: `WEB_KIOSK-${employee._id}-${workDateLabel}-CHECK_IN`,
+    externalEventId: `WEB_KIOSK-${employee._id}-${workDateLabel}-${eventType}`,
     userId: employee._id,
-    eventType: 'CHECK_IN',
+    eventType,
     source: 'MANUAL_CODE',
     occurredAt: now,
     workDate: workDateLabel,

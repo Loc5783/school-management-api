@@ -11,7 +11,7 @@ const auth = async (req, res, next) => {
         }
         const decoded = verifyToken(token);
         const user = await User.findById(decoded.sub).select('-passwordHash');
-        if (!user || user.status !== 'active' || decoded.authVersion !== (user.authVersion || 0)) {
+        if (!user || user.status !== 'active' || (user.accessEndsAt && user.accessEndsAt <= new Date()) || decoded.authVersion !== (user.authVersion || 0)) {
             return res.status(401).json({ message: 'Phiên đăng nhập không còn hiệu lực' });
         }
         if (user.role === 'parent' && !hasLinkedStudent(user)) {

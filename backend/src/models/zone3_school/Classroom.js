@@ -27,6 +27,8 @@ const ClassroomSchema = new mongoose.Schema({
         type: Number,
         default: 25
     },
+    requiredTeachers: { type: Number, min: 1, max: 5, default: 1 },
+    teachingWeekdays: { type: [{ type: Number, min: 0, max: 6 }], default: [1, 2, 3, 4, 5] },
     schoolYear: {
         type: String,
         default: '2025-2026'

@@ -40,6 +40,7 @@ beforeEach(async () => {
   ]);
   classroom = await Classroom.create({
     name: 'Mầm A', ageGroup: '3-4',
+    homeroomTeacherId: teacher._id,
     teachers: [{ teacherId: teacher._id, teacherName: 'Cô Hoa', role: 'homeroom' }]
   });
   student = await Student.create({
@@ -99,10 +100,10 @@ test('revoking child link or teacher assignment revokes access to history', asyn
     .send({ userId: teacher._id, studentId: student._id }).expect(200);
   const path = `/api/chat/conversations/${opened.body.data._id}/messages`;
   await request(app).post(path).set(header(parent)).send({ body: 'Tin cũ' }).expect(201);
-  await Classroom.updateOne({ _id: classroom._id }, { $set: { teachers: [] } });
+  await Classroom.updateOne({ _id: classroom._id }, { $set: { teachers: [], homeroomTeacherId: null } });
   await request(app).get(path).set(header(teacher)).expect(404);
   await request(app).get(path).set(header(parent)).expect(404);
-  await Classroom.updateOne({ _id: classroom._id }, { $set: { teachers: [{ teacherId: teacher._id, teacherName: 'Cô Hoa' }] } });
+  await Classroom.updateOne({ _id: classroom._id }, { $set: { teachers: [{ teacherId: teacher._id, teacherName: 'Cô Hoa' }], homeroomTeacherId: teacher._id } });
   await User.updateOne({ _id: parent._id }, { $set: { 'parentInfo.studentIds': [] } });
   await request(app).get(path).set(header(parent)).expect(403);
   await request(app).get(path).set(header(teacher)).expect(404);

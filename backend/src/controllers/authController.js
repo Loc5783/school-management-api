@@ -40,6 +40,26 @@ const getRegistrationClassrooms = async (req, res) => {
   }
 };
 
+const changeMyPassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    if (typeof currentPassword !== 'string' || typeof newPassword !== 'string' || newPassword.length < 8 || newPassword.length > 72) {
+      return res.status(422).json({ message: 'Nhập mật khẩu hiện tại và mật khẩu mới từ 8 đến 72 ký tự' });
+    }
+    if (currentPassword === newPassword) return res.status(422).json({ message: 'Mật khẩu mới phải khác mật khẩu hiện tại' });
+    const account = await User.findById(req.user._id).select('+passwordHash authVersion');
+    if (!account || !await comparePassword(currentPassword, account.passwordHash)) return res.status(400).json({ message: 'Mật khẩu hiện tại không đúng' });
+    const changed = await User.updateOne({ _id: account._id, authVersion: account.authVersion || 0 }, {
+      $set: { passwordHash: await hashPassword(newPassword) }, $inc: { authVersion: 1 }
+    });
+    if (!changed.modifiedCount) return res.status(409).json({ message: 'Tài khoản vừa thay đổi, vui lòng đăng nhập lại' });
+    return res.json({ message: 'Đã đổi mật khẩu. Vui lòng đăng nhập lại.' });
+  } catch (error) {
+    console.error('Change own password failed:', error.message);
+    return res.status(500).json({ message: 'Không thể đổi mật khẩu' });
+  }
+};
+
 // Public registration is intentionally limited to pending parent accounts.
 const register = async (req, res) => {
   try {
@@ -111,7 +131,7 @@ const login = async (req, res) => {
     if (!isMatch) {
       return res.status(401).json({ message: 'Tên đăng nhập hoặc mật khẩu không đúng' });
     }
-    if (user.status !== 'active') {
+    if (user.status !== 'active' || (user.accessEndsAt && user.accessEndsAt <= new Date())) {
       return res.status(403).json({ message: 'Tài khoản chưa được kích hoạt hoặc đang tạm ngưng' });
     }
     if (user.role === 'parent' && !hasLinkedStudent(user)) {
@@ -212,6 +232,7 @@ module.exports = {
   getRegistrationClassrooms,
   login,
   getMe,
+  changeMyPassword,
   getAllPermissions,
   updateUserPermissions
 };

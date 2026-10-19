@@ -1,0 +1,79 @@
+.hr-report-page { display: grid; gap: 20px; }
+.hr-report-header { padding: 26px; background: linear-gradient(115deg, #fff 60%, #f3f6ff); }
+.hr-report-title { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
+.hr-report-title-icon { display: grid; place-items: center; flex: 0 0 56px; height: 56px; border-radius: 17px; color: #4265e2; background: #eaf0ff; }
+.hr-report-title h2 { margin: 4px 0 8px; font-size: 24px; letter-spacing: -.6px; }
+.hr-report-title p:last-child { color: #7182a2; margin: 0; line-height: 1.6; }
+.hr-report-filters { display: grid; grid-template-columns: 1fr 1fr 1.3fr 1.3fr auto; align-items: end; gap: 14px; }
+.hr-report-filters label { display: grid; gap: 8px; color: #526583; font-size: 13px; font-weight: 650; }
+.hr-report-filters input, .hr-report-filters select { width: 100%; min-width: 0; min-height: 46px; padding: 10px 12px; font: inherit; color: #253d68; background: #fff; border: 1px solid #dce5f6; border-radius: 11px; }
+.hr-report-filters input:focus, .hr-report-filters select:focus { outline: 3px solid #e8eeff; border-color: #7f9bee; }
+.hr-report-filters .button { min-height: 46px; white-space: nowrap; }
+.hr-report-context { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #5b6f91; font-size: 13px; }
+.hr-report-context small { color: #8a97ae; }
+.hr-report-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.hr-report-metrics article { position: relative; min-width: 0; padding: 21px; border: 1px solid #e5ebf7; border-radius: 17px; background: #fff; box-shadow: 0 5px 18px #30529205; }
+.hr-report-metric-icon { display: grid; place-items: center; position: absolute; right: 18px; top: 17px; width: 35px; height: 35px; border-radius: 11px; }
+.hr-report-metric-icon.blue { color: #396fd8; background: #edf3ff; }
+.hr-report-metric-icon.green { color: #139d80; background: #e8f9f2; }
+.hr-report-metric-icon.orange { color: #d98524; background: #fff3e4; }
+.hr-report-metric-icon.purple { color: #8b60d9; background: #f2ecff; }
+.hr-report-metrics article > small { display: block; color: #7788a6; font-size: 10px; font-weight: 750; letter-spacing: .45px; padding-right: 32px; line-height: 1.7; }
+.hr-report-metrics article > strong { display: block; margin: 15px 0 9px; color: #1c3569; font-size: 30px; letter-spacing: -.7px; }
+.hr-report-metrics em { font-size: 15px; font-weight: 500; font-style: normal; color: #8795b2; }
+.hr-report-metrics .hr-report-money { font-size: clamp(18px, 1.8vw, 27px); overflow-wrap: anywhere; }
+.hr-report-metrics p { margin: 0; color: #8998b2; font-size: 12px; }
+.hr-report-overview { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.hr-report-panel { padding: 24px; }
+.hr-report-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 20px; }
+.hr-report-panel h3, .hr-report-detail h3 { margin: 5px 0; font-size: 17px; color: #233d70; }
+.hr-report-chip { padding: 7px 10px; color: #4767ca; font-weight: 700; font-size: 12px; border-radius: 12px; background: #edf2ff; white-space: nowrap; }
+.hr-report-bars { display: grid; gap: 13px; }
+.hr-report-bars > div > div:first-child { display: flex; justify-content: space-between; gap: 14px; margin-bottom: 6px; color: #637797; font-size: 13px; }
+.hr-report-bars strong { color: #344e86; }
+.hr-report-bar-track { height: 8px; overflow: hidden; border-radius: 20px; background: #f0f3fa; }
+.hr-report-bar-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #5897fa, #6559df); transition: width .3s ease; }
+.hr-report-note { margin: 20px 0 0; padding-top: 14px; border-top: 1px solid #edf1fa; color: #8392ad; font-size: 12px; line-height: 1.7; }
+.hr-report-payroll-states { display: grid; gap: 15px; }
+.hr-report-payroll-states > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.hr-report-payroll-states > div > span { display: flex; align-items: center; gap: 10px; }
+.hr-report-payroll-states small { color: #8b9ab3; font-size: 11px; }
+.hr-report-payroll-states strong { color: #344e86; font-size: 15px; }
+.hr-report-warning { display: flex; gap: 10px; padding: 15px 18px; border: 1px solid #f1dcac; border-radius: 13px; color: #8b681d; background: #fffbef; }
+.hr-report-warning > svg { flex-shrink: 0; margin-top: 2px; }
+.hr-report-warning p { margin: 0 0 5px; font-size: 13px; line-height: 1.6; }
+.hr-report-warning p:last-child { margin: 0; }
+.hr-report-tabs { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; padding: 9px; background: #fafbff; border-bottom: 1px solid #eaf0fb; }
+.hr-report-tabs button { display: flex; justify-content: center; align-items: center; gap: 7px; min-height: 48px; padding: 9px 6px; border: 0; border-radius: 10px; background: transparent; color: #778bad; font: 650 12px 'Plus Jakarta Sans', sans-serif; cursor: pointer; }
+.hr-report-tabs button.active { color: #fff; background: linear-gradient(110deg, #4588f1, #5c56df); box-shadow: 0 5px 12px #4c6dde20; }
+.hr-report-tabs button > span { padding: 2px 5px; background: #edf2fa; border-radius: 6px; font-size: 10px; }
+.hr-report-tabs button.active > span { background: #ffffff29; }
+.hr-report-detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 23px 24px 18px; }
+.hr-report-detail-heading p { margin: 9px 0 0; max-width: 750px; color: #8191ae; font-size: 12px; line-height: 1.7; }
+.hr-report-detail-heading .button { flex-shrink: 0; }
+.hr-report-table { width: 100%; border-collapse: collapse; text-align: left; }
+.hr-report-table th { padding: 14px 20px; background: #f5f7ff; color: #7186b0; font-size: 10px; font-weight: 750; text-transform: uppercase; letter-spacing: .3px; white-space: nowrap; }
+.hr-report-table td { padding: 18px 20px; border-bottom: 1px solid #edf1f9; color: #5d7498; font-size: 12px; line-height: 1.6; vertical-align: top; min-width: 110px; max-width: 300px; overflow-wrap: anywhere; }
+.hr-report-table td strong { color: #2d477b; display: block; font-weight: 650; }
+.hr-report-table td small { display: block; font-size: 11px; color: #90a0ba; margin-top: 5px; }
+.hr-report-tag { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 9px; background: #eef2fa; color: #7185a8; font-weight: 650; font-size: 10px; line-height: 1.5; white-space: nowrap; }
+.hr-report-tag.active, .hr-report-tag.approved, .hr-report-tag.joined, .hr-report-tag.paid { color: #159779; background: #e5f8ee; }
+.hr-report-tag.shortage, .hr-report-tag.resigned, .hr-report-tag.rejected { color: #cd626a; background: #fff0f0; }
+.hr-report-tag.pending, .hr-report-tag.on_leave { color: #ba812a; background: #fff5e6; }
+.hr-report-tag.reviewed, .hr-report-tag.confirmed, .hr-report-tag.transferred { color: #546dce; background: #eef0ff; }
+.hr-report-table td.hr-report-empty { text-align: center; padding: 45px 20px; }
+.hr-report-empty > svg { color: #a4b5d5; margin-bottom: 12px; }
+.hr-report-empty > span { display: block; margin-top: 8px; color: #91a1bc; }
+.hr-report-pagination { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 18px 24px; color: #8799b6; font-size: 12px; }
+.hr-report-pagination > div { display: flex; gap: 8px; }
+.hr-report-leave-types { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 24px 20px; }
+.hr-report-leave-types > span { padding: 7px 10px; border-radius: 9px; color: #798cad; background: #f5f7ff; font-size: 12px; }
+.hr-report-role-costs { display: flex; flex-wrap: wrap; gap: 10px; padding: 0 24px 20px; }
+.hr-report-role-costs > div { display: grid; gap: 5px; flex: 1 1 150px; padding: 13px; border: 1px solid #e7ecf8; border-radius: 11px; color: #8192af; font-size: 11px; }
+.hr-report-role-costs strong { color: #405b92; font-size: 15px; }
+.hr-report-next { padding: 0 24px 24px; }
+.hr-report-loading { padding: 40px; display: flex; align-items: center; justify-content: center; gap: 14px; color: #8596b1; }
+@media (max-width: 1250px) { .hr-report-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }.hr-report-filters .button { justify-self: start; }.hr-report-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 850px) { .hr-report-overview { grid-template-columns: 1fr; }.hr-report-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }.hr-report-context { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 520px) { .hr-report-header, .hr-report-panel { padding: 18px; }.hr-report-filters { grid-template-columns: 1fr; }.hr-report-title h2 { font-size: 20px; }.hr-report-title-icon { display: none; }.hr-report-metrics article { padding: 16px; }.hr-report-metrics article > strong { font-size: 23px; }.hr-report-metric-icon { display: none; }.hr-report-metrics article > small { padding: 0; }.hr-report-tabs button { flex-wrap: wrap; }.hr-report-detail-heading { padding: 18px; }.hr-report-pagination { padding: 18px; flex-wrap: wrap; }.hr-report-payroll-states > div > span { gap: 6px; flex-wrap: wrap; } }
+@media (prefers-reduced-motion: reduce) { .hr-report-bar-track span { transition: none; } }

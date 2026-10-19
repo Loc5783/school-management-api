@@ -8,7 +8,7 @@ const blank = { name: '', fullName: '', subject: '', ageGroup: '3-4', maxSize: 2
 
 export default function ClassroomManagement() {
   const role = JSON.parse(localStorage.getItem('user') || '{}').role;
-  const canManage = ['admin', 'principal'].includes(role);
+  const canManage = role === 'admin';
   const [items, setItems] = useState([]);
   const [form, setForm] = useState(blank);
   const [editingId, setEditingId] = useState(null);

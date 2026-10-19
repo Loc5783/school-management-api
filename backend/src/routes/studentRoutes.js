@@ -16,13 +16,13 @@ const router = express.Router();
 
 router.use(auth);
 
-router.post('/', roleCheck(['admin', 'principal', 'teacher']), createStudent);
+router.post('/', roleCheck(['admin', 'teacher']), createStudent);
 router.get('/', getAllStudents);
 router.get('/:id/daily-reports', roleCheck(['admin', 'principal', 'teacher', 'parent']), getDailyReports);
-router.put('/:id/daily-reports', roleCheck(['admin', 'principal', 'teacher']), saveDailyReport);
+router.put('/:id/daily-reports', roleCheck(['admin', 'teacher']), saveDailyReport);
 router.get('/:id', getStudentById);
-router.put('/:id', roleCheck(['admin', 'principal', 'teacher', 'parent']), updateStudent);
+router.put('/:id', roleCheck(['admin', 'teacher', 'parent']), updateStudent);
 router.patch('/:id/status', roleCheck(['admin', 'principal']), changeStudentStatus);
-router.delete('/:id', roleCheck(['admin', 'principal']), deleteStudent);
+router.delete('/:id', roleCheck(['admin']), deleteStudent);
 
 module.exports = router;

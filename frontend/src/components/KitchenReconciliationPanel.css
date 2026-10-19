@@ -1,0 +1,32 @@
+.kitchen-reconciliation { overflow: hidden; }
+.kr-hint { margin: 0; padding: 15px 23px; color: #607391; line-height: 1.55; font-size: 13px; }
+.kr-scroll { overflow-x: auto; padding: 0 23px 20px; }
+.kr-scroll table { width: 100%; min-width: 760px; border-collapse: collapse; color: #25426c; font-size: 13px; }
+.kr-scroll th, .kr-scroll td { padding: 12px; border-bottom: 1px solid #e4ecf7; text-align: left; vertical-align: top; }
+.kr-scroll th { color: #647b9e; background: #f4f7fc; font-size: 11px; text-transform: uppercase; }
+.kr-scroll td:first-child { font-weight: 700; }
+.kr-variance { background: #fff9f0; }
+.kr-stock { margin: 3px 23px 18px; border: 1px solid #e1e9f5; border-radius: 13px; overflow: hidden; }
+.kr-stock .kr-hint { padding-bottom: 18px; }
+.kr-footer { display: grid; gap: 12px; padding: 18px 23px 23px; border-top: 1px solid #e4ecf7; }
+.kr-footer label { color: #344b70; font-weight: 700; font-size: 13px; }
+.kr-footer textarea { min-height: 80px; padding: 12px; border: 1px solid #cfddf0; border-radius: 10px; resize: vertical; font: inherit; }
+.kr-footer button { justify-self: start; }
+.kr-footer small { color: #7184a1; }
+.kr-footer .kr-hint { padding: 0; }
+.kr-counts { display: flex; flex-wrap: wrap; gap: 14px; }
+.kr-counts label { display: grid; gap: 6px; }
+.kr-counts input { width: 150px; padding: 10px 12px; border: 1px solid #cfddf0; border-radius: 10px; font: inherit; }
+.kr-blockers, .kr-error { padding: 12px 14px; border-radius: 10px; color: #9a5521; background: #fff5e8; }
+.kr-blockers ul { margin: 6px 0 0; padding-left: 20px; }
+.kr-error { margin: 16px 23px; }
+.kr-success, .kr-closed { margin: 16px 23px; padding: 12px 14px; border-radius: 10px; color: #146a50; background: #eaf8f0; }
+.kr-closed { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+.kr-transactions { padding: 0 23px 17px; color: #294a79; }
+.kr-transactions summary { cursor: pointer; font-weight: 700; }
+.kr-transactions .kr-scroll { padding: 12px 0 0; }
+.kr-source { display: block; margin-top: 4px; color: #6980a2; }
+.kr-safety { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 23px 18px; }
+.kr-safety span { padding: 7px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+.kr-safety .is-ready { color: #167153; background: #e7f7ef; }
+.kr-safety .is-pending { color: #a16326; background: #fff1df; }

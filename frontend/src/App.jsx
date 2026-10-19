@@ -1,15 +1,21 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
 import Register from './pages/Register';
-import ParentAccountManagement from './pages/ParentAccountManagement';
 import AccountManagement from './pages/AccountManagement';
 import Dashboard from './pages/Dashboard';
+import PrincipalOverview from './pages/PrincipalOverview';
 import AttendanceClassList from './pages/AttendanceClassList';
 import AttendanceDetail from './pages/AttendanceDetail';
 import AttendanceAbsenceReport from './pages/AttendanceAbsenceReport';
 import AttendanceLeaveManagement from './pages/AttendanceLeaveManagement';
 import TimekeepingHub from './pages/TimekeepingHub';
 import NutritionManagement from './pages/NutritionManagement';
+import ChefDashboard from './pages/ChefDashboard';
+import AccountantDashboard from './pages/AccountantDashboard';
+import AccountingExpenses from './pages/AccountingExpenses';
+import OperatingExpenses from './pages/OperatingExpenses';
+import AccountingCashbook from './pages/AccountingCashbook';
+import AccountingReport from './pages/AccountingReport';
 import StudentList from './pages/StudentList';
 import StudentDetail from './pages/StudentDetail';
 import StudentForm from './pages/StudentForm';
@@ -28,6 +34,12 @@ import StudentProfileChangeRequests from './pages/StudentProfileChangeRequests';
 import ParentFeedbackManagement from './pages/ParentFeedbackManagement';
 import ParentSettings from './pages/ParentSettings';
 import GuardOperations from './pages/GuardOperations';
+import StaffSettings from './pages/StaffSettings';
+import MyStaffing from './pages/MyStaffing';
+import ProfessionalReviews from './pages/ProfessionalReviews';
+import MyHandovers from './pages/MyHandovers';
+import InternalNotices from './pages/InternalNotices';
+import MyStaffRequests from './pages/MyStaffRequests';
 
 function ProtectedRoute({ children }) {
   return localStorage.getItem('token') ? children : <Navigate to="/login" replace />;
@@ -83,14 +95,31 @@ function RoleRoute({ roles, children }) {
   return roles.includes(user.role) ? children : <Navigate to="/dashboard" replace />;
 }
 
+function ProfileRequestsRoute({ children }) {
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
+  if (user.role === 'admin') return <Navigate to="/accounts?tab=profile-requests" replace />;
+  if (user.role === 'principal') return children;
+  return <Navigate to="/dashboard" replace />;
+}
+
+function ParentFeedbackRoute({ children }) {
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
+  if (user.role === 'admin') return <Navigate to="/staff-settings?tab=parent-feedback" replace />;
+  if (user.role === 'principal') return children;
+  return <Navigate to="/dashboard" replace />;
+}
+
 function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
-        <Route path="/parent-accounts" element={<RoleRoute roles={['admin', 'principal']}><ParentAccountManagement /></RoleRoute>} />
-        <Route path="/accounts" element={<RoleRoute roles={['admin', 'principal', 'hr']}><AccountManagement /></RoleRoute>} />
+        <Route path="/parent-accounts" element={<RoleRoute roles={['admin']}><Navigate to="/accounts?tab=parents" replace /></RoleRoute>} />
+        <Route path="/accounts" element={<RoleRoute roles={['admin', 'hr']}><AccountManagement /></RoleRoute>} />
+        <Route path="/principal" element={<RoleRoute roles={['admin', 'principal']}><PrincipalOverview /></RoleRoute>} />
         <Route
           path="/dashboard"
           element={<ProtectedRoute><Dashboard /></ProtectedRoute>}
@@ -101,7 +130,7 @@ function App() {
         />
         <Route
           path="/attendance/class/:classroomId"
-          element={<ProtectedRoute><AttendanceDetail /></ProtectedRoute>}
+          element={<RoleRoute roles={['admin', 'teacher']}><AttendanceDetail /></RoleRoute>}
         />
         <Route
           path="/attendance/reports"
@@ -120,6 +149,12 @@ function App() {
           element={<ProtectedRoute><TimekeepingHub /></ProtectedRoute>}
         />
         <Route path="/my-payroll" element={<StaffRoute><MyPayroll /></StaffRoute>} />
+        <Route path="/staff-settings" element={<StaffRoute><StaffSettings /></StaffRoute>} />
+        <Route path="/my-staffing" element={<StaffRoute><MyStaffing /></StaffRoute>} />
+        <Route path="/my-handovers" element={<StaffRoute><MyHandovers /></StaffRoute>} />
+        <Route path="/internal-notices" element={<StaffRoute><InternalNotices /></StaffRoute>} />
+        <Route path="/my-requests" element={<StaffRoute><MyStaffRequests /></StaffRoute>} />
+        <Route path="/professional-reviews" element={<RoleRoute roles={['teacher', 'principal', 'admin']}><ProfessionalReviews /></RoleRoute>} />
         <Route path="/daily-care" element={<TeacherRoute><DailyCare /></TeacherRoute>} />
         <Route
           path="/timekeeping-management"
@@ -129,10 +164,16 @@ function App() {
           path="/nutrition"
           element={<ProtectedRoute><NutritionManagement /></ProtectedRoute>}
         />
+        <Route path="/kitchen" element={<RoleRoute roles={['chef', 'admin']}><ChefDashboard /></RoleRoute>} />
+        <Route path="/accounting" element={<RoleRoute roles={['accountant']}><AccountantDashboard /></RoleRoute>} />
+        <Route path="/accounting/expenses" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><AccountingExpenses /></RoleRoute>} />
+        <Route path="/accounting/operating-expenses" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><OperatingExpenses /></RoleRoute>} />
+        <Route path="/accounting/cashbook" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><AccountingCashbook /></RoleRoute>} />
+        <Route path="/accounting/report" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><AccountingReport /></RoleRoute>} />
         <Route path="/students" element={<StudentManagementRoute><StudentList /></StudentManagementRoute>} />
-        <Route path="/students/new" element={<StudentManagementRoute><StudentForm /></StudentManagementRoute>} />
+        <Route path="/students/new" element={<RoleRoute roles={['admin', 'teacher']}><StudentForm /></RoleRoute>} />
         <Route path="/students/:id" element={<StudentManagementRoute><StudentDetail /></StudentManagementRoute>} />
-        <Route path="/students/:id/edit" element={<StudentManagementRoute><StudentForm /></StudentManagementRoute>} />
+        <Route path="/students/:id/edit" element={<RoleRoute roles={['admin', 'teacher']}><StudentForm /></RoleRoute>} />
         <Route path="/classrooms" element={<ClassroomRoute><ClassroomManagement /></ClassroomRoute>} />
         <Route path="/finance" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><FinanceManagement /></RoleRoute>} />
         <Route path="/reports" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><Reports /></RoleRoute>} />
@@ -143,9 +184,9 @@ function App() {
         <Route path="/parent-settings" element={<ParentRoute><ParentSettings /></ParentRoute>} />
         <Route path="/parent-care" element={<ParentRoute><ParentCare /></ParentRoute>} />
         <Route path="/pickups" element={<PickupRoute><PickupManagement /></PickupRoute>} />
-        <Route path="/student-profile-change-requests" element={<RoleRoute roles={['admin', 'principal']}><StudentProfileChangeRequests /></RoleRoute>} />
-        <Route path="/parent-feedback" element={<RoleRoute roles={['admin', 'principal']}><ParentFeedbackManagement /></RoleRoute>} />
-        <Route path="/guard" element={<RoleRoute roles={['guard', 'admin', 'principal']}><GuardOperations /></RoleRoute>} />
+        <Route path="/guard" element={<RoleRoute roles={['guard', 'admin']}><GuardOperations /></RoleRoute>} />
+        <Route path="/student-profile-change-requests" element={<ProfileRequestsRoute><StudentProfileChangeRequests /></ProfileRequestsRoute>} />
+        <Route path="/parent-feedback" element={<ParentFeedbackRoute><ParentFeedbackManagement /></ParentFeedbackRoute>} />
         <Route path="/messages" element={<ChatRoute><Messages /></ChatRoute>} />
         <Route path="*" element={<Navigate to="/dashboard" />} />
       </Routes>

@@ -5,29 +5,145 @@ import api from '../api/axiosConfig';
 import { getUnreadChat } from '../api/chat';
 
 const allNavItems = [
-  { to: '/guard', label: 'Tổng quan trực cổng', icon: 'grid', roles: ['guard'] },
   { to: '/dashboard', label: 'Tổng quan', icon: 'grid', roles: ['admin', 'principal', 'teacher'] },
-  { to: '/attendance', label: 'Điểm danh', icon: 'attendance', roles: ['admin', 'principal', 'teacher'] },
+  { to: '/principal', label: 'Sổ điều hành', icon: 'chart', roles: ['admin', 'principal'] },
+  { to: '/accounts', label: 'Tài khoản & vai trò', icon: 'shield', roles: ['admin', 'hr'] },
+  { to: '/students', label: 'Học sinh', icon: 'students', roles: ['admin', 'principal', 'teacher'] },
+  { to: '/classrooms', label: 'Lớp học', icon: 'classes', roles: ['admin', 'principal'] },
+  { to: '/attendance', label: 'Điểm danh', icon: 'attendance', roles: ['admin', 'teacher'] },
+  { to: '/attendance/reports', label: 'Báo cáo điểm danh', icon: 'attendance', roles: ['principal'] },
   { to: '/timekeeping', label: 'Chấm công nhân sự', icon: 'clock', roles: ['admin', 'principal', 'teacher', 'guard'] },
-  { to: '/my-payroll', label: 'Lương của tôi', icon: 'money', roles: ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'] },
   { to: '/hr', label: 'Nhân sự & Lương', icon: 'users', roles: ['admin', 'principal', 'accountant', 'hr'] },
-  { to: '/accounts', label: 'Tài khoản & vai trò', icon: 'shield', roles: ['admin', 'principal', 'hr'] },
-  { to: '/student-profile-change-requests', label: 'Duyệt cập nhật hồ sơ', icon: 'card', roles: ['admin', 'principal'] },
-  { to: '/parent-feedback', label: 'Phản hồi phụ huynh', icon: 'chat', roles: ['admin', 'principal'] },
+  { to: '/finance', label: 'Tài chính', icon: 'money', roles: ['admin', 'principal', 'accountant'] },
+  { to: '/accounting', label: 'Tổng quan kế toán', icon: 'grid', roles: ['accountant'] },
+  { to: '/accounting/expenses', label: 'Sổ chi mua sắm', icon: 'money', roles: ['accountant', 'admin'] },
+  { to: '/accounting/operating-expenses', label: 'Chi vận hành', icon: 'money', roles: ['admin', 'principal', 'accountant'] },
+  { to: '/accounting/cashbook', label: 'Đối soát thu – chi', icon: 'chart', roles: ['accountant', 'admin'] },
+  { to: '/accounting/report', label: 'Báo cáo kế toán', icon: 'chart', roles: ['accountant', 'admin'] },
+  { to: '/kitchen', label: 'Bếp hôm nay', icon: 'grid', roles: ['chef', 'admin'] },
+  { to: '/nutrition', label: 'Bếp ăn & Bán trú', icon: 'utensils', roles: ['admin', 'principal', 'chef', 'teacher'] },
+  { to: '/guard', label: 'Tổng quan trực cổng', icon: 'grid', roles: ['guard', 'admin'] },
+  { to: '/pickups', label: 'Đón trẻ', icon: 'users', roles: ['parent', 'teacher', 'guard', 'admin', 'principal'] },
+  { to: '/assets', label: 'Đề xuất mua sắm', icon: 'settings', roles: ['teacher'] },
+  { to: '/assets', label: 'Cơ sở vật chất', icon: 'settings', roles: ['admin', 'principal'] },
+  { to: '/reports', label: 'Báo cáo', icon: 'chart', roles: ['admin', 'principal', 'accountant'] },
+  { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar', roles: ['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard'] },
+  { to: '/my-staffing', label: 'Lịch phân công của tôi', icon: 'calendar', roles: ['teacher', 'chef', 'guard'] },
+  { to: '/my-handovers', label: 'Việc bàn giao của tôi', icon: 'users', roles: ['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard'] },
+  { to: '/my-requests', label: 'Yêu cầu của tôi', icon: 'card', roles: ['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard'] },
+  { to: '/my-payroll', label: 'Lương của tôi', icon: 'money', roles: ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'] },
+  { to: '/professional-reviews', label: 'Đánh giá chuyên môn', icon: 'users', roles: ['teacher', 'principal', 'admin'], positions: ['head_teacher', 'principal', 'vice_principal'] },
+  { to: '/student-profile-change-requests', label: 'Duyệt cập nhật hồ sơ', icon: 'card', roles: ['principal'] },
+  { to: '/parent-feedback', label: 'Phản hồi phụ huynh', icon: 'chat', roles: ['principal'] },
   { to: '/parent-dashboard', label: 'Tổng quan', icon: 'grid', roles: ['parent'] },
   { to: '/parent-portal', label: 'Thông tin của con', icon: 'students', roles: ['parent'] },
   { to: '/parent-care', label: 'Sổ chăm sóc của con', icon: 'attendance', roles: ['parent'] },
-  { to: '/pickups', label: 'Đón trẻ', icon: 'users', roles: ['parent', 'teacher', 'guard', 'admin', 'principal'] },
   { to: '/messages', label: 'Tin nhắn', icon: 'chat', roles: ['parent', 'teacher'] },
   { to: '/daily-care', label: 'Sổ chăm sóc lớp', icon: 'attendance', roles: ['teacher'] },
-  { to: '/students', label: 'Học sinh', icon: 'students', roles: ['admin', 'principal', 'teacher'] },
-  { to: '/classrooms', label: 'Lớp học', icon: 'classes', roles: ['admin', 'principal'] },
-  { to: '/finance', label: 'Tài chính', icon: 'money', permission: 'tuition.read' },
-  { to: '/nutrition', label: 'Bếp ăn & Bán trú', icon: 'utensils', roles: ['admin', 'principal', 'chef', 'teacher'] },
-  { to: '/assets', label: 'Đề xuất mua sắm', icon: 'settings', roles: ['teacher'] },
-  { to: '/assets', label: 'Cơ sở vật chất', icon: 'settings', roles: ['admin', 'principal'] },
-  { to: '/reports', label: 'Báo cáo', icon: 'chart', permission: 'report.read' },
 ];
+
+const PRINCIPAL_SIDEBAR_STORAGE_KEY = 'principal_sidebar_open_groups';
+
+const principalNavSections = [
+  {
+    id: 'overview-ops',
+    label: 'TỔNG QUAN & ĐIỀU HÀNH',
+    icon: 'grid',
+    items: [
+      { to: '/principal', label: 'Sổ điều hành', icon: 'chart' },
+      { to: '/dashboard', label: 'Tổng quan hôm nay', icon: 'grid' },
+      { to: '/internal-notices', label: 'Thông báo chỉ đạo', icon: 'calendar' },
+    ],
+  },
+  {
+    id: 'approvals',
+    label: 'PHÊ DUYỆT',
+    icon: 'check',
+    items: [
+      { to: '/student-profile-change-requests', label: 'Duyệt hồ sơ học sinh', icon: 'card' },
+      { to: '/accounting/operating-expenses', label: 'Duyệt chi vận hành', icon: 'money' },
+      { to: '/finance?tab=refunds', label: 'Duyệt hoàn học phí', icon: 'money' },
+      { to: '/hr?tab=leave', label: 'Duyệt nghỉ phép', icon: 'calendar' },
+      { to: '/hr?tab=payroll', label: 'Duyệt bảng lương', icon: 'money' },
+    ],
+  },
+  {
+    id: 'supervision',
+    label: 'GIÁM SÁT NHÀ TRƯỜNG',
+    icon: 'classes',
+    items: [
+      { to: '/classrooms', label: 'Lớp học', icon: 'classes' },
+      { to: '/pickups', label: 'Giám sát đón trẻ', icon: 'users' },
+      { to: '/hr', label: 'Nhân sự & Lương', icon: 'users' },
+      { to: '/finance', label: 'Tài chính học phí', icon: 'money' },
+    ],
+  },
+  {
+    id: 'reports',
+    label: 'BÁO CÁO & ĐÁNH GIÁ',
+    icon: 'chart',
+    items: [
+      { to: '/attendance/reports', label: 'Báo cáo chuyên cần', icon: 'attendance' },
+      { to: '/reports', label: 'Báo cáo nhà trường', icon: 'chart' },
+      { to: '/accounting/report', label: 'Báo cáo kế toán', icon: 'chart' },
+      { to: '/professional-reviews', label: 'Đánh giá chuyên môn', icon: 'users' },
+    ],
+  },
+  {
+    id: 'feedback',
+    label: 'PHẢN HỒI PHỤ HUYNH',
+    icon: 'chat',
+    items: [
+      { to: '/parent-feedback', label: 'Phản hồi phụ huynh', icon: 'chat' },
+    ],
+  },
+  {
+    id: 'personal',
+    label: 'CÁ NHÂN',
+    icon: 'users',
+    items: [
+      { to: '/my-requests', label: 'Yêu cầu của tôi', icon: 'card' },
+      { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
+    ],
+  },
+];
+
+const isNavItemActive = (itemTo, pathname, search) => {
+  const [targetPath, targetQuery] = itemTo.split('?');
+  const targetParams = new URLSearchParams(targetQuery || '');
+  const targetTab = targetParams.get('tab');
+
+  const currentParams = new URLSearchParams(search || '');
+  const currentTab = currentParams.get('tab');
+
+  const pathMatches = pathname === targetPath || pathname.startsWith(`${targetPath}/`);
+  if (!pathMatches) return false;
+
+  if (targetTab) {
+    return currentTab === targetTab;
+  }
+
+  if (targetPath === '/hr') {
+    return currentTab !== 'leave' && currentTab !== 'payroll';
+  }
+
+  if (targetPath === '/finance') {
+    return currentTab !== 'refunds';
+  }
+
+  return true;
+};
+
+const isPrincipalItemActive = isNavItemActive;
+
+const getActiveSectionId = (sections, pathname, search) => {
+  for (const section of sections) {
+    if (section.items.some((item) => isPrincipalItemActive(item.to, pathname, search))) {
+      return section.id;
+    }
+  }
+  return null;
+};
 
 export default function AppShell({ title, subtitle, actions, children }) {
   const navigate = useNavigate();
@@ -41,6 +157,32 @@ export default function AppShell({ title, subtitle, actions, children }) {
   const [unreadCount, setUnreadCount] = useState(0);
   const [chatUnread, setChatUnread] = useState({ total: 0, data: [] });
   const [showNotifications, setShowNotifications] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [prevPath, setPrevPath] = useState(location.pathname);
+  const [openSections, setOpenSections] = useState(() => {
+    let initialOpen = principalNavSections.map((s) => s.id);
+    try {
+      const saved = localStorage.getItem(PRINCIPAL_SIDEBAR_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          initialOpen = parsed;
+        }
+      }
+    } catch (e) {
+      console.error('Lỗi đọc trạng thái menu hiệu trưởng:', e);
+    }
+    const activeSectionId = getActiveSectionId(principalNavSections, location.pathname, location.search);
+    if (activeSectionId && !initialOpen.includes(activeSectionId)) {
+      initialOpen = [...initialOpen, activeSectionId];
+    }
+    return initialOpen;
+  });
+
+  if (prevPath !== location.pathname) {
+    setPrevPath(location.pathname);
+    setMobileNavOpen(false);
+  }
 
   useEffect(() => {
     const fetchUser = async () => {
@@ -67,7 +209,7 @@ export default function AppShell({ title, subtitle, actions, children }) {
       nav.scrollTo({ top: Math.max(0, targetTop), behavior: 'auto' });
     });
     return () => cancelAnimationFrame(frame);
-  }, [location.pathname, loading]);
+  }, [location.pathname, location.search, loading]);
 
   const loadNotifications = useCallback(async () => {
     try {
@@ -106,6 +248,40 @@ export default function AppShell({ title, subtitle, actions, children }) {
     };
   }, [user, loadNotifications, loadUnreadChat]);
 
+  const isPrincipal = user?.role === 'principal';
+  const currentLocationKey = `${location.pathname}${location.search}`;
+  const [prevLocationKey, setPrevLocationKey] = useState(currentLocationKey);
+
+  if (prevLocationKey !== currentLocationKey) {
+    setPrevLocationKey(currentLocationKey);
+    if (isPrincipal) {
+      const activeSectionId = getActiveSectionId(principalNavSections, location.pathname, location.search);
+      if (activeSectionId && !openSections.includes(activeSectionId)) {
+        const next = [...openSections, activeSectionId];
+        setOpenSections(next);
+        try {
+          localStorage.setItem(PRINCIPAL_SIDEBAR_STORAGE_KEY, JSON.stringify(next));
+        } catch (e) {
+          console.error('Lỗi lưu trạng thái menu hiệu trưởng:', e);
+        }
+      }
+    }
+  }
+
+  const toggleSection = (sectionId) => {
+    setOpenSections((prev) => {
+      const next = prev.includes(sectionId)
+        ? prev.filter((id) => id !== sectionId)
+        : [...prev, sectionId];
+      try {
+        localStorage.setItem(PRINCIPAL_SIDEBAR_STORAGE_KEY, JSON.stringify(next));
+      } catch (e) {
+        console.error('Lỗi lưu trạng thái menu hiệu trưởng:', e);
+      }
+      return next;
+    });
+  };
+
   const toggleNotifications = async () => {
     setShowNotifications((value) => !value);
     if (!showNotifications) {
@@ -135,8 +311,10 @@ export default function AppShell({ title, subtitle, actions, children }) {
   const isAdmin = user?.role === 'admin';
   const roleLabel = { admin: 'Quản trị viên', principal: 'Hiệu trưởng', teacher: 'Giáo viên', accountant: 'Kế toán', chef: 'Nhân viên bếp', hr: 'Nhân sự', parent: 'Phụ huynh', guard: 'Bảo vệ' }[user?.role] || 'Tài khoản trường';
   const totalUnread = unreadCount + chatUnread.total;
-  const homePath = user?.role === 'guard' ? '/guard' : user?.role === 'parent' ? '/parent-dashboard' : '/dashboard';
+  const homePath = user?.role === 'guard' ? '/guard' : user?.role === 'chef' ? '/kitchen' : user?.role === 'accountant' ? '/accounting' : user?.role === 'parent' ? '/parent-dashboard' : user?.role === 'hr' ? '/hr' : isPrincipal ? '/principal' : '/dashboard';
 
+  // Lọc menu dựa trên permissions và vai trò
+  // Đảm bảo không trùng lặp route trong danh sách
   // Lọc menu dựa trên permissions
   const navItems = allNavItems.filter(item => {
     // Phụ huynh chỉ dùng cổng thông tin của con và tin nhắn giáo viên.
@@ -145,11 +323,92 @@ export default function AppShell({ title, subtitle, actions, children }) {
     if (user?.role === 'parent') return Boolean(item.roles?.includes('parent'));
     // Mục khai báo roles là khu vực chuyên biệt: kể cả Admin cũng chỉ nhìn thấy
     // khi vai trò của họ nằm trong danh sách (ví dụ cổng thông tin phụ huynh).
+    if (item.positions && !item.positions.includes(user?.employeeInfo?.position)) return false;
     if (item.roles) return item.roles.includes(user?.role);
     if (isAdmin) return true;
     if (!item.permission) return false;
     return permissions.includes(item.permission);
   });
+  const renderNavigation = (mobile = false) => {
+    if (isPrincipal) {
+      const prefix = mobile ? 'mobile' : 'desktop';
+      return (
+        <div
+          className="principal-nav-accordion"
+          role="region"
+          aria-label={mobile ? 'Menu chức năng hiệu trưởng di động' : 'Menu chức năng hiệu trưởng'}
+        >
+          {principalNavSections.map((section) => {
+            const isOpen = openSections.includes(section.id);
+            const contentId = `${prefix}-principal-nav-section-${section.id}`;
+            return (
+              <div key={section.id} className="nav-accordion-section">
+                <button
+                  type="button"
+                  className={`nav-accordion-header ${isOpen ? 'is-open' : ''}`}
+                  aria-expanded={isOpen}
+                  aria-controls={contentId}
+                  onClick={() => toggleSection(section.id)}
+                >
+                  <span className="nav-accordion-header-title">
+                    {section.icon && <Icon name={section.icon} size={15} />}
+                    <span>{section.label}</span>
+                  </span>
+                  <span className={`nav-accordion-chevron ${isOpen ? 'expanded' : ''}`}>
+                    <Icon name="chevronRight" size={14} />
+                  </span>
+                </button>
+                <div
+                  id={contentId}
+                  className="nav-accordion-content"
+                  hidden={!isOpen}
+                >
+                  {section.items.map((item) => {
+                    const isActive = isPrincipalItemActive(item.to, location.pathname, location.search);
+                    return (
+                      <NavLink
+                        to={item.to}
+                        key={item.to}
+                        aria-current={isActive ? 'page' : undefined}
+                        className={() => `nav-link nav-sub-link ${isActive ? 'active' : ''}`.trim()}
+                        onClick={mobile ? () => setMobileNavOpen(false) : undefined}
+                      >
+                        <Icon name={item.icon} />
+                        {item.label}
+                      </NavLink>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+
+    return (
+      <>
+        <p className="nav-label">QUẢN LÝ</p>
+        {navItems.map((item) => (
+          <NavLink
+            to={item.to}
+            key={item.to}
+            className="nav-link"
+            onClick={mobile ? () => setMobileNavOpen(false) : undefined}
+          >
+            <Icon name={item.icon} />
+            {item.label}
+            {item.to === '/messages' && chatUnread.total > 0 && (
+              <span className="nav-chat-count">
+                {chatUnread.total > 99 ? '99+' : chatUnread.total}
+              </span>
+            )}
+          </NavLink>
+        ))}
+      </>
+    );
+  };
 
   const logout = () => {
     localStorage.removeItem('token');
@@ -159,21 +418,63 @@ export default function AppShell({ title, subtitle, actions, children }) {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      {/* Mobile Drawer Overlay */}
+      {mobileNavOpen && (
+        <div className="mobile-nav-backdrop" onClick={() => setMobileNavOpen(false)} role="presentation">
+          <aside className="sidebar mobile-sidebar" onClick={(e) => e.stopPropagation()}>
+            <div className="mobile-sidebar-header">
+              <NavLink to={homePath} className="brand" onClick={() => setMobileNavOpen(false)} aria-label="Mầm Non Hoa Nắng">
+                <span className="brand-mark"><Icon name="sun" size={22} stroke={2.2} /></span>
+                <span><strong>Hoa Nắng</strong><small>Mầm Non Hạnh Phúc</small></span>
+              </NavLink>
+              <button type="button" className="mobile-nav-close" onClick={() => setMobileNavOpen(false)} aria-label="Đóng menu">
+                <Icon name="close" size={20} />
+              </button>
+            </div>
+            <nav className="sidebar-nav" aria-label="Điều hướng chính di động">
+              {renderNavigation(true)}
+            </nav>
+            <div className="sidebar-bottom">
+              {user?.role === 'parent' ? (
+                <NavLink to="/parent-settings" className="nav-link" onClick={() => setMobileNavOpen(false)}>
+                  <Icon name="settings" />Cài đặt
+                </NavLink>
+              ) : (
+                <NavLink to="/staff-settings" className="nav-link" onClick={() => setMobileNavOpen(false)}>
+                  <Icon name="settings" />Cài đặt tài khoản
+                </NavLink>
+              )}
+              <div className="account-card">
+                <span className="avatar">{displayName.charAt(0).toUpperCase()}</span>
+                <span><strong>{displayName}</strong><small>{roleLabel}</small></span>
+              </div>
+              <button className="sidebar-logout" onClick={logout} title="Đăng xuất khỏi hệ thống">
+                <Icon name="logout" size={17} />Đăng xuất
+              </button>
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {/* Desktop Persistent Sidebar */}
+      <aside className="sidebar desktop-sidebar">
         <NavLink to={homePath} className="brand" aria-label="Mầm Non Hoa Nắng">
-          <span className="brand-mark"><Icon name="classes" size={22} stroke={2.2} /></span>
-          <span><strong>Hoa Nắng</strong><small>School Management</small></span>
+          <span className="brand-mark"><Icon name="sun" size={22} stroke={2.2} /></span>
+          <span><strong>Hoa Nắng</strong><small>Mầm Non Hạnh Phúc</small></span>
         </NavLink>
         <nav ref={navRef} className="sidebar-nav" aria-label="Điều hướng chính">
-          <p className="nav-label">QUẢN LÝ</p>
-          {navItems.map((item) => (
-            <NavLink to={item.to} key={item.to} className="nav-link">
-              <Icon name={item.icon} />{item.label}{item.to === '/messages' && chatUnread.total > 0 && <span className="nav-chat-count">{chatUnread.total > 99 ? '99+' : chatUnread.total}</span>}
-            </NavLink>
-          ))}
+          {renderNavigation()}
         </nav>
         <div className="sidebar-bottom">
-          {user?.role === 'parent' ? <NavLink to="/parent-settings" className="nav-link"><Icon name="settings" />Cài đặt</NavLink> : <span className="nav-link is-disabled"><Icon name="settings" />Cài đặt</span>}
+          {user?.role === 'parent' ? (
+            <NavLink to="/parent-settings" className="nav-link">
+              <Icon name="settings" />Cài đặt
+            </NavLink>
+          ) : (
+            <NavLink to="/staff-settings" className="nav-link">
+              <Icon name="settings" />Cài đặt tài khoản
+            </NavLink>
+          )}
           <div className="account-card">
             <span className="avatar">{displayName.charAt(0).toUpperCase()}</span>
             <span><strong>{displayName}</strong><small>{roleLabel}</small></span>
@@ -186,16 +487,55 @@ export default function AppShell({ title, subtitle, actions, children }) {
       <main className="main-content">
         <header className="topbar">
           <div className="topbar-copy">
-            <p className="eyebrow">HỆ THỐNG QUẢN LÝ TRƯỜNG</p>
-            <h1>{title}</h1>
+            <div className="topbar-title-row">
+              <button type="button" className="mobile-menu-toggle" onClick={() => setMobileNavOpen(true)} aria-label="Mở menu điều hướng">
+                <Icon name="menu" size={22} />
+              </button>
+              <div>
+                <p className="eyebrow">HỆ THỐNG QUẢN LÝ TRƯỜNG MẦM NON</p>
+                <h1>{title}</h1>
+              </div>
+            </div>
             {subtitle && <p className="page-subtitle">{subtitle}</p>}
           </div>
           <div className="topbar-actions">
             {actions}
-            <div className="notification-menu"><button className="icon-button" aria-label={`Thông báo${totalUnread ? `, ${totalUnread} chưa đọc` : ''}`} onClick={toggleNotifications}>
-              <Icon name="bell" />{totalUnread > 0 && <span className="notification-count">{totalUnread > 99 ? '99+' : totalUnread}</span>}
-            </button>{showNotifications && <div className="notification-popover"><div><strong>Thông báo</strong>{totalUnread > 0 && <span>{totalUnread} chưa đọc</span>}</div>{chatUnread.data.length > 0 && <><div className="notification-group-label">TIN NHẮN</div>{chatUnread.data.map((item) => <button key={item.conversationId} className="chat-alert unread" onClick={() => openChatAlert(item)}><strong>Bạn có {item.count} tin nhắn từ {user?.role === 'teacher' ? 'phụ huynh' : 'giáo viên'} {item.senderName}</strong><small>Về bé {item.studentName} · Nhấn để xem và đánh dấu đã đọc</small><span className="chat-unread-dot" /></button>)}</>}{notifications.length > 0 && chatUnread.data.length > 0 && <div className="notification-group-label">THÔNG BÁO KHÁC</div>}{notifications.length ? notifications.map((item) => <button key={item._id} className={`${item.isRead ? '' : 'unread'} ${item.metadata?.priority === 'high' ? 'priority' : ''}`.trim()} onClick={() => openNotification(item)}><strong>{item.metadata?.priority === 'high' ? '⚠ ' : ''}{item.title}</strong><small>{item.message}</small></button>) : chatUnread.data.length === 0 && <p>Chưa có thông báo mới.</p>}</div>}</div>
-            <div className="topbar-profile"><span className="avatar">{displayName.charAt(0).toUpperCase()}</span><span><strong>{displayName}</strong><small>{roleLabel}</small></span><Icon name="chevronRight" size={15} /></div>
+            <div className="notification-menu">
+              <button className="icon-button" aria-label={`Thông báo${totalUnread ? `, ${totalUnread} chưa đọc` : ''}`} onClick={toggleNotifications}>
+                <Icon name="bell" />{totalUnread > 0 && <span className="notification-count">{totalUnread > 99 ? '99+' : totalUnread}</span>}
+              </button>
+              {showNotifications && (
+                <div className="notification-popover">
+                  <div><strong>Thông báo</strong>{totalUnread > 0 && <span>{totalUnread} chưa đọc</span>}</div>
+                  {chatUnread.data.length > 0 && (
+                    <>
+                      <div className="notification-group-label">TIN NHẮN</div>
+                      {chatUnread.data.map((item) => (
+                        <button key={item.conversationId} className="chat-alert unread" onClick={() => openChatAlert(item)}>
+                          <strong>Bạn có {item.count} tin nhắn từ {user?.role === 'teacher' ? 'phụ huynh' : 'giáo viên'} {item.senderName}</strong>
+                          <small>Về bé {item.studentName} · Nhấn để xem và đánh dấu đã đọc</small>
+                          <span className="chat-unread-dot" />
+                        </button>
+                      ))}
+                    </>
+                  )}
+                  {notifications.length > 0 && chatUnread.data.length > 0 && <div className="notification-group-label">THÔNG BÁO KHÁC</div>}
+                  {notifications.length ? (
+                    notifications.map((item) => (
+                      <button key={item._id} className={`${item.isRead ? '' : 'unread'} ${item.metadata?.priority === 'high' ? 'priority' : ''}`.trim()} onClick={() => openNotification(item)}>
+                        <strong>{item.metadata?.priority === 'high' ? '⚠ ' : ''}{item.title}</strong>
+                        <small>{item.message}</small>
+                      </button>
+                    ))
+                  ) : chatUnread.data.length === 0 && <p>Chưa có thông báo mới.</p>}
+                </div>
+              )}
+            </div>
+            <div className="topbar-profile">
+              <span className="avatar">{displayName.charAt(0).toUpperCase()}</span>
+              <span><strong>{displayName}</strong><small className={`role-pill role-pill-${user?.role || 'default'}`}>{roleLabel}</small></span>
+              <Icon name="chevronRight" size={15} />
+            </div>
           </div>
         </header>
         <div className="page-content">{children}</div>

@@ -1,6 +1,10 @@
 const AttendanceRecord = require('../models/zone2_hr/AttendanceRecord');
 const RawAttendanceEvent = require('../models/zone2_hr/RawAttendanceEvent');
 const TimekeepingCorrectionRequest = require('../models/zone2_hr/TimekeepingCorrectionRequest');
+const Employee = require('../models/zone2_hr/Employee');
+const StaffShift = require('../models/zone2_hr/StaffShift');
+const AttendanceAuditLog = require('../models/zone2_hr/AttendanceAuditLog');
+const { inTransaction, fail } = require('../services/credentialService');
 const { ingestDeviceEvent, kioskCheckInByIdentifier } = require('../services/attendanceDeviceService');
 const { recalculateAttendanceForDate } = require('../services/attendanceCalculationService');
 const {
@@ -16,12 +20,14 @@ const {
 } = require('../services/attendanceAdjustmentService');
 const {
   DEFAULT_SCHOOL_TIMEZONE,
+  createDateTime,
   getWorkDate,
   isValidWorkDate,
   startOfWorkDate
 } = require('../utils/dateHelpers');
 
 const sendError = (res, error) => {
+  if (error.statusCode) return res.status(error.statusCode).json({ message: error.message });
   if (error instanceof TimekeepingError) {
     return res.status(error.statusCode).json({ message: error.message, code: error.code });
   }
@@ -39,6 +45,7 @@ const manualCheckIn = async (req, res) => {
   try {
     const workDate = startOfWorkDate(getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE), DEFAULT_SCHOOL_TIMEZONE);
     const existing = await AttendanceRecord.findOne({ userId: req.user._id, workDate });
+    if (existing?.finalized) return res.status(409).json({ message: 'Ngày công đã chốt, không thể ghi đè bằng chấm công thủ công. Vui lòng gửi phiếu điều chỉnh.' });
     if (existing?.checkInTime) {
       return res.status(200).json({
         message: 'Bạn đã chấm công hôm nay',
@@ -47,7 +54,10 @@ const manualCheckIn = async (req, res) => {
       });
     }
 
-    const record = await AttendanceRecord.findOneAndUpdate(
+    const record = await inTransaction(async (session) => {
+    const before = await AttendanceRecord.findOne({ userId: req.user._id, workDate }).session(session);
+    if (before?.finalized || before?.checkInTime) throw fail('Ngày công đã được ghi nhận hoặc chốt. Vui lòng tải lại.', 409);
+    const saved = await AttendanceRecord.findOneAndUpdate(
       { userId: req.user._id, workDate },
       {
         $set: {
@@ -62,8 +72,12 @@ const manualCheckIn = async (req, res) => {
         },
         $setOnInsert: { userId: req.user._id, workDate }
       },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
+      { new: true, upsert: true, setDefaultsOnInsert: true, session }
     );
+    await AttendanceAuditLog.create([{ actor: req.user._id, action: 'MANUAL_CHECK_IN', entity: 'AttendanceRecord', entityId: saved._id,
+      oldValue: before?.toObject() || {}, newValue: saved.toObject() }], { session });
+    return saved;
+    });
     return res.status(201).json({ message: 'Chấm công thành công', alreadyCheckedIn: false, data: record });
   } catch (error) {
     return sendError(res, error);
@@ -121,14 +135,65 @@ const createCorrectionRequest = async (req, res) => {
 
 const getMyTimekeeping = async (req, res) => {
   try {
-    const [records, corrections] = await Promise.all([
+    const [records, corrections, employee] = await Promise.all([
       AttendanceRecord.find({ userId: req.user._id }).sort({ workDate: -1 }).limit(31),
-      TimekeepingCorrectionRequest.find({ userId: req.user._id }).sort({ createdAt: -1 }).limit(31)
+      TimekeepingCorrectionRequest.find({ userId: req.user._id }).sort({ createdAt: -1 }).limit(31),
+      Employee.findOne({ userId: req.user._id }).select('_id payrollRole')
     ]);
-    return res.json({ message: 'Lấy dữ liệu chấm công thành công', data: { records, corrections } });
+    const firstDate = records.length ? getWorkDate(records.at(-1).workDate) : getWorkDate();
+    const shifts = employee ? await StaffShift.find({ employeeId: employee._id, status: 'active', validUntil: { $gte: firstDate } }).lean() : [];
+    const attendance = records.map((record) => {
+      const date = getWorkDate(record.workDate);
+      const weekday = new Date(`${date}T00:00:00.000Z`).getUTCDay();
+      const shift = shifts.find((item) => item.validFrom <= date && item.validUntil >= date && item.weekdays.includes(weekday));
+      if (!shift) return { ...record.toObject(), shift: null, lateMinutes: null, earlyLeaveMinutes: null, overtimeMinutes: null };
+      const start = createDateTime(date, shift.startTime);
+      const endDate = shift.endTime <= shift.startTime ? new Date(Date.parse(`${date}T00:00:00.000Z`) + 86400000).toISOString().slice(0, 10) : date;
+      const end = createDateTime(endDate, shift.endTime);
+      const diff = (left, right) => Math.max(0, Math.floor((left - right) / 60000));
+      return { ...record.toObject(), shift: { name: shift.name, startTime: shift.startTime, endTime: shift.endTime },
+        lateMinutes: record.checkInTime ? diff(record.checkInTime, start) : null,
+        earlyLeaveMinutes: record.checkOutTime ? diff(end, record.checkOutTime) : null,
+        overtimeMinutes: record.checkOutTime ? diff(record.checkOutTime, end) : null };
+    });
+    return res.json({ message: 'Lấy dữ liệu chấm công thành công', data: { records: attendance, corrections } });
   } catch (error) {
     return sendError(res, error);
   }
+};
+
+const getDailyTimekeeping = async (req, res) => {
+  try {
+    const date = String(req.query.date || getWorkDate());
+    if (!isValidWorkDate(date)) return res.status(400).json({ message: 'Ngày công phải có định dạng YYYY-MM-DD' });
+    const workDate = startOfWorkDate(date, DEFAULT_SCHOOL_TIMEZONE);
+    const [employees, shifts, records] = await Promise.all([
+      Employee.find({ status: { $ne: 'resigned' }, userId: { $exists: true, $ne: null } }).select('fullName employeeCode payrollRole userId').lean(),
+      StaffShift.find({ status: 'active', validFrom: { $lte: date }, validUntil: { $gte: date } }).lean(),
+      AttendanceRecord.find({ workDate }).lean()
+    ]);
+    const weekday = new Date(`${date}T00:00:00.000Z`).getUTCDay();
+    const recordsByUser = new Map(records.map((record) => [String(record.userId), record]));
+    const data = employees.flatMap((employee) => {
+      const assigned = shifts.filter((shift) => String(shift.employeeId) === String(employee._id) && shift.weekdays.includes(weekday));
+      const record = recordsByUser.get(String(employee.userId));
+      if (!record && !assigned.length) return [];
+      if (!assigned.length) return [{ employeeId: employee._id, employeeName: employee.fullName, employeeCode: employee.employeeCode, role: employee.payrollRole, shift: null, record: record || null, lateMinutes: null, earlyLeaveMinutes: null, overtimeMinutes: null, missing: !record?.checkInTime || !record?.checkOutTime }];
+      return assigned.map((shift) => {
+        const start = createDateTime(date, shift.startTime);
+        const endDate = shift.endTime <= shift.startTime ? new Date(Date.parse(`${date}T00:00:00.000Z`) + 86400000).toISOString().slice(0, 10) : date;
+        const end = createDateTime(endDate, shift.endTime);
+        const diff = (left, right) => Math.max(0, Math.floor((left - right) / 60000));
+        return { employeeId: employee._id, employeeName: employee.fullName, employeeCode: employee.employeeCode, role: employee.payrollRole,
+          shift: { name: shift.name, startTime: shift.startTime, endTime: shift.endTime }, record: record || null,
+          lateMinutes: record?.checkInTime ? diff(record.checkInTime, start) : null,
+          earlyLeaveMinutes: record?.checkOutTime ? diff(end, record.checkOutTime) : null,
+          overtimeMinutes: record?.checkOutTime ? diff(record.checkOutTime, end) : null,
+          missing: !record?.checkInTime || !record?.checkOutTime };
+      });
+    });
+    return res.json({ data: { date, rows: data } });
+  } catch (error) { return sendError(res, error); }
 };
 
 const listMyAdjustments = async (req, res) => {
@@ -205,11 +270,13 @@ const receiveDeviceEvent = async (req, res) => {
 
 const kioskCheckIn = async (req, res) => {
   try {
-    const result = await kioskCheckInByIdentifier(req.user, req.body.identifier);
+    if (req.body.action && !['check-in', 'check-out'].includes(req.body.action)) return res.status(400).json({ message: 'Loại chấm công không hợp lệ' });
+    const eventType = req.body.action === 'check-out' ? 'CHECK_OUT' : 'CHECK_IN';
+    const result = await kioskCheckInByIdentifier(req.user, req.body.identifier, eventType);
     return res.status(result.duplicate ? 200 : 201).json({
       message: result.duplicate
-        ? `${result.employee.name} đã chấm công hôm nay`
-        : `Đã ghi nhận check-in cho ${result.employee.name}`,
+        ? `${result.employee.name} đã ghi nhận ${eventType === 'CHECK_OUT' ? 'giờ ra' : 'giờ vào'} hôm nay`
+        : `Đã ghi nhận ${eventType === 'CHECK_OUT' ? 'giờ ra' : 'giờ vào'} cho ${result.employee.name}`,
       alreadyCheckedIn: result.duplicate,
       data: result
     });
@@ -239,6 +306,7 @@ module.exports = {
   createAdjustmentDraft,
   createCorrectionRequest,
   getDeviceEvents,
+  getDailyTimekeeping,
   getMyAdjustment,
   getMyTimekeeping,
   getPendingCorrectionRequests,

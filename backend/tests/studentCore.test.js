@@ -52,11 +52,12 @@ describe('Student Core Pha 1', () => {
   test('enforces teacher field allowlist and role data scope', async () => {
     await request(app).post('/api/students').set(token(teacher)).send(payload({ status: 'pending_admission' })).expect(403);
     await request(app).put(`/api/students/${student._id}`).set(token(teacher)).send({ fullName: 'Được phép', parents: [] }).expect(403);
-    await request(app).put(`/api/students/${student._id}`).set(token(teacher)).send({ fullName: 'Được phép' }).expect(200);
+    await request(app).put(`/api/students/${student._id}`).set(token(teacher)).send({ fullName: 'Được phép' }).expect(403);
+    await request(app).put(`/api/students/${student._id}`).set(token(teacher)).send({ notes: 'Theo dõi tại lớp' }).expect(200);
     await request(app).put(`/api/students/${student._id}`).set(token(teacher)).send({ classroomId: classroomB }).expect(403);
     for (const role of ['accountant', 'chef', 'guard']) await request(app).get('/api/students').set(token(await user(role))).expect(403);
     const parentDetail = await request(app).get(`/api/students/${student._id}`).set(token(parent)).expect(200);
-    expect(parentDetail.body.data).not.toHaveProperty('parents'); expect(parentDetail.body.data).not.toHaveProperty('allergies');
+    expect(parentDetail.body.data).not.toHaveProperty('parents'); expect(parentDetail.body.data).toHaveProperty('allergies');
   });
 
   test('changes status idempotently, validates transitions and preserves headcount', async () => {

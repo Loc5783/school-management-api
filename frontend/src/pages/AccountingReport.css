@@ -1,0 +1,29 @@
+.accounting-report { display: grid; gap: 20px; }
+.accounting-report-period { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 340px); gap: 20px; padding: 24px; }
+.accounting-report-period h2 { margin: 4px 0; color: #1e3b70; }
+.accounting-report-period p { color: #667b9b; }
+.accounting-report-period-action { display: grid; gap: 12px; align-content: start; }
+.accounting-report-period-action label { display: grid; gap: 8px; color: #526a90; font-weight: 700; }
+.accounting-report-period-action textarea { min-height: 76px; padding: 10px 12px; border: 1px solid #d3e1f5; border-radius: 10px; resize: vertical; }
+.accounting-report-history { grid-column: 1 / -1; border-top: 1px solid #e1eaf7; padding-top: 14px; }
+.accounting-report-history p { margin: 7px 0; overflow-wrap: anywhere; }
+.accounting-report-toolbar { display: flex; align-items: end; justify-content: space-between; flex-wrap: wrap; gap: 20px; padding: 24px; }
+.accounting-report-toolbar h2 { margin: 4px 0; color: #1e3b70; }
+.accounting-report-toolbar p:last-child { color: #667b9b; max-width: 720px; }
+.accounting-report-actions { display: flex; align-items: end; gap: 10px; flex-wrap: wrap; }
+.accounting-report-actions label { display: grid; gap: 6px; color: #556d92; font-weight: 700; }
+.accounting-report-actions input { min-height: 44px; padding: 8px 12px; border: 1px solid #d3e1f5; border-radius: 10px; }
+.accounting-report-loading { padding: 24px; color: #667b9b; }
+.accounting-report-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 18px 24px; }
+.accounting-report-metrics div { display: grid; gap: 7px; padding: 15px; border: 1px solid #e1eaf7; border-radius: 12px; background: #fbfdff; }
+.accounting-report-metrics small, .accounting-report-metrics span { color: #6b7f9e; }
+.accounting-report-metrics strong { color: #244677; font-size: 20px; }
+.accounting-report-methods { display: flex; gap: 12px; flex-wrap: wrap; padding: 0 24px 20px; color: #526a90; }
+.accounting-report-methods div { padding: 10px 13px; border-radius: 10px; background: #f2f6fc; }
+.accounting-report-warning { margin: 0 24px 20px; color: #a65c20; }
+.accounting-report-status { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; padding: 18px 24px; }
+.accounting-report-status div { display: grid; gap: 5px; padding: 14px; border-radius: 10px; background: #f5f8fd; }
+.accounting-report-status strong { color: #244677; font-size: 23px; }
+.accounting-report-status span { color: #6b7f9e; font-size: 12px; }
+@media (max-width: 900px) { .accounting-report-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }.accounting-report-status { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 550px) { .accounting-report-metrics, .accounting-report-status, .accounting-report-period { grid-template-columns: 1fr; } }

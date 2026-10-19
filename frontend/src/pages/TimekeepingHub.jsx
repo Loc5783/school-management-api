@@ -4,11 +4,13 @@ import Icon from '../components/Icon';
 import SmartAttendance from './SmartAttendance';
 import ManualTimekeeping from './ManualTimekeeping';
 import MyLeaveRequests from './MyLeaveRequests';
+import OvertimeEmployee from '../components/OvertimeEmployee';
 
 const tabs = [
   { id: 'kiosk', label: 'Chấm công bằng mã', icon: 'clock', roles: null, Component: SmartAttendance },
   { id: 'corrections', label: 'Đơn chấm công bù', icon: 'attendance', roles: null, Component: ManualTimekeeping },
-  { id: 'leave', label: 'Nghỉ phép cá nhân', icon: 'calendar', roles: null, Component: MyLeaveRequests }
+  { id: 'leave', label: 'Nghỉ phép cá nhân', icon: 'calendar', roles: null, Component: MyLeaveRequests },
+  { id: 'overtime', label: 'Làm thêm giờ', icon: 'clock', roles: ['chef', 'guard'], Component: OvertimeEmployee }
 ];
 
 export default function TimekeepingHub() {

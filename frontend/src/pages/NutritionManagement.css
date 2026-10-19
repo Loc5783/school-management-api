@@ -372,3 +372,7 @@
   .nutrition-archive-days { grid-template-columns: 1fr; }
   .nutrition-serving-kpis { grid-template-columns: repeat(2, 1fr); }
 }
+.nutrition-recipe-row { display: grid; grid-template-columns: minmax(140px, 2fr) minmax(110px, 1fr) 65px auto; align-items: center; gap: 8px; margin-top: 8px; }
+.nutrition-recipe-row select, .nutrition-recipe-row input { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid #d6e2f5; border-radius: 9px; background: #fff; }
+.nutrition-recipe-row span { color: #657b9d; font-size: 12px; }
+@media (max-width: 620px) { .nutrition-recipe-row { grid-template-columns: 1fr 1fr; } }

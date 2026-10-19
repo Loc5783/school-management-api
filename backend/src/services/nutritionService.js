@@ -160,8 +160,8 @@ const checkAllergyAndDiseaseConflicts = async (classroomId, days = []) => {
 
 /**
  * Lập kế hoạch suất ăn theo lớp từ sĩ số và điểm danh.
- * Học sinh chưa được điểm danh vẫn được tính suất để bếp không chuẩn bị thiếu;
- * chỉ học sinh đã được ghi nhận nghỉ mới bị trừ khỏi số suất đề xuất.
+ * Chỉ học sinh đã được ghi nhận có mặt hoặc đi muộn mới được tính suất.
+ * Học sinh chưa điểm danh được thống kê riêng để bếp theo dõi khi số liệu thay đổi.
  */
 const calculateDailyServingPlan = async (date, classroomIds = null) => {
     const targetDate = date ? new Date(date) : new Date();
@@ -216,8 +216,9 @@ const calculateDailyServingPlan = async (date, classroomIds = null) => {
             lateStudents,
             absentCount: absentStudents.length,
             unmarkedCount: unmarkedStudents.length,
-            recommendedServings: Math.max(0, classStudents.length - absentStudents.length),
+            recommendedServings: presentStudents.length,
             attendanceComplete: unmarkedStudents.length === 0,
+            presentStudentIds: presentStudents.map((student) => student.studentId),
             absentStudents,
             unmarkedStudents
         };
