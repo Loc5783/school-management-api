@@ -225,33 +225,45 @@ export default function PrincipalOverview() {
 
   // Init loads
   useEffect(() => {
-    loadOverview();
-    loadClassrooms();
+    const timer = window.setTimeout(() => {
+      void loadOverview();
+      void loadClassrooms();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [loadOverview, loadClassrooms]);
 
   useEffect(() => {
-    if (activeTab === 'tasks') loadTasks();
-    else if (activeTab === 'class-quality') loadClassQuality();
-    else if (activeTab === 'safety') loadIncidents();
-    else if (activeTab === 'directives') loadAnnouncements();
+    const timer = window.setTimeout(() => {
+      if (activeTab === 'tasks') void loadTasks();
+      else if (activeTab === 'class-quality') void loadClassQuality();
+      else if (activeTab === 'safety') void loadIncidents();
+      else if (activeTab === 'directives') void loadAnnouncements();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [activeTab, loadTasks, loadClassQuality, loadIncidents, loadAnnouncements]);
 
   // Tải danh sách nhân sự thuộc bộ phận khi mở form giao việc
   useEffect(() => {
     if (!showNewTaskModal) return;
     let active = true;
-    setLoadingDeptStaff(true);
-    api.get(`/reports/principal-tasks/staff?department=${newTaskForm.department}`)
-      .then((res) => {
-        if (active) setDepartmentStaff(res.data.data || []);
-      })
-      .catch(() => {
-        if (active) setDepartmentStaff([]);
-      })
-      .finally(() => {
-        if (active) setLoadingDeptStaff(false);
-      });
-    return () => { active = false; };
+    const timer = window.setTimeout(() => {
+      if (!active) return;
+      setLoadingDeptStaff(true);
+      api.get(`/reports/principal-tasks/staff?department=${newTaskForm.department}`)
+        .then((res) => {
+          if (active) setDepartmentStaff(res.data.data || []);
+        })
+        .catch(() => {
+          if (active) setDepartmentStaff([]);
+        })
+        .finally(() => {
+          if (active) setLoadingDeptStaff(false);
+        });
+    }, 0);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
   }, [showNewTaskModal, newTaskForm.department]);
 
   // Thao tác giao việc từ quyết định đã duyệt
@@ -1768,8 +1780,9 @@ export default function PrincipalOverview() {
                     <select
                       value={newTaskForm.assignedTo || ''}
                       onChange={(e) => setNewTaskForm({ ...newTaskForm, assignedTo: e.target.value })}
+                      disabled={loadingDeptStaff}
                     >
-                      <option value="">Phân công toàn bộ phận</option>
+                      <option value="">{loadingDeptStaff ? 'Đang tải nhân sự...' : 'Phân công toàn bộ phận'}</option>
                       {departmentStaff.map((u) => (
                         <option key={u._id} value={u._id}>{u.name} ({u.role})</option>
                       ))}

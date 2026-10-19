@@ -42,44 +42,108 @@ const allNavItems = [
   { to: '/daily-care', label: 'Sổ chăm sóc lớp', icon: 'attendance', roles: ['teacher'] },
 ];
 
+const PRINCIPAL_SIDEBAR_STORAGE_KEY = 'principal_sidebar_open_groups';
+
 const principalNavSections = [
   {
-    label: 'ĐIỀU HÀNH',
+    id: 'overview-ops',
+    label: 'TỔNG QUAN & ĐIỀU HÀNH',
+    icon: 'grid',
     items: [
       { to: '/principal', label: 'Sổ điều hành', icon: 'chart' },
       { to: '/dashboard', label: 'Tổng quan hôm nay', icon: 'grid' },
-      { to: '/pickups', label: 'Giám sát đón trẻ', icon: 'users' },
-      { to: '/classrooms', label: 'Lớp học', icon: 'classes' },
       { to: '/internal-notices', label: 'Thông báo chỉ đạo', icon: 'calendar' },
-    ]
+    ],
   },
   {
-    label: 'PHÊ DUYỆT & GIÁM SÁT',
+    id: 'approvals',
+    label: 'PHÊ DUYỆT',
+    icon: 'check',
     items: [
       { to: '/student-profile-change-requests', label: 'Duyệt hồ sơ học sinh', icon: 'card' },
       { to: '/accounting/operating-expenses', label: 'Duyệt chi vận hành', icon: 'money' },
-      { to: '/finance', label: 'Tài chính & Hoàn phí', icon: 'money' },
-      { to: '/hr', label: 'Nhân sự & Nghỉ phép', icon: 'users' },
-      { to: '/parent-feedback', label: 'Phản hồi phụ huynh', icon: 'chat' },
-    ]
+      { to: '/finance?tab=refunds', label: 'Duyệt hoàn học phí', icon: 'money' },
+      { to: '/hr?tab=leave', label: 'Duyệt nghỉ phép', icon: 'calendar' },
+      { to: '/hr?tab=payroll', label: 'Duyệt bảng lương', icon: 'money' },
+    ],
   },
   {
-    label: 'BÁO CÁO',
+    id: 'supervision',
+    label: 'GIÁM SÁT NHÀ TRƯỜNG',
+    icon: 'classes',
+    items: [
+      { to: '/classrooms', label: 'Lớp học', icon: 'classes' },
+      { to: '/pickups', label: 'Giám sát đón trẻ', icon: 'users' },
+      { to: '/hr', label: 'Nhân sự & Lương', icon: 'users' },
+      { to: '/finance', label: 'Tài chính học phí', icon: 'money' },
+    ],
+  },
+  {
+    id: 'reports',
+    label: 'BÁO CÁO & ĐÁNH GIÁ',
+    icon: 'chart',
     items: [
       { to: '/attendance/reports', label: 'Báo cáo chuyên cần', icon: 'attendance' },
       { to: '/reports', label: 'Báo cáo nhà trường', icon: 'chart' },
       { to: '/accounting/report', label: 'Báo cáo kế toán', icon: 'chart' },
       { to: '/professional-reviews', label: 'Đánh giá chuyên môn', icon: 'users' },
-    ]
+    ],
   },
   {
+    id: 'feedback',
+    label: 'PHẢN HỒI PHỤ HUYNH',
+    icon: 'chat',
+    items: [
+      { to: '/parent-feedback', label: 'Phản hồi phụ huynh', icon: 'chat' },
+    ],
+  },
+  {
+    id: 'personal',
     label: 'CÁ NHÂN',
+    icon: 'users',
     items: [
       { to: '/my-requests', label: 'Yêu cầu của tôi', icon: 'card' },
       { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
-    ]
-  }
+    ],
+  },
 ];
+
+const isNavItemActive = (itemTo, pathname, search) => {
+  const [targetPath, targetQuery] = itemTo.split('?');
+  const targetParams = new URLSearchParams(targetQuery || '');
+  const targetTab = targetParams.get('tab');
+
+  const currentParams = new URLSearchParams(search || '');
+  const currentTab = currentParams.get('tab');
+
+  const pathMatches = pathname === targetPath || pathname.startsWith(`${targetPath}/`);
+  if (!pathMatches) return false;
+
+  if (targetTab) {
+    return currentTab === targetTab;
+  }
+
+  if (targetPath === '/hr') {
+    return currentTab !== 'leave' && currentTab !== 'payroll';
+  }
+
+  if (targetPath === '/finance') {
+    return currentTab !== 'refunds';
+  }
+
+  return true;
+};
+
+const isPrincipalItemActive = isNavItemActive;
+
+const getActiveSectionId = (sections, pathname, search) => {
+  for (const section of sections) {
+    if (section.items.some((item) => isPrincipalItemActive(item.to, pathname, search))) {
+      return section.id;
+    }
+  }
+  return null;
+};
 
 export default function AppShell({ title, subtitle, actions, children }) {
   const navigate = useNavigate();
@@ -95,6 +159,25 @@ export default function AppShell({ title, subtitle, actions, children }) {
   const [showNotifications, setShowNotifications] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [prevPath, setPrevPath] = useState(location.pathname);
+  const [openSections, setOpenSections] = useState(() => {
+    let initialOpen = principalNavSections.map((s) => s.id);
+    try {
+      const saved = localStorage.getItem(PRINCIPAL_SIDEBAR_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          initialOpen = parsed;
+        }
+      }
+    } catch (e) {
+      console.error('Lỗi đọc trạng thái menu hiệu trưởng:', e);
+    }
+    const activeSectionId = getActiveSectionId(principalNavSections, location.pathname, location.search);
+    if (activeSectionId && !initialOpen.includes(activeSectionId)) {
+      initialOpen = [...initialOpen, activeSectionId];
+    }
+    return initialOpen;
+  });
 
   if (prevPath !== location.pathname) {
     setPrevPath(location.pathname);
@@ -126,7 +209,7 @@ export default function AppShell({ title, subtitle, actions, children }) {
       nav.scrollTo({ top: Math.max(0, targetTop), behavior: 'auto' });
     });
     return () => cancelAnimationFrame(frame);
-  }, [location.pathname, loading]);
+  }, [location.pathname, location.search, loading]);
 
   const loadNotifications = useCallback(async () => {
     try {
@@ -165,6 +248,40 @@ export default function AppShell({ title, subtitle, actions, children }) {
     };
   }, [user, loadNotifications, loadUnreadChat]);
 
+  const isPrincipal = user?.role === 'principal';
+  const currentLocationKey = `${location.pathname}${location.search}`;
+  const [prevLocationKey, setPrevLocationKey] = useState(currentLocationKey);
+
+  if (prevLocationKey !== currentLocationKey) {
+    setPrevLocationKey(currentLocationKey);
+    if (isPrincipal) {
+      const activeSectionId = getActiveSectionId(principalNavSections, location.pathname, location.search);
+      if (activeSectionId && !openSections.includes(activeSectionId)) {
+        const next = [...openSections, activeSectionId];
+        setOpenSections(next);
+        try {
+          localStorage.setItem(PRINCIPAL_SIDEBAR_STORAGE_KEY, JSON.stringify(next));
+        } catch (e) {
+          console.error('Lỗi lưu trạng thái menu hiệu trưởng:', e);
+        }
+      }
+    }
+  }
+
+  const toggleSection = (sectionId) => {
+    setOpenSections((prev) => {
+      const next = prev.includes(sectionId)
+        ? prev.filter((id) => id !== sectionId)
+        : [...prev, sectionId];
+      try {
+        localStorage.setItem(PRINCIPAL_SIDEBAR_STORAGE_KEY, JSON.stringify(next));
+      } catch (e) {
+        console.error('Lỗi lưu trạng thái menu hiệu trưởng:', e);
+      }
+      return next;
+    });
+  };
+
   const toggleNotifications = async () => {
     setShowNotifications((value) => !value);
     if (!showNotifications) {
@@ -194,9 +311,10 @@ export default function AppShell({ title, subtitle, actions, children }) {
   const isAdmin = user?.role === 'admin';
   const roleLabel = { admin: 'Quản trị viên', principal: 'Hiệu trưởng', teacher: 'Giáo viên', accountant: 'Kế toán', chef: 'Nhân viên bếp', hr: 'Nhân sự', parent: 'Phụ huynh', guard: 'Bảo vệ' }[user?.role] || 'Tài khoản trường';
   const totalUnread = unreadCount + chatUnread.total;
-  const isPrincipal = user?.role === 'principal';
   const homePath = user?.role === 'guard' ? '/guard' : user?.role === 'chef' ? '/kitchen' : user?.role === 'accountant' ? '/accounting' : user?.role === 'parent' ? '/parent-dashboard' : user?.role === 'hr' ? '/hr' : isPrincipal ? '/principal' : '/dashboard';
 
+  // Lọc menu dựa trên permissions và vai trò
+  // Đảm bảo không trùng lặp route trong danh sách
   // Lọc menu dựa trên permissions
   const navItems = allNavItems.filter(item => {
     // Phụ huynh chỉ dùng cổng thông tin của con và tin nhắn giáo viên.
@@ -213,27 +331,61 @@ export default function AppShell({ title, subtitle, actions, children }) {
   });
   const renderNavigation = (mobile = false) => {
     if (isPrincipal) {
+      const prefix = mobile ? 'mobile' : 'desktop';
       return (
-        <>
-          {principalNavSections.map((section) => (
-            <div key={section.label} className="nav-section-group">
-              <p className="nav-label">{section.label}</p>
-              {section.items.map((item) => (
-                <NavLink
-                  to={item.to}
-                  key={item.to}
-                  className="nav-link"
-                  onClick={mobile ? () => setMobileNavOpen(false) : undefined}
+        <div
+          className="principal-nav-accordion"
+          role="region"
+          aria-label={mobile ? 'Menu chức năng hiệu trưởng di động' : 'Menu chức năng hiệu trưởng'}
+        >
+          {principalNavSections.map((section) => {
+            const isOpen = openSections.includes(section.id);
+            const contentId = `${prefix}-principal-nav-section-${section.id}`;
+            return (
+              <div key={section.id} className="nav-accordion-section">
+                <button
+                  type="button"
+                  className={`nav-accordion-header ${isOpen ? 'is-open' : ''}`}
+                  aria-expanded={isOpen}
+                  aria-controls={contentId}
+                  onClick={() => toggleSection(section.id)}
                 >
-                  <Icon name={item.icon} />
-                  {item.label}
-                </NavLink>
-              ))}
-            </div>
-          ))}
-        </>
+                  <span className="nav-accordion-header-title">
+                    {section.icon && <Icon name={section.icon} size={15} />}
+                    <span>{section.label}</span>
+                  </span>
+                  <span className={`nav-accordion-chevron ${isOpen ? 'expanded' : ''}`}>
+                    <Icon name="chevronRight" size={14} />
+                  </span>
+                </button>
+                <div
+                  id={contentId}
+                  className="nav-accordion-content"
+                  hidden={!isOpen}
+                >
+                  {section.items.map((item) => {
+                    const isActive = isPrincipalItemActive(item.to, location.pathname, location.search);
+                    return (
+                      <NavLink
+                        to={item.to}
+                        key={item.to}
+                        aria-current={isActive ? 'page' : undefined}
+                        className={() => `nav-link nav-sub-link ${isActive ? 'active' : ''}`.trim()}
+                        onClick={mobile ? () => setMobileNavOpen(false) : undefined}
+                      >
+                        <Icon name={item.icon} />
+                        {item.label}
+                      </NavLink>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       );
     }
+
 
     return (
       <>
@@ -283,7 +435,15 @@ export default function AppShell({ title, subtitle, actions, children }) {
               {renderNavigation(true)}
             </nav>
             <div className="sidebar-bottom">
-              {user?.role === 'parent' ? <NavLink to="/parent-settings" className="nav-link" onClick={() => setMobileNavOpen(false)}><Icon name="settings" />Cài đặt</NavLink> : <NavLink to="/staff-settings" className="nav-link" onClick={() => setMobileNavOpen(false)}><Icon name="settings" />Cài đặt tài khoản</NavLink>}
+              {user?.role === 'parent' ? (
+                <NavLink to="/parent-settings" className="nav-link" onClick={() => setMobileNavOpen(false)}>
+                  <Icon name="settings" />Cài đặt
+                </NavLink>
+              ) : (
+                <NavLink to="/staff-settings" className="nav-link" onClick={() => setMobileNavOpen(false)}>
+                  <Icon name="settings" />Cài đặt tài khoản
+                </NavLink>
+              )}
               <div className="account-card">
                 <span className="avatar">{displayName.charAt(0).toUpperCase()}</span>
                 <span><strong>{displayName}</strong><small>{roleLabel}</small></span>
@@ -306,7 +466,15 @@ export default function AppShell({ title, subtitle, actions, children }) {
           {renderNavigation()}
         </nav>
         <div className="sidebar-bottom">
-          {user?.role === 'parent' ? <NavLink to="/parent-settings" className="nav-link"><Icon name="settings" />Cài đặt</NavLink> : <NavLink to="/staff-settings" className="nav-link"><Icon name="settings" />Cài đặt tài khoản</NavLink>}
+          {user?.role === 'parent' ? (
+            <NavLink to="/parent-settings" className="nav-link">
+              <Icon name="settings" />Cài đặt
+            </NavLink>
+          ) : (
+            <NavLink to="/staff-settings" className="nav-link">
+              <Icon name="settings" />Cài đặt tài khoản
+            </NavLink>
+          )}
           <div className="account-card">
             <span className="avatar">{displayName.charAt(0).toUpperCase()}</span>
             <span><strong>{displayName}</strong><small>{roleLabel}</small></span>
@@ -332,10 +500,42 @@ export default function AppShell({ title, subtitle, actions, children }) {
           </div>
           <div className="topbar-actions">
             {actions}
-            <div className="notification-menu"><button className="icon-button" aria-label={`Thông báo${totalUnread ? `, ${totalUnread} chưa đọc` : ''}`} onClick={toggleNotifications}>
-              <Icon name="bell" />{totalUnread > 0 && <span className="notification-count">{totalUnread > 99 ? '99+' : totalUnread}</span>}
-            </button>{showNotifications && <div className="notification-popover"><div><strong>Thông báo</strong>{totalUnread > 0 && <span>{totalUnread} chưa đọc</span>}</div>{chatUnread.data.length > 0 && <><div className="notification-group-label">TIN NHẮN</div>{chatUnread.data.map((item) => <button key={item.conversationId} className="chat-alert unread" onClick={() => openChatAlert(item)}><strong>Bạn có {item.count} tin nhắn từ {user?.role === 'teacher' ? 'phụ huynh' : 'giáo viên'} {item.senderName}</strong><small>Về bé {item.studentName} · Nhấn để xem và đánh dấu đã đọc</small><span className="chat-unread-dot" /></button>)}</>}{notifications.length > 0 && chatUnread.data.length > 0 && <div className="notification-group-label">THÔNG BÁO KHÁC</div>}{notifications.length ? notifications.map((item) => <button key={item._id} className={`${item.isRead ? '' : 'unread'} ${item.metadata?.priority === 'high' ? 'priority' : ''}`.trim()} onClick={() => openNotification(item)}><strong>{item.metadata?.priority === 'high' ? '⚠ ' : ''}{item.title}</strong><small>{item.message}</small></button>) : chatUnread.data.length === 0 && <p>Chưa có thông báo mới.</p>}</div>}</div>
-            <div className="topbar-profile"><span className="avatar">{displayName.charAt(0).toUpperCase()}</span><span><strong>{displayName}</strong><small className={`role-pill role-pill-${user?.role || 'default'}`}>{roleLabel}</small></span><Icon name="chevronRight" size={15} /></div>
+            <div className="notification-menu">
+              <button className="icon-button" aria-label={`Thông báo${totalUnread ? `, ${totalUnread} chưa đọc` : ''}`} onClick={toggleNotifications}>
+                <Icon name="bell" />{totalUnread > 0 && <span className="notification-count">{totalUnread > 99 ? '99+' : totalUnread}</span>}
+              </button>
+              {showNotifications && (
+                <div className="notification-popover">
+                  <div><strong>Thông báo</strong>{totalUnread > 0 && <span>{totalUnread} chưa đọc</span>}</div>
+                  {chatUnread.data.length > 0 && (
+                    <>
+                      <div className="notification-group-label">TIN NHẮN</div>
+                      {chatUnread.data.map((item) => (
+                        <button key={item.conversationId} className="chat-alert unread" onClick={() => openChatAlert(item)}>
+                          <strong>Bạn có {item.count} tin nhắn từ {user?.role === 'teacher' ? 'phụ huynh' : 'giáo viên'} {item.senderName}</strong>
+                          <small>Về bé {item.studentName} · Nhấn để xem và đánh dấu đã đọc</small>
+                          <span className="chat-unread-dot" />
+                        </button>
+                      ))}
+                    </>
+                  )}
+                  {notifications.length > 0 && chatUnread.data.length > 0 && <div className="notification-group-label">THÔNG BÁO KHÁC</div>}
+                  {notifications.length ? (
+                    notifications.map((item) => (
+                      <button key={item._id} className={`${item.isRead ? '' : 'unread'} ${item.metadata?.priority === 'high' ? 'priority' : ''}`.trim()} onClick={() => openNotification(item)}>
+                        <strong>{item.metadata?.priority === 'high' ? '⚠ ' : ''}{item.title}</strong>
+                        <small>{item.message}</small>
+                      </button>
+                    ))
+                  ) : chatUnread.data.length === 0 && <p>Chưa có thông báo mới.</p>}
+                </div>
+              )}
+            </div>
+            <div className="topbar-profile">
+              <span className="avatar">{displayName.charAt(0).toUpperCase()}</span>
+              <span><strong>{displayName}</strong><small className={`role-pill role-pill-${user?.role || 'default'}`}>{roleLabel}</small></span>
+              <Icon name="chevronRight" size={15} />
+            </div>
           </div>
         </header>
         <div className="page-content">{children}</div>
