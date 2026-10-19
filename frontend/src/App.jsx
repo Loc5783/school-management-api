@@ -1,7 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
 import Register from './pages/Register';
-import ParentAccountManagement from './pages/ParentAccountManagement';
 import AccountManagement from './pages/AccountManagement';
 import Dashboard from './pages/Dashboard';
 import PrincipalOverview from './pages/PrincipalOverview';
@@ -96,13 +95,29 @@ function RoleRoute({ roles, children }) {
   return roles.includes(user.role) ? children : <Navigate to="/dashboard" replace />;
 }
 
+function ProfileRequestsRoute({ children }) {
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
+  if (user.role === 'admin') return <Navigate to="/accounts?tab=profile-requests" replace />;
+  if (user.role === 'principal') return children;
+  return <Navigate to="/dashboard" replace />;
+}
+
+function ParentFeedbackRoute({ children }) {
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
+  if (user.role === 'admin') return <Navigate to="/staff-settings?tab=parent-feedback" replace />;
+  if (user.role === 'principal') return children;
+  return <Navigate to="/dashboard" replace />;
+}
+
 function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
-        <Route path="/parent-accounts" element={<RoleRoute roles={['admin']}><ParentAccountManagement /></RoleRoute>} />
+        <Route path="/parent-accounts" element={<RoleRoute roles={['admin']}><Navigate to="/accounts?tab=parents" replace /></RoleRoute>} />
         <Route path="/accounts" element={<RoleRoute roles={['admin', 'hr']}><AccountManagement /></RoleRoute>} />
         <Route path="/principal" element={<RoleRoute roles={['admin', 'principal']}><PrincipalOverview /></RoleRoute>} />
         <Route
@@ -170,8 +185,8 @@ function App() {
         <Route path="/parent-care" element={<ParentRoute><ParentCare /></ParentRoute>} />
         <Route path="/pickups" element={<PickupRoute><PickupManagement /></PickupRoute>} />
         <Route path="/guard" element={<RoleRoute roles={['guard', 'admin']}><GuardOperations /></RoleRoute>} />
-        <Route path="/student-profile-change-requests" element={<RoleRoute roles={['admin', 'principal']}><StudentProfileChangeRequests /></RoleRoute>} />
-        <Route path="/parent-feedback" element={<RoleRoute roles={['admin', 'principal']}><ParentFeedbackManagement /></RoleRoute>} />
+        <Route path="/student-profile-change-requests" element={<ProfileRequestsRoute><StudentProfileChangeRequests /></ProfileRequestsRoute>} />
+        <Route path="/parent-feedback" element={<ParentFeedbackRoute><ParentFeedbackManagement /></ParentFeedbackRoute>} />
         <Route path="/messages" element={<ChatRoute><Messages /></ChatRoute>} />
         <Route path="*" element={<Navigate to="/dashboard" />} />
       </Routes>

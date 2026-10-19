@@ -191,7 +191,7 @@ const listInternalAccounts = async (req, res) => {
     const [accounts, total] = await Promise.all([
       User.find(filter)
         .select('username role status profile employeeInfo createdAt lastLogin')
-        .sort({ role: 1, 'profile.fullName': 1, username: 1 })
+        .sort(req.query.sortBy === 'name' ? { role: 1, 'profile.fullName': 1, username: 1 } : { createdAt: -1, _id: -1 })
         .skip((page - 1) * limit)
         .limit(limit),
       User.countDocuments(filter)

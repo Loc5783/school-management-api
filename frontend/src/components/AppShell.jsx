@@ -5,52 +5,41 @@ import api from '../api/axiosConfig';
 import { getUnreadChat } from '../api/chat';
 
 const allNavItems = [
-  { to: '/guard', label: 'Tổng quan trực cổng', icon: 'grid', roles: ['guard', 'admin'] },
-  { to: '/kitchen', label: 'Bếp hôm nay', icon: 'grid', roles: ['chef', 'admin'] },
+  { to: '/dashboard', label: 'Tổng quan', icon: 'grid', roles: ['admin', 'principal', 'teacher'] },
+  { to: '/principal', label: 'Sổ điều hành', icon: 'chart', roles: ['admin', 'principal'] },
+  { to: '/accounts', label: 'Tài khoản & vai trò', icon: 'shield', roles: ['admin', 'hr'] },
+  { to: '/students', label: 'Học sinh', icon: 'students', roles: ['admin', 'principal', 'teacher'] },
+  { to: '/classrooms', label: 'Lớp học', icon: 'classes', roles: ['admin', 'principal'] },
+  { to: '/attendance', label: 'Điểm danh', icon: 'attendance', roles: ['admin', 'teacher'] },
+  { to: '/attendance/reports', label: 'Báo cáo điểm danh', icon: 'attendance', roles: ['principal'] },
+  { to: '/timekeeping', label: 'Chấm công nhân sự', icon: 'clock', roles: ['admin', 'principal', 'teacher', 'guard'] },
+  { to: '/hr', label: 'Nhân sự & Lương', icon: 'users', roles: ['admin', 'principal', 'accountant', 'hr'] },
+  { to: '/finance', label: 'Tài chính', icon: 'money', roles: ['admin', 'principal', 'accountant'] },
   { to: '/accounting', label: 'Tổng quan kế toán', icon: 'grid', roles: ['accountant'] },
   { to: '/accounting/expenses', label: 'Sổ chi mua sắm', icon: 'money', roles: ['accountant', 'admin'] },
   { to: '/accounting/operating-expenses', label: 'Chi vận hành', icon: 'money', roles: ['admin', 'principal', 'accountant'] },
   { to: '/accounting/cashbook', label: 'Đối soát thu – chi', icon: 'chart', roles: ['accountant', 'admin'] },
   { to: '/accounting/report', label: 'Báo cáo kế toán', icon: 'chart', roles: ['accountant', 'admin'] },
-  { to: '/dashboard', label: 'Tổng quan', icon: 'grid', roles: ['admin', 'principal', 'teacher'] },
-  { to: '/principal', label: 'Sổ điều hành', icon: 'chart', roles: ['admin', 'principal'] },
-  { to: '/attendance', label: 'Điểm danh', icon: 'attendance', roles: ['admin', 'teacher'] },
-  { to: '/attendance/reports', label: 'Báo cáo điểm danh', icon: 'attendance', roles: ['principal'] },
-  { to: '/timekeeping', label: 'Chấm công nhân sự', icon: 'clock', roles: ['admin', 'principal', 'teacher', 'guard'] },
-  { to: '/my-staffing', label: 'Lịch phân công của tôi', icon: 'calendar', roles: ['teacher', 'chef', 'guard'] },
-  { to: '/my-handovers', label: 'Việc bàn giao của tôi', icon: 'users', roles: ['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard'] },
-  { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar', roles: ['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard'] },
-  { to: '/my-requests', label: 'Yêu cầu của tôi', icon: 'card', roles: ['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard'] },
-  { to: '/professional-reviews', label: 'Đánh giá chuyên môn', icon: 'users', roles: ['teacher', 'principal', 'admin'], positions: ['head_teacher', 'principal', 'vice_principal'] },
-  { to: '/my-payroll', label: 'Lương của tôi', icon: 'money', roles: ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'] },
-  { to: '/hr', label: 'Nhân sự & Lương', icon: 'users', roles: ['admin', 'principal', 'accountant', 'hr'] },
-  { to: '/accounts', label: 'Tài khoản & vai trò', icon: 'shield', roles: ['admin', 'hr'] },
-  { to: '/parent-accounts', label: 'Duyệt tài khoản phụ huynh', icon: 'users', roles: ['admin'] },
-  { to: '/student-profile-change-requests', label: 'Duyệt cập nhật hồ sơ', icon: 'card', roles: ['admin', 'principal'] },
-  { to: '/parent-feedback', label: 'Phản hồi phụ huynh', icon: 'chat', roles: ['admin', 'principal'] },
-  { to: '/parent-dashboard', label: 'Tổng quan', icon: 'grid', roles: ['parent'] },
-  { to: '/parent-portal', label: 'Thông tin của con', icon: 'students', roles: ['parent'] },
-  { to: '/parent-care', label: 'Sổ chăm sóc của con', icon: 'attendance', roles: ['parent'] },
-  { to: '/pickups', label: 'Đón trẻ', icon: 'users', roles: ['parent', 'teacher', 'guard', 'admin', 'principal'] },
-  { to: '/messages', label: 'Tin nhắn', icon: 'chat', roles: ['parent', 'teacher'] },
-  { to: '/daily-care', label: 'Sổ chăm sóc lớp', icon: 'attendance', roles: ['teacher'] },
-  { to: '/students', label: 'Học sinh', icon: 'students', roles: ['admin', 'principal', 'teacher'] },
-  { to: '/classrooms', label: 'Lớp học', icon: 'classes', roles: ['admin', 'principal'] },
-  { to: '/finance', label: 'Tài chính', icon: 'money', roles: ['admin', 'principal', 'accountant'] },
+  { to: '/kitchen', label: 'Bếp hôm nay', icon: 'grid', roles: ['chef', 'admin'] },
   { to: '/nutrition', label: 'Bếp ăn & Bán trú', icon: 'utensils', roles: ['admin', 'principal', 'chef', 'teacher'] },
+  { to: '/guard', label: 'Tổng quan trực cổng', icon: 'grid', roles: ['guard', 'admin'] },
+  { to: '/pickups', label: 'Đón trẻ', icon: 'users', roles: ['parent', 'teacher', 'guard', 'admin', 'principal'] },
   { to: '/assets', label: 'Đề xuất mua sắm', icon: 'settings', roles: ['teacher'] },
   { to: '/assets', label: 'Cơ sở vật chất', icon: 'settings', roles: ['admin', 'principal'] },
   { to: '/reports', label: 'Báo cáo', icon: 'chart', roles: ['admin', 'principal', 'accountant'] },
-];
-
-const adminNavGroups = [
-  { key: 'admin', label: 'Quản trị', icon: 'shield', paths: ['/dashboard', '/principal', '/accounts', '/parent-accounts', '/student-profile-change-requests', '/parent-feedback', '/assets'] },
-  { key: 'teacher', label: 'Giáo viên', icon: 'students', paths: ['/attendance', '/professional-reviews', '/students', '/classrooms'] },
-  { key: 'hr', label: 'Nhân sự', icon: 'users', paths: ['/timekeeping', '/hr'] },
-  { key: 'accountant', label: 'Kế toán', icon: 'money', paths: ['/finance', '/accounting/expenses', '/accounting/operating-expenses', '/accounting/cashbook', '/accounting/report', '/reports'] },
-  { key: 'chef', label: 'Nhà bếp', icon: 'utensils', paths: ['/kitchen', '/nutrition'] },
-  { key: 'guard', label: 'Bảo vệ', icon: 'shield', paths: ['/guard', '/pickups'] },
-  { key: 'personal', label: 'Cá nhân', icon: 'card', paths: ['/my-handovers', '/internal-notices', '/my-requests', '/my-payroll'] },
+  { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar', roles: ['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard'] },
+  { to: '/my-staffing', label: 'Lịch phân công của tôi', icon: 'calendar', roles: ['teacher', 'chef', 'guard'] },
+  { to: '/my-handovers', label: 'Việc bàn giao của tôi', icon: 'users', roles: ['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard'] },
+  { to: '/my-requests', label: 'Yêu cầu của tôi', icon: 'card', roles: ['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard'] },
+  { to: '/my-payroll', label: 'Lương của tôi', icon: 'money', roles: ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'] },
+  { to: '/professional-reviews', label: 'Đánh giá chuyên môn', icon: 'users', roles: ['teacher', 'principal', 'admin'], positions: ['head_teacher', 'principal', 'vice_principal'] },
+  { to: '/student-profile-change-requests', label: 'Duyệt cập nhật hồ sơ', icon: 'card', roles: ['principal'] },
+  { to: '/parent-feedback', label: 'Phản hồi phụ huynh', icon: 'chat', roles: ['principal'] },
+  { to: '/parent-dashboard', label: 'Tổng quan', icon: 'grid', roles: ['parent'] },
+  { to: '/parent-portal', label: 'Thông tin của con', icon: 'students', roles: ['parent'] },
+  { to: '/parent-care', label: 'Sổ chăm sóc của con', icon: 'attendance', roles: ['parent'] },
+  { to: '/messages', label: 'Tin nhắn', icon: 'chat', roles: ['parent', 'teacher'] },
+  { to: '/daily-care', label: 'Sổ chăm sóc lớp', icon: 'attendance', roles: ['teacher'] },
 ];
 
 const principalNavSections = [
@@ -92,8 +81,6 @@ const principalNavSections = [
   }
 ];
 
-const groupForPath = (pathname) => adminNavGroups.find((group) => group.paths.some((path) => pathname === path || pathname.startsWith(`${path}/`)))?.key || 'admin';
-
 export default function AppShell({ title, subtitle, actions, children }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -108,7 +95,6 @@ export default function AppShell({ title, subtitle, actions, children }) {
   const [showNotifications, setShowNotifications] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [prevPath, setPrevPath] = useState(location.pathname);
-  const [adminNavChoice, setAdminNavChoice] = useState(() => ({ pathname: location.pathname, group: groupForPath(location.pathname) }));
 
   if (prevPath !== location.pathname) {
     setPrevPath(location.pathname);
@@ -225,9 +211,6 @@ export default function AppShell({ title, subtitle, actions, children }) {
     if (!item.permission) return false;
     return permissions.includes(item.permission);
   });
-  const selectedAdminGroup = adminNavChoice.pathname === location.pathname ? adminNavChoice.group : groupForPath(location.pathname);
-  const selectedGroup = adminNavGroups.find((group) => group.key === selectedAdminGroup) || adminNavGroups[0];
-  const visibleNavItems = isAdmin ? navItems.filter((item) => selectedGroup.paths.includes(item.to)) : navItems;
   const renderNavigation = (mobile = false) => {
     if (isPrincipal) {
       return (
@@ -254,31 +237,8 @@ export default function AppShell({ title, subtitle, actions, children }) {
 
     return (
       <>
-        {isAdmin && (
-          <div className="admin-nav-switch">
-            <span className="admin-nav-switch-kicker">XEM THEO BỘ PHẬN</span>
-            <div className="admin-nav-switch-control">
-              <Icon name={selectedGroup.icon} size={17} />
-              <select
-                aria-label="Chọn nhóm công việc trong menu quản trị"
-                value={selectedAdminGroup}
-                onChange={(event) => {
-                  setAdminNavChoice({ pathname: location.pathname, group: event.target.value });
-                  event.currentTarget.closest('nav')?.scrollTo({ top: 0, behavior: 'auto' });
-                }}
-              >
-                {adminNavGroups.map((group) => (
-                  <option key={group.key} value={group.key}>
-                    {group.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <small>Chỉ đổi menu, không đổi quyền tài khoản</small>
-          </div>
-        )}
-        <p className="nav-label">{isAdmin ? selectedGroup.label.toUpperCase() : 'QUẢN LÝ'}</p>
-        {visibleNavItems.map((item) => (
+        <p className="nav-label">QUẢN LÝ</p>
+        {navItems.map((item) => (
           <NavLink
             to={item.to}
             key={item.to}
