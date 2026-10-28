@@ -23,7 +23,7 @@ router.use(auth);
 // Điểm danh
 router.post('/', roleCheck(['teacher', 'admin']), createAttendance);
 router.post('/bulk', roleCheck(['teacher', 'admin']), createBulkAttendance);
-router.post('/check-in', roleCheck(['teacher', 'admin', 'guard']), automaticCheckIn);
+router.post('/check-in', roleCheck(['teacher', 'admin']), automaticCheckIn);
 
 // Đơn xin nghỉ và báo cáo vắng mặt. Các kiểm tra liên kết phụ huynh/lớp giáo
 // viên tiếp tục nằm ở controller để không tin tưởng riêng vào giao diện.

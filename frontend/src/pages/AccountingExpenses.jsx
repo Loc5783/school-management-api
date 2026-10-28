@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import AppShell from '../components/AppShell';
-import { getExpenseOrders, getPurchaseExpenses, recordPurchaseExpense } from '../api/finance';
+import Icon from '../components/Icon';
+import { getExpenseOrders, getPurchaseExpenses, recordPurchaseExpense, exportPurchaseExpenses } from '../api/finance';
 import './AccountingExpenses.css';
 
 const schoolToday = () => {
@@ -25,11 +26,24 @@ export default function AccountingExpenses() {
   const [form, setForm] = useState(freshForm);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const period = asPeriod(month);
   const selected = orders.find((order) => order._id === form.orderId);
   const remaining = selected ? selected.totalAmount - (selected.paidAmount || 0) : 0;
+
+  const handleExport = async () => {
+    if (exporting) return;
+    setExporting(true); setError('');
+    try {
+      await exportPurchaseExpenses(period);
+    } catch (err) {
+      setError(err.message || 'Không thể xuất Excel sổ chi mua sắm.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -81,7 +95,7 @@ export default function AccountingExpenses() {
         <label className="form-wide">Ghi chú<input maxLength="500" value={form.note} onChange={(event) => changeField('note', event.target.value)} placeholder="Nội dung thanh toán" /></label>
         <div className="form-actions form-wide"><button className="button button-primary" disabled={saving || !selected}>{saving ? 'Đang ghi nhận...' : 'Ghi nhận đã chi'}</button></div>
       </form></section>}
-      <section className="content-card student-list-card"><div className="card-heading"><div><p className="card-kicker">LỊCH SỬ CHI</p><h2>Chứng từ trong kỳ {period}</h2></div><button type="button" className="button button-secondary" onClick={load} disabled={loading}>Làm mới</button></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Ngày chi</th><th>Đơn / nhà cung cấp</th><th>Số tiền</th><th>Hình thức / mã giao dịch</th><th>Chứng từ</th><th>Người ghi</th></tr></thead><tbody>{expenses.map((item) => <tr key={item._id}><td>{new Date(item.paidAt).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</td><td>{item.orderCode}<small>{item.supplierName}</small></td><td><strong>{money(item.amount)}</strong></td><td>{item.method === 'cash' ? 'Tiền mặt' : `Chuyển khoản · ${item.transactionRef}`}</td><td>{item.documentNumber}</td><td>{item.recordedByName}</td></tr>)}{!expenses.length && <tr><td colSpan="6" className="history-empty">{loading ? 'Đang tải...' : 'Chưa có khoản chi trong kỳ.'}</td></tr>}</tbody></table></div>{summary.count > 0 && <div className="table-pagination"><span>Trang {page}/{totalPages} · {summary.count} chứng từ</span><div><button type="button" disabled={page <= 1} onClick={() => setPage(page - 1)}>‹ Trước</button><button type="button" disabled={page >= totalPages} onClick={() => setPage(page + 1)}>Sau ›</button></div></div>}</section>
+      <section className="content-card student-list-card"><div className="card-heading"><div><p className="card-kicker">LỊCH SỬ CHI</p><h2>Chứng từ trong kỳ {period}</h2></div><div className="classroom-actions"><button type="button" className="button button-secondary" onClick={handleExport} disabled={exporting}><Icon name="download" size={16} />{exporting ? 'Đang xuất...' : 'Xuất Excel'}</button><button type="button" className="button button-secondary" onClick={load} disabled={loading}><Icon name="refresh" size={16} />Làm mới</button></div></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Ngày chi</th><th>Đơn / nhà cung cấp</th><th>Số tiền</th><th>Hình thức / mã giao dịch</th><th>Chứng từ</th><th>Người ghi</th></tr></thead><tbody>{expenses.map((item) => <tr key={item._id}><td>{new Date(item.paidAt).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</td><td>{item.orderCode}<small>{item.supplierName}</small></td><td><strong>{money(item.amount)}</strong></td><td>{item.method === 'cash' ? 'Tiền mặt' : `Chuyển khoản · ${item.transactionRef}`}</td><td>{item.documentNumber}</td><td>{item.recordedByName}</td></tr>)}{!expenses.length && <tr><td colSpan="6" className="history-empty">{loading ? 'Đang tải...' : 'Chưa có khoản chi trong kỳ.'}</td></tr>}</tbody></table></div>{summary.count > 0 && <div className="table-pagination"><span>Trang {page}/{totalPages} · {summary.count} chứng từ</span><div><button type="button" disabled={page <= 1} onClick={() => setPage(page - 1)}>‹ Trước</button><button type="button" disabled={page >= totalPages} onClick={() => setPage(page + 1)}>Sau ›</button></div></div>}</section>
     </div>
   </AppShell>;
 }

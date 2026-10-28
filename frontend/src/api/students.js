@@ -15,3 +15,9 @@ export const previewExcelImport = (formData) => api.post('/students/excel/previe
 export const confirmExcelImport = (data, idempotencyKey) => api.post('/students/excel/confirm', data, {
   headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}
 });
+export const transferStudentClassroom = (id, data, idempotencyKey) => {
+  const key = idempotencyKey || data?.idempotencyKey;
+  const headers = key ? { 'Idempotency-Key': key } : {};
+  return api.post(`/students/${id}/transfer`, data, { headers });
+};
+export const getStudentTransferHistory = (id) => api.get(`/students/${id}/transfer-history`);

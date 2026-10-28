@@ -44,7 +44,7 @@ const getAllClassrooms = async (req, res) => {
       // A teacher can only discover classrooms that they have been assigned to.
       // This protects attendance/student pages even if a user opens an API URL directly.
       filter._id = { $in: await getTeacherClassroomIds(req.user) };
-    } else if (!hasSchoolWideReadAccess(req.user)) {
+    } else if (!hasSchoolWideReadAccess(req.user) && req.user.role !== 'hr') {
       throw error('Bạn không có quyền xem danh sách lớp học', 403);
     }
     const classrooms = await Classroom.find(filter).sort({ status: 1, schoolYear: -1, name: 1 });
@@ -56,7 +56,7 @@ const getClassroomById = async (req, res) => {
   try {
     if (!isId(req.params.id)) throw error('ID lớp học không hợp lệ', 400);
     if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, req.params.id)) throw error('Bạn không có quyền xem lớp học này', 403);
-    if (req.user.role !== 'teacher' && !hasSchoolWideReadAccess(req.user)) throw error('Bạn không có quyền xem lớp học', 403);
+    if (req.user.role !== 'teacher' && req.user.role !== 'hr' && !hasSchoolWideReadAccess(req.user)) throw error('Bạn không có quyền xem lớp học', 403);
     const classroom = await Classroom.findById(req.params.id); if (!classroom) throw error('Không tìm thấy lớp học', 404);
     res.json({ success: true, message: 'Lấy chi tiết lớp học thành công', data: classroom });
   } catch (err) { console.error(err); respond(res, err); }

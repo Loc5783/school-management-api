@@ -8,6 +8,7 @@ const ImportIdempotency = require('../models/zone1_system/ImportIdempotency');
 const { applyStudentListScope, canAccessStudent, isParent, isValidStudentId } = require('../services/studentAccessService');
 const { canAccessClassroom, getTeacherClassroomIds, hasSchoolWideReadAccess } = require('../services/schoolDataAccessService');
 const { STUDENT_STATUSES, isClassroomCountedStatus, canTransitionStudentStatus, generateStudentCode, runStudentTransaction, serializeStudent } = require('../services/studentCoreService');
+const { isValidWorkDate, getWorkDate } = require('../utils/dateHelpers');
 
 const ADMIN_MUTABLE = ['fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'notes', 'classroomId', 'schoolYear', 'parents', 'authorizedPickers', 'allergies', 'disease', 'emergencyContact', 'admissionDate'];
 const TEACHER_CREATE_FIELDS = ['fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'notes'];
@@ -23,7 +24,7 @@ const assertTeacherAllowedFields = (body, creating = false) => {
     const forbidden = Object.keys(body || {}).filter((key) => !allowed.has(key));
     if (forbidden.length) throw httpError(`Giáo viên không có quyền cập nhật trường: ${forbidden.join(', ')}`, 403);
 };
-const actorName = (user) => user.profile?.fullName || user.username;
+const actorName = (user) => user?.fullName || user?.profile?.fullName || user?.username || 'Hệ thống';
 const httpError = (message, statusCode) => Object.assign(new Error(message), { statusCode });
 const respondError = (res, err, fallback = 'Lỗi server') => {
     const field = Object.keys(err.keyPattern || {})[0];
@@ -38,7 +39,7 @@ const deriveSchoolYear = (date = new Date()) => {
 };
 
 const audit = (req, action, student, before = {}, after = {}, session = null) => AuditLog.create([{
-    actorId: req.user._id, actorUsername: req.user.username, action, targetType: 'Student', targetId: student._id, before, after
+    actorId: req.user._id, actorUsername: req.user.username || req.user.profile?.fullName || 'system', action, targetType: 'Student', targetId: student._id, before, after
 }], { session });
 const adjustHeadcount = (classroomId, delta, session = null) => delta ? Classroom.findOneAndUpdate({ _id: classroomId, 'statistics.currentStudents': { $gte: delta < 0 ? Math.abs(delta) : 0 } }, { $inc: { 'statistics.currentStudents': delta } }, { session }) : null;
 const validatePayload = (data, creating = false) => {
@@ -75,6 +76,10 @@ const scopedFilter = async (user, filter, classroomId) => {
     if (user.role === 'teacher') {
         const ids = await getTeacherClassroomIds(user);
         filter.classroomId = classroomId ? (ids.includes(String(classroomId)) ? classroomId : { $in: [] }) : { $in: ids };
+        return filter;
+    }
+    if (user.role === 'hr') {
+        if (classroomId) filter.classroomId = classroomId;
         return filter;
     }
     if (!hasSchoolWideReadAccess(user)) throw httpError('Bạn không có quyền xem dữ liệu học sinh', 403);
@@ -128,7 +133,7 @@ const getStudentById = async (req, res) => {
         const student = await Student.findById(req.params.id); if (!student) return res.status(404).json({ message: 'Không tìm thấy học sinh' });
         if (isParent(req.user) && !canAccessStudent(req.user, student._id)) return res.status(403).json({ message: 'Bạn không có quyền xem thông tin học sinh này' });
         if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, student.classroomId)) return res.status(403).json({ message: 'Bạn không có quyền xem thông tin học sinh này' });
-        if (!isParent(req.user) && req.user.role !== 'teacher' && !hasSchoolWideReadAccess(req.user)) return res.status(403).json({ message: 'Bạn không có quyền xem dữ liệu học sinh' });
+        if (!isParent(req.user) && req.user.role !== 'teacher' && req.user.role !== 'hr' && !hasSchoolWideReadAccess(req.user)) return res.status(403).json({ message: 'Bạn không có quyền xem dữ liệu học sinh' });
         res.json({ success: true, message: 'Lấy chi tiết học sinh thành công', data: serializeStudent(student, req.user.role) });
     } catch (err) { console.error(err); return respondError(res, err); }
 };
@@ -608,6 +613,415 @@ const confirmExcelImport = async (req, res) => {
     }
 };
 
+const transferStudentClassroom = async (req, res) => {
+    let idempotencyDoc = null;
+    let currentLockToken = null;
+    try {
+        if (!['admin', 'hr', 'principal'].includes(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Bạn không có quyền chuyển lớp học sinh' });
+        }
+        if (!isValidStudentId(req.params.id)) return res.status(400).json({ success: false, message: 'ID học sinh không hợp lệ' });
+        const { toClassroomId, reason = '', effectiveDate } = req.body || {};
+        if (!isValidStudentId(toClassroomId)) return res.status(400).json({ success: false, message: 'ID lớp chuyển đến không hợp lệ' });
+        const cleanReason = String(reason).trim();
+        if (!cleanReason) return res.status(422).json({ success: false, message: 'Vui lòng nhập lý do chuyển lớp' });
+
+        // Require valid Idempotency-Key header (16-128 chars)
+        const idempotencyKey = String(req.get('Idempotency-Key') || '').trim();
+        if (!idempotencyKey || !/^[A-Za-z0-9_-]{16,128}$/.test(idempotencyKey)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Header Idempotency-Key là bắt buộc để chuyển lớp (chuỗi 16-128 ký tự gồm chữ cái, chữ số, gạch nối hoặc gạch dưới).'
+            });
+        }
+
+        // Check existing idempotency record first to stabilize contract on retries
+        const existingRecord = await ImportIdempotency.findOne({ idempotencyKey });
+
+        // Canonical payload for stable idempotency fingerprint
+        let targetEffectiveDate = '';
+        if (effectiveDate !== undefined && effectiveDate !== null && effectiveDate !== '') {
+            const dateStr = String(effectiveDate).slice(0, 10);
+            if (!isValidWorkDate(dateStr)) {
+                return res.status(422).json({ success: false, message: 'Ngày hiệu lực không hợp lệ theo lịch thực tế' });
+            }
+            targetEffectiveDate = dateStr;
+        } else if (existingRecord) {
+            targetEffectiveDate = existingRecord.effectiveDate
+                || (existingRecord.response?.data?.transferHistory?.effectiveDate
+                    ? getWorkDate(new Date(existingRecord.response.data.transferHistory.effectiveDate))
+                    : getWorkDate(new Date(existingRecord.createdAt)));
+        } else {
+            targetEffectiveDate = getWorkDate();
+        }
+
+        currentLockToken = crypto.randomUUID();
+        const canonicalPayload = {
+            studentId: String(req.params.id),
+            toClassroomId: String(toClassroomId),
+            reason: cleanReason,
+            effectiveDate: targetEffectiveDate
+        };
+        const fingerprint = crypto.createHash('sha256')
+            .update(JSON.stringify(canonicalPayload))
+            .digest('hex');
+
+        if (existingRecord) {
+            if (String(existingRecord.userId) !== String(req.user._id)) {
+                return res.status(409).json({ success: false, message: 'Khóa idempotency này thuộc về một người dùng khác.' });
+            }
+            if (existingRecord.fingerprint !== fingerprint) {
+                return res.status(409).json({ success: false, message: 'Khóa idempotency này đã được sử dụng cho một yêu cầu khác với nội dung khác.' });
+            }
+            if (existingRecord.status === 'completed') {
+                return res.status(200).json({
+                    ...(existingRecord.response || {}),
+                    replayed: true
+                });
+            }
+
+            const staleThreshold = new Date(Date.now() - 30000);
+            const acquired = await ImportIdempotency.findOneAndUpdate(
+                {
+                    idempotencyKey,
+                    userId: req.user._id,
+                    fingerprint,
+                    $or: [
+                        { status: 'failed' },
+                        { status: 'processing', updatedAt: { $lt: staleThreshold } }
+                    ]
+                },
+                {
+                    $set: {
+                        status: 'processing',
+                        lockToken: currentLockToken,
+                        effectiveDate: targetEffectiveDate,
+                        updatedAt: new Date()
+                    }
+                },
+                { returnDocument: 'after' }
+            );
+
+            if (!acquired) {
+                return res.status(409).json({
+                    success: false,
+                    message: 'Yêu cầu chuyển lớp này đang được xử lý bởi hệ thống. Vui lòng không gửi lặp lại.'
+                });
+            }
+            idempotencyDoc = acquired;
+        } else {
+            try {
+                idempotencyDoc = await ImportIdempotency.create({
+                    idempotencyKey,
+                    fingerprint,
+                    status: 'processing',
+                    lockToken: currentLockToken,
+                    userId: req.user._id,
+                    effectiveDate: targetEffectiveDate
+                });
+            } catch (dupErr) {
+                if (dupErr.code === 11000) {
+                    const raceRecord = await ImportIdempotency.findOne({ idempotencyKey });
+                    if (!raceRecord) {
+                        return res.status(409).json({ success: false, message: 'Khóa idempotency bị xung đột dữ liệu.' });
+                    }
+                    if (String(raceRecord.userId) !== String(req.user._id)) {
+                        return res.status(409).json({ success: false, message: 'Khóa idempotency này thuộc về một người dùng khác.' });
+                    }
+                    if (raceRecord.fingerprint !== fingerprint) {
+                        return res.status(409).json({ success: false, message: 'Khóa idempotency này đã được sử dụng cho một yêu cầu khác với nội dung khác.' });
+                    }
+                    if (raceRecord.status === 'completed') {
+                        return res.status(200).json({
+                            ...(raceRecord.response || {}),
+                            replayed: true
+                        });
+                    }
+
+                    const staleThreshold = new Date(Date.now() - 30000);
+                    const acquired = await ImportIdempotency.findOneAndUpdate(
+                        {
+                            idempotencyKey,
+                            userId: req.user._id,
+                            fingerprint,
+                            $or: [
+                                { status: 'failed' },
+                                { status: 'processing', updatedAt: { $lt: staleThreshold } }
+                            ]
+                        },
+                        {
+                            $set: {
+                                status: 'processing',
+                                lockToken: currentLockToken,
+                                effectiveDate: targetEffectiveDate,
+                                updatedAt: new Date()
+                            }
+                        },
+                        { returnDocument: 'after' }
+                    );
+
+                    if (!acquired) {
+                        return res.status(409).json({
+                            success: false,
+                            message: 'Yêu cầu chuyển lớp này đang được xử lý bởi hệ thống. Vui lòng không gửi lặp lại.'
+                        });
+                    }
+                    idempotencyDoc = acquired;
+                } else {
+                    throw dupErr;
+                }
+            }
+        }
+        // Strict immediate effective date in Asia/Ho_Chi_Minh for NEW or RETRIED non-completed requests
+        const todayWorkDate = getWorkDate();
+        if (targetEffectiveDate !== todayWorkDate) {
+            if (idempotencyDoc) {
+                await ImportIdempotency.updateOne(
+                    { _id: idempotencyDoc._id, lockToken: currentLockToken, status: 'processing' },
+                    { $set: { status: 'failed' } }
+                ).catch(() => {});
+            }
+            return res.status(422).json({
+                success: false,
+                message: 'Chuyển lớp hiện chỉ hỗ trợ có hiệu lực ngay trong ngày làm việc hiện tại (Asia/Ho_Chi_Minh). Không chấp nhận ngày trong tương lai hoặc quá khứ.'
+            });
+        }
+
+        const StudentTransferHistory = require('../models/zone3_school/StudentTransferHistory');
+        const Notification = require('../models/zone1_system/Notification');
+        const User = require('../models/zone1_system/User');
+
+        const result = await runStudentTransaction(async (session) => {
+            // Read and validate student inside session
+            const studentDoc = await Student.findById(req.params.id).session(session);
+            if (!studentDoc) throw httpError('Không tìm thấy học sinh', 404);
+            if (!['enrolled', 'temporarily_absent'].includes(studentDoc.status)) {
+                throw httpError('Chỉ được chuyển lớp cho học sinh đang theo học (enrolled hoặc tạm vắng)', 422);
+            }
+
+            const fromClassroomId = studentDoc.classroomId;
+            if (String(fromClassroomId) === String(toClassroomId)) {
+                throw httpError('Lớp mới phải khác lớp hiện tại của học sinh', 422);
+            }
+
+            // Read source and target classrooms inside session
+            const [fromClassroom, toClassroom] = await Promise.all([
+                Classroom.findById(fromClassroomId).session(session),
+                Classroom.findOne({ _id: toClassroomId, status: 'active' }).session(session)
+            ]);
+
+            if (!fromClassroom) throw httpError('Không tìm thấy lớp học hiện tại của học sinh', 404);
+            if (!toClassroom) throw httpError('Không tìm thấy lớp chuyển đến hoặc lớp không hoạt động', 404);
+
+            // Same school year constraint
+            if (studentDoc.schoolYear && toClassroom.schoolYear && studentDoc.schoolYear !== toClassroom.schoolYear) {
+                throw httpError(`Chỉ được chuyển giữa các lớp trong cùng năm học (Lớp mới: ${toClassroom.schoolYear}, Học sinh: ${studentDoc.schoolYear})`, 422);
+            }
+
+            // Atomic capacity control on target classroom
+            const maxSize = Number(toClassroom.maxSize || 25);
+            const targetClassUpdated = await Classroom.findOneAndUpdate(
+                {
+                    _id: toClassroomId,
+                    status: 'active',
+                    $or: [
+                        { 'statistics.currentStudents': { $lt: maxSize } },
+                        { 'statistics.currentStudents': { $exists: false } }
+                    ]
+                },
+                { $inc: { 'statistics.currentStudents': 1 } },
+                { session, new: true }
+            );
+            if (!targetClassUpdated) {
+                throw httpError(`Lớp ${toClassroom.name} đã đạt sĩ số tối đa (${toClassroom.statistics?.currentStudents || maxSize}/${maxSize} học sinh). Không thể tiếp nhận thêm.`, 409);
+            }
+
+            // Atomic headcount decrement on source classroom
+            const sourceClassUpdated = await Classroom.findOneAndUpdate(
+                {
+                    _id: fromClassroomId,
+                    'statistics.currentStudents': { $gt: 0 }
+                },
+                { $inc: { 'statistics.currentStudents': -1 } },
+                { session, new: true }
+            );
+            if (!sourceClassUpdated) {
+                throw httpError(`Không thể cập nhật sĩ số lớp nguồn ${fromClassroom.name}.`, 409);
+            }
+
+            // Conditional write on student (concurrency control)
+            const updatedStudent = await Student.findOneAndUpdate(
+                {
+                    _id: studentDoc._id,
+                    classroomId: fromClassroomId
+                },
+                {
+                    $set: {
+                        classroomId: toClassroom._id,
+                        className: toClassroom.name,
+                        updatedBy: req.user._id
+                    }
+                },
+                { session, new: true }
+            );
+            if (!updatedStudent) {
+                throw httpError('Học sinh đã bị thay đổi thông tin lớp học bởi một thao tác khác.', 409);
+            }
+
+            // Record Transfer History inside session
+            const [historyEntry] = await StudentTransferHistory.create([{
+                studentId: studentDoc._id,
+                studentCode: studentDoc.studentCode,
+                studentName: studentDoc.fullName,
+                fromClassroomId: fromClassroom._id,
+                fromClassName: fromClassroom.name,
+                toClassroomId: toClassroom._id,
+                toClassName: toClassroom.name,
+                schoolYear: toClassroom.schoolYear,
+                reason: cleanReason,
+                effectiveDate: new Date(`${targetEffectiveDate}T00:00:00.000Z`),
+                transferredBy: req.user._id,
+                transferredByName: actorName(req.user)
+            }], { session });
+
+            // Audit inside session
+            await audit(req, 'STUDENT_TRANSFERRED', studentDoc, {
+                classroomId: fromClassroom._id,
+                className: fromClassroom.name
+            }, {
+                classroomId: toClassroom._id,
+                className: toClassroom.name,
+                reason: cleanReason,
+                effectiveDate: targetEffectiveDate
+            }, session);
+
+            // Buffer notifications inside session
+            const recipients = new Set();
+            if (fromClassroom.homeroomTeacherId) recipients.add(String(fromClassroom.homeroomTeacherId));
+            if (toClassroom.homeroomTeacherId) recipients.add(String(toClassroom.homeroomTeacherId));
+
+            const parentUsers = await User.find({ role: 'parent', 'parentInfo.studentIds': studentDoc._id }).select('_id').session(session);
+            for (const p of parentUsers) recipients.add(String(p._id));
+
+            for (const recipientId of recipients) {
+                await Notification.create([{
+                    recipientId,
+                    title: `Học sinh ${studentDoc.fullName} chuyển lớp`,
+                    message: `Học sinh ${studentDoc.fullName} (${studentDoc.studentCode}) đã được chuyển từ lớp ${fromClassroom.name} sang lớp ${toClassroom.name}. Lý do: ${cleanReason}`,
+                    type: 'info',
+                    link: '/students',
+                    createdBy: req.user._id
+                }], { session });
+            }
+
+            const responsePayload = {
+                success: true,
+                message: `Đã chuyển học sinh ${studentDoc.fullName} sang lớp ${toClassroom.name} thành công.`,
+                data: {
+                    student: serializeStudent(updatedStudent, req.user.role),
+                    transferHistory: historyEntry
+                }
+            };
+
+            // Save idempotency completed response inside session
+            if (idempotencyDoc) {
+                const updateRes = await ImportIdempotency.updateOne(
+                    {
+                        _id: idempotencyDoc._id,
+                        lockToken: currentLockToken,
+                        status: 'processing'
+                    },
+                    {
+                        $set: {
+                            status: 'completed',
+                            response: responsePayload
+                        }
+                    },
+                    { session }
+                );
+                if (updateRes.matchedCount === 0) {
+                    throw httpError('Tiến trình xử lý chuyển lớp đã mất khóa sở hữu độc quyền.', 409);
+                }
+            }
+
+            return responsePayload;
+        });
+
+        return res.json(result);
+    } catch (err) {
+        if (idempotencyDoc) {
+            await ImportIdempotency.updateOne(
+                { _id: idempotencyDoc._id, lockToken: currentLockToken, status: 'processing' },
+                { $set: { status: 'failed' } }
+            ).catch(() => {});
+        }
+        console.error('Lỗi chuyển lớp học sinh:', err);
+        return respondError(res, err, 'Không thể chuyển lớp cho học sinh.');
+    }
+};
+
+const getStudentTransferHistory = async (req, res) => {
+    try {
+        if (!isValidStudentId(req.params.id)) return res.status(400).json({ success: false, message: 'ID học sinh không hợp lệ' });
+        const StudentTransferHistory = require('../models/zone3_school/StudentTransferHistory');
+        
+        const student = await Student.findById(req.params.id).select('classroomId parents fullName studentCode').lean();
+        if (!student) return res.status(404).json({ success: false, message: 'Không tìm thấy học sinh' });
+
+        // Scoped access control
+        if (['admin', 'principal', 'hr'].includes(req.user.role)) {
+            // Full access
+        } else if (req.user.role === 'teacher') {
+            const teacherClassIds = await getTeacherClassroomIds(req.user);
+            const isCurrentClass = student.classroomId && teacherClassIds.includes(String(student.classroomId));
+            if (!isCurrentClass) {
+                const hadPastClass = await StudentTransferHistory.exists({
+                    studentId: student._id,
+                    $or: [
+                        { fromClassroomId: { $in: teacherClassIds } },
+                        { toClassroomId: { $in: teacherClassIds } }
+                    ]
+                });
+                if (!hadPastClass) {
+                    return res.status(403).json({ success: false, message: 'Bạn không có quyền xem lịch sử chuyển lớp của học sinh này' });
+                }
+            }
+        } else if (isParent(req.user)) {
+            const hasAccess = await canAccessStudent(req.user, student._id);
+            if (!hasAccess) {
+                return res.status(403).json({ success: false, message: 'Bạn không có quyền xem thông tin học sinh này' });
+            }
+        } else {
+            return res.status(403).json({ success: false, message: 'Bạn không có quyền xem lịch sử chuyển lớp' });
+        }
+
+        const history = await StudentTransferHistory.find({ studentId: req.params.id })
+            .sort({ effectiveDate: -1, createdAt: -1 })
+            .lean();
+
+        const sanitized = history.map((item) => {
+            if (isParent(req.user)) {
+                return {
+                    _id: item._id,
+                    studentId: item.studentId,
+                    studentName: item.studentName,
+                    fromClassName: item.fromClassName,
+                    toClassName: item.toClassName,
+                    schoolYear: item.schoolYear,
+                    effectiveDate: item.effectiveDate,
+                    createdAt: item.createdAt
+                };
+            }
+            return item;
+        });
+
+        res.json({ success: true, data: sanitized });
+    } catch (err) {
+        console.error(err);
+        return respondError(res, err);
+    }
+};
+
 module.exports = {
     createStudent,
     getAllStudents,
@@ -619,5 +1033,7 @@ module.exports = {
     saveDailyReport,
     downloadExcelTemplate,
     previewExcelImport,
-    confirmExcelImport
+    confirmExcelImport,
+    transferStudentClassroom,
+    getStudentTransferHistory
 };

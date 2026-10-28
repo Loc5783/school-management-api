@@ -16,6 +16,7 @@ const SchoolVisitorSchema = new mongoose.Schema({
   status: { type: String, enum: ['inside', 'checked_out', 'denied'], default: 'inside', index: true },
   note: { type: String, trim: true, maxlength: 500, default: '' },
   clientEventId: { type: String, trim: true, maxlength: 100 },
+  payloadFingerprint: { type: String, trim: true, maxlength: 64 },
   recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   recordedByName: { type: String, required: true, trim: true },
   checkedOutBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },

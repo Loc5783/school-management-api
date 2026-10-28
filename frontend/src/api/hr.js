@@ -15,8 +15,8 @@ export const getStaffHandovers = (params) => api.get('/hr/handovers', { params }
 export const getInternalOverview = (params) => api.get('/hr/internal', { params });
 export const sendInternalAnnouncement = (data) => api.post('/hr/internal/announcements', data);
 export const publishMonthlyTimesheet = (data) => api.post('/hr/internal/timesheets', data);
-export const getMyInternalAnnouncements = (params) => api.get('/hr/internal/my-announcements', { params });
-export const getMyTimesheets = (params) => api.get('/hr/internal/my-timesheets', { params });
+export const getMyInternalAnnouncements = (params, signal) => api.get('/hr/internal/my-announcements', { params, signal });
+export const getMyTimesheets = (params, signal) => api.get('/hr/internal/my-timesheets', { params, signal });
 export const respondMonthlyTimesheet = (id, data) => api.patch(`/hr/internal/timesheets/${id}/respond`, data);
 export const getMyHandovers = (params) => api.get('/hr/my-handovers', { params });
 export const createStaffHandover = (data) => api.post('/hr/handovers', data);
@@ -52,7 +52,23 @@ export const getCredentialOverview = (params) => api.get('/hr/credentials/overvi
 export const getCredentialRequirements = () => api.get('/hr/credentials/requirements');
 export const saveCredentialRequirement = (id, data) => id ? api.put(`/hr/credentials/requirements/${id}`, data) : api.post('/hr/credentials/requirements', data);
 export const saveCredentialPolicy = (data) => api.put('/hr/credentials/policy', data);
-export const saveEmployeeCredential = (data) => api.post('/hr/credentials/records', data);
+export const saveEmployeeCredential = (data) => {
+  const isFormData = typeof FormData !== 'undefined' && data instanceof FormData;
+  return api.post('/hr/credentials/records', data, isFormData ? { headers: { 'Content-Type': undefined } } : undefined);
+};
+export const downloadCredentialEvidence = (id) => api.get(`/hr/credentials/records/${id}/evidence`, { responseType: 'blob' });
+export const parseBlobError = async (err) => {
+  if (err?.response?.data instanceof Blob) {
+    try {
+      const text = await err.response.data.text();
+      const parsed = JSON.parse(text);
+      return parsed.message || parsed.error || 'Lỗi tải tệp';
+    } catch {
+      return 'Lỗi tải tệp';
+    }
+  }
+  return err?.response?.data?.message || err?.message || 'Lỗi tải tệp';
+};
 export const reviewEmployeeCredential = (id, data) => api.patch(`/hr/credentials/records/${id}/review`, data);
 export const getCredentialHistory = (id) => api.get(`/hr/credentials/records/${id}/history`);
 export const getEmployees = (params) => api.get('/hr/employees', { params });
@@ -64,6 +80,7 @@ export const updateDepartment = (id, data) => api.put(`/hr/departments/${id}`, d
 export const createEmployee = (data) => api.post('/hr/employees', data);
 export const getEmployeeHistory = (id) => api.get(`/hr/employees/${id}/history`);
 export const getStaffing = (date) => api.get('/hr/staffing', { params: { date } });
+export const getStaffingTimetable = (params) => api.get('/hr/staffing/timetable', { params });
 export const saveClassroomStaffing = (id, data) => api.put(`/hr/staffing/classrooms/${id}`, data);
 export const createStaffShift = (data) => api.post('/hr/staffing/shifts', data);
 export const cancelStaffShift = (id) => api.delete(`/hr/staffing/shifts/${id}`);

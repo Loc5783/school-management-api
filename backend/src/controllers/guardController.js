@@ -14,6 +14,37 @@ const PurchaseOrder = require('../models/zone6_procurement/PurchaseOrder');
 const crypto = require('crypto');
 const { isValidObjectId } = require('../utils/idValidation');
 const { DEFAULT_SCHOOL_TIMEZONE, getWorkDate, isValidWorkDate } = require('../utils/dateHelpers');
+const {
+  resolveEventDateAndTime,
+  computeFingerprint,
+  computeFingerprintV1,
+  computeFingerprintV2,
+  canonicalGatePayload,
+  canonicalGatePayloadV1,
+  canonicalGatePayloadV2,
+  canonicalVisitorPayload,
+  canonicalVisitorPayloadV1,
+  canonicalVisitorPayloadV2,
+  canonicalIncidentPayload,
+  canonicalIncidentPayloadV1,
+  canonicalIncidentPayloadV2,
+  canonicalDeliveryPayload,
+  canonicalDeliveryPayloadV1,
+  canonicalDeliveryPayloadV2,
+  canonicalGateFromDoc,
+  canonicalGateFromDocV1,
+  canonicalGateFromDocV2,
+  canonicalVisitorFromDoc,
+  canonicalVisitorFromDocV1,
+  canonicalVisitorFromDocV2,
+  canonicalIncidentFromDoc,
+  canonicalIncidentFromDocV1,
+  canonicalIncidentFromDocV2,
+  canonicalDeliveryFromDoc,
+  canonicalDeliveryFromDocV1,
+  canonicalDeliveryFromDocV2,
+  verifyIdempotency
+} = require('../utils/idempotencyHelper');
 
 const today = () => getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE);
 const actorName = (user) => user?.profile?.fullName || user?.username || 'Nhân viên trực cổng';
@@ -57,6 +88,28 @@ const getDashboard = async (req, res) => {
   try {
     const gateDate = req.query.date || today();
     if (!isValidWorkDate(gateDate)) throw fail('Ngày trực không hợp lệ');
+    const isGuard = req.user.role === 'guard';
+    if (isGuard) {
+      const [visitors, incidents, handovers] = await Promise.all([
+        SchoolVisitor.find(gateDate === today() ? { $or: [{ visitDate: gateDate }, { status: 'inside' }] } : { visitDate: gateDate }).sort({ checkInAt: -1 }).lean(),
+        SecurityIncident.find({ status: { $ne: 'closed' } }).sort({ createdAt: -1 }).lean(),
+        GuardShiftHandover.find(gateDate === today() ? { $or: [{ handoverDate: gateDate }, { receiverId: req.user._id, status: 'pending' }] } : { handoverDate: gateDate }).select('-childrenSnapshot -childrenRemaining').sort({ handedOverAt: -1 }).limit(5).lean()
+      ]);
+      return res.json({
+        success: true,
+        data: {
+          date: gateDate,
+          summary: {
+            visitorsInside: visitors.filter((item) => item.status === 'inside').length,
+            openIncidents: incidents.length
+          },
+          visitorsInside: visitors.filter((item) => item.status === 'inside').slice(0, 12),
+          incidents: incidents.slice(0, 10),
+          priorityIncidents: incidents.filter((item) => ['serious', 'emergency'].includes(item.severity) && !item.acknowledgedAt),
+          handovers
+        }
+      });
+    }
     const [{ events, inside }, enrolled, pickups, visitors, incidents, handovers] = await Promise.all([
       getGateState(gateDate),
       Student.countDocuments({ status: 'enrolled' }),
@@ -129,22 +182,88 @@ const recordGateEvent = async (req, res) => {
     if (direction === 'departure' && req.user.role === 'guard') throw fail('Bảo vệ phải xác nhận người đón tại mục Đón trẻ trước khi ghi nhận trẻ rời trường', 403);
     if (!['manual', 'card', 'qr', 'offline'].includes(method)) throw fail('Phương thức ghi nhận không hợp lệ');
     if (String(note).length > 500) throw fail('Ghi chú tối đa 500 ký tự');
+
+    const { dateObj, normalizedOccurredAt, workDate: gateDate } = resolveEventDateAndTime(occurredAt);
+    const canonicalPayloadV2 = canonicalGatePayloadV2({ studentId, direction, method, note, gateDate, occurredAt: normalizedOccurredAt });
+    const canonicalPayloadV1 = canonicalGatePayloadV1({ studentId, direction, method, note, gateDate });
+    const payloadFingerprint = computeFingerprintV2(canonicalPayloadV2);
+
     if (clientEventId) {
       const repeated = await StudentGateEvent.findOne({ clientEventId }).lean();
-      if (repeated) return res.json({ success: true, repeated: true, message: 'Dữ liệu ngoại tuyến đã được đồng bộ trước đó', data: repeated });
+      if (repeated) {
+        const verify = verifyIdempotency({
+          existingDoc: repeated,
+          currentUserId: req.user._id,
+          ownerField: 'recordedBy',
+          incomingFingerprint: payloadFingerprint,
+          incomingCanonicalV2: canonicalPayloadV2,
+          incomingCanonicalV1: canonicalPayloadV1,
+          incomingNormalizedOccurredAt: normalizedOccurredAt,
+          canonicalFromDocV1Fn: canonicalGateFromDocV1,
+          canonicalFromDocV2Fn: canonicalGateFromDocV2
+        });
+        if (verify.status === 'conflict') {
+          return res.status(409).json({ success: false, message: verify.message });
+        }
+        return res.json({ success: true, repeated: true, message: 'Dữ liệu ngoại tuyến đã được đồng bộ trước đó', data: verify.doc });
+      }
     }
+
+    if (gateDate !== today()) {
+      throw fail('Dữ liệu ngoại tuyến chỉ được đồng bộ trong đúng ngày phát sinh', 422);
+    }
+
     const student = await Student.findOne({ _id: studentId, status: 'enrolled' }).select('fullName studentCode classroomId className');
     if (!student) throw fail('Không tìm thấy học sinh đang theo học', 404);
-    const gateDate = today();
     const opposite = direction === 'arrival' ? 'departure' : 'arrival';
     const oppositeEvent = await StudentGateEvent.exists({ studentId, gateDate, direction: opposite });
     if (direction === 'arrival' && oppositeEvent) throw fail('Học sinh đã rời trường hôm nay, cần quản lý xác minh nếu quay lại', 409);
     if (direction === 'departure' && !oppositeEvent) throw fail('Chưa có ghi nhận học sinh vào trường hôm nay', 409);
-    const event = await StudentGateEvent.create({ studentId: student._id, studentName: student.fullName, studentCode: student.studentCode, classroomId: student.classroomId, className: student.className || '', gateDate, direction, occurredAt: parseOccurredAt(occurredAt), method, note: clean(note), ...(clientEventId ? { clientEventId: clean(clientEventId, 100) } : {}), recordedBy: req.user._id, recordedByName: actorName(req.user) });
+    const event = await StudentGateEvent.create({ studentId: student._id, studentName: student.fullName, studentCode: student.studentCode, classroomId: student.classroomId, className: student.className || '', gateDate, direction, occurredAt: dateObj, method, note: clean(note), ...(clientEventId ? { clientEventId: clean(clientEventId, 100), payloadFingerprint } : {}), recordedBy: req.user._id, recordedByName: actorName(req.user) });
     await notifyParents(student._id, direction === 'arrival' ? `Đã vào trường: ${student.fullName}` : `Đã rời trường: ${student.fullName}`, direction === 'arrival' ? `${student.fullName} đã được ghi nhận qua cổng trường.` : `${student.fullName} đã được ghi nhận rời trường.`, req.user._id, { gateEventId: event._id, direction });
     return res.status(201).json({ success: true, message: direction === 'arrival' ? 'Đã ghi nhận học sinh vào trường' : 'Đã ghi nhận học sinh rời trường', data: event });
   } catch (error) {
-    if (error?.code === 11000) return res.status(409).json({ success: false, message: 'Sự kiện này đã được ghi nhận trước đó' });
+    if (error?.code === 11000) {
+      const isClientEventConflict = error.keyPattern?.clientEventId || (error.message && error.message.includes('clientEventId'));
+      if (req.body?.clientEventId && isClientEventConflict) {
+        const repeated = await StudentGateEvent.findOne({ clientEventId: req.body.clientEventId }).lean();
+        if (repeated) {
+          const { normalizedOccurredAt, workDate: gateDate } = resolveEventDateAndTime(req.body.occurredAt);
+          const canonicalPayloadV2 = canonicalGatePayloadV2({
+            studentId: req.body.studentId,
+            direction: req.body.direction,
+            method: req.body.method,
+            note: req.body.note,
+            gateDate,
+            occurredAt: normalizedOccurredAt
+          });
+          const canonicalPayloadV1 = canonicalGatePayloadV1({
+            studentId: req.body.studentId,
+            direction: req.body.direction,
+            method: req.body.method,
+            note: req.body.note,
+            gateDate
+          });
+          const payloadFingerprint = computeFingerprintV2(canonicalPayloadV2);
+          const verify = verifyIdempotency({
+            existingDoc: repeated,
+            currentUserId: req.user._id,
+            ownerField: 'recordedBy',
+            incomingFingerprint: payloadFingerprint,
+            incomingCanonicalV2: canonicalPayloadV2,
+            incomingCanonicalV1: canonicalPayloadV1,
+            incomingNormalizedOccurredAt: normalizedOccurredAt,
+            canonicalFromDocV1Fn: canonicalGateFromDocV1,
+            canonicalFromDocV2Fn: canonicalGateFromDocV2
+          });
+          if (verify.status === 'conflict') {
+            return res.status(409).json({ success: false, message: verify.message });
+          }
+          return res.json({ success: true, repeated: true, message: 'Dữ liệu ngoại tuyến đã được đồng bộ trước đó', data: verify.doc });
+        }
+      }
+      return res.status(409).json({ success: false, message: 'Sự kiện này đã được ghi nhận trước đó' });
+    }
     return sendError(res, error, 'Không thể ghi nhận qua cổng');
   }
 };
@@ -164,13 +283,95 @@ const createVisitor = async (req, res) => {
     if (!clean(fullName, 121) || !clean(purpose, 501) || !clean(hostName, 121)) throw fail('Họ tên khách, mục đích và người cần gặp là bắt buộc');
     if (phone && !/^[0-9+().\s-]{8,20}$/.test(phone)) throw fail('Số điện thoại không hợp lệ');
     if (identityLast4 && !/^\d{4}$/.test(identityLast4)) throw fail('Chỉ nhập 4 số cuối giấy tờ');
+
+    const { dateObj, normalizedOccurredAt, workDate: visitDate } = resolveEventDateAndTime(occurredAt);
+    const canonicalPayloadV2 = canonicalVisitorPayloadV2({ fullName, phone, organization, purpose, hostName, allowedArea, identityLast4, vehiclePlate, badgeNumber, visitDate, occurredAt: normalizedOccurredAt, note });
+    const canonicalPayloadV1 = canonicalVisitorPayloadV1({ fullName, phone, organization, purpose, hostName, allowedArea, identityLast4, vehiclePlate, badgeNumber, visitDate, note });
+    const payloadFingerprint = computeFingerprintV2(canonicalPayloadV2);
+
     if (clientEventId) {
       const repeated = await SchoolVisitor.findOne({ clientEventId }).lean();
-      if (repeated) return res.json({ success: true, repeated: true, message: 'Dữ liệu ngoại tuyến đã được đồng bộ trước đó', data: repeated });
+      if (repeated) {
+        const verify = verifyIdempotency({
+          existingDoc: repeated,
+          currentUserId: req.user._id,
+          ownerField: 'recordedBy',
+          incomingFingerprint: payloadFingerprint,
+          incomingCanonicalV2: canonicalPayloadV2,
+          incomingCanonicalV1: canonicalPayloadV1,
+          incomingNormalizedOccurredAt: normalizedOccurredAt,
+          canonicalFromDocV1Fn: canonicalVisitorFromDocV1,
+          canonicalFromDocV2Fn: canonicalVisitorFromDocV2
+        });
+        if (verify.status === 'conflict') {
+          return res.status(409).json({ success: false, message: verify.message });
+        }
+        return res.json({ success: true, repeated: true, message: 'Dữ liệu ngoại tuyến đã được đồng bộ trước đó', data: verify.doc });
+      }
     }
-    const item = await SchoolVisitor.create({ fullName: clean(fullName, 120), phone: clean(phone, 20), organization: clean(organization, 160), purpose: clean(purpose, 500), hostName: clean(hostName, 120), allowedArea: clean(allowedArea, 160), identityLast4, vehiclePlate: clean(vehiclePlate, 20).toUpperCase(), badgeNumber: clean(badgeNumber, 30).toUpperCase(), visitDate: today(), checkInAt: parseOccurredAt(occurredAt), note: clean(note), ...(clientEventId ? { clientEventId: clean(clientEventId, 100) } : {}), recordedBy: req.user._id, recordedByName: actorName(req.user) });
+
+    if (visitDate !== today()) {
+      throw fail('Dữ liệu ngoại tuyến chỉ được đồng bộ trong đúng ngày phát sinh', 422);
+    }
+
+    const item = await SchoolVisitor.create({ fullName: clean(fullName, 120), phone: clean(phone, 20), organization: clean(organization, 160), purpose: clean(purpose, 500), hostName: clean(hostName, 120), allowedArea: clean(allowedArea, 160), identityLast4, vehiclePlate: clean(vehiclePlate, 20).toUpperCase(), badgeNumber: clean(badgeNumber, 30).toUpperCase(), visitDate, checkInAt: dateObj, note: clean(note), ...(clientEventId ? { clientEventId: clean(clientEventId, 100), payloadFingerprint } : {}), recordedBy: req.user._id, recordedByName: actorName(req.user) });
     return res.status(201).json({ success: true, message: 'Đã ghi nhận khách vào trường', data: item });
-  } catch (error) { return sendError(res, error, 'Không thể ghi nhận khách'); }
+  } catch (error) {
+    if (error?.code === 11000) {
+      const isClientEventConflict = error.keyPattern?.clientEventId || (error.message && error.message.includes('clientEventId'));
+      if (req.body?.clientEventId && isClientEventConflict) {
+        const repeated = await SchoolVisitor.findOne({ clientEventId: req.body.clientEventId }).lean();
+        if (repeated) {
+          const { normalizedOccurredAt, workDate: visitDate } = resolveEventDateAndTime(req.body.occurredAt);
+          const canonicalPayloadV2 = canonicalVisitorPayloadV2({
+            fullName: req.body.fullName,
+            phone: req.body.phone,
+            organization: req.body.organization,
+            purpose: req.body.purpose,
+            hostName: req.body.hostName,
+            allowedArea: req.body.allowedArea,
+            identityLast4: req.body.identityLast4,
+            vehiclePlate: req.body.vehiclePlate,
+            badgeNumber: req.body.badgeNumber,
+            visitDate,
+            occurredAt: normalizedOccurredAt,
+            note: req.body.note
+          });
+          const canonicalPayloadV1 = canonicalVisitorPayloadV1({
+            fullName: req.body.fullName,
+            phone: req.body.phone,
+            organization: req.body.organization,
+            purpose: req.body.purpose,
+            hostName: req.body.hostName,
+            allowedArea: req.body.allowedArea,
+            identityLast4: req.body.identityLast4,
+            vehiclePlate: req.body.vehiclePlate,
+            badgeNumber: req.body.badgeNumber,
+            visitDate,
+            note: req.body.note
+          });
+          const payloadFingerprint = computeFingerprintV2(canonicalPayloadV2);
+          const verify = verifyIdempotency({
+            existingDoc: repeated,
+            currentUserId: req.user._id,
+            ownerField: 'recordedBy',
+            incomingFingerprint: payloadFingerprint,
+            incomingCanonicalV2: canonicalPayloadV2,
+            incomingCanonicalV1: canonicalPayloadV1,
+            incomingNormalizedOccurredAt: normalizedOccurredAt,
+            canonicalFromDocV1Fn: canonicalVisitorFromDocV1,
+            canonicalFromDocV2Fn: canonicalVisitorFromDocV2
+          });
+          if (verify.status === 'conflict') {
+            return res.status(409).json({ success: false, message: verify.message });
+          }
+          return res.json({ success: true, repeated: true, message: 'Dữ liệu ngoại tuyến đã được đồng bộ trước đó', data: verify.doc });
+        }
+      }
+      return res.status(409).json({ success: false, message: 'Thông tin khách bị trùng khóa duy nhất' });
+    }
+    return sendError(res, error, 'Không thể ghi nhận khách');
+  }
 };
 
 const checkoutVisitor = async (req, res) => {
@@ -196,23 +397,97 @@ const listIncidents = async (req, res) => {
 
 const createIncident = async (req, res) => {
   try {
-    const { category, severity = 'normal', location, description, actionTaken = '', studentId = null, clientEventId = '' } = req.body || {};
+    const { category, severity = 'normal', location, description, actionTaken = '', studentId = null, clientEventId = '', occurredAt } = req.body || {};
     if (!['unauthorized_person', 'invalid_picker', 'child_safety', 'accident', 'lost_property', 'equipment', 'fire', 'traffic', 'other'].includes(category)) throw fail('Loại sự cố không hợp lệ');
     if (!['normal', 'serious', 'emergency'].includes(severity)) throw fail('Mức độ sự cố không hợp lệ');
     if (!clean(location, 161) || !clean(description, 2001)) throw fail('Vị trí và nội dung sự cố là bắt buộc');
     let student = null;
     if (studentId) { if (!isValidObjectId(studentId)) throw fail('ID học sinh không hợp lệ'); student = await Student.findById(studentId).select('fullName'); if (!student) throw fail('Không tìm thấy học sinh', 404); }
+
+    const { dateObj, normalizedOccurredAt, workDate: incidentDate } = resolveEventDateAndTime(occurredAt);
+    const canonicalPayloadV2 = canonicalIncidentPayloadV2({ incidentDate, category, severity, location, description, actionTaken, studentId, occurredAt: normalizedOccurredAt });
+    const canonicalPayloadV1 = canonicalIncidentPayloadV1({ incidentDate, category, severity, location, description, actionTaken, studentId });
+    const payloadFingerprint = computeFingerprintV2(canonicalPayloadV2);
+
     if (clientEventId) {
       const repeated = await SecurityIncident.findOne({ clientEventId }).lean();
-      if (repeated) return res.json({ success: true, repeated: true, message: 'Dữ liệu ngoại tuyến đã được đồng bộ trước đó', data: repeated });
+      if (repeated) {
+        const verify = verifyIdempotency({
+          existingDoc: repeated,
+          currentUserId: req.user._id,
+          ownerField: 'reportedBy',
+          incomingFingerprint: payloadFingerprint,
+          incomingCanonicalV2: canonicalPayloadV2,
+          incomingCanonicalV1: canonicalPayloadV1,
+          incomingNormalizedOccurredAt: normalizedOccurredAt,
+          canonicalFromDocV1Fn: canonicalIncidentFromDocV1,
+          canonicalFromDocV2Fn: canonicalIncidentFromDocV2
+        });
+        if (verify.status === 'conflict') {
+          return res.status(409).json({ success: false, message: verify.message });
+        }
+        return res.json({ success: true, repeated: true, message: 'Dữ liệu ngoại tuyến đã được đồng bộ trước đó', data: verify.doc });
+      }
     }
+
+    if (incidentDate !== today()) {
+      throw fail('Dữ liệu ngoại tuyến chỉ được đồng bộ trong đúng ngày phát sinh', 422);
+    }
+
     const item = await mongoose.connection.transaction(async (session) => {
-      const [incident] = await SecurityIncident.create([{ incidentDate: today(), category, severity, location: clean(location, 160), description: clean(description, 2000), actionTaken: clean(actionTaken, 1000), studentId: student?._id || null, studentName: student?.fullName || '', ...(clientEventId ? { clientEventId: clean(clientEventId, 100) } : {}), reportedBy: req.user._id, reportedByName: actorName(req.user), nextReminderAt: severity === 'normal' ? null : new Date(Date.now() + REMINDER_INTERVAL_MS) }], { session });
+      const [incident] = await SecurityIncident.create([{ incidentDate, occurredAt: dateObj, category, severity, location: clean(location, 160), description: clean(description, 2000), actionTaken: clean(actionTaken, 1000), studentId: student?._id || null, studentName: student?.fullName || '', ...(clientEventId ? { clientEventId: clean(clientEventId, 100), payloadFingerprint } : {}), reportedBy: req.user._id, reportedByName: actorName(req.user), nextReminderAt: severity === 'normal' ? null : new Date(Date.now() + REMINDER_INTERVAL_MS) }], { session });
       if (severity !== 'normal') await notifyManagers(`Sự cố ${severity === 'emergency' ? 'khẩn cấp' : 'nghiêm trọng'} tại ${incident.location}`, incident.description, req.user._id, { incidentId: incident._id, severity }, session);
       return incident;
     });
     return res.status(201).json({ success: true, message: 'Đã ghi nhận sự cố và gửi cảnh báo phù hợp', data: item });
-  } catch (error) { return sendError(res, error, 'Không thể ghi nhận sự cố'); }
+  } catch (error) {
+    if (error?.code === 11000) {
+      const isClientEventConflict = error.keyPattern?.clientEventId || (error.message && error.message.includes('clientEventId'));
+      if (req.body?.clientEventId && isClientEventConflict) {
+        const repeated = await SecurityIncident.findOne({ clientEventId: req.body.clientEventId }).lean();
+        if (repeated) {
+          const { normalizedOccurredAt, workDate: incidentDate } = resolveEventDateAndTime(req.body.occurredAt);
+          const canonicalPayloadV2 = canonicalIncidentPayloadV2({
+            incidentDate,
+            category: req.body.category,
+            severity: req.body.severity,
+            location: req.body.location,
+            description: req.body.description,
+            actionTaken: req.body.actionTaken,
+            studentId: req.body.studentId,
+            occurredAt: normalizedOccurredAt
+          });
+          const canonicalPayloadV1 = canonicalIncidentPayloadV1({
+            incidentDate,
+            category: req.body.category,
+            severity: req.body.severity,
+            location: req.body.location,
+            description: req.body.description,
+            actionTaken: req.body.actionTaken,
+            studentId: req.body.studentId
+          });
+          const payloadFingerprint = computeFingerprintV2(canonicalPayloadV2);
+          const verify = verifyIdempotency({
+            existingDoc: repeated,
+            currentUserId: req.user._id,
+            ownerField: 'reportedBy',
+            incomingFingerprint: payloadFingerprint,
+            incomingCanonicalV2: canonicalPayloadV2,
+            incomingCanonicalV1: canonicalPayloadV1,
+            incomingNormalizedOccurredAt: normalizedOccurredAt,
+            canonicalFromDocV1Fn: canonicalIncidentFromDocV1,
+            canonicalFromDocV2Fn: canonicalIncidentFromDocV2
+          });
+          if (verify.status === 'conflict') {
+            return res.status(409).json({ success: false, message: verify.message });
+          }
+          return res.json({ success: true, repeated: true, message: 'Dữ liệu ngoại tuyến đã được đồng bộ trước đó', data: verify.doc });
+        }
+      }
+      return res.status(409).json({ success: false, message: 'Sự cố bị trùng khóa duy nhất' });
+    }
+    return sendError(res, error, 'Không thể ghi nhận sự cố');
+  }
 };
 
 const updateIncident = async (req, res) => {
@@ -284,7 +559,11 @@ const listHandovers = async (req, res) => {
     const handoverDate = req.query.date || today();
     if (!isValidWorkDate(handoverDate)) throw fail('Ngày bàn giao không hợp lệ');
     const filter = handoverDate === today() ? { $or: [{ handoverDate }, { receiverId: req.user._id, status: 'pending' }] } : { handoverDate };
-    const data = await GuardShiftHandover.find(filter).sort({ handedOverAt: -1 }).limit(50).lean();
+    let query = GuardShiftHandover.find(filter).sort({ handedOverAt: -1 }).limit(50);
+    if (req.user.role === 'guard') {
+      query = query.select('-childrenSnapshot -childrenRemaining');
+    }
+    const data = await query.lean();
     return res.json({ success: true, data });
   } catch (error) { return sendError(res, error, 'Không thể tải lịch sử bàn giao'); }
 };
@@ -297,13 +576,47 @@ const createHandover = async (req, res) => {
     if (String(receiverId) === String(req.user._id)) throw fail('Không thể tự nhận ca của mình');
     const receiver = await User.findOne({ _id: receiverId, role: { $in: ['guard', 'admin', 'principal'] }, status: 'active' }).select('username profile.fullName role');
     if (!receiver) throw fail('Tài khoản nhận bàn giao không còn hoạt động', 404);
-    const [{ inside }, visitors, incidents] = await Promise.all([getGateState(today()), SchoolVisitor.find({ status: 'inside' }).select('fullName hostName').lean(), SecurityIncident.find({ status: { $ne: 'closed' } }).select('location description status').lean()]);
+    const isGuard = req.user.role === 'guard';
+    const [inside, visitors, incidents] = await Promise.all([
+      isGuard ? Promise.resolve([]) : getGateState(today()).then((res) => res.inside),
+      SchoolVisitor.find({ status: 'inside' }).select('fullName hostName').lean(),
+      SecurityIncident.find({ status: { $ne: 'closed' } }).select('location description status').lean()
+    ]);
     const item = await mongoose.connection.transaction(async (session) => {
-      const [handover] = await GuardShiftHandover.create([{ handoverDate: today(), shiftName, receiverId: receiver._id, receiverName: receiver.profile?.fullName || receiver.username, childrenRemaining: inside.length, visitorsRemaining: visitors.length, openIncidents: incidents.length, childrenSnapshot: inside.map((entry) => ({ studentId: entry.studentId, studentName: entry.studentName, className: entry.className })), visitorsSnapshot: visitors.map((entry) => ({ visitorId: entry._id, fullName: entry.fullName, hostName: entry.hostName })), incidentsSnapshot: incidents.map((entry) => ({ incidentId: entry._id, location: entry.location, description: entry.description, status: entry.status })), keysAndEquipment: clean(keysAndEquipment, 1000), notes: clean(notes, 2000), handedOverBy: req.user._id, handedOverByName: actorName(req.user) }], { session });
-      await Notification.create([{ recipientId: receiver._id, title: 'Bạn có ca trực cần nhận bàn giao', message: `${actorName(req.user)} đã bàn giao ca ${shiftName}. Vui lòng kiểm tra trẻ, khách và sự cố còn tồn.`, type: 'warning', link: '/guard', createdBy: req.user._id, metadata: { handoverId: handover._id, priority: 'high' } }], { session });
+      const [handover] = await GuardShiftHandover.create([{
+        handoverDate: today(),
+        shiftName,
+        receiverId: receiver._id,
+        receiverName: receiver.profile?.fullName || receiver.username,
+        childrenRemaining: isGuard ? 0 : inside.length,
+        visitorsRemaining: visitors.length,
+        openIncidents: incidents.length,
+        childrenSnapshot: isGuard ? [] : inside.map((entry) => ({ studentId: entry.studentId, studentName: entry.studentName, className: entry.className })),
+        visitorsSnapshot: visitors.map((entry) => ({ visitorId: entry._id, fullName: entry.fullName, hostName: entry.hostName })),
+        incidentsSnapshot: incidents.map((entry) => ({ incidentId: entry._id, location: entry.location, description: entry.description, status: entry.status })),
+        keysAndEquipment: clean(keysAndEquipment, 1000),
+        notes: clean(notes, 2000),
+        handedOverBy: req.user._id,
+        handedOverByName: actorName(req.user)
+      }], { session });
+      await Notification.create([{
+        recipientId: receiver._id,
+        title: 'Bạn có ca trực cần nhận bàn giao',
+        message: `${actorName(req.user)} đã bàn giao ca ${shiftName}. Vui lòng kiểm tra khách và sự cố còn tồn.`,
+        type: 'warning',
+        link: '/guard',
+        createdBy: req.user._id,
+        metadata: { handoverId: handover._id, priority: 'high' }
+      }], { session });
       return handover;
     });
-    return res.status(201).json({ success: true, message: 'Đã lưu biên bản bàn giao ca', data: item });
+    const safeData = isGuard ? (() => {
+      const obj = typeof item.toObject === 'function' ? item.toObject() : { ...item };
+      delete obj.childrenSnapshot;
+      delete obj.childrenRemaining;
+      return obj;
+    })() : item;
+    return res.status(201).json({ success: true, message: 'Đã lưu biên bản bàn giao ca', data: safeData });
   } catch (error) { return sendError(res, error, 'Không thể bàn giao ca'); }
 };
 
@@ -321,13 +634,21 @@ const acceptHandover = async (req, res) => {
       if (accepted) await Notification.create([{ recipientId: accepted.handedOverBy, title: 'Ca trực đã được tiếp nhận', message: `${actorName(req.user)} đã xác nhận nhận ca ${accepted.shiftName}.`, type: 'info', link: '/guard', createdBy: req.user._id, metadata: { handoverId: accepted._id } }], { session });
       return accepted;
     });
+    const isGuard = req.user.role === 'guard';
+    const safeData = (result) => {
+      if (!result || !isGuard) return result;
+      const obj = typeof result.toObject === 'function' ? result.toObject() : { ...result };
+      delete obj.childrenSnapshot;
+      delete obj.childrenRemaining;
+      return obj;
+    };
     if (item) {
-      return res.json({ success: true, message: 'Đã xác nhận nhận ca trực', data: item });
+      return res.json({ success: true, message: 'Đã xác nhận nhận ca trực', data: safeData(item) });
     }
     const existing = await GuardShiftHandover.findById(req.params.id);
     if (!existing) throw fail('Không tìm thấy biên bản', 404);
     if (String(existing.receiverId) !== String(req.user._id)) throw fail('Bạn không phải người nhận ca được chỉ định', 403);
-    if (existing.status === 'accepted') return res.json({ success: true, message: 'Ca trực đã được tiếp nhận', data: existing });
+    if (existing.status === 'accepted') return res.json({ success: true, message: 'Ca trực đã được tiếp nhận', data: safeData(existing) });
     throw fail('Không thể nhận biên bản này', 409);
   } catch (error) { return sendError(res, error, 'Không thể xác nhận nhận ca'); }
 };
@@ -427,12 +748,118 @@ const createSupplierDelivery = async (req, res) => {
     const { purchaseOrderId = null, supplierName, driverName, phone = '', vehiclePlate = '', itemsDescription, recipientName, allowedArea = 'Khu vực giao nhận', note = '', clientEventId = '', occurredAt } = req.body || {};
     if (!clean(supplierName, 161) || !clean(driverName, 121) || !clean(itemsDescription, 1001) || !clean(recipientName, 121)) throw fail('Nhà cung cấp, người giao, hàng hóa và người nhận là bắt buộc');
     if (phone && !/^[0-9+().\s-]{8,20}$/.test(phone)) throw fail('Số điện thoại không hợp lệ');
-    if (clientEventId) { const repeated = await SupplierDelivery.findOne({ clientEventId }).lean(); if (repeated) return res.json({ success: true, repeated: true, message: 'Dữ liệu ngoại tuyến đã được đồng bộ trước đó', data: repeated }); }
+
+    const { dateObj, normalizedOccurredAt, workDate: deliveryDate } = resolveEventDateAndTime(occurredAt);
+    const canonicalPayloadV2 = canonicalDeliveryPayloadV2({
+      deliveryDate,
+      occurredAt: normalizedOccurredAt,
+      purchaseOrderId,
+      supplierName,
+      driverName,
+      phone,
+      vehiclePlate,
+      itemsDescription,
+      recipientName,
+      allowedArea,
+      note
+    });
+    const canonicalPayloadV1 = canonicalDeliveryPayloadV1({
+      deliveryDate,
+      purchaseOrderId,
+      supplierName,
+      driverName,
+      phone,
+      vehiclePlate,
+      itemsDescription,
+      recipientName,
+      allowedArea,
+      note
+    });
+    const payloadFingerprint = computeFingerprintV2(canonicalPayloadV2);
+
+    if (clientEventId) {
+      const repeated = await SupplierDelivery.findOne({ clientEventId }).lean();
+      if (repeated) {
+        const verify = verifyIdempotency({
+          existingDoc: repeated,
+          currentUserId: req.user._id,
+          ownerField: 'recordedBy',
+          incomingFingerprint: payloadFingerprint,
+          incomingCanonicalV2: canonicalPayloadV2,
+          incomingCanonicalV1: canonicalPayloadV1,
+          incomingNormalizedOccurredAt: normalizedOccurredAt,
+          canonicalFromDocV1Fn: canonicalDeliveryFromDocV1,
+          canonicalFromDocV2Fn: canonicalDeliveryFromDocV2
+        });
+        if (verify.status === 'conflict') {
+          return res.status(409).json({ success: false, message: verify.message });
+        }
+        return res.json({ success: true, repeated: true, message: 'Dữ liệu ngoại tuyến đã được đồng bộ trước đó', data: verify.doc });
+      }
+    }
+
+    if (deliveryDate !== today()) {
+      throw fail('Dữ liệu ngoại tuyến chỉ được đồng bộ trong đúng ngày phát sinh', 422);
+    }
+
     let order = null;
     if (purchaseOrderId) { if (!isValidObjectId(purchaseOrderId)) throw fail('Mã đơn hàng không hợp lệ'); order = await PurchaseOrder.findOne({ _id: purchaseOrderId, status: 'ordered' }).select('orderCode supplierName'); if (!order) throw fail('Đơn hàng không còn ở trạng thái chờ giao', 409); }
-    const item = await SupplierDelivery.create({ deliveryDate: today(), purchaseOrderId: order?._id || null, orderCode: order?.orderCode || '', supplierName: clean(supplierName || order?.supplierName, 160), driverName: clean(driverName, 120), phone: clean(phone, 20), vehiclePlate: clean(vehiclePlate, 20).toUpperCase(), itemsDescription: clean(itemsDescription, 1000), recipientName: clean(recipientName, 120), allowedArea: clean(allowedArea, 160), note: clean(note), checkInAt: parseOccurredAt(occurredAt), ...(clientEventId ? { clientEventId: clean(clientEventId, 100) } : {}), recordedBy: req.user._id, recordedByName: actorName(req.user) });
+    const item = await SupplierDelivery.create({ deliveryDate, purchaseOrderId: order?._id || null, orderCode: order?.orderCode || '', supplierName: clean(supplierName || order?.supplierName, 160), driverName: clean(driverName, 120), phone: clean(phone, 20), vehiclePlate: clean(vehiclePlate, 20).toUpperCase(), itemsDescription: clean(itemsDescription, 1000), recipientName: clean(recipientName, 120), allowedArea: clean(allowedArea, 160), note: clean(note), checkInAt: dateObj, ...(clientEventId ? { clientEventId: clean(clientEventId, 100), payloadFingerprint } : {}), recordedBy: req.user._id, recordedByName: actorName(req.user) });
     return res.status(201).json({ success: true, message: 'Đã ghi nhận nhà cung cấp vào giao hàng', data: item });
-  } catch (error) { return sendError(res, error, 'Không thể ghi nhận giao hàng'); }
+  } catch (error) {
+    if (error?.code === 11000) {
+      const isClientEventConflict = error.keyPattern?.clientEventId || (error.message && error.message.includes('clientEventId'));
+      if (req.body?.clientEventId && isClientEventConflict) {
+        const repeated = await SupplierDelivery.findOne({ clientEventId: req.body.clientEventId }).lean();
+        if (repeated) {
+          const { normalizedOccurredAt, workDate: deliveryDate } = resolveEventDateAndTime(req.body.occurredAt);
+          const canonicalPayloadV2 = canonicalDeliveryPayloadV2({
+            deliveryDate,
+            occurredAt: normalizedOccurredAt,
+            purchaseOrderId: req.body.purchaseOrderId,
+            supplierName: req.body.supplierName,
+            driverName: req.body.driverName,
+            phone: req.body.phone,
+            vehiclePlate: req.body.vehiclePlate,
+            itemsDescription: req.body.itemsDescription,
+            recipientName: req.body.recipientName,
+            allowedArea: req.body.allowedArea,
+            note: req.body.note
+          });
+          const canonicalPayloadV1 = canonicalDeliveryPayloadV1({
+            deliveryDate,
+            purchaseOrderId: req.body.purchaseOrderId,
+            supplierName: req.body.supplierName,
+            driverName: req.body.driverName,
+            phone: req.body.phone,
+            vehiclePlate: req.body.vehiclePlate,
+            itemsDescription: req.body.itemsDescription,
+            recipientName: req.body.recipientName,
+            allowedArea: req.body.allowedArea,
+            note: req.body.note
+          });
+          const payloadFingerprint = computeFingerprintV2(canonicalPayloadV2);
+          const verify = verifyIdempotency({
+            existingDoc: repeated,
+            currentUserId: req.user._id,
+            ownerField: 'recordedBy',
+            incomingFingerprint: payloadFingerprint,
+            incomingCanonicalV2: canonicalPayloadV2,
+            incomingCanonicalV1: canonicalPayloadV1,
+            incomingNormalizedOccurredAt: normalizedOccurredAt,
+            canonicalFromDocV1Fn: canonicalDeliveryFromDocV1,
+            canonicalFromDocV2Fn: canonicalDeliveryFromDocV2
+          });
+          if (verify.status === 'conflict') {
+            return res.status(409).json({ success: false, message: verify.message });
+          }
+          return res.json({ success: true, repeated: true, message: 'Dữ liệu ngoại tuyến đã được đồng bộ trước đó', data: verify.doc });
+        }
+      }
+      return res.status(409).json({ success: false, message: 'Lượt giao hàng bị trùng khóa duy nhất' });
+    }
+    return sendError(res, error, 'Không thể ghi nhận giao hàng');
+  }
 };
 
 const checkoutSupplierDelivery = async (req, res) => {

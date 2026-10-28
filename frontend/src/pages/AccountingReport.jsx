@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import AppShell from '../components/AppShell';
-import { getAccountingReport, getAccountingPeriod, closeAccountingPeriod, reopenAccountingPeriod } from '../api/finance';
+import Icon from '../components/Icon';
+import { getAccountingReport, getAccountingPeriod, closeAccountingPeriod, reopenAccountingPeriod, exportAccountingReport } from '../api/finance';
 import './AccountingReport.css';
 
 const currentMonth = () => {
@@ -19,12 +20,25 @@ export default function AccountingReport() {
   const [month, setMonth] = useState(currentMonth);
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState('');
   const [periodState, setPeriodState] = useState(null);
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const role = JSON.parse(localStorage.getItem('user') || '{}').role;
   const canClose = ['admin', 'principal'].includes(role);
+
+  const handleExport = async () => {
+    if (exporting) return;
+    setExporting(true); setError('');
+    try {
+      await exportAccountingReport(month);
+    } catch (err) {
+      setError(err.message || 'Không thể xuất Excel báo cáo kế toán.');
+    } finally {
+      setExporting(false);
+    }
+  };
   const load = useCallback(async () => {
     setLoading(true);
     try { const [summary, period] = await Promise.all([getAccountingReport(month), getAccountingPeriod(month)]); setReport(summary.data.data); setPeriodState(period.data.data); setError(''); }
@@ -72,7 +86,7 @@ export default function AccountingReport() {
 
   return <AppShell title="Báo cáo kế toán" subtitle="Báo cáo theo kỳ hóa đơn, kỳ lương và dòng tiền đã ghi nhận.">
     <div className="accounting-report">
-      <section className="content-card accounting-report-toolbar"><div><p className="card-kicker">BÁO CÁO TỔNG HỢP</p><h2>Tháng {month.slice(5, 7)}/{month.slice(0, 4)}</h2><p>Số “đã thu cho hóa đơn kỳ” là lũy kế đến lúc xem báo cáo; dòng tiền chỉ tính giao dịch phát sinh trong tháng.</p></div><div className="accounting-report-actions"><label>Chọn tháng<input type="month" value={month} onChange={(event) => { if (event.target.value) setMonth(event.target.value); }} /></label><button type="button" className="button button-secondary" onClick={load} disabled={loading}>Làm mới</button><button type="button" className="button button-primary" onClick={downloadCsv} disabled={!report || loading}>Tải CSV</button></div></section>
+      <section className="content-card accounting-report-toolbar"><div><p className="card-kicker">BÁO CÁO TỔNG HỢP</p><h2>Tháng {month.slice(5, 7)}/{month.slice(0, 4)}</h2><p>Số “đã thu cho hóa đơn kỳ” là lũy kế đến lúc xem báo cáo; dòng tiền chỉ tính giao dịch phát sinh trong tháng.</p></div><div className="accounting-report-actions"><label>Chọn tháng<input type="month" value={month} onChange={(event) => { if (event.target.value) setMonth(event.target.value); }} /></label><button type="button" className="button button-secondary" onClick={handleExport} disabled={exporting || loading}><Icon name="download" size={16} />{exporting ? 'Đang xuất...' : 'Xuất Excel'}</button><button type="button" className="button button-secondary" onClick={load} disabled={loading}><Icon name="refresh" size={16} />Làm mới</button><button type="button" className="button button-primary" onClick={downloadCsv} disabled={!report || loading}>Tải CSV</button></div></section>
       {error && <div className="form-error" role="alert">{error}</div>}{loading && <section className="content-card accounting-report-loading">Đang tổng hợp báo cáo...</section>}
       {!loading && report && <>
         <section className="content-card accounting-report-period"><div><p className="card-kicker">CHỐT KỲ VÀ NHẬT KÝ</p><h2>{periodState?.status === 'closed' ? 'Kỳ đã chốt' : 'Kỳ đang mở'}</h2><p>{periodState?.status === 'closed' ? 'Ảnh chụp lúc chốt được giữ trong lịch sử. Khoản thu nợ kỳ cũ ghi vào tháng thực thu; không sửa hóa đơn kỳ đã chốt.' : 'Chỉ chốt sau khi tháng kết thúc, đối soát khớp và hoàn tất chi lương.'}</p>{periodState?.sourceChanged && <p className="accounting-report-warning">Dữ liệu nguồn của kỳ đã thay đổi so với lúc chốt. Cần rà soát.</p>}</div>{canClose && <div className="accounting-report-period-action"><label>Căn cứ / lý do<textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} placeholder="Nhập ít nhất 10 ký tự" /></label><button type="button" className="button button-secondary" disabled={submitting} onClick={changePeriod}>{submitting ? 'Đang xử lý...' : periodState?.status === 'closed' ? 'Mở lại kỳ' : 'Chốt kỳ'}</button></div>}<div className="accounting-report-history"><strong>Lịch sử thao tác</strong>{periodState?.history?.length ? [...periodState.history].reverse().map((entry, index) => <p key={`${entry.revision}-${index}`}>{entry.action === 'closed' ? 'Chốt kỳ' : 'Mở lại'} · {entry.actorName} · {new Date(entry.at).toLocaleString('vi-VN')} · {entry.reason}</p>) : <p>Chưa có thao tác chốt kỳ.</p>}</div></section>

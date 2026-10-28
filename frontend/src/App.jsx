@@ -25,6 +25,7 @@ import FinanceManagement from './pages/FinanceManagement';
 import Reports from './pages/Reports';
 import AssetManagement from './pages/AssetManagement';
 import EmployeeManagement from './pages/EmployeeManagement';
+import PayrollManagement from './pages/PayrollManagement';
 import Messages from './pages/Messages';
 import MyPayroll from './pages/MyPayroll';
 import DailyCare from './pages/DailyCare';
@@ -52,12 +53,22 @@ function ParentRoute({ children }) {
   return user.role === 'parent' ? children : <Navigate to="/dashboard" replace />;
 }
 
+function DashboardRoute({ children }) {
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
+  if (user.role === 'guard') return <Navigate to="/guard" replace />;
+  if (user.role === 'parent') return <Navigate to="/parent-dashboard" replace />;
+  return children;
+}
+
 function StudentManagementRoute({ children }) {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
-  // Hồ sơ của con được hiển thị qua ParentPortal; không cho phụ huynh dùng
+  // Hồ sơ của con được hiển thị qua ParentPortal; không cho phụ huynh hoặc bảo vệ dùng
   // giao diện quản trị/danh sách học sinh dù họ tự nhập URL.
-  return user.role === 'parent' ? <Navigate to="/parent-portal" replace /> : children;
+  if (user.role === 'parent') return <Navigate to="/parent-portal" replace />;
+  if (user.role === 'guard') return <Navigate to="/guard" replace />;
+  return children;
 }
 
 function ChatRoute({ children }) {
@@ -70,6 +81,7 @@ function PickupRoute({ children }) {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const location = useLocation();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
+  if (user.role === 'guard') return <Navigate to="/guard" replace />;
   if (user.role === 'teacher') {
     const searchParams = new URLSearchParams(location.search);
     const classroomId = searchParams.get('classroomId');
@@ -82,7 +94,7 @@ function PickupRoute({ children }) {
     const search = searchParams.toString();
     return <Navigate to={`/attendance${search ? `?${search}` : ''}`} replace />;
   }
-  return ['parent', 'guard', 'admin', 'principal'].includes(user.role) ? children : <Navigate to="/dashboard" replace />;
+  return ['parent', 'admin', 'principal'].includes(user.role) ? children : <Navigate to="/dashboard" replace />;
 }
 
 function StaffRoute({ children }) {
@@ -106,6 +118,7 @@ function TeacherRoute({ children }) {
 function RoleRoute({ roles, children }) {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
+  if (user.role === 'guard' && !roles.includes('guard')) return <Navigate to="/guard" replace />;
   return roles.includes(user.role) ? children : <Navigate to="/dashboard" replace />;
 }
 
@@ -136,11 +149,11 @@ function App() {
         <Route path="/principal" element={<RoleRoute roles={['admin', 'principal']}><PrincipalOverview /></RoleRoute>} />
         <Route
           path="/dashboard"
-          element={<ProtectedRoute><Dashboard /></ProtectedRoute>}
+          element={<DashboardRoute><Dashboard /></DashboardRoute>}
         />
         <Route
           path="/attendance"
-          element={<ProtectedRoute><AttendanceClassList /></ProtectedRoute>}
+          element={<RoleRoute roles={['admin', 'teacher']}><AttendanceClassList /></RoleRoute>}
         />
         <Route
           path="/attendance/class/:classroomId"
@@ -148,11 +161,11 @@ function App() {
         />
         <Route
           path="/attendance/reports"
-          element={<ProtectedRoute><AttendanceAbsenceReport /></ProtectedRoute>}
+          element={<RoleRoute roles={['admin', 'principal', 'teacher']}><AttendanceAbsenceReport /></RoleRoute>}
         />
         <Route
           path="/attendance/leave-requests"
-          element={<ProtectedRoute><AttendanceLeaveManagement /></ProtectedRoute>}
+          element={<RoleRoute roles={['admin', 'principal', 'teacher']}><AttendanceLeaveManagement /></RoleRoute>}
         />
         <Route
           path="/smart-attendance"
@@ -194,6 +207,7 @@ function App() {
         <Route path="/reports" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><Reports /></RoleRoute>} />
         <Route path="/assets" element={<RoleRoute roles={['admin', 'principal', 'teacher']}><AssetManagement /></RoleRoute>} />
         <Route path="/hr" element={<RoleRoute roles={['admin', 'principal', 'accountant', 'hr']}><EmployeeManagement /></RoleRoute>} />
+        <Route path="/payroll" element={<RoleRoute roles={['admin', 'principal', 'accountant', 'hr']}><PayrollManagement /></RoleRoute>} />
         <Route path="/parent-dashboard" element={<ParentRoute><ParentPortal /></ParentRoute>} />
         <Route path="/parent-portal" element={<ParentRoute><ParentPortal /></ParentRoute>} />
         <Route path="/parent-settings" element={<ParentRoute><ParentSettings /></ParentRoute>} />

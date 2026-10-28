@@ -9,6 +9,7 @@ const SecurityIncidentSchema = new mongoose.Schema({
   actionTaken: { type: String, trim: true, maxlength: 1000, default: '' },
   studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', default: null },
   studentName: { type: String, trim: true, default: '' },
+  occurredAt: { type: Date, default: Date.now },
   status: { type: String, enum: ['open', 'in_progress', 'handed_over', 'closed'], default: 'open', index: true },
   reportedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   reportedByName: { type: String, required: true, trim: true },
@@ -28,7 +29,8 @@ const SecurityIncidentSchema = new mongoose.Schema({
     note: { type: String, required: true, trim: true, maxlength: 1000 },
     createdAt: { type: Date, default: Date.now }
   }],
-  clientEventId: { type: String, trim: true, maxlength: 100 }
+  clientEventId: { type: String, trim: true, maxlength: 100 },
+  payloadFingerprint: { type: String, trim: true, maxlength: 64 }
 }, { timestamps: true });
 
 SecurityIncidentSchema.index({ status: 1, severity: 1, createdAt: -1 });

@@ -8,12 +8,13 @@ const allNavItems = [
   { to: '/dashboard', label: 'Tổng quan', icon: 'grid', roles: ['admin', 'principal', 'teacher'] },
   { to: '/principal', label: 'Sổ điều hành', icon: 'chart', roles: ['admin', 'principal'] },
   { to: '/accounts', label: 'Tài khoản & vai trò', icon: 'shield', roles: ['admin', 'hr'] },
-  { to: '/students', label: 'Học sinh', icon: 'students', roles: ['admin', 'principal', 'teacher'] },
+  { to: '/students', label: 'Học sinh', icon: 'students', roles: ['admin', 'principal', 'teacher', 'hr'] },
   { to: '/classrooms', label: 'Lớp học', icon: 'classes', roles: ['admin', 'principal'] },
   { to: '/attendance', label: 'Điểm danh', icon: 'attendance', roles: ['admin', 'teacher'] },
   { to: '/attendance/reports', label: 'Báo cáo điểm danh', icon: 'attendance', roles: ['principal'] },
   { to: '/timekeeping', label: 'Chấm công nhân sự', icon: 'clock', roles: ['admin', 'principal', 'guard'] },
-  { to: '/hr', label: 'Nhân sự & Lương', icon: 'users', roles: ['admin', 'principal', 'accountant', 'hr'] },
+  { to: '/hr', label: 'Nhân sự', icon: 'users', roles: ['admin', 'principal', 'hr'] },
+  { to: '/payroll', label: 'Lương & Chi trả', icon: 'money', roles: ['admin', 'principal', 'accountant', 'hr'] },
   { to: '/finance', label: 'Tài chính', icon: 'money', roles: ['admin', 'principal', 'accountant'] },
   { to: '/accounting', label: 'Tổng quan kế toán', icon: 'grid', roles: ['accountant'] },
   { to: '/accounting/expenses', label: 'Sổ chi mua sắm', icon: 'money', roles: ['accountant', 'admin'] },
@@ -23,7 +24,7 @@ const allNavItems = [
   { to: '/kitchen', label: 'Bếp hôm nay', icon: 'grid', roles: ['chef', 'admin'] },
   { to: '/nutrition', label: 'Bếp ăn & Bán trú', icon: 'utensils', roles: ['admin', 'principal', 'chef', 'teacher'] },
   { to: '/guard', label: 'Tổng quan trực cổng', icon: 'grid', roles: ['guard', 'admin'] },
-  { to: '/pickups', label: 'Đón trẻ', icon: 'users', roles: ['parent', 'guard', 'admin', 'principal'] },
+  { to: '/pickups', label: 'Đón trẻ', icon: 'users', roles: ['parent', 'admin', 'principal'] },
   { to: '/assets', label: 'Đề xuất mua sắm', icon: 'settings', roles: ['teacher'] },
   { to: '/assets', label: 'Cơ sở vật chất', icon: 'settings', roles: ['admin', 'principal'] },
   { to: '/reports', label: 'Báo cáo', icon: 'chart', roles: ['admin', 'principal', 'accountant'] },
@@ -64,7 +65,7 @@ const principalNavSections = [
       { to: '/accounting/operating-expenses', label: 'Duyệt chi vận hành', icon: 'money' },
       { to: '/finance?tab=refunds', label: 'Duyệt hoàn học phí', icon: 'money' },
       { to: '/hr?tab=leave', label: 'Duyệt nghỉ phép', icon: 'calendar' },
-      { to: '/hr?tab=payroll', label: 'Duyệt bảng lương', icon: 'money' },
+      { to: '/payroll', label: 'Duyệt bảng lương', icon: 'money' },
     ],
   },
   {
@@ -74,7 +75,7 @@ const principalNavSections = [
     items: [
       { to: '/classrooms', label: 'Lớp học', icon: 'classes' },
       { to: '/pickups', label: 'Giám sát đón trẻ', icon: 'users' },
-      { to: '/hr', label: 'Nhân sự & Lương', icon: 'users' },
+      { to: '/hr', label: 'Nhân sự', icon: 'users' },
       { to: '/finance', label: 'Tài chính học phí', icon: 'money' },
     ],
   },
@@ -162,6 +163,115 @@ const teacherNavSections = [
   },
 ];
 
+const ACCOUNTANT_SIDEBAR_STORAGE_KEY = 'accountant_sidebar_open_groups';
+
+const accountantNavSections = [
+  {
+    id: 'accountant-overview',
+    label: 'TỔNG QUAN',
+    icon: 'grid',
+    items: [
+      { to: '/accounting', label: 'Tổng quan kế toán', icon: 'grid' },
+    ],
+  },
+  {
+    id: 'accountant-tuition',
+    label: 'HỌC PHÍ & CÔNG NỢ',
+    icon: 'money',
+    items: [
+      { to: '/finance?tab=invoices', label: 'Hóa đơn học phí', icon: 'card' },
+      { to: '/finance?tab=schedules', label: 'Thiết lập mức thu', icon: 'settings' },
+      { to: '/finance?tab=create', label: 'Lập học phí theo lớp', icon: 'users' },
+      { to: '/finance?tab=debts', label: 'Công nợ', icon: 'chart' },
+      { to: '/finance?tab=refunds', label: 'Hoàn học phí', icon: 'money' },
+    ],
+  },
+  {
+    id: 'accountant-expenses',
+    label: 'CHI PHÍ & THANH TOÁN',
+    icon: 'money',
+    items: [
+      { to: '/accounting/expenses', label: 'Sổ chi mua sắm', icon: 'money' },
+      { to: '/accounting/operating-expenses', label: 'Chi vận hành', icon: 'money' },
+      { to: '/payroll', label: 'Thanh toán lương', icon: 'users' },
+    ],
+  },
+  {
+    id: 'accountant-cashbook',
+    label: 'SỔ QUỸ & ĐỐI SOÁT',
+    icon: 'chart',
+    items: [
+      { to: '/accounting/cashbook', label: 'Sổ thu – chi / Đối soát', icon: 'chart' },
+    ],
+  },
+  {
+    id: 'accountant-reports',
+    label: 'BÁO CÁO',
+    icon: 'chart',
+    items: [
+      { to: '/accounting/report', label: 'Báo cáo kế toán', icon: 'chart' },
+      { to: '/finance?tab=report', label: 'Báo cáo kỳ thu', icon: 'chart' },
+      { to: '/reports', label: 'Báo cáo tổng hợp', icon: 'chart' },
+    ],
+  },
+  {
+    id: 'accountant-personal',
+    label: 'CÔNG VIỆC & CÁ NHÂN',
+    icon: 'users',
+    items: [
+      { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar' },
+      { to: '/my-handovers', label: 'Việc bàn giao của tôi', icon: 'users' },
+      { to: '/my-requests', label: 'Yêu cầu của tôi', icon: 'card' },
+      { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
+    ],
+  },
+];
+
+const GUARD_SIDEBAR_STORAGE_KEY = 'guard_sidebar_open_groups';
+
+const guardNavSections = [
+  {
+    id: 'guard-overview',
+    label: 'TỔNG QUAN & CA TRỰC',
+    icon: 'grid',
+    items: [
+      { to: '/guard?tab=overview', label: 'Tổng quan ca trực', icon: 'grid' },
+      { to: '/timekeeping', label: 'Chấm công vào/ra ca', icon: 'clock' },
+      { to: '/my-staffing', label: 'Lịch phân công của tôi', icon: 'calendar' },
+    ],
+  },
+  {
+    id: 'guard-security',
+    label: 'AN NINH & TRỰC CỔNG',
+    icon: 'shield',
+    items: [
+      { to: '/guard?tab=visitors', label: 'Khách ra/vào', icon: 'users' },
+      { to: '/guard?tab=incidents', label: 'Sự cố an ninh', icon: 'alertCircle' },
+      { to: '/guard?tab=emergency', label: 'Xử lý khẩn cấp', icon: 'shield' },
+      { to: '/guard?tab=devices', label: 'Thiết bị cổng', icon: 'settings' },
+    ],
+  },
+  {
+    id: 'guard-handover',
+    label: 'BÀN GIAO & THÔNG BÁO',
+    icon: 'clock',
+    items: [
+      { to: '/guard?tab=handover', label: 'Bàn giao ca trực', icon: 'clock' },
+      { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar' },
+    ],
+  },
+  {
+    id: 'guard-personal',
+    label: 'CÁ NHÂN',
+    icon: 'users',
+    items: [
+      { to: '/my-leave-requests', label: 'Nghỉ phép cá nhân', icon: 'calendar' },
+      { to: '/my-requests', label: 'Yêu cầu của tôi', icon: 'card' },
+      { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
+    ],
+  },
+];
+
 const isNavItemActive = (itemTo, pathname, search) => {
   const [targetPath, targetQuery] = itemTo.split('?');
   const targetParams = new URLSearchParams(targetQuery || '');
@@ -170,19 +280,49 @@ const isNavItemActive = (itemTo, pathname, search) => {
   const currentParams = new URLSearchParams(search || '');
   const currentTab = currentParams.get('tab');
 
-  const pathMatches = pathname === targetPath || pathname.startsWith(`${targetPath}/`);
-  if (!pathMatches) return false;
-
-  if (targetTab) {
-    return currentTab === targetTab;
+  if (pathname !== targetPath) {
+    if (pathname.startsWith(`${targetPath}/`)) {
+      if (targetPath === '/accounting') {
+        return false;
+      }
+      if (targetTab) {
+        return currentTab === targetTab;
+      }
+      return true;
+    }
+    return false;
   }
 
-  if (targetPath === '/hr') {
-    return currentTab !== 'leave' && currentTab !== 'payroll';
+  // Exact pathname match
+  if (targetPath === '/guard') {
+    if (targetTab) {
+      if (targetTab === 'overview') {
+        return !currentTab || currentTab === 'overview';
+      }
+      return currentTab === targetTab;
+    }
+    return !currentTab || currentTab === 'overview';
   }
 
   if (targetPath === '/finance') {
+    if (targetTab) {
+      if (targetTab === 'invoices') {
+        return !currentTab || currentTab === 'invoices' || !['invoices', 'refunds', 'schedules', 'create', 'debts', 'report'].includes(currentTab);
+      }
+      return currentTab === targetTab;
+    }
     return currentTab !== 'refunds';
+  }
+
+  if (targetPath === '/hr') {
+    if (targetTab) {
+      return currentTab === targetTab;
+    }
+    return currentTab !== 'leave';
+  }
+
+  if (targetTab) {
+    return currentTab === targetTab;
   }
 
   return true;
@@ -247,6 +387,46 @@ export default function AppShell({ title, subtitle, actions, children }) {
       console.error('Lỗi đọc trạng thái menu giáo viên:', e);
     }
     const activeSectionId = getActiveSectionId(teacherNavSections, location.pathname, location.search);
+    if (activeSectionId && !initialOpen.includes(activeSectionId)) {
+      initialOpen = [...initialOpen, activeSectionId];
+    }
+    return initialOpen;
+  });
+
+  const [accountantOpenSections, setAccountantOpenSections] = useState(() => {
+    let initialOpen = accountantNavSections.map((s) => s.id);
+    try {
+      const saved = localStorage.getItem(ACCOUNTANT_SIDEBAR_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          initialOpen = parsed;
+        }
+      }
+    } catch (e) {
+      console.error('Lỗi đọc trạng thái menu kế toán:', e);
+    }
+    const activeSectionId = getActiveSectionId(accountantNavSections, location.pathname, location.search);
+    if (activeSectionId && !initialOpen.includes(activeSectionId)) {
+      initialOpen = [...initialOpen, activeSectionId];
+    }
+    return initialOpen;
+  });
+
+  const [guardOpenSections, setGuardOpenSections] = useState(() => {
+    let initialOpen = guardNavSections.map((s) => s.id);
+    try {
+      const saved = localStorage.getItem(GUARD_SIDEBAR_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          initialOpen = parsed;
+        }
+      }
+    } catch (e) {
+      console.error('Lỗi đọc trạng thái menu bảo vệ:', e);
+    }
+    const activeSectionId = getActiveSectionId(guardNavSections, location.pathname, location.search);
     if (activeSectionId && !initialOpen.includes(activeSectionId)) {
       initialOpen = [...initialOpen, activeSectionId];
     }
@@ -324,6 +504,8 @@ export default function AppShell({ title, subtitle, actions, children }) {
 
   const isPrincipal = user?.role === 'principal';
   const isTeacher = user?.role === 'teacher';
+  const isAccountant = user?.role === 'accountant';
+  const isGuard = user?.role === 'guard';
   const currentLocationKey = `${location.pathname}${location.search}`;
   const [prevLocationKey, setPrevLocationKey] = useState(currentLocationKey);
 
@@ -353,6 +535,30 @@ export default function AppShell({ title, subtitle, actions, children }) {
         }
       }
     }
+    if (isAccountant) {
+      const activeSectionId = getActiveSectionId(accountantNavSections, location.pathname, location.search);
+      if (activeSectionId && !accountantOpenSections.includes(activeSectionId)) {
+        const next = [...accountantOpenSections, activeSectionId];
+        setAccountantOpenSections(next);
+        try {
+          localStorage.setItem(ACCOUNTANT_SIDEBAR_STORAGE_KEY, JSON.stringify(next));
+        } catch (e) {
+          console.error('Lỗi lưu trạng thái menu kế toán:', e);
+        }
+      }
+    }
+    if (isGuard) {
+      const activeSectionId = getActiveSectionId(guardNavSections, location.pathname, location.search);
+      if (activeSectionId && !guardOpenSections.includes(activeSectionId)) {
+        const next = [...guardOpenSections, activeSectionId];
+        setGuardOpenSections(next);
+        try {
+          localStorage.setItem(GUARD_SIDEBAR_STORAGE_KEY, JSON.stringify(next));
+        } catch (e) {
+          console.error('Lỗi lưu trạng thái menu bảo vệ:', e);
+        }
+      }
+    }
   }
 
   const toggleSection = (sectionId) => {
@@ -378,6 +584,34 @@ export default function AppShell({ title, subtitle, actions, children }) {
         localStorage.setItem(TEACHER_SIDEBAR_STORAGE_KEY, JSON.stringify(next));
       } catch (e) {
         console.error('Lỗi lưu trạng thái menu giáo viên:', e);
+      }
+      return next;
+    });
+  };
+
+  const toggleAccountantSection = (sectionId) => {
+    setAccountantOpenSections((prev) => {
+      const next = prev.includes(sectionId)
+        ? prev.filter((id) => id !== sectionId)
+        : [...prev, sectionId];
+      try {
+        localStorage.setItem(ACCOUNTANT_SIDEBAR_STORAGE_KEY, JSON.stringify(next));
+      } catch (e) {
+        console.error('Lỗi lưu trạng thái menu kế toán:', e);
+      }
+      return next;
+    });
+  };
+
+  const toggleGuardSection = (sectionId) => {
+    setGuardOpenSections((prev) => {
+      const next = prev.includes(sectionId)
+        ? prev.filter((id) => id !== sectionId)
+        : [...prev, sectionId];
+      try {
+        localStorage.setItem(GUARD_SIDEBAR_STORAGE_KEY, JSON.stringify(next));
+      } catch (e) {
+        console.error('Lỗi lưu trạng thái menu bảo vệ:', e);
       }
       return next;
     });
@@ -541,6 +775,118 @@ export default function AppShell({ title, subtitle, actions, children }) {
                             {chatUnread.total > 99 ? '99+' : chatUnread.total}
                           </span>
                         )}
+                      </NavLink>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    if (isAccountant) {
+      const prefix = mobile ? 'mobile' : 'desktop';
+      return (
+        <div
+          className="principal-nav-accordion accountant-nav-accordion"
+          role="region"
+          aria-label={mobile ? 'Menu chức năng kế toán di động' : 'Menu chức năng kế toán'}
+        >
+          {accountantNavSections.map((section) => {
+            const isOpen = accountantOpenSections.includes(section.id);
+            const contentId = `${prefix}-accountant-nav-section-${section.id}`;
+            return (
+              <div key={section.id} className="nav-accordion-section">
+                <button
+                  type="button"
+                  className={`nav-accordion-header ${isOpen ? 'is-open' : ''}`}
+                  aria-expanded={isOpen}
+                  aria-controls={contentId}
+                  onClick={() => toggleAccountantSection(section.id)}
+                >
+                  <span className="nav-accordion-header-title">
+                    {section.icon && <Icon name={section.icon} size={15} />}
+                    <span>{section.label}</span>
+                  </span>
+                  <span className={`nav-accordion-chevron ${isOpen ? 'expanded' : ''}`}>
+                    <Icon name="chevronRight" size={14} />
+                  </span>
+                </button>
+                <div
+                  id={contentId}
+                  className="nav-accordion-content"
+                  hidden={!isOpen}
+                >
+                  {section.items.map((item) => {
+                    const isActive = isNavItemActive(item.to, location.pathname, location.search);
+                    return (
+                      <NavLink
+                        to={item.to}
+                        key={item.to}
+                        aria-current={isActive ? 'page' : undefined}
+                        className={() => `nav-link nav-sub-link ${isActive ? 'active' : ''}`.trim()}
+                        onClick={mobile ? () => setMobileNavOpen(false) : undefined}
+                      >
+                        <Icon name={item.icon} />
+                        {item.label}
+                      </NavLink>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    if (isGuard) {
+      const prefix = mobile ? 'mobile' : 'desktop';
+      return (
+        <div
+          className="principal-nav-accordion guard-nav-accordion"
+          role="region"
+          aria-label={mobile ? 'Menu chức năng bảo vệ di động' : 'Menu chức năng bảo vệ'}
+        >
+          {guardNavSections.map((section) => {
+            const isOpen = guardOpenSections.includes(section.id);
+            const contentId = `${prefix}-guard-nav-section-${section.id}`;
+            return (
+              <div key={section.id} className="nav-accordion-section">
+                <button
+                  type="button"
+                  className={`nav-accordion-header ${isOpen ? 'is-open' : ''}`}
+                  aria-expanded={isOpen}
+                  aria-controls={contentId}
+                  onClick={() => toggleGuardSection(section.id)}
+                >
+                  <span className="nav-accordion-header-title">
+                    {section.icon && <Icon name={section.icon} size={15} />}
+                    <span>{section.label}</span>
+                  </span>
+                  <span className={`nav-accordion-chevron ${isOpen ? 'expanded' : ''}`}>
+                    <Icon name="chevronRight" size={14} />
+                  </span>
+                </button>
+                <div
+                  id={contentId}
+                  className="nav-accordion-content"
+                  hidden={!isOpen}
+                >
+                  {section.items.map((item) => {
+                    const isActive = isNavItemActive(item.to, location.pathname, location.search);
+                    return (
+                      <NavLink
+                        to={item.to}
+                        key={item.to}
+                        aria-current={isActive ? 'page' : undefined}
+                        className={() => `nav-link nav-sub-link ${isActive ? 'active' : ''}`.trim()}
+                        onClick={mobile ? () => setMobileNavOpen(false) : undefined}
+                      >
+                        <Icon name={item.icon} />
+                        {item.label}
                       </NavLink>
                     );
                   })}

@@ -16,8 +16,8 @@ const router = express.Router();
 router.use(auth);
 
 router.post('/', roleCheck(['admin']), createClassroom);
-router.get('/', roleCheck(['admin', 'principal', 'teacher']), getAllClassrooms);
-router.get('/:id', roleCheck(['admin', 'principal', 'teacher']), getClassroomById);
+router.get('/', roleCheck(['admin', 'principal', 'teacher', 'hr']), getAllClassrooms);
+router.get('/:id', roleCheck(['admin', 'principal', 'teacher', 'hr']), getClassroomById);
 router.put('/:id', roleCheck(['admin']), updateClassroom);
 router.put('/:id/homeroom-teacher', roleCheck(['admin', 'hr']), assignHomeroomTeacher);
 router.delete('/:id', roleCheck(['admin']), deleteClassroom);

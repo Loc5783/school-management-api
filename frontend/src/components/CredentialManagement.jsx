@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Icon from './Icon';
 import { getCredentialOverview, getCredentialRequirements, saveCredentialRequirement, saveCredentialPolicy,
-  saveEmployeeCredential, reviewEmployeeCredential, getCredentialHistory } from '../api/hr';
+  saveEmployeeCredential, reviewEmployeeCredential, getCredentialHistory, downloadCredentialEvidence, parseBlobError } from '../api/hr';
 
 const positionNames = { principal: 'Hiệu trưởng', vice_principal: 'Phó hiệu trưởng', head_teacher: 'Tổ trưởng chuyên môn', teacher: 'Giáo viên', assistant_teacher: 'Trợ giảng', accountant: 'Kế toán', chef: 'Nhân viên bếp', hr: 'Nhân sự', nurse: 'Y tế', security: 'Bảo vệ', cleaner: 'Tạp vụ' };
 const categories = { degree: 'Bằng cấp', certificate: 'Chứng chỉ', training: 'Tập huấn', health: 'Sức khỏe', other: 'Giấy tờ khác' };
@@ -33,9 +33,11 @@ export default function CredentialManagement() {
   const [modalError, setModalError] = useState('');
   const [requirementForm, setRequirementForm] = useState(null);
   const [documentForm, setDocumentForm] = useState(null);
+  const [evidenceFile, setEvidenceFile] = useState(null);
   const [review, setReview] = useState(null);
   const [history, setHistory] = useState(null);
   const requestId = useRef(0);
+
   const load = useCallback(async () => {
     const id = ++requestId.current;
     setLoading(true); setError('');
@@ -47,7 +49,9 @@ export default function CredentialManagement() {
     } catch (err) { if (id === requestId.current) setError(err.response?.data?.message || 'Không thể tải hồ sơ năng lực.'); }
     finally { if (id === requestId.current) setLoading(false); }
   }, [page, search, attention, policyDirty]);
+
   useEffect(() => { const timer = window.setTimeout(load, 200); return () => window.clearTimeout(timer); }, [load]);
+
   const mutate = async (operation, message, close) => {
     if (saving) return;
     setSaving(true); setModalError(''); setError(''); setNotice('');
@@ -55,21 +59,85 @@ export default function CredentialManagement() {
     catch (err) { const message = err.response?.data?.message || 'Không thể lưu thay đổi.'; if (requirementForm || documentForm || review) setModalError(message); else setError(message); }
     finally { setSaving(false); }
   };
+
   const openRequirement = (record) => { setModalError(''); setRequirementForm(record ? { ...record, version: record.__v } : { ...emptyRequirement, schoolType: data?.policy.schoolType || '' }); };
   const openDocument = (employee, document) => {
     setModalError('');
+    setEvidenceFile(null);
     setDocumentForm({ employeeName: employee.fullName, requirement: document.requirement, employeeId: employee._id, requirementId: document.requirement._id,
       version: document.record?.__v ?? null, number: document.record?.number || '', issuer: document.record?.issuer || '', issuedOn: document.record?.issuedOn || '',
-      expiresOn: document.record?.expiresOn || '', evidenceUrl: document.record?.evidenceUrl || '', note: document.record?.note || '' });
+      expiresOn: document.record?.expiresOn || '', evidenceUrl: document.record?.evidenceUrl || '', note: document.record?.note || '', existingFile: document.record?.evidenceFile || null });
   };
+  const handleDownloadEvidence = async (record) => {
+    setError('');
+    try {
+      const response = await downloadCredentialEvidence(record._id);
+      const disposition = response.headers['content-disposition'];
+      let filename = record.evidenceFile?.originalName || record.evidenceFile?.filename || 'minh-chung.pdf';
+      if (disposition && disposition.includes('filename=')) {
+        const match = disposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+        if (match && match[1]) filename = match[1].replace(/['"]/g, '');
+      }
+      const blob = new Blob([response.data], { type: response.headers['content-type'] || 'application/octet-stream' });
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => window.URL.revokeObjectURL(blobUrl), 1000);
+    } catch (err) {
+      const msg = await parseBlobError(err);
+      setError(msg);
+    }
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) {
+      setEvidenceFile(null);
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setModalError('Dung lượng tệp vượt quá 10MB. Vui lòng chọn tệp nhỏ hơn.');
+      e.target.value = '';
+      return;
+    }
+    const allowed = ['application/pdf', 'image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+    if (!allowed.includes(file.type)) {
+      setModalError('Chỉ chấp nhận tệp định dạng PDF, JPG, PNG hoặc WEBP.');
+      e.target.value = '';
+      return;
+    }
+    setModalError('');
+    setEvidenceFile(file);
+  };
+
+  const submitDocumentForm = (event) => {
+    event.preventDefault();
+    const formData = new FormData();
+    Object.entries(documentForm).forEach(([k, v]) => {
+      if (v !== null && v !== undefined && k !== 'requirement' && k !== 'existingFile') {
+        formData.append(k, v);
+      }
+    });
+    if (evidenceFile) {
+      formData.append('evidenceFile', evidenceFile);
+    }
+    mutate(() => saveEmployeeCredential(formData), 'Đã cập nhật giấy tờ. Hồ sơ được chuyển về chờ xác minh.', () => { setDocumentForm(null); setEvidenceFile(null); });
+  };
+
   const openHistory = async (employee, document) => {
     setError('');
     try { const response = await getCredentialHistory(document.record._id); setHistory({ employeeName: employee.fullName, name: document.requirement.name, records: response.data.data }); }
     catch (err) { setError(err.response?.data?.message || 'Không thể tải lịch sử.'); }
   };
+
   const summary = data?.summary || {};
   const catalogPages = Math.max(1, Math.ceil(requirements.length / 10));
   const effectiveCatalogPage = Math.min(catalogPage, catalogPages);
+
   return <div className="credential-page">
     <section className="content-card credential-heading"><div><p className="card-kicker">ĐIỀU KIỆN LÀM VIỆC</p><h2>Năng lực & giấy tờ nhân sự</h2><p>Theo dõi bằng cấp, chứng chỉ và tập huấn theo vị trí. Yêu cầu bắt buộc do trường cấu hình.</p></div><div className="credential-heading-icon"><Icon name="users" size={30} /></div></section>
     {error && <div className="form-error" role="alert">{error}</div>}{notice && <div className="timekeeping-notice success" role="status">{notice}</div>}
@@ -80,7 +148,7 @@ export default function CredentialManagement() {
       {loading ? <div className="inline-loader">Đang kiểm tra giấy tờ...</div> : <>
         {!data?.requirements.length && <div className="credential-empty"><strong>Chưa có yêu cầu giấy tờ</strong><p>Tạo danh mục áp dụng theo vị trí để HR biết mỗi nhân viên cần bổ sung những gì.</p><button className="button button-primary" onClick={() => { setSection('catalog'); openRequirement(); }}>Thêm yêu cầu giấy tờ</button></div>}
         <div className="credential-employees">{data?.rows.map((employee) => <article key={employee._id} className="credential-employee"><div className="credential-employee-heading"><div className="credential-avatar">{employee.fullName.slice(0, 1)}</div><div><h3>{employee.fullName}</h3><small>{employee.employeeCode} · {positionNames[employee.position] || employee.position}</small></div><span className={`credential-badge ${employee.needsAttention ? 'pending' : 'valid'}`}>{!employee.documents.length ? 'Chưa cấu hình yêu cầu' : employee.needsAttention ? 'Cần lưu ý' : 'Đã đáp ứng'}</span><button className="button button-secondary" onClick={() => setExpanded(expanded === employee._id ? '' : employee._id)}>{expanded === employee._id ? 'Thu gọn' : 'Xem hồ sơ'}</button></div>
-          {expanded === employee._id && <div className="credential-documents">{employee.documents.length ? employee.documents.map((document) => <div className="credential-document" key={document.requirement._id}><div className="credential-document-title"><strong>{document.requirement.name}</strong><small>{categories[document.requirement.category]} · {document.requirement.required ? 'Bắt buộc' : 'Theo dõi thêm'}</small><span className={`credential-badge ${document.state}`}>{stateNames[document.state]}</span></div><div className="credential-document-facts"><span>Nơi cấp: {document.record?.issuer || 'Chưa cập nhật'}</span><span>Ngày cấp: {document.record ? dateText(document.record.issuedOn) : '—'}</span><span>Hết hạn: {document.record ? dateText(document.record.expiresOn) : '—'}</span>{document.record?.number && <span>Số văn bằng: {document.record.number}</span>}{document.record?.evidenceUrl && <a href={document.record.evidenceUrl} target="_blank" rel="noopener noreferrer">Mở minh chứng ↗</a>}{document.record?.reviewNote && <span>Kết quả xác minh: {document.record.reviewNote}</span>}{document.record?.note && <span>Ghi chú: {document.record.note}</span>}</div><div className="classroom-actions"><button className="button button-secondary" onClick={() => openDocument(employee, document)}>{document.record ? 'Cập nhật / gia hạn' : 'Bổ sung giấy tờ'}</button>{document.record?.verification === 'pending' && <button className="button button-primary" onClick={() => { setModalError(''); setReview({ employeeName: employee.fullName, document, verification: 'verified', reviewNote: '' }); }}>Xác minh</button>}{document.record && <button className="button button-secondary" onClick={() => openHistory(employee, document)}>Lịch sử</button>}</div></div>) : <p>Chưa có yêu cầu áp dụng cho vị trí này. Hãy kiểm tra danh mục và loại trường.</p>}</div>}
+          {expanded === employee._id && <div className="credential-documents">{employee.documents.length ? employee.documents.map((document) => <div className="credential-document" key={document.requirement._id}><div className="credential-document-title"><strong>{document.requirement.name}</strong><small>{categories[document.requirement.category]} · {document.requirement.required ? 'Bắt buộc' : 'Theo dõi thêm'}</small><span className={`credential-badge ${document.state}`}>{stateNames[document.state]}</span></div><div className="credential-document-facts"><span>Nơi cấp: {document.record?.issuer || 'Chưa cập nhật'}</span><span>Ngày cấp: {document.record ? dateText(document.record.issuedOn) : '—'}</span><span>Hết hạn: {document.record ? dateText(document.record.expiresOn) : '—'}</span>{document.record?.number && <span>Số văn bằng: {document.record.number}</span>}{document.record?.evidenceFile?.filename && <button type="button" className="button-link" style={{ padding: '0', textDecoration: 'underline', color: '#1d4ed8', background: 'none', border: 'none', cursor: 'pointer', font: 'inherit' }} onClick={() => handleDownloadEvidence(document.record)}>📄 Tệp minh chứng: {document.record.evidenceFile.originalName || 'Xem/Tải'} ↗</button>}{document.record?.evidenceUrl && <a href={document.record.evidenceUrl} target="_blank" rel="noopener noreferrer">Mở liên kết ↗</a>}{document.record?.reviewNote && <span>Kết quả xác minh: {document.record.reviewNote}</span>}{document.record?.note && <span>Ghi chú: {document.record.note}</span>}</div><div className="classroom-actions"><button className="button button-secondary" onClick={() => openDocument(employee, document)}>{document.record ? 'Cập nhật / gia hạn' : 'Bổ sung giấy tờ'}</button>{document.record?.verification === 'pending' && <button className="button button-primary" onClick={() => { setModalError(''); setReview({ employeeName: employee.fullName, document, verification: 'verified', reviewNote: '' }); }}>Xác minh</button>}{document.record && <button className="button button-secondary" onClick={() => openHistory(employee, document)}>Lịch sử</button>}</div></div>) : <p>Chưa có yêu cầu áp dụng cho vị trí này. Hãy kiểm tra danh mục và loại trường.</p>}</div>}
           {expanded === employee._id && (employee.archivedDocuments?.length > 0 || employee.qualification?.degree) && <div className="credential-documents"><details><summary>Thông tin bằng cấp cũ & giấy tờ ngoài yêu cầu hiện tại</summary>{employee.qualification?.degree && <p>Thông tin đã lưu: {employee.qualification.degree} · {employee.qualification.major || 'Chưa ghi chuyên ngành'}{employee.qualification.graduationYear ? ` · Năm ${employee.qualification.graduationYear}` : ''}. Bổ sung giấy tờ theo danh mục để xác minh hiệu lực.</p>}{employee.archivedDocuments?.map((document) => <div className="credential-document" key={document.requirement._id}><div><strong>{document.requirement.name}</strong><p>{document.requirement.active ? 'Không áp dụng cho vị trí / loại trường hiện tại' : 'Yêu cầu đã ngừng áp dụng'}</p></div><div className="credential-document-facts"><span>{document.record.issuer} · Cấp ngày {dateText(document.record.issuedOn)}</span><span>Hết hạn: {dateText(document.record.expiresOn)}</span>{document.record.evidenceUrl && <a href={document.record.evidenceUrl} target="_blank" rel="noopener noreferrer">Mở minh chứng ↗</a>}</div><button className="button button-secondary" onClick={() => openHistory(employee, document)}>Xem lịch sử</button></div>)}</details></div>}
         </article>)}{!data?.rows.length && <div className="credential-empty">Không có nhân viên phù hợp.</div>}</div>
         <Pagination {...pagination} onChange={setPage} />
@@ -93,11 +161,19 @@ export default function CredentialManagement() {
       <div className="form-wide credential-checks">{[['required', 'Bắt buộc cho vị trí đã chọn'], ['expiryRequired', 'Bắt buộc nhập ngày hết hạn'], ['active', 'Đang áp dụng']].map(([key, label]) => <label key={key}><input type="checkbox" checked={requirementForm[key]} onChange={(e) => setRequirementForm({ ...requirementForm, [key]: e.target.checked })} />{label}</label>)}</div><label className="form-wide">Ghi chú yêu cầu<textarea maxLength="500" value={requirementForm.note} onChange={(e) => setRequirementForm({ ...requirementForm, note: e.target.value })} /></label>
     </div><div className="form-actions"><button className="button button-primary" disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu yêu cầu'}</button></div></form></div>}
 
-    {documentForm && <div className="modal-backdrop"><form className="content-card student-form hr-modal credential-modal" onSubmit={(event) => { event.preventDefault(); mutate(() => saveEmployeeCredential(documentForm), 'Đã cập nhật giấy tờ. Cần xác minh để hoàn tất hồ sơ.', () => setDocumentForm(null)); }}><div className="card-heading"><div><p className="card-kicker">HỒ SƠ NĂNG LỰC</p><h2>{documentForm.employeeName}</h2><p>{documentForm.requirement.name}</p></div><button type="button" className="button button-secondary" disabled={saving} onClick={() => setDocumentForm(null)}>Đóng</button></div>{modalError && <div className="form-error" role="alert">{modalError}</div>}<p className="department-form-note">Cập nhật hoặc gia hạn sẽ chuyển giấy tờ về chờ xác minh. Nội dung trước đó được lưu trong lịch sử.</p><div className="student-form-grid">
-      <label>Số văn bằng / chứng chỉ<input maxLength="100" value={documentForm.number} onChange={(e) => setDocumentForm({ ...documentForm, number: e.target.value })} /></label><label>Nơi cấp / đơn vị tổ chức<input required maxLength="200" value={documentForm.issuer} onChange={(e) => setDocumentForm({ ...documentForm, issuer: e.target.value })} /></label><label>Ngày cấp<input required type="date" max={data?.today} value={documentForm.issuedOn} onChange={(e) => setDocumentForm({ ...documentForm, issuedOn: e.target.value })} /></label><label>Ngày hết hạn{documentForm.requirement.expiryRequired ? ' (bắt buộc)' : ' (nếu có)'}<input type="date" min={documentForm.issuedOn || undefined} required={documentForm.requirement.expiryRequired} value={documentForm.expiresOn} onChange={(e) => setDocumentForm({ ...documentForm, expiresOn: e.target.value })} /></label><label className="form-wide">Đường dẫn bản chụp / minh chứng<input type="url" maxLength="2000" placeholder="https://..." value={documentForm.evidenceUrl} onChange={(e) => setDocumentForm({ ...documentForm, evidenceUrl: e.target.value })} /></label><label className="form-wide">Ghi chú<textarea maxLength="1000" value={documentForm.note} onChange={(e) => setDocumentForm({ ...documentForm, note: e.target.value })} /></label>
+    {documentForm && <div className="modal-backdrop"><form className="content-card student-form hr-modal credential-modal" onSubmit={submitDocumentForm}><div className="card-heading"><div><p className="card-kicker">HỒ SƠ NĂNG LỰC</p><h2>{documentForm.employeeName}</h2><p>{documentForm.requirement.name}</p></div><button type="button" className="button button-secondary" disabled={saving} onClick={() => setDocumentForm(null)}>Đóng</button></div>{modalError && <div className="form-error" role="alert">{modalError}</div>}<p className="department-form-note">Cập nhật hoặc gia hạn sẽ chuyển giấy tờ về chờ xác minh. Nội dung trước đó được lưu trong lịch sử.</p><div className="student-form-grid">
+      <label>Số văn bằng / chứng chỉ<input maxLength="100" value={documentForm.number} onChange={(e) => setDocumentForm({ ...documentForm, number: e.target.value })} /></label><label>Nơi cấp / đơn vị tổ chức<input required maxLength="200" value={documentForm.issuer} onChange={(e) => setDocumentForm({ ...documentForm, issuer: e.target.value })} /></label><label>Ngày cấp<input required type="date" max={data?.today} value={documentForm.issuedOn} onChange={(e) => setDocumentForm({ ...documentForm, issuedOn: e.target.value })} /></label><label>Ngày hết hạn{documentForm.requirement.expiryRequired ? ' (bắt buộc)' : ' (nếu có)'}<input type="date" min={documentForm.issuedOn || undefined} required={documentForm.requirement.expiryRequired} value={documentForm.expiresOn} onChange={(e) => setDocumentForm({ ...documentForm, expiresOn: e.target.value })} /></label>
+      <label className="form-wide">Tải tệp minh chứng (PDF, JPG, PNG — tối đa 10MB)
+        <input type="file" accept=".pdf,image/png,image/jpeg,image/jpg,image/webp" onChange={handleFileChange} />
+        {documentForm.existingFile?.filename && <small style={{ display: 'block', marginTop: '4px' }}>Tệp hiện tại: {documentForm.existingFile.originalName || documentForm.existingFile.filename}</small>}
+      </label>
+      <label className="form-wide">Đường dẫn bản chụp / minh chứng bổ sung (nếu có)<input type="url" maxLength="2000" placeholder="https://..." value={documentForm.evidenceUrl} onChange={(e) => setDocumentForm({ ...documentForm, evidenceUrl: e.target.value })} /></label>
+      <label className="form-wide">Ghi chú<textarea maxLength="1000" value={documentForm.note} onChange={(e) => setDocumentForm({ ...documentForm, note: e.target.value })} /></label>
     </div><div className="form-actions"><button className="button button-primary" disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu giấy tờ'}</button></div></form></div>}
 
-    {review && <div className="modal-backdrop"><form className="content-card student-form hr-modal credential-modal" onSubmit={(event) => { event.preventDefault(); mutate(() => reviewEmployeeCredential(review.document.record._id, { version: review.document.record.__v, verification: review.verification, reviewNote: review.reviewNote }), 'Đã lưu kết quả xác minh giấy tờ.', () => setReview(null)); }}><div className="card-heading"><div><p className="card-kicker">XÁC MINH GIẤY TỜ</p><h2>{review.employeeName}</h2><p>{review.document.requirement.name}</p></div><button type="button" className="button button-secondary" disabled={saving} onClick={() => setReview(null)}>Đóng</button></div>{modalError && <div className="form-error" role="alert">{modalError}</div>}<p>Nơi cấp: {review.document.record.issuer} · Ngày cấp: {dateText(review.document.record.issuedOn)} · Hết hạn: {dateText(review.document.record.expiresOn)}</p>{review.document.record.evidenceUrl && <a href={review.document.record.evidenceUrl} target="_blank" rel="noopener noreferrer">Mở minh chứng để kiểm tra ↗</a>}<div className="student-form-grid"><label className="form-wide">Kết quả<select value={review.verification} onChange={(e) => setReview({ ...review, verification: e.target.value })}><option value="verified">Đã đối chiếu và chấp nhận</option><option value="rejected">Chưa chấp nhận / cần bổ sung</option></select></label><label className="form-wide">Căn cứ / lý do xác minh<textarea required maxLength="500" value={review.reviewNote} onChange={(e) => setReview({ ...review, reviewNote: e.target.value })} placeholder="Ví dụ: Đã đối chiếu bản gốc; hoặc nêu thông tin cần bổ sung" /></label></div><div className="form-actions"><button className="button button-primary" disabled={saving}>{saving ? 'Đang xử lý...' : 'Lưu kết quả xác minh'}</button></div></form></div>}
+    {review && <div className="modal-backdrop"><form className="content-card student-form hr-modal credential-modal" onSubmit={(event) => { event.preventDefault(); mutate(() => reviewEmployeeCredential(review.document.record._id, { version: review.document.record.__v, verification: review.verification, reviewNote: review.reviewNote }), 'Đã lưu kết quả xác minh giấy tờ.', () => setReview(null)); }}><div className="card-heading"><div><p className="card-kicker">XÁC MINH GIẤY TỜ</p><h2>{review.employeeName}</h2><p>{review.document.requirement.name}</p></div><button type="button" className="button button-secondary" disabled={saving} onClick={() => setReview(null)}>Đóng</button></div>{modalError && <div className="form-error" role="alert">{modalError}</div>}<p>Nơi cấp: {review.document.record.issuer} · Ngày cấp: {dateText(review.document.record.issuedOn)} · Hết hạn: {dateText(review.document.record.expiresOn)}</p>
+      {review.document.record.evidenceFile?.filename && <p><a href={`/api/hr/credentials/records/${review.document.record._id}/evidence`} target="_blank" rel="noopener noreferrer">📄 Xem tệp minh chứng đính kèm ↗</a></p>}
+      {review.document.record.evidenceUrl && <a href={review.document.record.evidenceUrl} target="_blank" rel="noopener noreferrer">Mở minh chứng URL để kiểm tra ↗</a>}<div className="student-form-grid"><label className="form-wide">Kết quả<select value={review.verification} onChange={(e) => setReview({ ...review, verification: e.target.value })}><option value="verified">Đã đối chiếu và chấp nhận</option><option value="rejected">Chưa chấp nhận / cần bổ sung</option></select></label><label className="form-wide">Căn cứ / lý do xác minh<textarea required maxLength="500" value={review.reviewNote} onChange={(e) => setReview({ ...review, reviewNote: e.target.value })} placeholder="Ví dụ: Đã đối chiếu bản gốc; hoặc nêu thông tin cần bổ sung" /></label></div><div className="form-actions"><button className="button button-primary" disabled={saving}>{saving ? 'Đang xử lý...' : 'Lưu kết quả xác minh'}</button></div></form></div>}
     {history && <div className="modal-backdrop"><section className="content-card student-form hr-modal credential-modal"><div className="card-heading"><div><p className="card-kicker">LỊCH SỬ GIẤY TỜ</p><h2>{history.employeeName}</h2><p>{history.name} · Tối đa 100 lần thay đổi gần nhất</p></div><button className="button button-secondary" onClick={() => setHistory(null)}>Đóng</button></div><div className="credential-history">{history.records.map((event) => <article key={event._id}><strong>{event.action === 'EMPLOYEE_CREDENTIAL_REVIEWED' ? 'Xác minh giấy tờ' : 'Cập nhật giấy tờ'}</strong><small>{event.actorUsername} · {new Date(event.occurredAt).toLocaleString('vi-VN', { hour12: false })}</small>{Object.entries(historyNames).filter(([key]) => String(event.before?.[key] || '') !== String(event.after?.[key] || '')).map(([key, name]) => <p key={key}>{name}: {String(event.before?.[key] || '—')} → {String(event.after?.[key] || '—')}</p>)}</article>)}{!history.records.length && <p>Chưa có lịch sử thay đổi.</p>}</div></section></div>}
   </div>;
 }

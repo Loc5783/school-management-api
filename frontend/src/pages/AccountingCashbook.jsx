@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import AppShell from '../components/AppShell';
-import { getCashbook, saveCashReconciliation } from '../api/finance';
+import Icon from '../components/Icon';
+import { getCashbook, saveCashReconciliation, exportCashbook } from '../api/finance';
 import './AccountingCashbook.css';
 
 const keys = ['cashIn', 'cashOut', 'bankIn', 'bankOut', 'walletIn', 'walletOut'];
@@ -26,9 +27,22 @@ export default function AccountingCashbook() {
   const [selected, setSelected] = useState(null);
   const [form, setForm] = useState({ actual: blankActual(), evidenceReference: '', note: '', changeReason: '' });
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState('');
   const [modalError, setModalError] = useState('');
   const [notice, setNotice] = useState('');
+
+  const handleExport = async () => {
+    if (exporting) return;
+    setExporting(true); setError('');
+    try {
+      await exportCashbook({ from: filter.from, to: filter.to });
+    } catch (err) {
+      setError(err.message || 'Không thể xuất Excel sổ quỹ / đối soát.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const load = useCallback(async () => {
     setState((current) => ({ ...current, loading: true }));
@@ -63,12 +77,12 @@ export default function AccountingCashbook() {
 
   return <AppShell title="Đối soát thu – chi" subtitle="Sổ nội bộ theo ngày giao dịch; so với sổ quỹ và sao kê do kế toán nhập.">
     <div className="accounting-cashbook">
-      <section className="content-card cashbook-toolbar"><div><p className="card-kicker">SỔ DÒNG TIỀN NỘI BỘ</p><h2>Tra cứu giao dịch</h2><p>Khớp số nhập tay không đồng nghĩa ngân hàng đã xác nhận. Lương tính theo ngày chi trả, không theo tháng lương.</p></div><div className="cashbook-filters"><label>Từ ngày<input type="date" value={filter.from} onChange={(event) => setFilter({ ...filter, from: event.target.value })} /></label><label>Đến ngày<input type="date" value={filter.to} onChange={(event) => setFilter({ ...filter, to: event.target.value })} /></label><button className="button button-primary" onClick={() => setQuery({ ...filter, page: 1 })}>Xem sổ</button></div></section>
+      <section className="content-card cashbook-toolbar"><div><p className="card-kicker">SỔ DÒNG TIỀN NỘI BỘ</p><h2>Tra cứu giao dịch</h2><p>Khớp số nhập tay không đồng nghĩa ngân hàng đã xác nhận. Lương tính theo ngày chi trả, không theo tháng lương.</p></div><div className="cashbook-filters"><label>Từ ngày<input type="date" value={filter.from} onChange={(event) => setFilter({ ...filter, from: event.target.value })} /></label><label>Đến ngày<input type="date" value={filter.to} onChange={(event) => setFilter({ ...filter, to: event.target.value })} /></label><button className="button button-primary" onClick={() => setQuery({ ...filter, page: 1 })}>Xem sổ</button><button type="button" className="button button-secondary" onClick={handleExport} disabled={exporting}><Icon name="download" size={16} />{exporting ? 'Đang xuất...' : 'Xuất Excel'}</button></div></section>
       {error && <div className="form-error" role="alert">{error}</div>}{notice && <div className="form-success" role="status">{notice}</div>}
       <section className="cashbook-totals">{[['Tiền mặt thu', totals.cashIn], ['Tiền mặt chi', totals.cashOut], ['Chuyển khoản thu', totals.bankIn], ['Chuyển khoản chi', totals.bankOut], ['Ví thu', totals.walletIn], ['Ví chi', totals.walletOut]].map(([label, value]) => <article className="content-card" key={label}><small>{label}</small><strong>{money(value)}</strong></article>)}</section>
       {(totals.issues > 0 || totals.unknownAmount > 0) && <div className="form-error" role="alert">{totals.issues || 0} giao dịch cần rà chứng từ; {money(totals.unknownAmount)} chưa xác định hình thức thanh toán. Các khoản này không được tự phân vào tiền mặt/ngân hàng.</div>}
       <section className="content-card student-list-card"><div className="card-heading"><div><p className="card-kicker">THEO NGÀY</p><h2>Đối chiếu số thực tế</h2></div></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Ngày</th><th>Thu nội bộ</th><th>Chi nội bộ</th><th>Vấn đề</th><th>Trạng thái</th><th></th></tr></thead><tbody>{state.daily.map((day) => <tr key={day.workDate}><td>{day.workDate}</td><td>{money(day.cashIn + day.bankIn + day.walletIn)}</td><td>{money(day.cashOut + day.bankOut + day.walletOut)}</td><td>{day.issues ? `${day.issues} chứng từ cần rà` : day.unknownAmount ? 'Thiếu hình thức chi' : '—'}</td><td><span className={`cashbook-status ${day.reconciliation?.status || 'not_recorded'}`}>{statusText[day.reconciliation?.status || 'not_recorded']}</span></td><td>{canSave && day.workDate <= today && <button type="button" className="button button-secondary" onClick={() => openDay(day)}>{day.reconciliation ? 'Xem / sửa' : 'Nhập đối chiếu'}</button>}</td></tr>)}</tbody></table></div></section>
-      <section className="content-card student-list-card"><div className="card-heading"><div><p className="card-kicker">CHI TIẾT</p><h2>{state.pagination.total} giao dịch trong khoảng ngày</h2></div></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Ngày</th><th>Nguồn</th><th>Đối tượng</th><th>Thu / chi</th><th>Phương thức</th><th>Mã / chứng từ</th><th>Kiểm tra</th></tr></thead><tbody>{state.rows.map((row) => <tr key={`${row.source}-${row.id}`}><td>{new Date(row.paidAt).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</td><td>{sourceText[row.source]}</td><td>{row.party}</td><td>{row.direction === 'in' ? '+' : '−'}{money(row.amount)}</td><td>{methodText[row.method] || row.method}</td><td>{row.reference || row.documentNumber || '—'}</td><td>{row.issue || '—'}</td></tr>)}{!state.rows.length && <tr><td colSpan="7" className="history-empty">{state.loading ? 'Đang tải...' : 'Chưa có giao dịch trong khoảng ngày này.'}</td></tr>}</tbody></table></div><div className="table-pagination"><span>Trang {page}/{state.pagination.totalPages}</span><div><button type="button" disabled={page <= 1} onClick={() => setQuery({ ...query, page: page - 1 })}>‹ Trước</button><button type="button" disabled={page >= state.pagination.totalPages} onClick={() => setQuery({ ...query, page: page + 1 })}>Sau ›</button></div></div></section>
+      <section className="content-card student-list-card"><div className="card-heading"><div><p className="card-kicker">CHI TIẾT</p><h2>{state.pagination.total} giao dịch trong khoảng ngày</h2></div><div className="classroom-actions"><button type="button" className="button button-secondary" onClick={handleExport} disabled={exporting}><Icon name="download" size={16} />{exporting ? 'Đang xuất...' : 'Xuất Excel'}</button></div></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Ngày</th><th>Nguồn</th><th>Đối tượng</th><th>Thu / chi</th><th>Phương thức</th><th>Mã / chứng từ</th><th>Kiểm tra</th></tr></thead><tbody>{state.rows.map((row) => <tr key={`${row.source}-${row.id}`}><td>{new Date(row.paidAt).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</td><td>{sourceText[row.source]}</td><td>{row.party}</td><td>{row.direction === 'in' ? '+' : '−'}{money(row.amount)}</td><td>{methodText[row.method] || row.method}</td><td>{row.reference || row.documentNumber || '—'}</td><td>{row.issue || '—'}</td></tr>)}{!state.rows.length && <tr><td colSpan="7" className="history-empty">{state.loading ? 'Đang tải...' : 'Chưa có giao dịch trong khoảng ngày này.'}</td></tr>}</tbody></table></div><div className="table-pagination"><span>Trang {page}/{state.pagination.totalPages}</span><div><button type="button" disabled={page <= 1} onClick={() => setQuery({ ...query, page: page - 1 })}>‹ Trước</button><button type="button" disabled={page >= state.pagination.totalPages} onClick={() => setQuery({ ...query, page: page + 1 })}>Sau ›</button></div></div></section>
     </div>
     {selected && <div className="modal-backdrop"><form className="content-card student-form cashbook-modal" onSubmit={save}><div className="card-heading"><div><p className="card-kicker">ĐỐI CHIẾU THỦ CÔNG</p><h2>Ngày {selected.workDate}</h2><p>Nhập tổng thực tế từ sổ quỹ/sao kê. Mọi lần sửa được lưu lịch sử và cần lý do.</p></div><button type="button" className="button button-secondary" disabled={saving} onClick={() => setSelected(null)}>Đóng</button></div>{modalError && <div className="form-error" role="alert">{modalError}</div>}
       <div className="student-form-grid">{keys.map((key) => <label key={key}>{labels[key]}<input type="number" min="0" step="1" required value={form.actual[key]} onChange={(event) => setForm({ ...form, actual: { ...form.actual, [key]: event.target.value } })} /><small>Sổ nội bộ: {money(selected[key])} · Chênh lệch: {money(Number(form.actual[key] || 0) - selected[key])}</small></label>)}

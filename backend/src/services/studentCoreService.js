@@ -68,6 +68,17 @@ const serializeStudent = (student, role, mode = 'detail') => {
         updatedAt: raw.updatedAt
     };
     if (mode === 'list') return base;
+    if (role === 'hr') {
+        return {
+            ...base,
+            schoolYear: raw.schoolYear || '',
+            statusHistory: (raw.statusHistory || []).map((h) => ({
+                toStatus: h.toStatus,
+                effectiveDate: h.effectiveDate,
+                reason: h.reason
+            }))
+        };
+    }
     if (role === 'parent') {
         return {
             ...base,

@@ -25,7 +25,7 @@ const normalizeRequirement = (body) => {
     schoolType: text(body.schoolType || '', 100, 'Loại trường'), required: body.required, expiryRequired: body.expiryRequired,
     active: body.active, warningDays, note: text(body.note || '', 500, 'Ghi chú') };
 };
-const normalizeCredential = (body, requirement) => {
+const normalizeCredential = (body, requirement, file = null) => {
   const issuedOn = body.issuedOn;
   const expiresOn = body.expiresOn || '';
   if (!isValidWorkDate(issuedOn) || issuedOn > getWorkDate()) throw fail('Ngày cấp phải hợp lệ và không ở tương lai');
@@ -36,8 +36,28 @@ const normalizeCredential = (body, requirement) => {
     try { url = new URL(evidenceUrl); } catch { throw fail('Đường dẫn minh chứng không hợp lệ'); }
     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw fail('Minh chứng phải là đường dẫn HTTP/HTTPS không chứa mật khẩu');
   }
-  return { number: text(body.number || '', 100, 'Số văn bằng'), issuer: text(body.issuer, 200, 'Nơi cấp', true), issuedOn,
-    expiresOn, evidenceUrl, note: text(body.note || '', 1000, 'Ghi chú'), verification: 'pending', verifiedBy: null, verifiedAt: null, reviewNote: '' };
+  const result = {
+    number: text(body.number || '', 100, 'Số văn bằng'),
+    issuer: text(body.issuer, 200, 'Nơi cấp', true),
+    issuedOn,
+    expiresOn,
+    evidenceUrl,
+    note: text(body.note || '', 1000, 'Ghi chú'),
+    verification: 'pending',
+    verifiedBy: null,
+    verifiedAt: null,
+    reviewNote: ''
+  };
+  if (file) {
+    result.evidenceFile = {
+      filename: file.filename,
+      originalName: file.originalName || file.originalname,
+      mimetype: file.mimetype,
+      size: file.size,
+      uploadedAt: file.uploadedAt || new Date()
+    };
+  }
+  return result;
 };
 const inTransaction = async (operation) => {
   const topology = await mongoose.connection.db.admin().command({ hello: 1 });
@@ -53,9 +73,9 @@ const applies = (requirement, employee, schoolType) => requirement.positions.inc
   && (!requirement.schoolType || requirement.schoolType === schoolType);
 const credentialState = (record, requirement, today = getWorkDate()) => {
   if (!record) return 'missing';
+  if (record.expiresOn && record.expiresOn < today) return 'expired';
   if (record.verification !== 'verified') return record.verification;
   if (requirement.expiryRequired && !record.expiresOn) return 'missing_expiry';
-  if (record.expiresOn && record.expiresOn < today) return 'expired';
   if (record.expiresOn) {
     const days = (Date.parse(`${record.expiresOn}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400000;
     if (days <= requirement.warningDays) return 'expiring';
@@ -91,4 +111,4 @@ const getCompliance = async () => {
   }
   return { policy: policy || { schoolType: '', __v: 0 }, today, requirements: requirements.filter((r) => r.active && (!r.schoolType || r.schoolType === schoolType)), rows, summary };
 };
-module.exports = { fail, checkId, text, normalizeRequirement, normalizeCredential, inTransaction, audit, applies, getCompliance };
+module.exports = { fail, checkId, text, normalizeRequirement, normalizeCredential, inTransaction, audit, applies, getCompliance, credentialState };

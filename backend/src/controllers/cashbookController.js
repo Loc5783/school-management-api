@@ -89,6 +89,43 @@ const statusOf = (record, todayBook) => {
     return keys.every((key) => moneyValue(record.actual?.[key]) === moneyValue(todayBook[key])) ? 'matched' : 'difference';
 };
 
+const getCashbookData = async ({ from, to }) => {
+    const validFrom = String(from || getWorkDate());
+    const validTo = String(to || validFrom);
+    if (!validRange(validFrom, validTo)) {
+        bad('Chọn khoảng ngày hợp lệ, tối đa 31 ngày', 422);
+    }
+    const [{ rows, daily, overall }, records] = await Promise.all([
+        loadEntries(validFrom, validTo),
+        DailyCashReconciliation.find({ workDate: { $gte: validFrom, $lte: validTo } }).lean()
+    ]);
+    const byDate = new Map(records.map((item) => [item.workDate, item]));
+    const dates = [];
+    for (let day = validFrom; day <= validTo; day = addWorkDays(day, 1)) {
+        const book = daily.find((item) => item.workDate === day) || {
+            workDate: day, ...emptyTotals(), unknownAmount: 0, issues: 0, count: 0,
+            sourceSignature: createHash('sha256').update('').digest('hex')
+        };
+        const record = byDate.get(day);
+        dates.push({
+            ...book,
+            reconciliation: record ? {
+                _id: record._id, actual: record.actual, bookSnapshot: record.bookSnapshot,
+                evidenceReference: record.evidenceReference, note: record.note, revision: record.revision,
+                recordedByName: record.recordedByName, updatedAt: record.updatedAt, history: record.history,
+                status: statusOf(record, book)
+            } : null
+        });
+    }
+    return {
+        rows,
+        daily: dates.reverse(),
+        overall,
+        from: validFrom,
+        to: validTo
+    };
+};
+
 const getCashbook = async (req, res) => {
     const from = String(req.query.from || getWorkDate());
     const to = String(req.query.to || from);
@@ -96,25 +133,10 @@ const getCashbook = async (req, res) => {
     if (!validRange(from, to)) return res.status(422).json({ message: 'Chọn khoảng ngày hợp lệ, tối đa 31 ngày' });
     if (!Number.isInteger(page) || page < 1) return res.status(422).json({ message: 'Trang không hợp lệ' });
     try {
-        const [{ rows, daily, overall }, records] = await Promise.all([
-            loadEntries(from, to), DailyCashReconciliation.find({ workDate: { $gte: from, $lte: to } }).lean()
-        ]);
-        const byDate = new Map(records.map((item) => [item.workDate, item]));
-        const dates = [];
-        for (let day = from; day <= to; day = addWorkDays(day, 1)) {
-            const book = daily.find((item) => item.workDate === day) || { workDate: day, ...emptyTotals(), unknownAmount: 0, issues: 0, count: 0,
-                sourceSignature: createHash('sha256').update('').digest('hex') };
-            const record = byDate.get(day);
-            dates.push({ ...book, reconciliation: record ? {
-                _id: record._id, actual: record.actual, bookSnapshot: record.bookSnapshot,
-                evidenceReference: record.evidenceReference, note: record.note, revision: record.revision,
-                recordedByName: record.recordedByName, updatedAt: record.updatedAt, history: record.history,
-                status: statusOf(record, book)
-            } : null });
-        }
-        return res.json({ success: true, data: rows.slice((page - 1) * 20, page * 20), daily: dates.reverse(), overall,
+        const { rows, daily, overall } = await getCashbookData({ from, to });
+        return res.json({ success: true, data: rows.slice((page - 1) * 20, page * 20), daily, overall,
             pagination: { page, total: rows.length, totalPages: Math.max(1, Math.ceil(rows.length / 20)) } });
-    } catch (error) { return res.status(500).json({ message: 'Không thể tải sổ đối soát' }); }
+    } catch (error) { return res.status(error.statusCode || 500).json({ message: error.message || 'Không thể tải sổ đối soát' }); }
 };
 
 const saveDailyReconciliation = async (req, res) => {
@@ -165,4 +187,4 @@ const saveDailyReconciliation = async (req, res) => {
     }
 };
 
-module.exports = { getCashbook, saveDailyReconciliation, loadEntries, statusOf };
+module.exports = { getCashbook, saveDailyReconciliation, loadEntries, statusOf, getCashbookData };

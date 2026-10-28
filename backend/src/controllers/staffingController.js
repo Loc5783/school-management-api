@@ -19,7 +19,7 @@ const auditedUpdate = (req, Model, filter, fields, action) => inTransaction(asyn
   await audit(req.user, action, Model.modelName, record._id, before, record.toObject(), session);
   return record;
 });
-const { getStaffingSnapshot, leaveOn, weekdayOf, worksOn } = require('../services/staffingService');
+const { getStaffingSnapshot, getStaffingTimetable, leaveOn, weekdayOf, worksOn } = require('../services/staffingService');
 const { addWorkDays, getWorkDate, isValidWorkDate, isValidTime } = require('../utils/dateHelpers');
 
 const fail = (message, status = 422) => Object.assign(new Error(message), { status });
@@ -62,6 +62,24 @@ const getStaffing = async (req, res) => {
   } catch (error) { respond(res, error); }
 };
 
+const getTimetable = async (req, res) => {
+  try {
+    const startDate = req.query.startDate || req.query.date || getWorkDate();
+    if (!isValidWorkDate(startDate)) throw fail('Ngày bắt đầu xem thời khóa biểu không hợp lệ');
+    const daysCount = Math.min(14, Math.max(1, Number(req.query.daysCount) || 7));
+    const data = await getStaffingTimetable({
+      startDate,
+      daysCount,
+      schoolYear: req.query.schoolYear,
+      role: req.query.role,
+      classroomId: req.query.classroomId,
+      employeeId: req.query.employeeId,
+      shiftId: req.query.shiftId
+    });
+    res.json({ data });
+  } catch (error) { respond(res, error); }
+};
+
 const getMyStaffing = async (req, res) => {
   try {
     const date = req.query.date || getWorkDate();
@@ -91,9 +109,30 @@ const assignClassroomStaff = async (req, res) => {
     const profiles = await Employee.find({ userId: { $in: teacherIds }, status: 'active' }).populate('userId', 'role status profile username');
     if (profiles.length !== teacherIds.length || profiles.some((employee) => employee.userId?.role !== 'teacher' || employee.userId?.status !== 'active')) throw fail('Chỉ phân công giáo viên đang làm việc và có tài khoản hợp lệ');
     if (await StaffHandover.exists({ employeeId: { $in: profiles.map((employee) => employee._id) }, kind: 'resignation', status: 'scheduled' })) throw fail('Giáo viên đã hẹn nghỉ việc. Không thể phân công lớp mới.', 409);
+    
+    // Homeroom constraint: teacher can only be homeroom teacher for max 1 class in the academic year
+    if (homeroomTeacherId) {
+      const existingHomeroom = await Classroom.findOne({
+        _id: { $ne: classroom._id },
+        schoolYear: classroom.schoolYear,
+        status: 'active',
+        homeroomTeacherId
+      }).select('name').lean();
+      if (existingHomeroom) throw fail(`Giáo viên này đã làm giáo viên chủ nhiệm lớp ${existingHomeroom.name} trong năm học ${classroom.schoolYear}. Mỗi giáo viên chỉ được chủ nhiệm 1 lớp/năm học.`, 409);
+    }
+
+    // Double booking constraint: cannot assign teacher to overlapping classes on the same teaching weekdays
     const conflicts = await Classroom.find({ _id: { $ne: classroom._id }, schoolYear: classroom.schoolYear, status: 'active',
-      $or: [{ homeroomTeacherId: { $in: teacherIds } }, { teachers: { $elemMatch: { teacherId: { $in: teacherIds }, role: { $in: ['homeroom', 'support'] } } } }] }).select('name').lean();
-    if (conflicts.length) throw fail(`Giáo viên đã được phân công lớp ${conflicts.map((item) => item.name).join(', ')} trong năm học này`, 409);
+      $or: [{ homeroomTeacherId: { $in: teacherIds } }, { teachers: { $elemMatch: { teacherId: { $in: teacherIds }, role: { $in: ['homeroom', 'support'] } } } }] }).select('name teachingWeekdays').lean();
+    
+    for (const conflict of conflicts) {
+      const conflictDays = conflict.teachingWeekdays || [1, 2, 3, 4, 5];
+      const sharedDays = teachingWeekdays.filter((d) => conflictDays.includes(d));
+      if (sharedDays.length > 0) {
+        throw fail(`Giáo viên đã được phân công lớp ${conflict.name} có ngày học trùng lịch (${sharedDays.join(', ')}) trong năm học này`, 409);
+      }
+    }
+
     const byUser = new Map(profiles.map((employee) => [String(employee.userId._id), employee]));
     classroom.homeroomTeacherId = homeroomTeacherId || null;
     classroom.teachers = [...(classroom.teachers || []).filter((entry) => entry.role === 'subject' && !teacherIds.includes(String(entry.teacherId))),
@@ -140,7 +179,7 @@ const createReplacement = async (req, res) => {
   try {
     const { date, kind, classroomId, shiftId, absentEmployeeId, replacementEmployeeId, note = '' } = req.body || {};
     if (!isValidWorkDate(date) || !['classroom', 'shift'].includes(kind) || !id(absentEmployeeId) || !id(replacementEmployeeId) ||
-      String(absentEmployeeId) === String(replacementEmployeeId) || String(note).length > 500) throw fail('Thông tin thay thế không hợp lệ');
+      String(absentEmployeeId) === String(replacementEmployeeId) || String(note).length > 500) throw fail('Thông tin thay thế không hợp lệ. Không được phân công tự thay chính mình.');
     const [absent, replacement, leaves] = await Promise.all([
       Employee.findById(absentEmployeeId).populate('userId', 'role status'),
       Employee.findById(replacementEmployeeId).populate('userId', 'role status'),
@@ -183,4 +222,4 @@ const cancelReplacement = async (req, res) => {
   } catch (error) { respond(res, error); }
 };
 
-module.exports = { getStaffing, getMyStaffing, assignClassroomStaff, createShift, cancelShift, createReplacement, cancelReplacement };
+module.exports = { getStaffing, getTimetable, getMyStaffing, assignClassroomStaff, createShift, cancelShift, createReplacement, cancelReplacement };

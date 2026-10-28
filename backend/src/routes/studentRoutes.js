@@ -10,7 +10,9 @@ const {
     saveDailyReport,
     downloadExcelTemplate,
     previewExcelImport,
-    confirmExcelImport
+    confirmExcelImport,
+    transferStudentClassroom,
+    getStudentTransferHistory
 } = require('../controllers/studentController');
 const auth = require('../middlewares/auth');
 const roleCheck = require('../middlewares/roleCheck');
@@ -61,6 +63,8 @@ router.put('/:id/daily-reports', roleCheck(['admin', 'teacher']), saveDailyRepor
 router.get('/:id', getStudentById);
 router.put('/:id', roleCheck(['admin', 'teacher', 'parent']), updateStudent);
 router.patch('/:id/status', roleCheck(['admin', 'principal']), changeStudentStatus);
+router.post('/:id/transfer', roleCheck(['admin', 'hr', 'principal']), transferStudentClassroom);
+router.get('/:id/transfer-history', roleCheck(['admin', 'hr', 'principal', 'teacher', 'parent']), getStudentTransferHistory);
 router.delete('/:id', roleCheck(['admin']), deleteStudent);
 
 module.exports = router;

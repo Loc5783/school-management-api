@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import AppShell from '../components/AppShell';
-import { createOperatingExpenseRequest, getOperatingExpenseRequests, getOperatingExpenses, recordOperatingExpense, reviewOperatingExpenseRequest } from '../api/finance';
+import Icon from '../components/Icon';
+import { createOperatingExpenseRequest, getOperatingExpenseRequests, getOperatingExpenses, recordOperatingExpense, reviewOperatingExpenseRequest, exportOperatingExpenses } from '../api/finance';
 import './AccountingExpenses.css';
 
 const todaySchool = () => {
@@ -25,8 +26,21 @@ export default function OperatingExpenses() {
   const [reviewNotes, setReviewNotes] = useState({});
   const [state, setState] = useState({ loading: true, rows: [], summary: { count: 0, total: 0 }, totalPages: 1 });
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+
+  const handleExport = async () => {
+    if (exporting) return;
+    setExporting(true); setError('');
+    try {
+      await exportOperatingExpenses(month);
+    } catch (err) {
+      setError(err.message || 'Không thể xuất Excel sổ chi vận hành.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const load = useCallback(async () => {
     setState((current) => ({ ...current, loading: true }));
@@ -90,7 +104,7 @@ export default function OperatingExpenses() {
         <label className="form-wide">Ghi chú<input maxLength="500" value={paymentForm.note} onChange={(event) => changePayment('note', event.target.value)} /></label>
         <div className="form-actions form-wide"><button className="button button-primary" disabled={saving}>{saving ? 'Đang ghi...' : 'Xác nhận đã chi'}</button></div>
       </form></section>}
-      <section className="content-card student-list-card"><div className="card-heading"><div><p className="card-kicker">LỊCH SỬ CHI</p><h2>{state.summary.count} chứng từ trong tháng</h2></div><button type="button" className="button button-secondary" disabled={state.loading} onClick={load}>Làm mới</button></div>{state.rows.some((item) => !item.approvalRequestId) && <p className="accounting-legacy-note">Chứng từ cũ không có mã đề nghị phê duyệt trong hệ thống; cần đối chiếu hồ sơ ngoài hệ thống. Không tự gán trạng thái “đã duyệt”.</p>}<div className="table-wrap"><table className="data-table"><thead><tr><th>Ngày</th><th>Nhóm / nội dung</th><th>Người nhận</th><th>Số tiền</th><th>Chứng từ / căn cứ</th><th>Người ghi</th></tr></thead><tbody>{state.rows.map((item) => <tr key={item._id}><td>{new Date(item.paidAt).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</td><td>{categories[item.category]}<small>{item.description}</small></td><td>{item.payee}</td><td><strong>{money(item.amount)}</strong></td><td>{item.documentNumber}<small>{item.approvalReference}{item.transactionRef ? ` · ${item.transactionRef}` : ''}{!item.approvalRequestId ? ' · Căn cứ nhập thủ công' : ' · Đã duyệt trong hệ thống'}</small></td><td>{item.recordedByName}</td></tr>)}{!state.rows.length && <tr><td colSpan="6" className="history-empty">{state.loading ? 'Đang tải...' : 'Chưa có khoản chi trong tháng này.'}</td></tr>}</tbody></table></div>{state.summary.count > 0 && <div className="table-pagination"><span>Trang {page}/{state.totalPages}</span><div><button type="button" disabled={page <= 1} onClick={() => setPage(page - 1)}>‹ Trước</button><button type="button" disabled={page >= state.totalPages} onClick={() => setPage(page + 1)}>Sau ›</button></div></div>}</section>
+      <section className="content-card student-list-card"><div className="card-heading"><div><p className="card-kicker">LỊCH SỬ CHI</p><h2>{state.summary.count} chứng từ trong tháng</h2></div><div className="classroom-actions"><button type="button" className="button button-secondary" onClick={handleExport} disabled={exporting}><Icon name="download" size={16} />{exporting ? 'Đang xuất...' : 'Xuất Excel'}</button><button type="button" className="button button-secondary" disabled={state.loading} onClick={load}><Icon name="refresh" size={16} />Làm mới</button></div></div>{state.rows.some((item) => !item.approvalRequestId) && <p className="accounting-legacy-note">Chứng từ cũ không có mã đề nghị phê duyệt trong hệ thống; cần đối chiếu hồ sơ ngoài hệ thống. Không tự gán trạng thái “đã duyệt”.</p>}<div className="table-wrap"><table className="data-table"><thead><tr><th>Ngày</th><th>Nhóm / nội dung</th><th>Người nhận</th><th>Số tiền</th><th>Chứng từ / căn cứ</th><th>Người ghi</th></tr></thead><tbody>{state.rows.map((item) => <tr key={item._id}><td>{new Date(item.paidAt).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</td><td>{categories[item.category]}<small>{item.description}</small></td><td>{item.payee}</td><td><strong>{money(item.amount)}</strong></td><td>{item.documentNumber}<small>{item.approvalReference}{item.transactionRef ? ` · ${item.transactionRef}` : ''}{!item.approvalRequestId ? ' · Căn cứ nhập thủ công' : ' · Đã duyệt trong hệ thống'}</small></td><td>{item.recordedByName}</td></tr>)}{!state.rows.length && <tr><td colSpan="6" className="history-empty">{state.loading ? 'Đang tải...' : 'Chưa có khoản chi trong tháng này.'}</td></tr>}</tbody></table></div>{state.summary.count > 0 && <div className="table-pagination"><span>Trang {page}/{state.totalPages}</span><div><button type="button" disabled={page <= 1} onClick={() => setPage(page - 1)}>‹ Trước</button><button type="button" disabled={page >= state.totalPages} onClick={() => setPage(page + 1)}>Sau ›</button></div></div>}</section>
     </div>
   </AppShell>;
 }

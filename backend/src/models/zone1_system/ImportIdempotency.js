@@ -29,6 +29,10 @@ const ImportIdempotencySchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
+  effectiveDate: {
+    type: String,
+    trim: true
+  },
   classroomId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Classroom'

@@ -15,7 +15,7 @@ const router = express.Router();
 router.use(auth);
 router.use(require('../middlewares/hrAccessAudit')('hr'));
 const journal = require('../controllers/hrAuditController');
-const journalRoles = roleCheck(['admin', 'principal', 'hr', 'accountant']);
+const journalRoles = roleCheck(['admin']);
 router.get('/audit/options', journalRoles, journal.options);
 router.get('/audit', journalRoles, journal.list);
 router.get('/audit/:source/:id', journalRoles, journal.detail);
@@ -59,32 +59,27 @@ router.patch('/development/reviews/:id/professional', roleCheck(['teacher', 'pri
 router.patch('/development/reviews/:id/finalize', roleCheck(['admin', 'hr']), development.finalizeReview);
 router.patch('/development/reviews/:id/improvement', roleCheck(['admin', 'hr']), development.finishPlan);
 
-router.get('/recruitment', roleCheck(['admin', 'principal', 'hr']), recruitment.getDashboard);
-router.post('/recruitment/needs', roleCheck(['admin', 'hr']), recruitment.saveNeed);
-router.put('/recruitment/needs/:id', roleCheck(['admin', 'hr']), recruitment.saveNeed);
-router.patch('/recruitment/needs/:id/close', roleCheck(['admin', 'hr']), recruitment.closeNeed);
-router.post('/recruitment/applicants', roleCheck(['admin', 'hr']), recruitment.saveApplicant);
-router.put('/recruitment/applicants/:id', roleCheck(['admin', 'hr']), recruitment.saveApplicant);
-router.post('/recruitment/applicants/:id/interviews', roleCheck(['admin', 'hr']), recruitment.scheduleInterview);
-router.patch('/recruitment/applicants/:id/interviews/:interviewId', roleCheck(['admin', 'hr']), recruitment.evaluateInterview);
-router.patch('/recruitment/applicants/:id/recommend', roleCheck(['admin', 'hr']), recruitment.recommendApplicant);
-router.patch('/recruitment/applicants/:id/decision', roleCheck(['admin', 'principal']), recruitment.decideApplicant);
-router.patch('/recruitment/applicants/:id/stop', roleCheck(['admin', 'hr']), recruitment.stopApplicant);
-router.patch('/recruitment/applicants/:id/decline', roleCheck(['admin', 'hr']), recruitment.declineApplicant);
-router.post('/recruitment/applicants/:id/tasks', roleCheck(['admin', 'hr']), recruitment.addTask);
-router.patch('/recruitment/applicants/:id/tasks/:taskId/complete', roleCheck(['admin', 'hr']), recruitment.completeTask);
-router.patch('/recruitment/applicants/:id/link-employee', roleCheck(['admin', 'hr']), recruitment.linkEmployee);
-router.get('/recruitment/applicants/:id/history', roleCheck(['admin', 'principal', 'hr']), recruitment.getHistory);
+// Retired recruitment and onboarding endpoints (HTTP 410 Gone)
+const retiredRecruitmentHandler = (req, res) => {
+  return res.status(410).json({
+    success: false,
+    message: 'Chức năng tuyển dụng và tiếp nhận nhân sự đã chính thức ngừng hoạt động theo quy định của nhà trường.'
+  });
+};
+router.use('/recruitment', retiredRecruitmentHandler);
+router.retiredRecruitmentHandler = retiredRecruitmentHandler;
 
 router.get('/credentials/overview', roleCheck(['admin', 'principal', 'hr']), credentials.getOverview);
 router.get('/credentials/requirements', roleCheck(['admin', 'principal', 'hr']), credentials.getRequirements);
 router.post('/credentials/requirements', roleCheck(['admin', 'hr']), credentials.saveRequirement);
 router.put('/credentials/requirements/:id', roleCheck(['admin', 'hr']), credentials.saveRequirement);
 router.put('/credentials/policy', roleCheck(['admin', 'hr']), credentials.savePolicy);
-router.post('/credentials/records', roleCheck(['admin', 'hr']), credentials.saveCredential);
+router.post('/credentials/records', roleCheck(['admin', 'hr']), credentials.uploadEvidenceMiddleware, credentials.saveCredential);
+router.get('/credentials/records/:id/evidence', roleCheck(['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard']), credentials.getEvidenceFile);
 router.patch('/credentials/records/:id/review', roleCheck(['admin', 'hr']), credentials.reviewCredential);
 router.get('/credentials/records/:id/history', roleCheck(['admin', 'principal', 'hr']), credentials.getHistory);
 
+router.get('/staffing/timetable', roleCheck(['admin', 'principal', 'hr']), staffing.getTimetable);
 router.get('/staffing', roleCheck(['admin', 'principal', 'hr']), staffing.getStaffing);
 router.get('/my-staffing', roleCheck(['admin', 'principal', 'teacher', 'chef', 'guard', 'accountant', 'hr']), staffing.getMyStaffing);
 router.put('/staffing/classrooms/:id', roleCheck(['admin', 'hr']), staffing.assignClassroomStaff);
@@ -112,6 +107,7 @@ router.patch('/leave-requests/:id/review', roleCheck(['admin', 'principal']), co
 router.post('/payroll/generate', roleCheck(['admin', 'hr']), accountingPeriodOpen.byPayrollBody, controller.generateMonthlyPayroll);
 router.get('/my-payroll', roleCheck(['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr']), controller.getMyPayroll);
 router.get('/payroll', roleCheck(['admin', 'principal', 'accountant', 'hr']), controller.getPayrollByMonth);
+router.get('/payroll/export', roleCheck(['admin', 'principal', 'accountant', 'hr']), require('../controllers/financeExcelController').exportPayroll);
 router.patch('/payroll/:id/status', roleCheck(['admin', 'principal', 'accountant']), accountingPeriodOpen.byPayroll, accountingPeriodOpen.byPayrollPaidDate, controller.updatePayrollStatus);
 router.patch('/payroll/:id/reopen', roleCheck(['admin', 'principal']), accountingPeriodOpen.byPayroll, controller.reopenConfirmedPayroll);
 router.patch('/payroll/:id/adjustments', roleCheck(['admin', 'accountant']), accountingPeriodOpen.byPayroll, controller.updatePayrollAdjustment);

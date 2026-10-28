@@ -8,6 +8,14 @@ const schema = new mongoose.Schema({
   issuedOn: { type: String, required: true },
   expiresOn: { type: String, default: '' },
   evidenceUrl: { type: String, trim: true, maxlength: 2000, default: '' },
+  evidenceFile: {
+    filename: { type: String, default: '' },
+    originalName: { type: String, default: '' },
+    path: { type: String, default: '' },
+    mimetype: { type: String, default: '' },
+    size: { type: Number, default: 0 },
+    uploadedAt: { type: Date, default: null }
+  },
   note: { type: String, trim: true, maxlength: 1000, default: '' },
   verification: { type: String, enum: ['pending', 'verified', 'rejected'], default: 'pending' },
   verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },

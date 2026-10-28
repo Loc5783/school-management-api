@@ -75,4 +75,35 @@ router.post('/payment', roleCheck(['admin', 'accountant']), periodOpen.currentCa
 router.get('/payment/invoice/:invoiceId', roleCheck(['admin', 'principal', 'accountant', 'parent']), getPaymentsByInvoice);
 router.get('/receipt/:paymentId', roleCheck(['admin', 'principal', 'accountant', 'parent']), getReceipt);
 
+// ==========================================
+// Xuất & Nhập Excel
+// ==========================================
+const multer = require('multer');
+const uploadExcel = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 }
+});
+const excelCtrl = require('../controllers/financeExcelController');
+
+// Xuất Excel các phân hệ tài chính
+router.get('/export/fee-schedules', roleCheck(['admin', 'principal', 'accountant']), excelCtrl.exportFeeSchedules);
+router.get('/export/invoices', roleCheck(['admin', 'principal', 'accountant']), excelCtrl.exportInvoices);
+router.get('/export/debts', roleCheck(['admin', 'principal', 'accountant']), excelCtrl.exportDebts);
+router.get('/export/payments', roleCheck(['admin', 'principal', 'accountant']), excelCtrl.exportPayments);
+router.get('/export/expenses', roleCheck(['admin', 'principal', 'accountant']), excelCtrl.exportPurchaseExpenses);
+router.get('/export/operating-expenses', roleCheck(['admin', 'principal', 'accountant']), excelCtrl.exportOperatingExpenses);
+router.get('/export/cashbook', roleCheck(['admin', 'principal', 'accountant']), excelCtrl.exportCashbook);
+router.get('/export/accounting-report', roleCheck(['admin', 'principal', 'accountant']), excelCtrl.exportAccountingReport);
+router.get('/export/payroll', roleCheck(['admin', 'principal', 'accountant']), excelCtrl.exportPayroll);
+
+// Nhập Excel Mức thu (FeeSchedule)
+router.get('/import/fee-schedules/template', roleCheck(['admin', 'accountant']), excelCtrl.getFeeScheduleTemplate);
+router.post('/import/fee-schedules/preview', roleCheck(['admin', 'accountant']), uploadExcel.single('file'), excelCtrl.previewFeeScheduleImport);
+router.post('/import/fee-schedules/confirm', roleCheck(['admin', 'accountant']), excelCtrl.confirmFeeScheduleImport);
+
+// Nhập Excel Hóa đơn học phí (TuitionFee - CHƯA THU)
+router.get('/import/invoices/template', roleCheck(['admin', 'accountant']), excelCtrl.getInvoiceTemplate);
+router.post('/import/invoices/preview', roleCheck(['admin', 'accountant']), uploadExcel.single('file'), excelCtrl.previewInvoiceImport);
+router.post('/import/invoices/confirm', roleCheck(['admin', 'accountant']), excelCtrl.confirmInvoiceImport);
+
 module.exports = router;

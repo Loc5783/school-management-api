@@ -105,8 +105,18 @@ const myTimesheets = handle(async (req, res) => {
   const page = Math.max(1, Number(req.query.page) || 1);
   if (!Number.isInteger(page)) throw fail('Số trang không hợp lệ');
   const filter = { userId: req.user._id };
-  const [rows, total] = await Promise.all([Timesheet.find(filter).sort({ period: -1 }).skip((page - 1) * 10).limit(10).lean(), Timesheet.countDocuments(filter)]);
-  res.json({ data: rows, pagination: { page, total, totalPages: Math.max(1, Math.ceil(total / 10)) } });
+  if (req.query.period && /^\d{4}-(0[1-9]|1[0-2])$/.test(req.query.period)) {
+    filter.period = req.query.period;
+  }
+  const [rows, total] = await Promise.all([
+    Timesheet.find(filter).sort({ period: -1 }).skip((page - 1) * 10).limit(10).lean(),
+    Timesheet.countDocuments(filter)
+  ]);
+  const sanitized = rows.map((r) => ({
+    ...r,
+    days: Array.isArray(r.days) ? r.days : []
+  }));
+  res.json({ data: sanitized, pagination: { page, total, totalPages: Math.max(1, Math.ceil(total / 10)) } });
 });
 const respondTimesheet = handle(async (req, res) => {
   checkId(req.params.id);

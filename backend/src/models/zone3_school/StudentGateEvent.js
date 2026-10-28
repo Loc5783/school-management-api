@@ -12,6 +12,7 @@ const StudentGateEventSchema = new mongoose.Schema({
   method: { type: String, enum: ['manual', 'card', 'qr', 'pickup', 'offline'], default: 'manual' },
   note: { type: String, trim: true, maxlength: 500, default: '' },
   clientEventId: { type: String, trim: true, maxlength: 100 },
+  payloadFingerprint: { type: String, trim: true, maxlength: 64 },
   pickupRecordId: { type: mongoose.Schema.Types.ObjectId, ref: 'PickupRecord', default: null },
   recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   recordedByName: { type: String, required: true, trim: true }

@@ -18,6 +18,7 @@ const classroomCommunicationRoutes = require('./src/routes/classroomCommunicatio
 const pickupRoutes = require('./src/routes/pickupRoutes');
 const studentProfileChangeRequestRoutes = require('./src/routes/studentProfileChangeRequestRoutes');
 const parentFeedbackRoutes = require('./src/routes/parentFeedbackRoutes');
+const parentTeacherEvaluationRoutes = require('./src/routes/parentTeacherEvaluationRoutes');
 const guardRoutes = require('./src/routes/guardRoutes');
 const guardDeviceIngestRoutes = require('./src/routes/guardDeviceIngestRoutes');
 
@@ -55,6 +56,7 @@ const createApp = () => {
     app.use('/api/pickups', pickupRoutes);
     app.use('/api/student-profile-change-requests', studentProfileChangeRequestRoutes);
     app.use('/api/parent-feedback', parentFeedbackRoutes);
+    app.use('/api/parent-teacher-evaluations', parentTeacherEvaluationRoutes);
     app.use('/api/guard', guardRoutes);
     app.use('/api/guard-device', guardDeviceIngestRoutes);
 

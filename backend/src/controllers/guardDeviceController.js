@@ -68,11 +68,25 @@ const rotateDeviceToken = async (req, res) => {
   } catch (error) { return errorResponse(res, error); }
 };
 
+const sanitizeEventForRole = (event, role) => {
+  if (role !== 'guard' || !event) return event;
+  const { studentId, pickupRecordId, matchLabel, identifier, ...safe } = event;
+  return safe;
+};
+
 const listEvents = async (req, res) => {
   try {
+    const isGuard = req.user.role === 'guard';
     const page = Math.max(1, Math.min(100000, Number.parseInt(req.query.page, 10) || 1));
     const filter = req.query.status && ['matched', 'review', 'alert', 'dismissed'].includes(req.query.status) ? { status: req.query.status } : {};
-    const [total, data] = await Promise.all([GuardDeviceEvent.countDocuments(filter), GuardDeviceEvent.find(filter).populate('deviceId', 'name kind location').sort({ occurredAt: -1 }).skip((page - 1) * 10).limit(10).lean()]);
+    if (isGuard) {
+      filter.eventType = { $in: ['behavior', 'gate_state'] };
+    }
+    const [total, rawData] = await Promise.all([
+      GuardDeviceEvent.countDocuments(filter),
+      GuardDeviceEvent.find(filter).populate('deviceId', 'name kind location').sort({ occurredAt: -1 }).skip((page - 1) * 10).limit(10).lean()
+    ]);
+    const data = isGuard ? rawData.map((e) => sanitizeEventForRole(e, 'guard')) : rawData;
     return res.json({ success: true, data, pagination: { page, total, totalPages: Math.max(1, Math.ceil(total / 10)) } });
   } catch (error) { return errorResponse(res, error); }
 };
@@ -81,9 +95,22 @@ const reviewEvent = async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) throw reject('ID sự kiện không hợp lệ');
     if (!['matched', 'dismissed'].includes(req.body?.status)) throw reject('Chỉ được xác nhận hoặc bỏ qua sự kiện');
-    const event = await GuardDeviceEvent.findOneAndUpdate({ _id: req.params.id, status: { $in: ['review', 'alert'] } }, { $set: { status: req.body.status, reviewNote: trim(req.body.note, 500), reviewedBy: req.user._id, reviewedAt: new Date() } }, { returnDocument: 'after' });
+    const isGuard = req.user.role === 'guard';
+    if (isGuard) {
+      const existing = await GuardDeviceEvent.findById(req.params.id).select('eventType status');
+      if (!existing) throw reject('Không tìm thấy sự kiện', 404);
+      if (!['behavior', 'gate_state'].includes(existing.eventType)) {
+        throw reject('Bạn không có quyền xử lý loại sự kiện này', 403);
+      }
+    }
+    const event = await GuardDeviceEvent.findOneAndUpdate(
+      { _id: req.params.id, status: { $in: ['review', 'alert'] } },
+      { $set: { status: req.body.status, reviewNote: trim(req.body.note, 500), reviewedBy: req.user._id, reviewedAt: new Date() } },
+      { returnDocument: 'after' }
+    );
     if (!event) throw reject('Sự kiện đã được xử lý hoặc không tồn tại', 409);
-    return res.json({ success: true, data: event });
+    const data = isGuard ? sanitizeEventForRole(event.toObject ? event.toObject() : event, 'guard') : event;
+    return res.json({ success: true, data });
   } catch (error) { return errorResponse(res, error); }
 };
 

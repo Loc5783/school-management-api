@@ -27,10 +27,23 @@ export function GuardDeliveryPanel({ date, onOfflineQueued }) {
   };
   const submit = async (event) => {
     event.preventDefault(); setState((old) => ({ ...old, saving: true, error: '', success: '' }));
-    try { await api.post('/guard/deliveries', form); setForm(deliveryInitial); await load(); setState((old) => ({ ...old, saving: false, success: 'Đã ghi nhận nhà cung cấp vào giao hàng.' })); }
+    const clientEventId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const occurredAt = new Date().toISOString();
+    const payload = { ...form, clientEventId, occurredAt };
+    try { await api.post('/guard/deliveries', payload); setForm(deliveryInitial); await load(); setState((old) => ({ ...old, saving: false, success: 'Đã ghi nhận nhà cung cấp vào giao hàng.' })); }
     catch (error) {
-      if (!error.response) { queueGuardOperation('delivery', form); setForm(deliveryInitial); onOfflineQueued?.(); setState({ loading: false, saving: false, error: '', success: 'Mất kết nối: lượt giao hàng đã được lưu trên thiết bị để đồng bộ sau.' }); }
-      else setState((old) => ({ ...old, saving: false, error: error.response.data?.message || 'Không thể ghi nhận giao hàng.' }));
+      if (!error.response) {
+        try {
+          await queueGuardOperation('delivery', payload);
+          setForm(deliveryInitial);
+          onOfflineQueued?.();
+          setState({ loading: false, saving: false, error: '', success: 'Mất kết nối: lượt giao hàng đã được lưu trên thiết bị để đồng bộ sau.' });
+        } catch (storageErr) {
+          setState({ loading: false, saving: false, success: '', error: storageErr.message || 'Không thể lưu lượt giao hàng vào bộ nhớ cục bộ.' });
+        }
+      } else {
+        setState((old) => ({ ...old, saving: false, error: error.response?.data?.message || 'Không thể ghi nhận giao hàng.' }));
+      }
     }
   };
   const checkout = async (id) => { try { await api.patch(`/guard/deliveries/${id}/check-out`); await load(); } catch (error) { setState((old) => ({ ...old, error: error.response?.data?.message || 'Không thể xác nhận xe rời trường.' })); } };

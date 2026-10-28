@@ -5,6 +5,7 @@ import api from "../api/axiosConfig";
 import { createLeaveRequest, getLeaveRequests } from "../api/attendance";
 import AppShell from "../components/AppShell";
 import Icon from "../components/Icon";
+import ParentTeacherEvaluationTab from "../components/ParentTeacherEvaluationTab";
 
 const attendanceText = {
   present: "Có mặt",
@@ -410,6 +411,7 @@ export default function ParentPortal() {
               ["leave", "calendar", "Xin nghỉ & phản hồi"],
               ["finance", "money", "Học phí"],
               ["menu", "utensils", "Thực đơn bán trú"],
+              ["evaluation", "users", "Đánh giá GVCN"],
             ].map(([key, icon, label]) => (
               <button
                 key={key}
@@ -767,6 +769,9 @@ export default function ParentPortal() {
               </div>
             )}
           </section>
+          )}
+          {activeTab === "evaluation" && (
+            <ParentTeacherEvaluationTab child={child} />
           )}
           </>}
           {onlinePaymentInvoice && (
