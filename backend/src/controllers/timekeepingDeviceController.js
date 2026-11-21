@@ -11,6 +11,10 @@ const Student = require('../models/zone3_school/Student');
 const Tenant = require('../models/zone1_system/Tenant');
 const { testDeviceConnection, syncDeviceEvents } = require('../services/hikvisionSyncService');
 const { validateDeviceHost } = require('../services/hikvisionIsapiService');
+const { ingestStudentDeviceAttendance } = require('../services/attendanceDeviceService');
+const { calculateAttendanceForUserDate } = require('../services/attendanceCalculationService');
+const { createTrustedTenantContext } = require('../services/tenantFilterService');
+const { getWorkDate, DEFAULT_SCHOOL_TIMEZONE } = require('../utils/dateHelpers');
 
 /**
  * Enforces authenticated tenant context.
@@ -506,7 +510,58 @@ async function upsertPersonMapping(req, res) {
       { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
 
-    return res.json({ success: true, data: mapping });
+    // Tự động xử lý bù (backfill) các sự kiện UNMAPPED trước đó của mã máy này sang đúng Học sinh / Nhân viên vừa gán
+    const cleanExtId = String(externalPersonId).trim();
+    const unmappedEvents = await RawAttendanceEvent.find({
+      tenantId: device.tenantId,
+      deviceId: device.deviceCode,
+      externalPersonId: cleanExtId,
+      mappingStatus: 'UNMAPPED'
+    }).sort({ occurredAt: 1 });
+
+    if (unmappedEvents.length > 0) {
+      const targetName = verifiedUser ? (verifiedUser.profile?.fullName || verifiedUser.username) : verifiedStudent.fullName;
+      await RawAttendanceEvent.updateMany(
+        { _id: { $in: unmappedEvents.map((e) => e._id) } },
+        {
+          $set: {
+            mappingStatus: 'MAPPED',
+            subjectType,
+            userId: verifiedUser ? verifiedUser._id : null,
+            studentId: verifiedStudent ? verifiedStudent._id : null,
+            employeeName: targetName
+          }
+        }
+      );
+
+      if (verifiedUser) {
+        const trustedCtx = createTrustedTenantContext({ tenantId: device.tenantId });
+        const distinctDates = [...new Set(unmappedEvents.map((e) => getWorkDate(e.occurredAt, DEFAULT_SCHOOL_TIMEZONE)))];
+        for (const workDateStr of distinctDates) {
+          await calculateAttendanceForUserDate({
+            userId: verifiedUser._id,
+            workDate: workDateStr,
+            actorId: req.user?._id || null,
+            calculatedBy: 'admin',
+            context: trustedCtx
+          });
+        }
+      } else if (verifiedStudent) {
+        for (const ev of unmappedEvents) {
+          await ingestStudentDeviceAttendance({
+            tenantId: device.tenantId,
+            student: verifiedStudent,
+            occurredAtDate: ev.occurredAt,
+            source: ev.source,
+            deviceId: device.deviceCode,
+            enableMorningLateCheck: true,
+            session: null
+          });
+        }
+      }
+    }
+
+    return res.json({ success: true, data: mapping, backfilledEvents: unmappedEvents.length });
   } catch (err) {
     return res.status(err.statusCode || 500).json({
       success: false,

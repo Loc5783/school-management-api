@@ -24,8 +24,8 @@ const StudentSchema = new mongoose.Schema({
         trim: true,
         uppercase: true,
         required: true,
-        immutable: true,
-        match: /^HS-\d{4}-\d{6}$/
+        immutable: false,
+        match: /^[A-Z0-9_-]{1,30}$/
     },
     fullName: {
         type: String,

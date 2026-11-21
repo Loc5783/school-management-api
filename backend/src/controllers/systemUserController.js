@@ -5,6 +5,7 @@ const User = require('../models/zone1_system/User');
 const Employee = require('../models/zone2_hr/Employee');
 const Classroom = require('../models/zone3_school/Classroom');
 const { hashPassword } = require('../utils/passwordHash');
+const { assertPersonCodeAvailable, generateNextPersonCode } = require('../services/personCodeService');
 const {
   buildTenantFilter,
   assertTenantContext,
@@ -95,7 +96,7 @@ const writeAudit = (req, action, target, before, after, reason = '', session = n
 
 const runLinkedAccountTransaction = async (operation) => {
   const topology = await mongoose.connection.db.admin().command({ hello: 1 });
-  if (!topology.setName && topology.msg !== 'isdbgrid') {
+  if (!topology.setName && topology.msg !== 'isdbgrid' && process.env.ALLOW_STANDALONE_MONGODB !== 'true') {
     const error = new Error('MongoDB phải chạy Replica Set để đồng bộ tài khoản và hồ sơ nhân sự');
     error.statusCode = 503;
     throw error;
@@ -292,8 +293,10 @@ const createInternalAccount = async (req, res) => {
         }
       }], { session });
 
-      const prefix = { principal: 'HT', teacher: 'GV', accountant: 'KT', chef: 'BEP', guard: 'BV', hr: 'NS' }[role] || 'NV';
-      const employeeCode = `${prefix}-${new Date().getFullYear()}-${String(createdAccount._id).slice(-6).toUpperCase()}`;
+      const rawRequestedCode = String(req.body?.employeeCode || '').trim();
+      const employeeCode = rawRequestedCode
+        ? await assertPersonCodeAvailable({ code: rawRequestedCode, tenantId: targetTenantId, excludeUserId: createdAccount._id, session })
+        : await generateNextPersonCode({ tenantId: targetTenantId, session });
 
       const [createdEmployee] = await Employee.create([{
         tenantId: targetTenantId,

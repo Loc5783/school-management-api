@@ -46,6 +46,7 @@ const handleWebhook = async (req, res) => {
       persisted: result.persisted,
       payloadFormat: result.record.payloadFormat,
       hikvisionSummary: result.record.hikvisionSummary,
+      attendanceResult: result.attendanceResult || null,
       filesCount: result.record.filesMeta?.length || 0
     });
   } catch (error) {

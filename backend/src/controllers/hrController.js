@@ -16,6 +16,7 @@ const { getWorkDate, isValidWorkDate, startOfWorkDate } = require('../utils/date
 const { getStaffingSnapshot } = require('../services/staffingService');
 const { REVIEW_MONTHLY_SALARY_BELOW, isUnverifiedLowMonthlySalary } = require('../services/salaryPolicy');
 const { lockOpenPeriod } = require('../services/accountingPeriodService');
+const { assertPersonCodeAvailable, generateNextPersonCode, normalizePersonCode } = require('../services/personCodeService');
 const {
     buildTenantFilter,
     assertTenantContext,
@@ -73,7 +74,7 @@ const payrollRoleFromPosition = (position) => ({
 
 const runHrTransaction = async (operation) => {
     const topology = await mongoose.connection.db.admin().command({ hello: 1 });
-    if (!topology.setName && topology.msg !== 'isdbgrid') throw httpError('MongoDB phải chạy Replica Set để liên kết tài khoản và hồ sơ nhân sự an toàn', 503);
+    if (!topology.setName && topology.msg !== 'isdbgrid' && process.env.ALLOW_STANDALONE_MONGODB !== 'true') throw httpError('MongoDB phải chạy Replica Set để liên kết tài khoản và hồ sơ nhân sự an toàn', 503);
     const session = await mongoose.startSession();
     try {
         let result;
@@ -148,18 +149,16 @@ const clearFormerLinkedUser = async (user, employeeCode, session) => {
 };
 
 const getAvailableEmployeeCode = async (user, session, tenantFilter = {}) => {
-    const year = new Date().getFullYear();
-    const fallback = `${EMPLOYEE_CODE_PREFIX_BY_ROLE[user.role] || 'NV'}-${year}-${String(user._id).slice(-6).toUpperCase()}`;
-    const requested = String(user.employeeInfo?.employeeId || '').trim().toUpperCase();
-    const candidates = [...new Set([requested, fallback].filter(Boolean))];
-    for (const code of candidates) {
-        const [usedByEmployee, usedByAnotherUser] = await Promise.all([
-            Employee.exists({ employeeCode: code }).session(session),
-            User.exists({ 'employeeInfo.employeeId': code, _id: { $ne: user._id }, ...tenantFilter }).session(session)
-        ]);
-        if (!usedByEmployee && !usedByAnotherUser) return code;
+    const tenantId = tenantFilter.tenantId && typeof tenantFilter.tenantId !== 'object' ? tenantFilter.tenantId : (user.tenantId || null);
+    const requested = normalizePersonCode(user.employeeInfo?.employeeId || '');
+    if (requested) {
+        try {
+            return await assertPersonCodeAvailable({ code: requested, tenantId, excludeUserId: user._id, session });
+        } catch (_err) {
+            // Mã cũ đã bị chiếm -> tự cấp mã số tiếp theo bên dưới
+        }
     }
-    throw httpError(`Không thể tự tạo mã nhân viên cho tài khoản ${user.username}`, 409);
+    return generateNextPersonCode({ tenantId, session });
 };
 
 // ==================== DEPARTMENTS ====================
@@ -439,7 +438,10 @@ const createEmployee = async (req, res) => {
                 throw httpError('Tài khoản thực hiện không còn quyền hoặc đã bị khóa/hạ quyền', 403);
             }
             const linkedUser = await resolveStaffAccount(requestedUserId, null, session, tenantFilter);
-            data.employeeCode = String(data.employeeCode || linkedUser?.employeeInfo?.employeeId || '').trim().toUpperCase();
+            const rawCode = String(data.employeeCode || linkedUser?.employeeInfo?.employeeId || '').trim();
+            data.employeeCode = rawCode
+                ? await assertPersonCodeAvailable({ code: rawCode, tenantId: tenantContext.tenantId || null, excludeUserId: linkedUser?._id || null, session })
+                : await generateNextPersonCode({ tenantId: tenantContext.tenantId || null, session });
             data.fullName = String(data.fullName || linkedUser?.profile?.fullName || '').trim();
             data.phone = String(data.phone || linkedUser?.profile?.phone || '').trim();
             data.email = String(data.email || linkedUser?.profile?.email || '').trim().toLowerCase();
@@ -447,8 +449,6 @@ const createEmployee = async (req, res) => {
             data.payrollRole = data.payrollRole || DEFAULT_PAYROLL_ROLE_BY_ACCOUNT_ROLE[linkedUser?.role] || payrollRoleFromPosition(data.position);
             data.salaryConfig = data.salaryConfig || { baseSalary: 0, positionAllowance: 0, lunchAllowance: 0 };
             validateEmployeeData(data, linkedUser);
-            const existing = await Employee.exists({ employeeCode: data.employeeCode });
-            if (existing) throw httpError('Mã nhân viên đã tồn tại', 409);
             const department = await resolveDepartment(data.departmentId, session, tenantFilter);
             const created = (await Employee.create([{
                 ...data,
@@ -496,7 +496,16 @@ const updateEmployee = async (req, res) => {
             const next = { ...current.toObject(), ...fields };
             if (fields.salaryConfig && Number(fields.salaryConfig.baseSalary) !== Number(current.salaryConfig?.baseSalary) && fields.salaryConfig.lowMonthlySalaryConfirmed !== true) fields.salaryConfig.lowMonthlySalaryConfirmed = false;
             if (fields.salaryConfig) next.salaryConfig = { ...current.salaryConfig.toObject(), ...fields.salaryConfig };
-            next.employeeCode = String(next.employeeCode || '').trim().toUpperCase();
+            next.employeeCode = await assertPersonCodeAvailable({
+                code: next.employeeCode || current.employeeCode,
+                tenantId: current.tenantId || null,
+                excludeEmployeeId: current._id,
+                excludeUserId: linkedUser?._id || formerLinkedUser?._id || null,
+                session
+            });
+            if (Object.hasOwn(fields, 'employeeCode')) {
+                fields.employeeCode = next.employeeCode;
+            }
             next.fullName = String(next.fullName || '').trim();
             next.phone = String(next.phone || '').trim();
             next.email = String(next.email || '').trim().toLowerCase();

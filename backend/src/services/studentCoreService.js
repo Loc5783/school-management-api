@@ -1,5 +1,6 @@
 const StudentCodeCounter = require('../models/zone3_school/StudentCodeCounter');
 const mongoose = require('mongoose');
+const { generateNextPersonCode } = require('./personCodeService');
 
 const STUDENT_STATUSES = Object.freeze([
     'pending_admission', 'enrolled', 'temporarily_absent', 'withdrawn', 'transferred', 'graduated'
@@ -17,6 +18,10 @@ const STATUS_TRANSITIONS = {
 const isClassroomCountedStatus = (status) => ACTIVE_CLASSROOM_STATUSES.has(status);
 const canTransitionStudentStatus = (fromStatus, toStatus) => fromStatus === toStatus || STATUS_TRANSITIONS[fromStatus]?.has(toStatus);
 
+/**
+ * Sinh mã học sinh theo dãy số nguyên tăng dần dùng chung toàn trường (1, 2, 3...)
+ * để đồng bộ trực tiếp với ID trên máy chấm công Hikvision và không đụng mã nhân sự.
+ */
 const generateStudentCode = async (date = new Date(), session = null, tenantId = null) => {
     const normalizedDate = date instanceof Date ? date : new Date(date);
     if (Number.isNaN(normalizedDate.getTime())) {
@@ -24,26 +29,12 @@ const generateStudentCode = async (date = new Date(), session = null, tenantId =
         error.statusCode = 422;
         throw error;
     }
-    const year = normalizedDate.getFullYear();
-    const query = { year };
-    const setOnInsert = { year };
-    if (tenantId) {
-        query.tenantId = tenantId;
-        setOnInsert.tenantId = tenantId;
-    } else {
-        query.tenantId = null;
-    }
-    const counter = await StudentCodeCounter.findOneAndUpdate(
-        query,
-        { $inc: { sequence: 1 }, $setOnInsert: setOnInsert },
-        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true, session }
-    );
-    return `HS-${year}-${String(counter.sequence).padStart(6, '0')}`;
+    return generateNextPersonCode({ tenantId, session });
 };
 
 const runStudentTransaction = async (operation) => {
     const topology = await mongoose.connection.db.admin().command({ hello: 1 });
-    if (!topology.setName && topology.msg !== 'isdbgrid') {
+    if (!topology.setName && topology.msg !== 'isdbgrid' && process.env.ALLOW_STANDALONE_MONGODB !== 'true') {
         const error = new Error('MongoDB phải chạy Replica Set hoặc sharded cluster để cập nhật học sinh an toàn');
         error.statusCode = 503;
         throw error;

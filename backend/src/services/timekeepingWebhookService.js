@@ -1,29 +1,41 @@
 'use strict';
 
 /**
- * @fileoverview Service tiếp nhận, bóc tách và lưu trữ gói tin Webhook từ máy chấm công Hikvision.
+ * @fileoverview Service tiếp nhận, bóc tách và xử lý nghiệp vụ Check-in / Check-out tự động
+ * cho cả Học sinh (`StudentAttendance`) và Nhân viên (`AttendanceRecord`) từ Webhook máy chấm công Hikvision.
  *
- * Thiết kế đồng bộ theo cơ chế thực chiến của `JussStudio/BE`:
- * 1. Nhận trực tiếp `Buffer` gốc từ `express.raw` (giới hạn 50MB, mọi Content-Type) hoặc JSON object.
- * 2. Với `multipart/form-data` (khi quét khuôn mặt có đính kèm ảnh JPEG nặng): chỉ đọc 64KB đầu tiên
- *    của Buffer và dùng thuật toán đếm ngoặc nhọn `extractJsonFromMultipart` để trích xuất khối JSON
- *    `event_log` chính xác, tránh lỗi regex tham lam ăn vào dữ liệu ảnh nhị phân và tiết kiệm RAM/CPU.
- * 3. Tự động lọc bỏ các gói nhiễu không phải chấm công người thật: gói nhịp tim (`heartBeat`) và
- *    sự kiện đóng/mở rơ-le cửa (`subEventType = 21, 22` không có mã người dùng).
- * 4. Ưu tiên xác định phương thức chấm công (`FACE`, `FINGERPRINT`, `CARD`) qua `subEventType` chuẩn ISAPI
- *    vì `currentVerifyMode` của Hikvision thường trả về chuỗi cấu hình cửa (`faceOrFpOrCardOrPw`).
+ * Luồng xử lý hoàn chỉnh:
+ * - Bước 1: Giải mã `Buffer` gốc từ `express.raw` (64KB đầu qua `extractJsonFromMultipart`) hoặc JSON object.
+ * - Bước 2: Lọc bỏ các gói nhiễu hệ thống (`heartBeat`, đóng/mở rơ-le cửa `21, 22`, sự kiện hệ thống `majorEventType !== 5`
+ *   hoặc quét thất bại không có `employeeNoString`).
+ * - Bước 3: Xác định trường học (`tenantId`) qua `schoolCode` trên URL hoặc tự dò theo Serial/IP máy trong `TimekeepingDevice`.
+ * - Bước 4: Đẩy sang `attendanceDeviceService.ingestDeviceEvent` (`calculateImmediately: true`) để:
+ *   + Ánh xạ tự động + bảng `AttendanceDevicePersonMapping` (nếu chưa khớp ai -> lưu vào danh sách `UNMAPPED` trên Web).
+ *   + Áp dụng quy tắc Check-in lần đầu, chống quẹt đúp 5 phút, cập nhật Check-out từ phút thứ 5 trở đi.
+ *   + Đánh dấu đi muộn sau `08:00` cho Học sinh và theo `StaffShift` (hoặc `08:00`) cho Nhân viên.
  */
 
 const mongoose = require('mongoose');
 const TimekeepingWebhookLog = require('../models/zone2_hr/TimekeepingWebhookLog');
+const TimekeepingDevice = require('../models/zone2_hr/TimekeepingDevice');
 const Tenant = require('../models/zone1_system/Tenant');
+const { ingestDeviceEvent } = require('./attendanceDeviceService');
 
-const MULTIPART_JSON_SCAN_LIMIT_BYTES = 65536; // 64KB đầu của gói tin luôn chứa trọn phần JSON event_log
-const MAX_RAW_PREVIEW_LENGTH = 32768; // Giới hạn 32KB lưu preview trong DB
+const MULTIPART_JSON_SCAN_LIMIT_BYTES = 65536;
+const MAX_RAW_PREVIEW_LENGTH = 32768;
 const DEFAULT_PAGE_LIMIT = 20;
 const MAX_PAGE_LIMIT = 100;
 
-// Các mã subEventType đóng/mở rơ-le cửa tự động phát sinh sau mỗi lần quẹt trên máy Hikvision
+// Tập mã subEventType xác thực người THÀNH CÔNG của Hikvision thuộc nhóm majorEventType === 5
+const VALID_AUTH_PASS_SUB_EVENTS = new Set([
+  1,   // Quẹt thẻ hợp lệ
+  38,  // Vân tay hợp lệ
+  39,  // Vân tay hợp lệ (biến thể firmware)
+  75,  // Khuôn mặt hợp lệ (Face OK)
+  77,  // Thẻ + Khuôn mặt hợp lệ
+  104  // Mật khẩu / PIN hợp lệ
+]);
+
 const DOOR_RELAY_NOISE_SUB_EVENTS = new Set([21, 22]);
 
 const SENSITIVE_HEADER_KEYS = new Set([
@@ -40,7 +52,7 @@ const HIKVISION_SUB_EVENT_LABELS = Object.freeze({
   21: 'Mở rơ-le cửa',
   22: 'Đóng rơ-le cửa',
   38: 'Xác thực vân tay thành công',
-  39: 'Xác thực vân tay',
+  39: 'Xác thực vân tay thành công',
   75: 'Xác thực khuôn mặt thành công (Face OK)',
   76: 'Xác thực khuôn mặt thất bại',
   77: 'Quẹt thẻ + khuôn mặt thành công',
@@ -49,10 +61,8 @@ const HIKVISION_SUB_EVENT_LABELS = Object.freeze({
 
 /**
  * Trích xuất khối JSON đầu tiên từ chuỗi `multipart/form-data` bằng bộ đếm ngoặc cân bằng.
- * Lý do: Tránh dùng biểu thức chính quy tham lam bị nuốt nhầm các ký tự `{` `}` ngẫu nhiên nằm trong
- * luồng byte nhị phân của ảnh JPEG đính kèm khi quét khuôn mặt.
  *
- * @param {string} raw - Chuỗi UTF-8 trích từ phần đầu của gói tin
+ * @param {string} raw
  * @returns {Record<string, any> | null}
  */
 const extractJsonFromMultipart = (raw) => {
@@ -107,12 +117,6 @@ const extractJsonFromMultipart = (raw) => {
   return null;
 };
 
-/**
- * Ẩn các header nhạy cảm trước khi ghi vào MongoDB.
- *
- * @param {Record<string, any>} rawHeaders
- * @returns {Record<string, any>}
- */
 const sanitizeHeaders = (rawHeaders = {}) => {
   const clean = {};
   for (const [key, value] of Object.entries(rawHeaders)) {
@@ -121,12 +125,6 @@ const sanitizeHeaders = (rawHeaders = {}) => {
   return clean;
 };
 
-/**
- * Giới hạn độ dài chuỗi preview để bảo vệ kích thước document MongoDB.
- *
- * @param {string} text
- * @returns {string}
- */
 const truncatePreview = (text) => {
   if (!text || typeof text !== 'string') return '';
   if (text.length <= MAX_RAW_PREVIEW_LENGTH) return text;
@@ -134,12 +132,11 @@ const truncatePreview = (text) => {
 };
 
 /**
- * Suy luận phương thức xác thực thực tế dựa trên `subEventType` chuẩn Hikvision ISAPI
- * trước khi fallback sang `currentVerifyMode` (giống chuẩn xử lý bên `JussStudio/BE`).
+ * Suy luận phương thức xác thực thực tế dựa trên `subEventType` chuẩn Hikvision ISAPI.
  *
  * @param {number | null} subEventType
  * @param {string | null} currentVerifyMode
- * @returns {string} 'FACE' | 'FINGERPRINT' | 'CARD' | 'PASSWORD' | 'UNKNOWN'
+ * @returns {'FACE' | 'FINGERPRINT' | 'CARD' | 'PASSWORD' | 'UNKNOWN'}
  */
 const resolveHikvisionVerifyMethod = (subEventType, currentVerifyMode) => {
   const subType = Number(subEventType);
@@ -159,35 +156,26 @@ const resolveHikvisionVerifyMethod = (subEventType, currentVerifyMode) => {
 };
 
 /**
- * Bóc tách dữ liệu từ `Buffer` (do `express.raw` trả về), `Object` (do `express.json` trả về) hoặc `String`.
+ * Bóc tách dữ liệu từ `Buffer` (do `express.raw` trả về), `Object` hoặc `String`.
  *
  * @param {import('express').Request} req
- * @returns {{
- *   payloadFormat: string,
- *   parsedPayload: Record<string, any> | null,
- *   rawBodyPreview: string,
- *   filesMeta: Array<object>
- * }}
  */
 const normalizeIncomingWebhook = (req) => {
   const contentType = String(req.headers['content-type'] || '').toLowerCase();
   const isMultipart = contentType.includes('multipart/form-data');
 
-  // Nhánh 1: Nhận Buffer trực tiếp từ express.raw({ type: '*/*', limit: '50mb' })
   if (Buffer.isBuffer(req.body)) {
     const totalBytes = req.body.length;
     if (totalBytes === 0) {
       return { payloadFormat: 'EMPTY', parsedPayload: null, rawBodyPreview: '', filesMeta: [] };
     }
 
-    // Chỉ giải mã tối đa 64KB đầu tiên sang UTF-8 để lấy trọn JSON mà không chạm vào vùng ảnh JPEG nặng phía sau
     const headSliceLength = Math.min(totalBytes, MULTIPART_JSON_SCAN_LIMIT_BYTES);
     const rawHead = req.body.toString('utf8', 0, headSliceLength);
     const parsedPayload = extractJsonFromMultipart(rawHead);
 
     const filesMeta = [];
     if (isMultipart) {
-      // Quét nhanh tiêu đề các part ảnh trong vùng header multipart để ghi nhận metadata (không lưu binary ảnh)
       const imagePartRegex = /name="([^"]+)"(?:;\s*filename="([^"]*)")?[\r\n]+Content-Type:\s*(image\/[a-zA-Z0-9.+-]+)/gi;
       let match;
       while ((match = imagePartRegex.exec(rawHead)) !== null) {
@@ -195,12 +183,11 @@ const normalizeIncomingWebhook = (req) => {
           fieldName: match[1] || 'Picture',
           originalName: match[2] || '',
           mimeType: match[3] || 'image/jpeg',
-          sizeBytes: totalBytes, // Tổng kích thước gói multipart nhận được
+          sizeBytes: totalBytes,
           isParsedAsEventJson: false
         });
       }
 
-      // Một số firmware đặt Content-Type của ảnh hoặc gửi nhị phân JPEG ngay sau boundary
       if (filesMeta.length === 0 && (/image\/(jpeg|jpg|png)/i.test(rawHead) || totalBytes > headSliceLength)) {
         filesMeta.push({
           fieldName: 'Picture',
@@ -224,7 +211,6 @@ const normalizeIncomingWebhook = (req) => {
     };
   }
 
-  // Nhánh 2: Đã được express.json() hoặc express.urlencoded() giải mã thành Object
   if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
     return {
       payloadFormat: contentType.includes('application/x-www-form-urlencoded') ? 'FORM_URLENCODED' : 'JSON',
@@ -234,7 +220,6 @@ const normalizeIncomingWebhook = (req) => {
     };
   }
 
-  // Nhánh 3: Chuỗi văn bản thuần
   if (typeof req.body === 'string' && req.body.trim()) {
     const parsed = extractJsonFromMultipart(req.body);
     return {
@@ -254,12 +239,7 @@ const normalizeIncomingWebhook = (req) => {
 };
 
 /**
- * Bóc tách tóm tắt nghiệp vụ từ gói tin Hikvision (`AccessControllerEvent` / `EventNotificationAlert`).
- *
- * @param {Record<string, any> | null} parsedPayload
- * @param {Array<object>} filesMeta
- * @param {string} fallbackIp
- * @returns {object}
+ * Trích xuất tóm tắt sự kiện Hikvision từ payload.
  */
 const extractHikvisionSummary = (parsedPayload, filesMeta = [], fallbackIp = '') => {
   const hasFaceImage = filesMeta.some(
@@ -267,7 +247,7 @@ const extractHikvisionSummary = (parsedPayload, filesMeta = [], fallbackIp = '')
   );
 
   if (!parsedPayload || typeof parsedPayload !== 'object' || Array.isArray(parsedPayload)) {
-    return { hasFaceImage, isHeartbeat: false, isDoorRelayNoise: false };
+    return { hasFaceImage, isHeartbeat: false, isNoiseEvent: true };
   }
 
   const root = parsedPayload.EventNotificationAlert || parsedPayload;
@@ -275,7 +255,8 @@ const extractHikvisionSummary = (parsedPayload, filesMeta = [], fallbackIp = '')
   const eventType = root.eventType || null;
   const majorEventType = eventInfo.majorEventType !== undefined ? Number(eventInfo.majorEventType) : null;
   const subEventType = eventInfo.subEventType !== undefined ? Number(eventInfo.subEventType) : null;
-  const cleanSubEvent = Number.isNaN(subEventType) ? null : subEventType;
+  const cleanMajor = Number.isNaN(majorEventType) ? null : majorEventType;
+  const cleanSub = Number.isNaN(subEventType) ? null : subEventType;
 
   const rawEmployeeNo = eventInfo.employeeNoString ?? eventInfo.EmployeeNo ?? eventInfo.employeeNo ?? null;
   const employeeNoString = rawEmployeeNo !== null && String(rawEmployeeNo).trim() !== ''
@@ -283,8 +264,16 @@ const extractHikvisionSummary = (parsedPayload, filesMeta = [], fallbackIp = '')
     : null;
 
   const isHeartbeat = String(eventType || '').toLowerCase() === 'heartbeat';
-  const isDoorRelayNoise = !employeeNoString && cleanSubEvent !== null && DOOR_RELAY_NOISE_SUB_EVENTS.has(cleanSubEvent);
-  const verifyMethod = resolveHikvisionVerifyMethod(cleanSubEvent, eventInfo.currentVerifyMode);
+  const isDoorRelayNoise = !employeeNoString && cleanSub !== null && DOOR_RELAY_NOISE_SUB_EVENTS.has(cleanSub);
+  const isSystemNonPersonEvent = !employeeNoString && cleanMajor !== null && cleanMajor !== 5;
+  const isValidPersonPass = Boolean(
+    employeeNoString &&
+    (cleanMajor === null || cleanMajor === 5) &&
+    (cleanSub === null || VALID_AUTH_PASS_SUB_EVENTS.has(cleanSub))
+  );
+
+  const verifyMethod = resolveHikvisionVerifyMethod(cleanSub, eventInfo.currentVerifyMode);
+  const shortSerialNumber = root.shortSerialNumber || eventInfo.shortSerialNumber || null;
 
   return {
     eventType,
@@ -292,11 +281,12 @@ const extractHikvisionSummary = (parsedPayload, filesMeta = [], fallbackIp = '')
     dateTime: root.dateTime || eventInfo.time || null,
     deviceIp: root.ipAddress || fallbackIp || null,
     macAddress: root.macAddress || null,
+    shortSerialNumber,
     deviceName: eventInfo.deviceName || root.deviceName || null,
-    majorEventType: Number.isNaN(majorEventType) ? null : majorEventType,
-    subEventType: cleanSubEvent,
-    subEventLabel: (majorEventType === 5 && cleanSubEvent !== null)
-      ? (HIKVISION_SUB_EVENT_LABELS[cleanSubEvent] || `Sự kiện kiểm soát mã phụ #${cleanSubEvent}`)
+    majorEventType: cleanMajor,
+    subEventType: cleanSub,
+    subEventLabel: (cleanMajor === 5 && cleanSub !== null)
+      ? (HIKVISION_SUB_EVENT_LABELS[cleanSub] || `Sự kiện kiểm soát mã phụ #${cleanSub}`)
       : null,
     employeeNoString,
     personName: eventInfo.name || null,
@@ -309,87 +299,224 @@ const extractHikvisionSummary = (parsedPayload, filesMeta = [], fallbackIp = '')
       : null,
     hasFaceImage,
     isHeartbeat,
-    isDoorRelayNoise
+    isNoiseEvent: isHeartbeat || isDoorRelayNoise || isSystemNonPersonEvent,
+    isValidPersonPass
   };
 };
 
 /**
- * Tra cứu `tenantId` nếu URL hoặc query có truyền kèm `schoolCode` (ví dụ `/api/attendance/webhook/HOANANG-A`).
- *
- * @param {string | null} rawSchoolCode
- * @returns {Promise<{ tenantId: import('mongoose').Types.ObjectId | null, schoolCode: string | null }>}
+ * Tra cứu ngữ cảnh Trường học (`tenantId`) và Thiết bị (`TimekeepingDevice`):
+ * 1. Ưu tiên theo `schoolCode` trên URL (`/api/attendance/webhook/HOANANG-A`).
+ * 2. Nếu URL không truyền `schoolCode`, tự dò thiết bị đã đăng ký theo `shortSerialNumber` hoặc `deviceIp`.
  */
-const resolveOptionalTenant = async (rawSchoolCode) => {
-  const cleanCode = String(rawSchoolCode || '').trim().toUpperCase();
-  if (!cleanCode) return { tenantId: null, schoolCode: null };
-  if (mongoose.connection.readyState !== 1) return { tenantId: null, schoolCode: cleanCode };
+const resolveTenantAndDevice = async ({ rawSchoolCode, rawDeviceCode, summary }) => {
+  if (mongoose.connection.readyState !== 1) {
+    return {
+      tenantId: null,
+      schoolCode: rawSchoolCode ? String(rawSchoolCode).trim().toUpperCase() : null,
+      deviceDoc: null,
+      deviceCode: rawDeviceCode ? String(rawDeviceCode).trim().toUpperCase() : 'HIKVISION-WEBHOOK'
+    };
+  }
 
-  const tenant = await Tenant.findOne({ code: cleanCode }).select('_id code').lean();
+  let tenantDoc = null;
+  const cleanSchoolCode = String(rawSchoolCode || '').trim().toUpperCase();
+  if (cleanSchoolCode) {
+    tenantDoc = await Tenant.findOne({ code: cleanSchoolCode, status: 'active' }).select('_id code').lean();
+  }
+
+  let deviceDoc = null;
+  if (tenantDoc) {
+    // Tìm máy chấm công thuộc trường này (khớp deviceCode, serialNumber hoặc IP, hoặc lấy máy HIKVISION đầu tiên của trường)
+    const deviceConditions = [];
+    if (rawDeviceCode) deviceConditions.push({ deviceCode: String(rawDeviceCode).trim().toUpperCase() });
+    if (summary.shortSerialNumber) deviceConditions.push({ serialNumber: summary.shortSerialNumber });
+    if (summary.deviceIp) deviceConditions.push({ host: summary.deviceIp });
+
+    if (deviceConditions.length > 0) {
+      deviceDoc = await TimekeepingDevice.findOne({ tenantId: tenantDoc._id, $or: deviceConditions }).lean();
+    }
+    if (!deviceDoc) {
+      deviceDoc = await TimekeepingDevice.findOne({ tenantId: tenantDoc._id, enabled: true }).sort({ createdAt: 1 }).lean();
+    }
+  } else {
+    // URL không có schoolCode -> Tự nhận diện trường thông qua Serial hoặc IP của máy chấm công (nếu duy nhất)
+    if (summary.shortSerialNumber) {
+      const bySerial = await TimekeepingDevice.find({ serialNumber: summary.shortSerialNumber, enabled: true }).limit(2).lean();
+      if (bySerial.length === 1) deviceDoc = bySerial[0];
+    }
+    if (!deviceDoc && summary.deviceIp) {
+      const byIp = await TimekeepingDevice.find({ host: summary.deviceIp, enabled: true }).limit(2).lean();
+      if (byIp.length === 1) deviceDoc = byIp[0];
+    }
+    if (deviceDoc?.tenantId) {
+      tenantDoc = await Tenant.findById(deviceDoc.tenantId).select('_id code').lean();
+    }
+  }
+
+  // Cập nhật trạng thái ONLINE và thời điểm kết nối mới nhất cho thiết bị
+  if (deviceDoc?._id) {
+    const deviceUpdate = { lastSeenAt: new Date(), status: 'ONLINE' };
+    if (summary.shortSerialNumber && !deviceDoc.serialNumber) {
+      deviceUpdate.serialNumber = summary.shortSerialNumber;
+    }
+    TimekeepingDevice.updateOne({ _id: deviceDoc._id }, { $set: deviceUpdate }).exec().catch(() => {});
+  }
+
   return {
-    tenantId: tenant ? tenant._id : null,
-    schoolCode: cleanCode
+    tenantId: tenantDoc?._id || null,
+    schoolCode: tenantDoc?.code || (cleanSchoolCode || null),
+    deviceDoc,
+    deviceCode: deviceDoc?.deviceCode || (rawDeviceCode ? String(rawDeviceCode).trim().toUpperCase() : 'HIKVISION-WEBHOOK')
   };
 };
 
 /**
- * In thông tin sự kiện chấm công ra Terminal rõ ràng để quan sát ngay khi quẹt thử.
- *
- * @param {object} logEntry
+ * Chuyển đổi phương thức xác thực Hikvision sang enum `source` & `authenticationMethod` của `RawAttendanceEvent`.
  */
-const logWebhookToConsole = (logEntry) => {
-  const s = logEntry.hikvisionSummary || {};
-  console.info(
-    `[Chấm Công Hikvision] Mã người: ${s.employeeNoString || 'Chưa rõ'} | Tên: ${s.personName || 'N/A'} | ` +
-    `Phương thức: ${s.currentVerifyMode || 'N/A'} (sub=${s.subEventType ?? 'n/a'}) | ` +
-    `Thời gian: ${s.dateTime || 'N/A'} | Ảnh mặt: ${s.hasFaceImage ? 'CÓ' : 'KHÔNG'} | Định dạng: ${logEntry.payloadFormat}`
-  );
-  if (logEntry.parsedPayload) {
-    console.info('[Payload Hikvision]:', JSON.stringify(logEntry.parsedPayload, null, 2));
+const mapVerifyMethodToDeviceSource = (verifyMethod) => {
+  switch (verifyMethod) {
+    case 'FACE':
+      return { source: 'FACE', authenticationMethod: 'FACE' };
+    case 'CARD':
+      return { source: 'CARD', authenticationMethod: 'CARD' };
+    case 'PASSWORD':
+      return { source: 'DEVICE', authenticationMethod: 'PIN' };
+    case 'FINGERPRINT':
+    default:
+      return { source: 'DEVICE', authenticationMethod: 'UNKNOWN' };
   }
 };
 
 /**
- * Tiếp nhận gói tin từ máy chấm công Hikvision:
- * - Bỏ qua các gói nhiễu (`heartBeat`, đóng/mở rơ-le cửa `subEventType = 21, 22`) giống `JussStudio/BE`.
- * - Lưu các sự kiện hợp lệ vào bảng `TimekeepingWebhookLog` và in ra Terminal để đối chiếu.
+ * Tiếp nhận gói tin Webhook Hikvision, lọc nhiễu, ghi nhận Check-in / Check-out tự động cho Học sinh & Nhân viên.
  *
  * @param {import('express').Request} req
- * @returns {Promise<{ savedId: string | null, persisted: boolean, skippedNoise: boolean, record: object }>}
  */
 const captureIncomingWebhook = async (req) => {
   // Bước 1: Giải mã Buffer / JSON / Multipart
   const { payloadFormat, parsedPayload, rawBodyPreview, filesMeta } = normalizeIncomingWebhook(req);
-  const sourceIp = String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || req.ip || '').trim();
+  const rawSourceIp = String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || req.ip || '').trim();
+  const cleanSourceIp = rawSourceIp.replace(/^::ffff:/i, '');
 
-  // Bước 2: Bóc tách các trường nghiệp vụ Hikvision
-  const summary = extractHikvisionSummary(parsedPayload, filesMeta, sourceIp);
-
-  // Bước 3: Lọc bỏ sự kiện nhịp tim (heartBeat) và đóng/mở rơ-le cửa (subEventType 21, 22) giống JussStudio/BE
-  if (summary.isHeartbeat || summary.isDoorRelayNoise || payloadFormat === 'EMPTY') {
+  // Bước 2: Bóc tách tóm tắt Hikvision & lọc bỏ gói nhiễu (heartBeat, đóng/mở cửa 21-22, sự kiện hệ thống không người)
+  const rawSummary = extractHikvisionSummary(parsedPayload, filesMeta, cleanSourceIp);
+  if (rawSummary.isNoiseEvent || payloadFormat === 'EMPTY') {
     return {
       savedId: null,
       persisted: false,
       skippedNoise: true,
-      record: { payloadFormat, hikvisionSummary: summary, filesMeta }
+      attendanceResult: null,
+      record: { payloadFormat, hikvisionSummary: rawSummary, filesMeta }
     };
   }
 
-  // Gán lại req.body đã bóc tách sạch (nếu là Buffer) để middleware log chung không in mảng byte nhị phân
   if (Buffer.isBuffer(req.body) && parsedPayload) {
     req.body = parsedPayload;
   }
 
-  // Bước 4: Tra cứu ngữ cảnh trường học nếu có schoolCode trên URL/query
+  // Bước 3: Xác định Trường học (tenantId) & Thiết bị (deviceCode)
   const rawSchoolCode = req.params?.schoolCode || req.query?.schoolCode || req.header('X-School-Code') || null;
-  const { tenantId, schoolCode } = await resolveOptionalTenant(rawSchoolCode);
   const rawDeviceCode = req.query?.deviceCode || req.header('X-Device-Code') || null;
+  const { tenantId, schoolCode, deviceDoc, deviceCode } = await resolveTenantAndDevice({
+    rawSchoolCode,
+    rawDeviceCode,
+    summary: rawSummary
+  });
 
-  const { isDoorRelayNoise, ...hikvisionSummary } = summary;
+  // Bước 4: Xử lý nghiệp vụ Check-in / Check-out Học sinh & Nhân viên nếu là lần quẹt hợp lệ
+  let attendanceResult = null;
+  let processingStatus = 'IGNORED';
+  let processingNote = 'Sự kiện không phải lần xác thực chấm công hợp lệ';
+
+  if (rawSummary.isValidPersonPass) {
+    const occurredAtDate = rawSummary.dateTime ? new Date(rawSummary.dateTime) : new Date();
+    const validOccurredAt = Number.isNaN(occurredAtDate.getTime()) ? new Date() : occurredAtDate;
+    const serialTag = rawSummary.shortSerialNumber || (rawSummary.macAddress ? rawSummary.macAddress.replace(/:/g, '') : deviceCode);
+    const externalEventId = rawSummary.serialNo !== null
+      ? `HIK-${serialTag}-${rawSummary.serialNo}`
+      : `HIK-${serialTag}-${rawSummary.employeeNoString}-${validOccurredAt.getTime()}`;
+
+    const { source, authenticationMethod } = mapVerifyMethodToDeviceSource(rawSummary.currentVerifyMode);
+
+    if (mongoose.connection.readyState === 1 && tenantId) {
+      try {
+        const ingestOut = await ingestDeviceEvent({
+          deviceId: deviceCode,
+          deviceObjectId: deviceDoc?._id || null,
+          externalEventId,
+          tenantId,
+          externalPersonId: rawSummary.employeeNoString,
+          employeeName: rawSummary.personName || `Mã máy #${rawSummary.employeeNoString}`,
+          eventType: 'PUNCH',
+          source,
+          authenticationMethod,
+          vendorEventCode: rawSummary.subEventType !== null ? `${rawSummary.majorEventType || 5}:${rawSummary.subEventType}` : null,
+          occurredAt: validOccurredAt,
+          calculateImmediately: true,
+          enableMorningLateCheck: true,
+          rawPayload: parsedPayload || {}
+        });
+
+        if (ingestOut.duplicate) {
+          processingStatus = 'PROCESSED';
+          processingNote = `Sự kiện trùng lặp đã được xử lý trước đó (${externalEventId})`;
+          attendanceResult = { status: 'DUPLICATE', subjectType: ingestOut.subjectType };
+        } else if (ingestOut.unmapped) {
+          processingStatus = 'RECEIVED_RAW';
+          processingNote = `Mã máy "${rawSummary.employeeNoString}" (${rawSummary.personName || 'N/A'}) chưa được ánh xạ Học sinh/Nhân viên — đã đưa vào danh sách Chưa ánh xạ`;
+          attendanceResult = { status: 'UNMAPPED', externalPersonId: rawSummary.employeeNoString };
+        } else if (ingestOut.subjectType === 'STUDENT') {
+          processingStatus = 'PROCESSED';
+          const stStatus = ingestOut.attendanceRecord?.status === 'late' ? 'Đi muộn' : 'Đúng giờ';
+          processingNote = `Học sinh "${ingestOut.student.fullName}" -> ${ingestOut.attendanceAction} (${stStatus})`;
+          attendanceResult = {
+            status: 'OK',
+            subjectType: 'STUDENT',
+            action: ingestOut.attendanceAction,
+            studentId: ingestOut.student._id,
+            fullName: ingestOut.student.fullName,
+            attendanceStatus: ingestOut.attendanceRecord?.status,
+            checkInTime: ingestOut.attendanceRecord?.checkInTime,
+            checkOutTime: ingestOut.attendanceRecord?.checkOutTime
+          };
+        } else {
+          processingStatus = 'PROCESSED';
+          const lateNote = ingestOut.attendanceRecord?.isLate
+            ? `Đi muộn ${ingestOut.attendanceRecord.lateMinutes} phút`
+            : 'Đúng giờ';
+          const empFullName = ingestOut.user.profile?.fullName || ingestOut.user.username;
+          processingNote = `Nhân viên "${empFullName}" -> ${ingestOut.attendanceAction} (${lateNote})`;
+          attendanceResult = {
+            status: 'OK',
+            subjectType: 'EMPLOYEE',
+            action: ingestOut.attendanceAction,
+            userId: ingestOut.user._id,
+            fullName: empFullName,
+            isLate: ingestOut.attendanceRecord?.isLate || false,
+            lateMinutes: ingestOut.attendanceRecord?.lateMinutes || 0,
+            checkInTime: ingestOut.attendanceRecord?.checkInTime,
+            checkOutTime: ingestOut.attendanceRecord?.checkOutTime
+          };
+        }
+      } catch (ingestErr) {
+        processingStatus = 'FAILED';
+        processingNote = `Lỗi khi ghi nhận chấm công: ${ingestErr.message}`;
+        attendanceResult = { status: 'ERROR', error: ingestErr.message };
+      }
+    } else {
+      processingStatus = 'RECEIVED_RAW';
+      processingNote = 'Chưa xác định được cơ sở trường học (hãy gắn /HOANANG-A lên URL hoặc đăng ký IP/Serial máy vào trường)';
+      attendanceResult = { status: 'NO_TENANT' };
+    }
+  }
+
+  const { isNoiseEvent, isValidPersonPass, shortSerialNumber, ...hikvisionSummary } = rawSummary;
   const logData = {
     tenantId,
     schoolCode,
-    deviceCode: rawDeviceCode ? String(rawDeviceCode).trim().toUpperCase() : null,
-    sourceIp,
+    deviceCode,
+    sourceIp: cleanSourceIp,
     method: req.method,
     url: req.originalUrl || req.url,
     contentType: String(req.headers['content-type'] || ''),
@@ -400,38 +527,32 @@ const captureIncomingWebhook = async (req) => {
     rawBodyPreview,
     filesMeta,
     hikvisionSummary,
-    processingStatus: 'RECEIVED_RAW',
-    processingNote: 'Đã nhận sự kiện từ máy Hikvision (Bước 1 - Chờ nối xử lý Check-in/Check-out ở Bước 2)'
+    processingStatus,
+    processingNote
   };
 
-  // Bước 5: In chi tiết ra Terminal
-  logWebhookToConsole(logData);
+  console.info(
+    `[Chấm Công Hikvision] Trường: ${schoolCode || 'N/A'} | Mã máy: ${hikvisionSummary.employeeNoString || 'N/A'} (${hikvisionSummary.personName || 'N/A'}) | ` +
+    `Phương thức: ${hikvisionSummary.currentVerifyMode || 'N/A'} | Lúc: ${hikvisionSummary.dateTime || 'N/A'} | Kết quả: ${processingNote}`
+  );
 
-  // Bước 6: Lưu lịch sử vào MongoDB
   if (mongoose.connection.readyState !== 1) {
-    return { savedId: null, persisted: false, skippedNoise: false, record: logData };
+    return { savedId: null, persisted: false, skippedNoise: false, attendanceResult, record: logData };
   }
 
   const created = await TimekeepingWebhookLog.create(logData);
-
-  // TODO (Bước 2): Sau khi kiểm tra gói tin thực tế từ máy Hikvision bắn về (xác nhận định dạng mã học sinh /
-  // mã nhân viên trong `hikvisionSummary.employeeNoString`, thời gian `dateTime`, phương thức `currentVerifyMode`),
-  // gọi sang `attendanceDeviceService.ingestDeviceEvent(...)` tại đây để tự động ghi nhận Check-in / Check-out
-  // cho cả Học sinh (`StudentAttendance`) và Nhân viên (`RawAttendanceEvent` -> `AttendanceRecord`).
 
   return {
     savedId: String(created._id),
     persisted: true,
     skippedNoise: false,
+    attendanceResult,
     record: created.toObject()
   };
 };
 
 /**
- * Truy vấn danh sách gói tin Webhook đã lưu (phân trang chuẩn, `.lean()`, `.select()`).
- *
- * @param {object} [params]
- * @returns {Promise<{ items: Array<object>, pagination: object }>}
+ * Truy vấn danh sách gói tin Webhook đã lưu (có phân trang, `.lean()`, `.select()`).
  */
 const listWebhookLogs = async ({
   tenantId = null,
@@ -473,10 +594,6 @@ const listWebhookLogs = async ({
 
 /**
  * Xem chi tiết đầy đủ 1 bản ghi gói tin Webhook theo ID.
- *
- * @param {string} id
- * @param {string | import('mongoose').Types.ObjectId | null} [tenantId=null]
- * @returns {Promise<object | null>}
  */
 const getWebhookLogDetail = async (id, tenantId = null) => {
   if (!mongoose.isValidObjectId(id)) return null;

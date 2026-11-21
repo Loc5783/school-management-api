@@ -12,7 +12,6 @@ const EmployeeSchema = new mongoose.Schema({
     employeeCode: {
         type: String,
         required: true,
-        unique: true,
         uppercase: true,
         trim: true
     },
@@ -95,6 +94,14 @@ const EmployeeSchema = new mongoose.Schema({
     timestamps: true
 });
 
+EmployeeSchema.index({ tenantId: 1, employeeCode: 1 }, {
+    unique: true,
+    partialFilterExpression: { tenantId: { $type: 'objectId' } }
+});
+EmployeeSchema.index({ employeeCode: 1 }, {
+    unique: true,
+    partialFilterExpression: { tenantId: null }
+});
 EmployeeSchema.index({ departmentId: 1 });
 EmployeeSchema.index({ userId: 1 }, { unique: true, sparse: true });
 EmployeeSchema.index({ status: 1 });

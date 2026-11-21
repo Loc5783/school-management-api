@@ -51,6 +51,18 @@ const AttendanceRecordSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  isLate: {
+    type: Boolean,
+    default: false
+  },
+  lateMinutes: {
+    type: Number,
+    default: 0
+  },
+  scheduledStartTime: {
+    type: String,
+    default: '08:00'
+  },
   checkInSource: {
     type: String,
     enum: ['biometric', 'correction', 'manual', 'unknown'],

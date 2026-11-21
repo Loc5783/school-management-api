@@ -9,10 +9,11 @@ const { applyStudentListScope, canAccessStudent, isParent, isValidStudentId } = 
 const { buildTenantFilter, applyTenantFilter, assertTenantContext } = require('../services/tenantFilterService');
 const { canAccessClassroom, getTeacherClassroomIds, hasSchoolWideReadAccess } = require('../services/schoolDataAccessService');
 const { STUDENT_STATUSES, isClassroomCountedStatus, canTransitionStudentStatus, generateStudentCode, runStudentTransaction, serializeStudent } = require('../services/studentCoreService');
+const { assertPersonCodeAvailable } = require('../services/personCodeService');
 const { isValidWorkDate, getWorkDate } = require('../utils/dateHelpers');
 
-const ADMIN_MUTABLE = ['fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'notes', 'classroomId', 'schoolYear', 'parents', 'authorizedPickers', 'allergies', 'disease', 'emergencyContact', 'admissionDate'];
-const TEACHER_CREATE_FIELDS = ['fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'notes'];
+const ADMIN_MUTABLE = ['studentCode', 'fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'notes', 'classroomId', 'schoolYear', 'parents', 'authorizedPickers', 'allergies', 'disease', 'emergencyContact', 'admissionDate'];
+const TEACHER_CREATE_FIELDS = ['studentCode', 'fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'notes'];
 const TEACHER_MUTABLE = ['avatar', 'notes'];
 const PARENT_MUTABLE = ['fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'allergies', 'disease', 'emergencyContact', 'authorizedPickers'];
 const SORTS = new Set(['fullName', 'studentCode', 'birthDate', 'admissionDate', 'createdAt', 'updatedAt']);
@@ -118,6 +119,11 @@ const createStudent = async (req, res) => {
         const admissionDate = data.admissionDate || new Date();
         data.schoolYear = data.schoolYear || deriveSchoolYear(admissionDate);
         const student = await runStudentTransaction(async (session) => {
+            const rawManualCode = String(data.studentCode || '').trim();
+            const resolvedStudentCode = rawManualCode
+                ? await assertPersonCodeAvailable({ code: rawManualCode, tenantId, session })
+                : await generateStudentCode(admissionDate, session, tenantId);
+
             const studentPayload = {
                 ...data,
                 fullName: data.fullName.trim(),
@@ -126,7 +132,7 @@ const createStudent = async (req, res) => {
                 status,
                 admissionDate,
                 enrollmentDate: admissionDate,
-                studentCode: await generateStudentCode(admissionDate, session, tenantId),
+                studentCode: resolvedStudentCode,
                 createdBy: req.user._id,
                 updatedBy: req.user._id,
                 statusHistory: [{ toStatus: status, reason: 'Tạo hồ sơ học sinh', effectiveDate: admissionDate, changedBy: req.user._id, changedByName: actorName(req.user) }]
@@ -182,7 +188,11 @@ const updateStudent = async (req, res) => {
         if (isParent(req.user)) return res.status(403).json({ success: false, message: 'Phụ huynh cần gửi yêu cầu cập nhật hồ sơ để nhà trường phê duyệt' });
         if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, current.classroomId, req)) return res.status(403).json({ message: 'Bạn không có quyền cập nhật học sinh này' });
         if (req.user.role === 'teacher') assertTeacherAllowedFields(req.body);
-        const updates = pick(req.body, req.user.role); if (!Object.keys(updates).length) return res.status(400).json({ message: 'Không có trường học sinh hợp lệ để cập nhật' });
+        const updates = pick(req.body, req.user.role);
+        if (Object.hasOwn(updates, 'studentCode') && !String(updates.studentCode || '').trim()) {
+            delete updates.studentCode;
+        }
+        if (!Object.keys(updates).length) return res.status(400).json({ message: 'Không có trường học sinh hợp lệ để cập nhật' });
         // Parent-facing serialization deliberately hides identity documents. Keep
         // existing protected values when a parent edits the visible picker list.
         if (isParent(req.user) && Array.isArray(updates.authorizedPickers)) {
@@ -200,7 +210,16 @@ const updateStudent = async (req, res) => {
             updates.classroomId = target._id; updates.className = target.name;
         }
         updates.updatedBy = req.user._id;
+        const tenantId = req.tenantId || req.user?.tenantId || current.tenantId || null;
         const student = await runStudentTransaction(async (session) => {
+            if (Object.hasOwn(updates, 'studentCode')) {
+                updates.studentCode = await assertPersonCodeAvailable({
+                    code: updates.studentCode,
+                    tenantId,
+                    excludeStudentId: current._id,
+                    session
+                });
+            }
             const updated = await Student.findOneAndUpdate({ _id: current._id, ...tenantFilter }, { $set: updates }, { returnDocument: 'after', runValidators: true, session });
             if (target && String(current.classroomId) !== String(target._id) && isClassroomCountedStatus(current.status)) {
                 if (!await adjustHeadcount(current.classroomId, -1, session) || !await adjustHeadcount(target._id, 1, session)) throw httpError('Không thể cập nhật sĩ số lớp', 409);

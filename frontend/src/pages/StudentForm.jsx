@@ -31,6 +31,7 @@ const ALLERGEN_ALIASES = {
   mollusc: ["nhuyễn thể", "nghêu", "sò", "ốc", "mực"],
 };
 const empty = {
+  studentCode: "",
   fullName: "",
   birthDate: "",
   gender: "male",
@@ -129,6 +130,7 @@ export default function StudentForm() {
     setError("");
     try {
       const teacherCreateFields = [
+        "studentCode",
         "fullName",
         "birthDate",
         "gender",
@@ -206,6 +208,16 @@ export default function StudentForm() {
         </div>
         {error && <p className="form-error">{error}</p>}
         <div className="student-form-grid">
+          <label>
+            Mã học sinh / Mã máy chấm công
+            <input
+              disabled={editing && !manager}
+              maxLength="30"
+              placeholder="Để trống tự đánh số (1, 2, 3...) hoặc nhập mã trên máy"
+              value={form.studentCode || ""}
+              onChange={(e) => set("studentCode", e.target.value)}
+            />
+          </label>
           <label>
             Họ và tên
             <input

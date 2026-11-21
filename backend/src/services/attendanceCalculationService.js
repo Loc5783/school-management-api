@@ -2,8 +2,10 @@ const crypto = require('crypto');
 const AttendanceAuditLog = require('../models/zone2_hr/AttendanceAuditLog');
 const AttendanceRecord = require('../models/zone2_hr/AttendanceRecord');
 const AttendanceRecalculationQueue = require('../models/zone2_hr/AttendanceRecalculationQueue');
+const Employee = require('../models/zone2_hr/Employee');
 const RawAttendance = require('../models/zone2_hr/RawAttendance');
 const RawAttendanceEvent = require('../models/zone2_hr/RawAttendanceEvent');
+const StaffShift = require('../models/zone2_hr/StaffShift');
 const TimekeepingCorrectionRequest = require('../models/zone2_hr/TimekeepingCorrectionRequest');
 const User = require('../models/zone1_system/User');
 const { queueRecalculation, withTransaction, TimekeepingError } = require('./attendanceAdjustmentService');
@@ -15,11 +17,16 @@ const {
 } = require('./tenantFilterService');
 const {
   DEFAULT_SCHOOL_TIMEZONE,
+  createDateTime,
   getWorkDate,
   getWorkDateRange,
   isValidWorkDate,
   startOfWorkDate
 } = require('../utils/dateHelpers');
+
+// Ngưỡng chống quẹt đúp liên tiếp trước máy chấm công: 5 phút (300.000 ms)
+const DEFAULT_PUNCH_COOLDOWN_MS = Number(process.env.ATTENDANCE_PUNCH_COOLDOWN_MS || 5 * 60 * 1000);
+const DEFAULT_EMPLOYEE_SHIFT_START = '08:00';
 
 const resolveTenantScope = (user, context) => {
   if (user) {
@@ -98,13 +105,13 @@ const resolveTimeline = ({ events, adjustments, legacyRaw, existingRecord }) => 
 
   if (punchEvents.length > 0) {
     if (!rawCheckIn) {
-      // First punch of the work date is the check-in time
+      // Lần quẹt đầu tiên trong ngày được ghi nhận là Giờ Vào (Check-in)
       rawCheckIn = punchEvents[0];
     }
     if (!rawCheckOut && punchEvents.length > 1) {
-      // Last punch after check-in is the check-out time
+      // Lần quẹt cuối cùng chỉ được ghi nhận là Giờ Ra (Check-out) khi cách lần Check-in tối thiểu 5 phút (chống quẹt đúp)
       const lastPunch = punchEvents[punchEvents.length - 1];
-      if (lastPunch > rawCheckIn) {
+      if (lastPunch.getTime() - rawCheckIn.getTime() >= DEFAULT_PUNCH_COOLDOWN_MS) {
         rawCheckOut = lastPunch;
       }
     }
@@ -169,17 +176,46 @@ const calculateAttendanceForUserDate = async ({ userId, workDate, actorId = null
       timezone
     });
 
+    // Tra cứu ca làm việc (StaffShift) của nhân sự trong ngày để xác định ngưỡng đi muộn; mặc định 08:00 nếu chưa gán ca
+    let scheduledStartTime = DEFAULT_EMPLOYEE_SHIFT_START;
+    const empProfile = await Employee.findOne({ userId, ...scope.filter }).select('_id').lean().session(session || null);
+    if (empProfile) {
+      const weekday = new Date(`${normalizedWorkDate}T00:00:00.000Z`).getUTCDay();
+      const activeShift = await StaffShift.findOne({
+        employeeId: empProfile._id,
+        status: 'active',
+        validFrom: { $lte: normalizedWorkDate },
+        validUntil: { $gte: normalizedWorkDate },
+        weekdays: weekday,
+        ...scope.filter
+      }).sort({ startTime: 1 }).select('startTime').lean().session(session || null);
+      if (activeShift?.startTime) {
+        scheduledStartTime = activeShift.startTime;
+      }
+    }
+
+    const shiftStartAt = createDateTime(normalizedWorkDate, scheduledStartTime, timezone);
+    const lateMinutes = timeline.checkInTime && timeline.checkInTime > shiftStartAt
+      ? Math.floor((timeline.checkInTime.getTime() - shiftStartAt.getTime()) / 60000)
+      : 0;
+    const isLate = lateMinutes > 0;
+
     const oldRecord = inputs.existingRecord;
     if (oldRecord && (oldRecord.isLocked || oldRecord.isPeriodLocked)) {
       return oldRecord;
     }
     const calculationVersion = (oldRecord?.calculationVersion || 0) + 1;
+    const autoLateNote = isLate ? `Đi muộn ${lateMinutes} phút (giờ vào chuẩn ${scheduledStartTime})` : '';
     const recordData = {
       tenantId: scope.tenantId || null,
       employeeName: oldRecord?.employeeName || inputs.events[0]?.employeeName || inputs.adjustments[0]?.employeeName || 'Nhân viên',
       checkInTime: timeline.checkInTime,
       checkOutTime: timeline.checkOutTime,
       workingMinutes,
+      isLate,
+      lateMinutes,
+      scheduledStartTime,
+      note: oldRecord?.note ? oldRecord.note : autoLateNote,
       checkInSource: timeline.checkInSource,
       checkOutSource: timeline.checkOutSource,
       status: timeline.checkInTime && timeline.checkOutTime ? 'present' : 'incomplete',

@@ -41,6 +41,7 @@ const AttendanceDevicePersonMapping = require('../models/zone2_hr/AttendanceDevi
 // Zone 3: School Operations
 const Classroom = require('../models/zone3_school/Classroom');
 const Student = require('../models/zone3_school/Student');
+const StudentCodeCounter = require('../models/zone3_school/StudentCodeCounter');
 const StudentAttendance = require('../models/zone3_school/StudentAttendance');
 const StudentLeaveRequest = require('../models/zone3_school/StudentLeaveRequest');
 const ClassroomAnnouncement = require('../models/zone3_school/ClassroomAnnouncement');
@@ -207,27 +208,34 @@ const runSeed = async () => {
     )
   ]);
 
-  // Bước 3: Khởi tạo đầy đủ 8 vai trò tài khoản cho Cơ sở A (HOANANG-A) và Cơ sở B (HOANANG-B)
+  // Gỡ index unique toàn cục cũ trên employeeCode (nếu có) và dọn bản ghi mã chữ cũ trước khi gán dãy số chuẩn 1, 2, 3...
+  await Employee.collection.dropIndex('employeeCode_1').catch(() => {});
+  await Promise.all([
+    Employee.createIndexes().catch(() => {}),
+    Student.createIndexes().catch(() => {})
+  ]);
+
+  // Bước 3: Khởi tạo đầy đủ 8 vai trò tài khoản cho Cơ sở A (mã số 1 -> 8) và Cơ sở B (mã số 1 -> 7)
   const usersA = await upsertSchoolUsers(tenantA._id, passwordHash, permMap, [
-    { key: 'admin', username: 'admin', role: 'admin', fullName: 'Nguyễn Minh Quản (Admin)', phone: '0901000001', email: 'admin@hoanang-a.edu.vn', employeeId: 'AD001', baseSalary: 15000000 },
-    { key: 'principal', username: 'principal', role: 'principal', fullName: 'Cô Trần Thu Hà (Hiệu trưởng)', phone: '0901000002', email: 'hieutruong@hoanang-a.edu.vn', employeeId: 'BGH001', baseSalary: 18000000 },
-    { key: 'hr', username: 'hr', role: 'hr', fullName: 'Chị Lê Hoàng Yến (Nhân sự)', phone: '0901000003', email: 'hr@hoanang-a.edu.vn', employeeId: 'HR001', baseSalary: 11000000 },
-    { key: 'accountant', username: 'accountant', role: 'accountant', fullName: 'Anh Phạm Quốc Tuấn (Kế toán)', phone: '0901000004', email: 'ketoan@hoanang-a.edu.vn', employeeId: 'KT001', baseSalary: 12000000 },
-    { key: 'teacher', username: 'teacher', role: 'teacher', fullName: 'Cô Nguyễn Thị Mai', phone: '0901000005', email: 'mai.gv@hoanang-a.edu.vn', employeeId: 'GV001', baseSalary: 9500000 },
-    { key: 'teacher2', username: 'teacher2', role: 'teacher', fullName: 'Cô Vũ Thanh Lan', phone: '0901000006', email: 'lan.gv@hoanang-a.edu.vn', employeeId: 'GV002', baseSalary: 9200000 },
-    { key: 'chef', username: 'chef', role: 'chef', fullName: 'Chú Đặng Văn Hùng (Bếp trưởng)', phone: '0901000007', email: 'bep@hoanang-a.edu.vn', employeeId: 'NV003', baseSalary: 9000000 },
-    { key: 'guard', username: 'guard', role: 'guard', fullName: 'Chú Hoàng Văn Bình (Bảo vệ)', phone: '0901000008', email: 'baove@hoanang-a.edu.vn', employeeId: 'NV004', baseSalary: 7500000 },
+    { key: 'teacher', username: 'teacher', role: 'teacher', fullName: 'Cô Nguyễn Thị Mai', phone: '0901000005', email: 'mai.gv@hoanang-a.edu.vn', employeeId: '1', baseSalary: 9500000 },
+    { key: 'admin', username: 'admin', role: 'admin', fullName: 'Nguyễn Minh Quản (Admin)', phone: '0901000001', email: 'admin@hoanang-a.edu.vn', employeeId: '2', baseSalary: 15000000 },
+    { key: 'principal', username: 'principal', role: 'principal', fullName: 'Cô Trần Thu Hà (Hiệu trưởng)', phone: '0901000002', email: 'hieutruong@hoanang-a.edu.vn', employeeId: '3', baseSalary: 18000000 },
+    { key: 'hr', username: 'hr', role: 'hr', fullName: 'Chị Lê Hoàng Yến (Nhân sự)', phone: '0901000003', email: 'hr@hoanang-a.edu.vn', employeeId: '4', baseSalary: 11000000 },
+    { key: 'accountant', username: 'accountant', role: 'accountant', fullName: 'Anh Phạm Quốc Tuấn (Kế toán)', phone: '0901000004', email: 'ketoan@hoanang-a.edu.vn', employeeId: '5', baseSalary: 12000000 },
+    { key: 'teacher2', username: 'teacher2', role: 'teacher', fullName: 'Cô Vũ Thanh Lan', phone: '0901000006', email: 'lan.gv@hoanang-a.edu.vn', employeeId: '6', baseSalary: 9200000 },
+    { key: 'chef', username: 'chef', role: 'chef', fullName: 'Chú Đặng Văn Hùng (Bếp trưởng)', phone: '0901000007', email: 'bep@hoanang-a.edu.vn', employeeId: '7', baseSalary: 9000000 },
+    { key: 'guard', username: 'guard', role: 'guard', fullName: 'Chú Hoàng Văn Bình (Bảo vệ)', phone: '0901000008', email: 'baove@hoanang-a.edu.vn', employeeId: '8', baseSalary: 7500000 },
     { key: 'parent', username: 'parent', role: 'parent', fullName: 'Chị Trần Thị Ngọc (Phụ huynh)', phone: '0909888777', email: 'ngoc.ph@gmail.com' }
   ]);
 
   const usersB = await upsertSchoolUsers(tenantB._id, passwordHash, permMap, [
-    { key: 'admin', username: 'admin_b', role: 'admin', fullName: 'Quản trị Cơ sở B', phone: '0902000001', email: 'admin@hoanang-b.edu.vn', employeeId: 'AD001' },
-    { key: 'principal', username: 'principal_b', role: 'principal', fullName: 'Hiệu trưởng Cơ sở B', phone: '0902000002', email: 'ht@hoanang-b.edu.vn', employeeId: 'BGH001' },
-    { key: 'hr', username: 'hr_b', role: 'hr', fullName: 'Nhân sự Cơ sở B', phone: '0902000003', email: 'hr@hoanang-b.edu.vn', employeeId: 'HR001' },
-    { key: 'accountant', username: 'accountant_b', role: 'accountant', fullName: 'Kế toán Cơ sở B', phone: '0902000004', email: 'kt@hoanang-b.edu.vn', employeeId: 'KT001' },
-    { key: 'teacher', username: 'teacher_b', role: 'teacher', fullName: 'Cô Giáo Cơ sở B', phone: '0902000005', email: 'gv@hoanang-b.edu.vn', employeeId: 'GV001' },
-    { key: 'chef', username: 'chef_b', role: 'chef', fullName: 'Bếp trưởng Cơ sở B', phone: '0902000006', email: 'bep@hoanang-b.edu.vn', employeeId: 'NV003' },
-    { key: 'guard', username: 'guard_b', role: 'guard', fullName: 'Bảo vệ Cơ sở B', phone: '0902000007', email: 'bv@hoanang-b.edu.vn', employeeId: 'NV004' },
+    { key: 'admin', username: 'admin_b', role: 'admin', fullName: 'Quản trị Cơ sở B', phone: '0902000001', email: 'admin@hoanang-b.edu.vn', employeeId: '1' },
+    { key: 'principal', username: 'principal_b', role: 'principal', fullName: 'Hiệu trưởng Cơ sở B', phone: '0902000002', email: 'ht@hoanang-b.edu.vn', employeeId: '2' },
+    { key: 'hr', username: 'hr_b', role: 'hr', fullName: 'Nhân sự Cơ sở B', phone: '0902000003', email: 'hr@hoanang-b.edu.vn', employeeId: '3' },
+    { key: 'accountant', username: 'accountant_b', role: 'accountant', fullName: 'Kế toán Cơ sở B', phone: '0902000004', email: 'kt@hoanang-b.edu.vn', employeeId: '4' },
+    { key: 'teacher', username: 'teacher_b', role: 'teacher', fullName: 'Cô Giáo Cơ sở B', phone: '0902000005', email: 'gv@hoanang-b.edu.vn', employeeId: '5' },
+    { key: 'chef', username: 'chef_b', role: 'chef', fullName: 'Bếp trưởng Cơ sở B', phone: '0902000006', email: 'bep@hoanang-b.edu.vn', employeeId: '6' },
+    { key: 'guard', username: 'guard_b', role: 'guard', fullName: 'Bảo vệ Cơ sở B', phone: '0902000007', email: 'bv@hoanang-b.edu.vn', employeeId: '7' },
     { key: 'parent', username: 'parent_b', role: 'parent', fullName: 'Phụ huynh Cơ sở B', phone: '0902000008', email: 'ph@hoanang-b.edu.vn' }
   ]);
 
@@ -278,16 +286,20 @@ const runSeed = async () => {
     { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
   );
 
+  // Nối tiếp dãy số nguyên cho Học sinh Cơ sở A từ 9 -> 17 (sau 8 nhân sự 1 -> 8)
+  await Student.deleteMany({ tenantId: tenantA._id, studentCode: /^HS-/ });
+  await Student.deleteMany({ tenantId: tenantB._id, studentCode: /^HS-/ });
+
   const studentsDefA = [
-    { code: 'HS-2026-000001', fullName: 'Bé Trần Gia Hân', birthDate: '2023-03-15', gender: 'female', classKey: 'MAM_1', pickerName: 'Chị Trần Thị Ngọc', pickerRel: 'Mẹ', pickerPhone: '0909888777' },
-    { code: 'HS-2026-000002', fullName: 'Bé Trần Minh Khôi', birthDate: '2022-05-20', gender: 'male', classKey: 'CHOI_1', pickerName: 'Chị Trần Thị Ngọc', pickerRel: 'Mẹ', pickerPhone: '0909888777' },
-    { code: 'HS-2026-000003', fullName: 'Bé Lê Minh Khang', birthDate: '2023-07-21', gender: 'male', classKey: 'MAM_1', pickerName: 'Anh Lê Văn Dũng', pickerRel: 'Bố', pickerPhone: '0912345003' },
-    { code: 'HS-2026-000004', fullName: 'Bé Phạm Bảo Ngọc', birthDate: '2023-11-06', gender: 'female', classKey: 'MAM_1', pickerName: 'Chị Nguyễn Thu Trang', pickerRel: 'Mẹ', pickerPhone: '0912345004' },
-    { code: 'HS-2026-000005', fullName: 'Bé Nguyễn Đức Anh', birthDate: '2022-02-19', gender: 'male', classKey: 'CHOI_1', pickerName: 'Anh Nguyễn Đức Bình', pickerRel: 'Bố', pickerPhone: '0912345005' },
-    { code: 'HS-2026-000006', fullName: 'Bé Võ Khánh Linh', birthDate: '2022-06-12', gender: 'female', classKey: 'CHOI_1', pickerName: 'Chị Võ Thị Hương', pickerRel: 'Mẹ', pickerPhone: '0912345006' },
-    { code: 'HS-2026-000007', fullName: 'Bé Bùi Thanh Mai', birthDate: '2021-01-30', gender: 'female', classKey: 'LA_1', pickerName: 'Anh Bùi Quốc Khánh', pickerRel: 'Bố', pickerPhone: '0912345007' },
-    { code: 'HS-2026-000008', fullName: 'Bé Hồ Quốc Bảo', birthDate: '2021-05-18', gender: 'male', classKey: 'LA_1', pickerName: 'Chị Phan Thị Thảo', pickerRel: 'Mẹ', pickerPhone: '0912345008' },
-    { code: 'HS-2026-000009', fullName: 'Bé Dương Nhật Minh', birthDate: '2021-10-09', gender: 'male', classKey: 'LA_1', pickerName: 'Anh Dương Văn Sơn', pickerRel: 'Bố', pickerPhone: '0912345009' }
+    { code: '9', fullName: 'Bé Trần Gia Hân', birthDate: '2023-03-15', gender: 'female', classKey: 'MAM_1', pickerName: 'Chị Trần Thị Ngọc', pickerRel: 'Mẹ', pickerPhone: '0909888777' },
+    { code: '10', fullName: 'Bé Trần Minh Khôi', birthDate: '2022-05-20', gender: 'male', classKey: 'CHOI_1', pickerName: 'Chị Trần Thị Ngọc', pickerRel: 'Mẹ', pickerPhone: '0909888777' },
+    { code: '11', fullName: 'Bé Lê Minh Khang', birthDate: '2023-07-21', gender: 'male', classKey: 'MAM_1', pickerName: 'Anh Lê Văn Dũng', pickerRel: 'Bố', pickerPhone: '0912345003' },
+    { code: '12', fullName: 'Bé Phạm Bảo Ngọc', birthDate: '2023-11-06', gender: 'female', classKey: 'MAM_1', pickerName: 'Chị Nguyễn Thu Trang', pickerRel: 'Mẹ', pickerPhone: '0912345004' },
+    { code: '13', fullName: 'Bé Nguyễn Đức Anh', birthDate: '2022-02-19', gender: 'male', classKey: 'CHOI_1', pickerName: 'Anh Nguyễn Đức Bình', pickerRel: 'Bố', pickerPhone: '0912345005' },
+    { code: '14', fullName: 'Bé Võ Khánh Linh', birthDate: '2022-06-12', gender: 'female', classKey: 'CHOI_1', pickerName: 'Chị Võ Thị Hương', pickerRel: 'Mẹ', pickerPhone: '0912345006' },
+    { code: '15', fullName: 'Bé Bùi Thanh Mai', birthDate: '2021-01-30', gender: 'female', classKey: 'LA_1', pickerName: 'Anh Bùi Quốc Khánh', pickerRel: 'Bố', pickerPhone: '0912345007' },
+    { code: '16', fullName: 'Bé Hồ Quốc Bảo', birthDate: '2021-05-18', gender: 'male', classKey: 'LA_1', pickerName: 'Chị Phan Thị Thảo', pickerRel: 'Mẹ', pickerPhone: '0912345008' },
+    { code: '17', fullName: 'Bé Dương Nhật Minh', birthDate: '2021-10-09', gender: 'male', classKey: 'LA_1', pickerName: 'Anh Dương Văn Sơn', pickerRel: 'Bố', pickerPhone: '0912345009' }
   ];
 
   const studentsA = [];
@@ -333,13 +345,13 @@ const runSeed = async () => {
     );
   }
 
-  // Học sinh mẫu bên Cơ sở B
+  // Học sinh mẫu bên Cơ sở B (mã số 8 nối tiếp sau 7 nhân sự của Cơ sở B)
   const studentB1 = await Student.findOneAndUpdate(
-    { tenantId: tenantB._id, studentCode: 'HS-2026-000001' },
+    { tenantId: tenantB._id, studentCode: '8' },
     {
       $set: {
         tenantId: tenantB._id,
-        studentCode: 'HS-2026-000001',
+        studentCode: '8',
         fullName: 'Bé Nguyễn Gia Bảo (Cơ sở B)',
         birthDate: new Date('2023-04-12'),
         gender: 'male',
@@ -601,20 +613,24 @@ const runSeed = async () => {
     )
   ]);
 
+  // Dọn các bản ghi Employee mang mã chữ cũ (GV001, NV003...) trước khi chuẩn hóa sang mã số nguyên 1..8
+  await Employee.deleteMany({ tenantId: tenantA._id, employeeCode: { $not: /^\d+$/ } });
+  await AttendanceDevicePersonMapping.deleteMany({ tenantId: tenantA._id });
+
   const employeesSeed = [
-    { code: 'BGH001', user: usersA.principal, dept: deptOps._id, position: 'principal', payrollRole: 'principal', salary: 18000000 },
-    { code: 'HR001', user: usersA.hr, dept: deptOps._id, position: 'hr', payrollRole: 'hr', salary: 11000000 },
-    { code: 'KT001', user: usersA.accountant, dept: deptOps._id, position: 'accountant', payrollRole: 'accountant', salary: 12000000 },
-    { code: 'GV001', user: usersA.teacher, dept: deptEdu._id, position: 'teacher', payrollRole: 'teacher', salary: 9500000 },
-    { code: 'GV002', user: usersA.teacher2, dept: deptEdu._id, position: 'teacher', payrollRole: 'teacher', salary: 9200000 },
-    { code: 'NV003', user: usersA.chef, dept: deptKitchen._id, position: 'chef', payrollRole: 'chef', salary: 9000000 },
-    { code: 'NV004', user: usersA.guard, dept: deptOps._id, position: 'security', payrollRole: 'guard', salary: 7500000 }
+    { code: '1', user: usersA.teacher, dept: deptEdu._id, position: 'teacher', payrollRole: 'teacher', salary: 9500000 },
+    { code: '3', user: usersA.principal, dept: deptOps._id, position: 'principal', payrollRole: 'principal', salary: 18000000 },
+    { code: '4', user: usersA.hr, dept: deptOps._id, position: 'hr', payrollRole: 'hr', salary: 11000000 },
+    { code: '5', user: usersA.accountant, dept: deptOps._id, position: 'accountant', payrollRole: 'accountant', salary: 12000000 },
+    { code: '6', user: usersA.teacher2, dept: deptEdu._id, position: 'teacher', payrollRole: 'teacher', salary: 9200000 },
+    { code: '7', user: usersA.chef, dept: deptKitchen._id, position: 'chef', payrollRole: 'chef', salary: 9000000 },
+    { code: '8', user: usersA.guard, dept: deptOps._id, position: 'security', payrollRole: 'guard', salary: 7500000 }
   ];
 
   const empDocs = {};
   for (const e of employeesSeed) {
     const emp = await Employee.findOneAndUpdate(
-      { tenantId: tenantA._id, employeeCode: e.code },
+      { tenantId: tenantA._id, userId: e.user._id },
       {
         $set: {
           tenantId: tenantA._id,
@@ -655,15 +671,15 @@ const runSeed = async () => {
   }
 
   await StaffShift.findOneAndUpdate(
-    { tenantId: tenantA._id, employeeId: empDocs.GV001._id, name: 'Ca hành chính Giáo viên' },
+    { tenantId: tenantA._id, employeeId: empDocs['7']._id, name: 'Ca sáng Bếp bán trú' },
     {
       $set: {
         tenantId: tenantA._id,
-        employeeId: empDocs.GV001._id,
-        role: 'teacher',
-        name: 'Ca hành chính Giáo viên',
-        startTime: '07:15',
-        endTime: '17:00',
+        employeeId: empDocs['7']._id,
+        role: 'chef',
+        name: 'Ca sáng Bếp bán trú',
+        startTime: '07:00',
+        endTime: '16:30',
         weekdays: [1, 2, 3, 4, 5],
         validFrom: '2026-01-01',
         validUntil: '2026-12-31',
@@ -712,33 +728,20 @@ const runSeed = async () => {
     { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
   );
 
-  const sampleMappings = [
-    { externalPersonId: '1', subjectType: 'EMPLOYEE', subjectId: usersA.teacher._id, userId: usersA.teacher._id, studentId: null, displayName: usersA.teacher.profile.fullName },
-    { externalPersonId: '7', subjectType: 'EMPLOYEE', subjectId: usersA.admin._id, userId: usersA.admin._id, studentId: null, displayName: usersA.admin.profile.fullName },
-    { externalPersonId: '101', subjectType: 'STUDENT', subjectId: studentsA[0]._id, userId: null, studentId: studentsA[0]._id, displayName: studentsA[0].fullName },
-    { externalPersonId: '102', subjectType: 'STUDENT', subjectId: studentsA[1]._id, userId: null, studentId: studentsA[1]._id, displayName: studentsA[1].fullName }
-  ];
-
-  for (const m of sampleMappings) {
-    await AttendanceDevicePersonMapping.findOneAndUpdate(
-      { tenantId: tenantA._id, deviceId: hikDevice._id, externalPersonId: m.externalPersonId },
-      {
-        $set: {
-          tenantId: tenantA._id,
-          deviceId: hikDevice._id,
-          externalPersonId: m.externalPersonId,
-          subjectType: m.subjectType,
-          subjectId: m.subjectId,
-          userId: m.userId,
-          studentId: m.studentId,
-          active: true,
-          metadata: { displayName: m.displayName, note: 'Ánh xạ mẫu phục vụ kiểm thử Webhook Hikvision' },
-          createdBy: usersA.admin._id
-        }
-      },
+  // Nhờ dùng chung 1 dãy số nguyên (Nhân sự: 1..8, Học sinh: 9..17), hệ thống tự động nhận diện trực tiếp
+  // theo employeeId / studentCode mà không bắt buộc phải tạo bản ghi phụ trong AttendanceDevicePersonMapping!
+  await Promise.all([
+    StudentCodeCounter.findOneAndUpdate(
+      { tenantId: tenantA._id, year: 0 },
+      { $set: { sequence: 17, tenantId: tenantA._id, year: 0 } },
       { upsert: true }
-    );
-  }
+    ),
+    StudentCodeCounter.findOneAndUpdate(
+      { tenantId: tenantB._id, year: 0 },
+      { $set: { sequence: 8, tenantId: tenantB._id, year: 0 } },
+      { upsert: true }
+    )
+  ]);
 
   // Bước 7: Tài chính & Học phí (FeeSchedule, TuitionFee, Payment, OperatingExpense)
   await FeeSchedule.findOneAndUpdate(
