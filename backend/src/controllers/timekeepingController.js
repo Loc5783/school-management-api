@@ -4,6 +4,7 @@ const TimekeepingCorrectionRequest = require('../models/zone2_hr/TimekeepingCorr
 const Employee = require('../models/zone2_hr/Employee');
 const StaffShift = require('../models/zone2_hr/StaffShift');
 const AttendanceAuditLog = require('../models/zone2_hr/AttendanceAuditLog');
+const User = require('../models/zone1_system/User');
 const { inTransaction, fail } = require('../services/credentialService');
 const { ingestDeviceEvent, kioskCheckInByIdentifier } = require('../services/attendanceDeviceService');
 const { recalculateAttendanceForDate } = require('../services/attendanceCalculationService');
@@ -19,6 +20,11 @@ const {
   updateDraft
 } = require('../services/attendanceAdjustmentService');
 const {
+  buildTenantFilter,
+  assertTenantContext,
+  InvalidTenantContextError
+} = require('../services/tenantFilterService');
+const {
   DEFAULT_SCHOOL_TIMEZONE,
   createDateTime,
   getWorkDate,
@@ -26,9 +32,16 @@ const {
   startOfWorkDate
 } = require('../utils/dateHelpers');
 
+const employeeRoles = ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'];
+
 const sendError = (res, error) => {
-  if (error.statusCode) return res.status(error.statusCode).json({ message: error.message });
   if (error instanceof TimekeepingError) {
+    return res.status(error.statusCode).json({ message: error.message, code: error.code });
+  }
+  if (error instanceof InvalidTenantContextError) {
+    return res.status(403).json({ message: 'Không thể truy cập ngoài phạm vi trường học', error: error.message });
+  }
+  if (error?.statusCode) {
     return res.status(error.statusCode).json({ message: error.message, code: error.code });
   }
   if (error?.code === 11000) {
@@ -43,9 +56,15 @@ const sendError = (res, error) => {
 
 const manualCheckIn = async (req, res) => {
   try {
+    const tenantContext = assertTenantContext(req);
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
     const workDate = startOfWorkDate(getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE), DEFAULT_SCHOOL_TIMEZONE);
-    const existing = await AttendanceRecord.findOne({ userId: req.user._id, workDate });
-    if (existing?.finalized) return res.status(409).json({ message: 'Ngày công đã chốt, không thể ghi đè bằng chấm công thủ công. Vui lòng gửi phiếu điều chỉnh.' });
+
+    // Pre-check outside transaction to fast-return if already checked in or finalized
+    const existing = await AttendanceRecord.findOne({ userId: req.user._id, workDate, ...tenantFilter });
+    if (existing?.finalized) {
+      return res.status(409).json({ message: 'Ngày công đã chốt, không thể ghi đè bằng chấm công thủ công. Vui lòng gửi phiếu điều chỉnh.' });
+    }
     if (existing?.checkInTime) {
       return res.status(200).json({
         message: 'Bạn đã chấm công hôm nay',
@@ -55,29 +74,54 @@ const manualCheckIn = async (req, res) => {
     }
 
     const record = await inTransaction(async (session) => {
-    const before = await AttendanceRecord.findOne({ userId: req.user._id, workDate }).session(session);
-    if (before?.finalized || before?.checkInTime) throw fail('Ngày công đã được ghi nhận hoặc chốt. Vui lòng tải lại.', 409);
-    const saved = await AttendanceRecord.findOneAndUpdate(
-      { userId: req.user._id, workDate },
-      {
-        $set: {
-          employeeName: employeeName(req.user),
-          checkInTime: new Date(),
-          source: 'manual',
-          checkInSource: 'manual',
-          note: req.body.note?.trim() || '',
-          timezone: DEFAULT_SCHOOL_TIMEZONE,
-          finalized: false,
-          needsRecalculation: true
+      // 1. Re-verify actor inside transaction session
+      const currentActor = await User.findOne({
+        _id: req.user._id,
+        role: { $in: employeeRoles },
+        status: 'active',
+        ...tenantFilter
+      }).session(session);
+      if (!currentActor) {
+        throw fail('Tài khoản thực hiện không còn quyền hoặc đã bị khóa/hạ quyền', 403);
+      }
+
+      const before = await AttendanceRecord.findOne({ userId: currentActor._id, workDate, ...tenantFilter }).session(session);
+      if (before?.finalized || before?.checkInTime) {
+        throw fail('Ngày công đã được ghi nhận hoặc chốt. Vui lòng tải lại.', 409);
+      }
+
+      const saved = await AttendanceRecord.findOneAndUpdate(
+        { userId: currentActor._id, workDate, ...tenantFilter },
+        {
+          $set: {
+            tenantId: tenantContext.tenantId || null,
+            employeeName: employeeName(currentActor),
+            checkInTime: new Date(),
+            source: 'manual',
+            checkInSource: 'manual',
+            note: req.body.note?.trim() || '',
+            timezone: DEFAULT_SCHOOL_TIMEZONE,
+            finalized: false,
+            needsRecalculation: true
+          },
+          $setOnInsert: { userId: currentActor._id, workDate }
         },
-        $setOnInsert: { userId: req.user._id, workDate }
-      },
-      { new: true, upsert: true, setDefaultsOnInsert: true, session }
-    );
-    await AttendanceAuditLog.create([{ actor: req.user._id, action: 'MANUAL_CHECK_IN', entity: 'AttendanceRecord', entityId: saved._id,
-      oldValue: before?.toObject() || {}, newValue: saved.toObject() }], { session });
-    return saved;
+        { new: true, upsert: true, setDefaultsOnInsert: true, session }
+      );
+
+      await AttendanceAuditLog.create([{
+        tenantId: tenantContext.tenantId || null,
+        actor: currentActor._id,
+        action: 'MANUAL_CHECK_IN',
+        entity: 'AttendanceRecord',
+        entityId: saved._id,
+        oldValue: before?.toObject() || {},
+        newValue: saved.toObject()
+      }], { session });
+
+      return saved;
     });
+
     return res.status(201).json({ message: 'Chấm công thành công', alreadyCheckedIn: false, data: record });
   } catch (error) {
     return sendError(res, error);
@@ -86,7 +130,8 @@ const manualCheckIn = async (req, res) => {
 
 const createAdjustmentDraft = async (req, res) => {
   try {
-    const document = await createDraft(req.user, req.body);
+    const tenantContext = assertTenantContext(req);
+    const document = await createDraft(req.user, req.body, tenantContext);
     return res.status(201).json({ message: 'Đã tạo phiếu nháp', data: document });
   } catch (error) {
     return sendError(res, error);
@@ -95,7 +140,8 @@ const createAdjustmentDraft = async (req, res) => {
 
 const updateAdjustmentDraft = async (req, res) => {
   try {
-    const document = await updateDraft(req.user, req.params.id, req.body);
+    const tenantContext = assertTenantContext(req);
+    const document = await updateDraft(req.user, req.params.id, req.body, tenantContext);
     return res.json({ message: 'Đã cập nhật phiếu điều chỉnh', data: document });
   } catch (error) {
     return sendError(res, error);
@@ -104,7 +150,10 @@ const updateAdjustmentDraft = async (req, res) => {
 
 const submitAdjustmentDraft = async (req, res) => {
   try {
-    const document = await submitDraft(req.user, req.params.id, req.body.version);
+    const tenantContext = assertTenantContext(req);
+    const body = req.body || {};
+    const version = body.version !== undefined ? body.version : body.expectedVersion;
+    const document = await submitDraft(req.user, req.params.id, version, tenantContext);
     return res.json({ message: 'Đã gửi phiếu chờ phê duyệt', data: document });
   } catch (error) {
     return sendError(res, error);
@@ -113,7 +162,10 @@ const submitAdjustmentDraft = async (req, res) => {
 
 const cancelAdjustment = async (req, res) => {
   try {
-    const document = await cancelAdjustmentService(req.user, req.params.id, req.body.version, req.body.reason || '');
+    const tenantContext = assertTenantContext(req);
+    const version = req.body.version !== undefined ? req.body.version : req.body.expectedVersion;
+    const reason = req.body.cancelReason || req.body.reason || '';
+    const document = await cancelAdjustmentService(req.user, req.params.id, version, reason, tenantContext);
     return res.json({ message: 'Đã hủy phiếu điều chỉnh', data: document });
   } catch (error) {
     return sendError(res, error);
@@ -123,7 +175,8 @@ const cancelAdjustment = async (req, res) => {
 // Compatibility endpoint for the existing client: create and submit at once.
 const createCorrectionRequest = async (req, res) => {
   try {
-    const document = await createAndSubmitLegacy(req.user, req.body);
+    const tenantContext = assertTenantContext(req);
+    const document = await createAndSubmitLegacy(req.user, req.body, tenantContext);
     return res.status(201).json({
       message: 'Đã gửi đơn chấm công bù. Đơn đang chờ Admin/Principal phê duyệt.',
       data: document
@@ -135,13 +188,14 @@ const createCorrectionRequest = async (req, res) => {
 
 const getMyTimekeeping = async (req, res) => {
   try {
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
     const [records, corrections, employee] = await Promise.all([
-      AttendanceRecord.find({ userId: req.user._id }).sort({ workDate: -1 }).limit(31),
-      TimekeepingCorrectionRequest.find({ userId: req.user._id }).sort({ createdAt: -1 }).limit(31),
-      Employee.findOne({ userId: req.user._id }).select('_id payrollRole')
+      AttendanceRecord.find({ userId: req.user._id, ...tenantFilter }).sort({ workDate: -1 }).limit(31),
+      TimekeepingCorrectionRequest.find({ userId: req.user._id, ...tenantFilter }).sort({ createdAt: -1 }).limit(31),
+      Employee.findOne({ userId: req.user._id, ...tenantFilter }).select('_id payrollRole tenantId')
     ]);
     const firstDate = records.length ? getWorkDate(records.at(-1).workDate) : getWorkDate();
-    const shifts = employee ? await StaffShift.find({ employeeId: employee._id, status: 'active', validUntil: { $gte: firstDate } }).lean() : [];
+    const shifts = employee ? await StaffShift.find({ employeeId: employee._id, status: 'active', validUntil: { $gte: firstDate }, ...tenantFilter }).lean() : [];
     const attendance = records.map((record) => {
       const date = getWorkDate(record.workDate);
       const weekday = new Date(`${date}T00:00:00.000Z`).getUTCDay();
@@ -164,17 +218,26 @@ const getMyTimekeeping = async (req, res) => {
 
 const getDailyTimekeeping = async (req, res) => {
   try {
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
     const date = String(req.query.date || getWorkDate());
     if (!isValidWorkDate(date)) return res.status(400).json({ message: 'Ngày công phải có định dạng YYYY-MM-DD' });
     const workDate = startOfWorkDate(date, DEFAULT_SCHOOL_TIMEZONE);
+
     const [employees, shifts, records] = await Promise.all([
-      Employee.find({ status: { $ne: 'resigned' }, userId: { $exists: true, $ne: null } }).select('fullName employeeCode payrollRole userId').lean(),
-      StaffShift.find({ status: 'active', validFrom: { $lte: date }, validUntil: { $gte: date } }).lean(),
-      AttendanceRecord.find({ workDate }).lean()
+      Employee.find({ status: { $ne: 'resigned' }, userId: { $exists: true, $ne: null }, ...tenantFilter }).select('fullName employeeCode payrollRole userId tenantId').lean(),
+      StaffShift.find({ status: 'active', validFrom: { $lte: date }, validUntil: { $gte: date }, ...tenantFilter }).lean(),
+      AttendanceRecord.find({ workDate, ...tenantFilter }).lean()
     ]);
+
+    // Authoritative check on User: verify employee's linked userId actually belongs to the same tenant
+    const employeeUserIds = employees.map((e) => e.userId).filter(Boolean);
+    const validUsers = await User.find({ _id: { $in: employeeUserIds }, ...tenantFilter }).select('_id').lean();
+    const validUserIdSet = new Set(validUsers.map((u) => String(u._id)));
+    const filteredEmployees = employees.filter((e) => validUserIdSet.has(String(e.userId)));
+
     const weekday = new Date(`${date}T00:00:00.000Z`).getUTCDay();
     const recordsByUser = new Map(records.map((record) => [String(record.userId), record]));
-    const data = employees.flatMap((employee) => {
+    const data = filteredEmployees.flatMap((employee) => {
       const assigned = shifts.filter((shift) => String(shift.employeeId) === String(employee._id) && shift.weekdays.includes(weekday));
       const record = recordsByUser.get(String(employee.userId));
       if (!record && !assigned.length) return [];
@@ -198,7 +261,8 @@ const getDailyTimekeeping = async (req, res) => {
 
 const listMyAdjustments = async (req, res) => {
   try {
-    const documents = await TimekeepingCorrectionRequest.find({ userId: req.user._id })
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+    const documents = await TimekeepingCorrectionRequest.find({ userId: req.user._id, ...tenantFilter })
       .sort({ createdAt: -1 })
       .limit(Math.min(Number(req.query.limit) || 50, 100));
     return res.json({ data: documents });
@@ -209,7 +273,8 @@ const listMyAdjustments = async (req, res) => {
 
 const getMyAdjustment = async (req, res) => {
   try {
-    const document = await TimekeepingCorrectionRequest.findOne({ _id: req.params.id, userId: req.user._id });
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+    const document = await TimekeepingCorrectionRequest.findOne({ _id: req.params.id, userId: req.user._id, ...tenantFilter });
     if (!document) return res.status(404).json({ message: 'Không tìm thấy phiếu điều chỉnh' });
     return res.json({ data: document });
   } catch (error) {
@@ -219,10 +284,14 @@ const getMyAdjustment = async (req, res) => {
 
 const getPendingCorrectionRequests = async (req, res) => {
   try {
-    const requests = await TimekeepingCorrectionRequest.find({ status: 'PENDING' })
-      .populate('userId', 'username profile role')
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+    const requests = await TimekeepingCorrectionRequest.find({ status: 'PENDING', ...tenantFilter })
+      .populate({ path: 'userId', match: tenantFilter, select: 'username profile role tenantId' })
       .sort({ submittedAt: 1 });
-    return res.json({ message: 'Lấy danh sách đơn chờ duyệt thành công', data: requests });
+
+    // Filter out items whose populated userId is null (alien user or mismatch)
+    const validRequests = requests.filter((r) => r.userId !== null && r.userId !== undefined);
+    return res.json({ message: 'Lấy danh sách đơn chờ duyệt thành công', data: validRequests });
   } catch (error) {
     return sendError(res, error);
   }
@@ -230,7 +299,9 @@ const getPendingCorrectionRequests = async (req, res) => {
 
 const approveCorrectionRequest = async (req, res) => {
   try {
-    const document = await approveAdjustment(req.user, req.params.id, req.body.version, req.body.reviewNote || '');
+    const tenantContext = assertTenantContext(req);
+    const version = req.body.version !== undefined ? req.body.version : req.body.expectedVersion;
+    const document = await approveAdjustment(req.user, req.params.id, version, req.body.reviewNote || '', tenantContext);
     return res.json({ message: 'Đã phê duyệt đơn và đưa vào hàng đợi tính lại', data: document });
   } catch (error) {
     return sendError(res, error);
@@ -239,7 +310,10 @@ const approveCorrectionRequest = async (req, res) => {
 
 const rejectCorrectionRequest = async (req, res) => {
   try {
-    const document = await rejectAdjustment(req.user, req.params.id, req.body.version, req.body.reason || req.body.reviewNote);
+    const tenantContext = assertTenantContext(req);
+    const version = req.body.version !== undefined ? req.body.version : req.body.expectedVersion;
+    const reason = req.body.reviewNote || req.body.reason || req.body.rejectionReason || '';
+    const document = await rejectAdjustment(req.user, req.params.id, version, reason, tenantContext);
     return res.json({ message: 'Đã từ chối đơn chấm công bù', data: document });
   } catch (error) {
     return sendError(res, error);
@@ -248,7 +322,11 @@ const rejectCorrectionRequest = async (req, res) => {
 
 const recalculateAttendance = async (req, res) => {
   try {
-    const records = await recalculateAttendanceForDate(req.params.date, req.user._id);
+    const tenantContext = assertTenantContext(req);
+    if (!isValidWorkDate(req.params.date)) {
+      return res.status(400).json({ message: 'Ngày công phải có định dạng YYYY-MM-DD' });
+    }
+    const records = await recalculateAttendanceForDate(req.params.date, req.user._id, tenantContext);
     return res.json({ message: 'Đã đưa dữ liệu vào tính lại', data: records });
   } catch (error) {
     return sendError(res, error);
@@ -290,8 +368,9 @@ const getDeviceEvents = async (req, res) => {
     if (!req.query.userId || !req.query.workDate || !isValidWorkDate(req.query.workDate)) {
       return res.status(400).json({ message: 'Cần gửi userId và workDate theo định dạng YYYY-MM-DD' });
     }
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
     const workDate = startOfWorkDate(req.query.workDate, DEFAULT_SCHOOL_TIMEZONE);
-    const events = await RawAttendanceEvent.find({ userId: req.query.userId, workDate })
+    const events = await RawAttendanceEvent.find({ userId: req.query.userId, workDate, ...tenantFilter })
       .sort({ occurredAt: 1 })
       .limit(Math.min(Number(req.query.limit) || 100, 500));
     return res.json({ data: events });

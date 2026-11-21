@@ -6,6 +6,7 @@ const StudentProfileChangeRequest = require('../models/zone3_school/StudentProfi
 const TuitionRefundRequest = require('../models/zone4_finance/TuitionRefundRequest');
 const OperatingExpenseRequest = require('../models/zone4_finance/OperatingExpenseRequest');
 require('../models/zone1_system/User');
+const { buildTenantFilter } = require('../services/tenantFilterService');
 
 const getPrincipalDecisions = async (req, res) => {
     const requestedLimit = Number(req.query.limit || 20);
@@ -13,18 +14,19 @@ const getPrincipalDecisions = async (req, res) => {
         return res.status(422).json({ message: 'Số bản ghi phải từ 1 đến 50.' });
     }
     try {
+        const tenantFilter = buildTenantFilter(req);
         const [payroll, leave, recruitment, profiles, refunds, expenses] = await Promise.all([
-            PayrollEvent.find({ action: { $in: ['confirmed', 'reopened'] } }).sort({ createdAt: -1 }).limit(requestedLimit)
+            PayrollEvent.find({ action: { $in: ['confirmed', 'reopened'] }, ...tenantFilter }).sort({ createdAt: -1 }).limit(requestedLimit)
                 .select('payrollId actorName action createdAt').populate('payrollId', 'employeeName month year').lean(),
-            LeaveRequest.find({ status: { $in: ['approved', 'rejected'] }, approvedAt: { $exists: true } })
+            LeaveRequest.find({ status: { $in: ['approved', 'rejected'] }, approvedAt: { $exists: true }, ...tenantFilter })
                 .sort({ approvedAt: -1 }).limit(requestedLimit).select('employeeName status approvedByName approvedAt').lean(),
-            JobApplicant.find({ status: { $in: ['approved', 'rejected'] }, decidedAt: { $exists: true } })
+            JobApplicant.find({ status: { $in: ['approved', 'rejected'] }, decidedAt: { $exists: true }, ...tenantFilter })
                 .sort({ decidedAt: -1 }).limit(requestedLimit).select('fullName status decidedAt decidedBy').populate('decidedBy', 'username profile.fullName').lean(),
-            StudentProfileChangeRequest.find({ status: { $in: ['approved', 'rejected'] }, reviewedAt: { $exists: true } })
+            StudentProfileChangeRequest.find({ status: { $in: ['approved', 'rejected'] }, reviewedAt: { $exists: true }, ...tenantFilter })
                 .sort({ reviewedAt: -1 }).limit(requestedLimit).select('studentName status reviewerName reviewedAt').lean(),
-            TuitionRefundRequest.find({ reviewedAt: { $exists: true } }).sort({ reviewedAt: -1 }).limit(requestedLimit)
+            TuitionRefundRequest.find({ reviewedAt: { $exists: true }, ...tenantFilter }).sort({ reviewedAt: -1 }).limit(requestedLimit)
                 .select('amount reviewedByName reviewedAt reviewNote status invoiceId').lean(),
-            OperatingExpenseRequest.find({ reviewedAt: { $exists: true } }).sort({ reviewedAt: -1 }).limit(requestedLimit)
+            OperatingExpenseRequest.find({ reviewedAt: { $exists: true }, ...tenantFilter }).sort({ reviewedAt: -1 }).limit(requestedLimit)
                 .select('payee amount reviewedByName reviewedAt status').lean()
         ]);
         const rows = [

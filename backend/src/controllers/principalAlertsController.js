@@ -16,6 +16,7 @@ const StudentProfileChangeRequest = require('../models/zone3_school/StudentProfi
 const PrincipalTask = require('../models/zone1_system/PrincipalTask');
 const { getStaffingSnapshot } = require('../services/staffingService');
 const { getWorkDate, startOfWorkDate } = require('../utils/dateHelpers');
+const { buildTenantFilter } = require('../services/tenantFilterService');
 
 const getPrincipalAlerts = async (req, res) => {
   try {
@@ -23,11 +24,12 @@ const getPrincipalAlerts = async (req, res) => {
     const now = new Date();
     const todayStart = startOfWorkDate(today);
     const tomorrowStart = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+    const tenantFilter = buildTenantFilter(req);
 
     // 1. LỚP THIẾU GIÁO VIÊN VÀ CA TRỰC BỊ THIẾU
     let staffing = { teacherShortages: [], uncoveredShifts: [], missingTeacherTotal: 0 };
     try {
-      staffing = await getStaffingSnapshot(today);
+      staffing = await getStaffingSnapshot(today, req);
     } catch (e) {
       console.error('Lỗi tính toán snapshot nhân sự:', e);
     }
@@ -54,15 +56,16 @@ const getPrincipalAlerts = async (req, res) => {
     // 2. TRẺ CHƯA ĐƯỢC ĐÓN & TỔNG HỢP HIỆN DIỆN HỌC SINH
     // Phân biệt: chưa đến, đang ở trường (chưa đón), đã bàn giao, nghỉ học
     const [activeClasses, activeStudents, todayAttendances, confirmedPickups] = await Promise.all([
-      Classroom.find({ status: 'active' }).select('name schoolYear').lean(),
-      Student.find({ status: 'active' }).select('fullName classroomId allergies').lean(),
+      Classroom.find({ status: 'active', ...tenantFilter }).select('name schoolYear').lean(),
+      Student.find({ status: { $in: ['active', 'enrolled'] }, ...tenantFilter }).select('fullName classroomId allergies').lean(),
       StudentAttendance.find({
+        ...tenantFilter,
         $or: [
           { attendanceDateKey: today },
           { attendDate: { $gte: todayStart, $lt: tomorrowStart } }
         ]
       }).select('studentId classroomId status checkInTime checkOutTime studentName').lean(),
-      PickupRecord.find({ pickupDate: today, status: 'confirmed' }).select('studentId classroomId confirmedAt').lean()
+      PickupRecord.find({ pickupDate: today, status: 'confirmed', ...tenantFilter }).select('studentId classroomId confirmedAt').lean()
     ]);
 
     const pickupStudentSet = new Set(confirmedPickups.map((p) => String(p.studentId)));
@@ -135,6 +138,7 @@ const getPrincipalAlerts = async (req, res) => {
 
     // 3. SỰ CỐ AN NINH & AN TOÀN TRƯỜNG HỌC
     const securityIncidents = await SecurityIncident.find({
+      ...tenantFilter,
       $or: [
         { status: { $ne: 'closed' } },
         { severity: { $in: ['serious', 'emergency'] } }
@@ -148,24 +152,27 @@ const getPrincipalAlerts = async (req, res) => {
     // 4. CẢNH BÁO BẾP ĂN & AN TOÀN THỰC PHẨM
     const [nearExpiryItems, mealServingsToday, heldInspections, pendingKitchenRequests, todayMenus] = await Promise.all([
       Inventory.find({
-        status: { $in: ['near_expiry', 'expired'] }
+        status: { $in: ['near_expiry', 'expired'] },
+        ...tenantFilter
       }).select('ingredientName lotNumber expiryDate status quantity unit').limit(15).lean(),
-      MealServing.find({ dateKey: today })
+      MealServing.find({ dateKey: today, ...tenantFilter })
         .populate('classroomId', 'name')
         .lean(),
       FoodInspection.find({
+        ...tenantFilter,
         $or: [
           { mealDateKey: today, stage: 'held' },
           { 'step1_rawIngredients.decision': 'reject' }
         ]
       }).limit(5).lean(),
-      KitchenRequest.find({ status: 'pending' })
+      KitchenRequest.find({ status: 'pending', ...tenantFilter })
         .select('requestType title priority createdAt')
         .limit(10).lean(),
       Menu.find({
         status: 'approved',
         startDate: { $lte: todayStart },
-        endDate: { $gte: todayStart }
+        endDate: { $gte: todayStart },
+        ...tenantFilter
       }).select('name allergyWarnings').lean()
     ]);
 
@@ -202,19 +209,20 @@ const getPrincipalAlerts = async (req, res) => {
     // 5. CÔNG VIỆC VÀ PHÊ DUYỆT QUÁ HẠN
     const overdueThreshold = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000); // 3 ngày
     const [pendingRefunds, pendingExpenses, pendingLeaves, pendingPayrolls, pendingProfiles, overdueTasks] = await Promise.all([
-      TuitionRefundRequest.find({ status: 'pending', createdAt: { $lt: overdueThreshold } })
+      TuitionRefundRequest.find({ status: 'pending', createdAt: { $lt: overdueThreshold }, ...tenantFilter })
         .select('amount createdAt studentName reason').lean(),
-      OperatingExpenseRequest.find({ status: 'pending', createdAt: { $lt: overdueThreshold } })
+      OperatingExpenseRequest.find({ status: 'pending', createdAt: { $lt: overdueThreshold }, ...tenantFilter })
         .select('payee amount createdAt purpose category').lean(),
-      LeaveRequest.find({ status: 'pending', createdAt: { $lt: overdueThreshold } })
+      LeaveRequest.find({ status: 'pending', createdAt: { $lt: overdueThreshold }, ...tenantFilter })
         .select('employeeName startDate endDate createdAt').lean(),
-      Payroll.find({ status: 'reviewed', updatedAt: { $lt: overdueThreshold } })
+      Payroll.find({ status: 'reviewed', updatedAt: { $lt: overdueThreshold }, ...tenantFilter })
         .select('employeeName month year updatedAt').lean(),
-      StudentProfileChangeRequest.find({ status: 'pending', createdAt: { $lt: overdueThreshold } })
+      StudentProfileChangeRequest.find({ status: 'pending', createdAt: { $lt: overdueThreshold }, ...tenantFilter })
         .select('studentName createdAt requestedFields').lean(),
       PrincipalTask.find({
         status: { $ne: 'completed' },
-        dueDate: { $lt: now }
+        dueDate: { $lt: now },
+        ...tenantFilter
       }).select('title department dueDate priority assignedToName createdAt').lean()
     ]);
 

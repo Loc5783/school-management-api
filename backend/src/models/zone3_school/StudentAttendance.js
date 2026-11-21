@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 
 const StudentAttendanceSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant'
+    },
     studentId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Student',
@@ -66,5 +70,10 @@ StudentAttendanceSchema.index(
 );
 StudentAttendanceSchema.index({ classroomId: 1, attendDate: 1 });
 StudentAttendanceSchema.index({ attendDate: 1 });
+
+// Indexes hỗ trợ multi-tenant (SaaS 1C)
+StudentAttendanceSchema.index({ tenantId: 1, studentId: 1, attendDate: 1 });
+StudentAttendanceSchema.index({ tenantId: 1, classroomId: 1, attendDate: 1 });
+StudentAttendanceSchema.index({ tenantId: 1, attendDate: 1 });
 
 module.exports = mongoose.model('StudentAttendance', StudentAttendanceSchema);

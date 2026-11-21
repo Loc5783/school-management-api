@@ -8,10 +8,12 @@ const OperatingExpense = require('../models/zone4_finance/OperatingExpense');
 const Payroll = require('../models/zone2_hr/Payroll');
 const Classroom = require('../models/zone3_school/Classroom');
 const Student = require('../models/zone3_school/Student');
+const User = require('../models/zone1_system/User');
 const AuditLog = require('../models/zone1_system/AuditLog');
 const ImportIdempotency = require('../models/zone1_system/ImportIdempotency');
 const { runStudentTransaction } = require('../services/studentCoreService');
 const { lockOpenPeriod, fromPeriod } = require('../services/accountingPeriodService');
+const { assertTenantContext, buildTenantFilter, resolveTenantContext } = require('../services/tenantFilterService');
 const { getCashbookData } = require('./cashbookController');
 const { buildAccountingReport } = require('./accountingReportController');
 const { addWorkDays, getWorkDate, isValidWorkDate, startOfWorkDate } = require('../utils/dateHelpers');
@@ -110,7 +112,7 @@ const parseMonthYearFilter = (query = {}) => {
  * - Tiếp quản yêu cầu 'processing' bị quá hạn > 2 phút
  * - Trả về phản hồi đã lưu nếu đã 'completed'
  */
-const acquireImportLock = async ({ idempotencyKey, fingerprint, userId }) => {
+const acquireImportLock = async ({ idempotencyKey, fingerprint, userId, tenantId = null }) => {
   const currentLockToken = crypto.randomUUID();
 
   try {
@@ -119,6 +121,7 @@ const acquireImportLock = async ({ idempotencyKey, fingerprint, userId }) => {
       fingerprint,
       lockToken: currentLockToken,
       userId,
+      ...(tenantId ? { tenantId } : { tenantId: null }),
       status: 'processing'
     });
     return { status: 'acquired', doc, lockToken: currentLockToken };
@@ -128,6 +131,9 @@ const acquireImportLock = async ({ idempotencyKey, fingerprint, userId }) => {
     const existing = await ImportIdempotency.findOne({ idempotencyKey });
     if (!existing) {
       return { status: 'conflict', statusCode: 409, message: 'Yêu cầu đang được xử lý bởi hệ thống.' };
+    }
+    if (tenantId && existing.tenantId && String(existing.tenantId) !== String(tenantId)) {
+      return { status: 'conflict', statusCode: 403, message: 'Idempotency-Key này thuộc về đơn vị trường học khác.' };
     }
     if (String(existing.userId) !== String(userId)) {
       return { status: 'conflict', statusCode: 403, message: 'Idempotency-Key này thuộc về tài khoản người dùng khác.' };
@@ -184,9 +190,12 @@ const sendWorkbookResponse = async (res, workbook, filename) => {
 
 const exportFeeSchedules = async (req, res) => {
   try {
+    assertTenantContext(req);
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+
     const my = parseMonthYearFilter(req.query);
     const period = my ? my.period : '';
-    const query = period ? { period } : {};
+    const query = { ...(period ? { period } : {}), ...tenantFilter };
     const schedules = await FeeSchedule.find(query)
       .sort({ period: -1, classroomName: 1 })
       .limit(10001)
@@ -207,17 +216,26 @@ const exportFeeSchedules = async (req, res) => {
 
 const exportInvoices = async (req, res) => {
   try {
+    assertTenantContext(req);
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+
     const { classroomId, status, search } = req.query;
-    const filter = {};
+    const filter = { ...tenantFilter };
     const my = parseMonthYearFilter(req.query);
     if (my) {
       filter.period = my.period;
     }
+    let className = 'Tất cả';
     if (classroomId) {
       if (!mongoose.isValidObjectId(classroomId)) {
         throw httpError('Mã lớp học (classroomId) không hợp lệ.', 400);
       }
+      const cls = await Classroom.findOne({ _id: classroomId, ...tenantFilter }).select('name').lean();
+      if (!cls) {
+        throw httpError('Không tìm thấy lớp học trong hệ thống.', 404);
+      }
       filter.classroomId = classroomId;
+      className = cls.name;
     }
     if (status) {
       const validStatuses = ['unpaid', 'partial', 'paid', 'cancelled'];
@@ -231,14 +249,12 @@ const exportInvoices = async (req, res) => {
       filter.studentName = { $regex: escaped, $options: 'i' };
     }
 
-    let className = 'Tất cả';
-    if (classroomId) {
-      const cls = await Classroom.findById(classroomId).select('name').lean();
-      if (cls) className = cls.name;
-    }
-
     const invoices = await TuitionFee.find(filter)
-      .populate('studentId', 'studentCode')
+      .populate({
+        path: 'studentId',
+        select: 'studentCode',
+        match: tenantFilter
+      })
       .sort({ period: -1, className: 1, studentName: 1 })
       .limit(10001)
       .lean();
@@ -247,7 +263,15 @@ const exportInvoices = async (req, res) => {
       return res.status(422).json({ success: false, message: 'Dữ liệu vượt quá giới hạn 10.000 bản ghi/lần xuất. Vui lòng thu hẹp bộ lọc.' });
     }
 
-    const workbook = exportService.buildInvoicesWorkbook(invoices, { period: filter.period, className, status });
+    // Bảo vệ rò rỉ mã học sinh ngoại lai: nếu studentId không khớp tenantFilter (null do không match), không trả studentCode
+    const scopedInvoices = invoices.map((inv) => {
+      if (!inv.studentId) {
+        return { ...inv, studentCode: '' };
+      }
+      return inv;
+    });
+
+    const workbook = exportService.buildInvoicesWorkbook(scopedInvoices, { period: filter.period, className, status });
     const filename = `HoaDonHocPhi_${filter.period || 'TatCa'}_${Date.now()}.xlsx`;
     await sendWorkbookResponse(res, workbook, filename);
   } catch (err) {
@@ -258,29 +282,37 @@ const exportInvoices = async (req, res) => {
 
 const exportDebts = async (req, res) => {
   try {
+    assertTenantContext(req);
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+
     const { classroomId, overdueOnly } = req.query;
     const filter = {
-      status: { $in: ['unpaid', 'partial'] }
+      status: { $in: ['unpaid', 'partial'] },
+      ...tenantFilter
     };
     const my = parseMonthYearFilter(req.query);
     if (my) {
       filter.period = my.period;
     }
+    let className = 'Tất cả lớp';
     if (classroomId) {
       if (!mongoose.isValidObjectId(classroomId)) {
         throw httpError('Mã lớp học (classroomId) không hợp lệ.', 400);
       }
+      const cls = await Classroom.findOne({ _id: classroomId, ...tenantFilter }).select('name').lean();
+      if (!cls) {
+        throw httpError('Không tìm thấy lớp học trong hệ thống.', 404);
+      }
       filter.classroomId = classroomId;
-    }
-
-    let className = 'Tất cả lớp';
-    if (classroomId) {
-      const cls = await Classroom.findById(classroomId).select('name').lean();
-      if (cls) className = cls.name;
+      className = cls.name;
     }
 
     const invoices = await TuitionFee.find(filter)
-      .populate('studentId', 'studentCode')
+      .populate({
+        path: 'studentId',
+        select: 'studentCode',
+        match: tenantFilter
+      })
       .sort({ dueDate: 1, studentName: 1 })
       .limit(10001)
       .lean();
@@ -293,9 +325,11 @@ const exportDebts = async (req, res) => {
     const debts = invoices.map(item => {
       const remainingAmount = Math.max(0, Number(item.totalAmount || 0) - Number(item.paidAmount || 0));
       const overdue = new Date(item.dueDate) < now;
+      // Chỉ lấy studentCode khi studentId thuộc đúng tenantFilter
+      const studentCode = item.studentId ? (item.studentId.studentCode || item.studentCode || '') : '';
       return {
         ...item,
-        studentCode: item.studentId?.studentCode || '',
+        studentCode,
         remainingAmount,
         overdue
       };
@@ -312,11 +346,17 @@ const exportDebts = async (req, res) => {
 
 const exportPayments = async (req, res) => {
   try {
+    assertTenantContext(req);
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
     const { invoiceId, startDate, endDate } = req.query;
-    const filter = {};
+    const filter = { ...tenantFilter };
     if (invoiceId) {
       if (!mongoose.isValidObjectId(invoiceId)) {
         throw httpError('Mã hóa đơn (invoiceId) không hợp lệ.', 400);
+      }
+      const inv = await TuitionFee.findOne({ _id: invoiceId, ...tenantFilter }).select('_id');
+      if (!inv) {
+        throw httpError('Không tìm thấy hóa đơn trong hệ thống.', 404);
       }
       filter.invoiceId = invoiceId;
     }
@@ -360,7 +400,9 @@ const exportPayments = async (req, res) => {
 
 const exportPurchaseExpenses = async (req, res) => {
   try {
-    const filter = {};
+    assertTenantContext(req);
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+    const filter = { ...tenantFilter };
     const my = parseMonthYearFilter(req.query);
     if (my) {
       const startMonthDate = `${my.year}-${String(my.month).padStart(2, '0')}-01`;
@@ -395,7 +437,9 @@ const exportPurchaseExpenses = async (req, res) => {
 
 const exportOperatingExpenses = async (req, res) => {
   try {
-    const filter = {};
+    assertTenantContext(req);
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+    const filter = { ...tenantFilter };
     if (req.query.category) {
       const validCategories = ['utilities', 'rent', 'maintenance', 'services', 'other'];
       if (!validCategories.includes(req.query.category)) {
@@ -417,7 +461,7 @@ const exportOperatingExpenses = async (req, res) => {
     }
 
     const expenses = await OperatingExpense.find(filter)
-      .populate('approvalRequestId', 'reviewedByName requestKey')
+      .populate({ path: 'approvalRequestId', select: 'reviewedByName requestKey', match: tenantFilter })
       .sort({ paidAt: -1 })
       .limit(10001)
       .lean();
@@ -464,7 +508,7 @@ const exportCashbook = async (req, res) => {
       }
     }
 
-    const cashbookData = await getCashbookData({ from, to });
+    const cashbookData = await getCashbookData({ from, to, context: req });
     const periodLabel = `${from} đến ${to}`;
     const workbook = exportService.buildCashbookWorkbook(cashbookData, periodLabel);
     const filename = `SoQuyDoiSoat_${from}_${to}_${Date.now()}.xlsx`;
@@ -532,7 +576,8 @@ const exportPayroll = async (req, res) => {
       }
     }
 
-    const payrolls = await Payroll.find({ month, year })
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+    const payrolls = await Payroll.find({ month, year, ...tenantFilter })
       .populate('employeeId', 'employeeCode fullName position')
       .sort({ 'employeeId.fullName': 1 })
       .limit(10001)
@@ -561,7 +606,7 @@ const exportAccountingReport = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Tháng báo cáo phải có dạng YYYY-MM (ví dụ: 2026-10)' });
     }
 
-    const reportPayload = await buildAccountingReport(month);
+    const reportPayload = await buildAccountingReport(month, null, req);
     const workbook = exportService.buildAccountingReportWorkbook(reportPayload, month);
     const filename = `BaoCaoKeToan_${month}_${Date.now()}.xlsx`;
     await sendWorkbookResponse(res, workbook, filename);
@@ -577,22 +622,27 @@ const exportAccountingReport = async (req, res) => {
 
 const getFeeScheduleTemplate = async (req, res) => {
   try {
-    const workbook = await importService.generateFeeScheduleTemplateWorkbook();
+    assertTenantContext(req);
+    const workbook = await importService.generateFeeScheduleTemplateWorkbook(req);
     const filename = 'MauNhap_MucThuHocPhi.xlsx';
     await sendWorkbookResponse(res, workbook, filename);
   } catch (err) {
     console.error('Lỗi tải mẫu mức thu:', err);
-    return res.status(500).json({ success: false, message: 'Không thể sinh file mẫu mức thu.' });
+    return res.status(err.statusCode || 500).json({ success: false, message: err.message || 'Không thể sinh file mẫu mức thu.' });
   }
 };
 
 const previewFeeScheduleImport = async (req, res) => {
   try {
+    assertTenantContext(req);
+    const resolvedTenant = resolveTenantContext(req);
+    const tenantId = resolvedTenant.isValid && resolvedTenant.isSaaS ? resolvedTenant.tenantId : null;
+
     if (!req.file || !req.file.buffer) {
       return res.status(400).json({ success: false, message: 'Vui lòng chọn tập tin Excel (.xlsx) để tải lên.' });
     }
     const { defaultPeriod } = req.body;
-    const result = await importService.parseAndValidateFeeSchedules(req.file.buffer, { defaultPeriod });
+    const result = await importService.parseAndValidateFeeSchedules(req.file.buffer, { defaultPeriod, context: req });
 
     let previewToken = null;
     // Chỉ cấp previewToken khi toàn bộ lô đủ điều kiện nhập (không có dòng lỗi, không có xung đột, kỳ mở)
@@ -602,6 +652,7 @@ const previewFeeScheduleImport = async (req, res) => {
       previewToken = importService.createPreviewToken({
         type: 'fee_schedule',
         userId: req.user._id,
+        tenantId,
         fingerprint,
         snapshot: []
       });
@@ -617,6 +668,11 @@ const previewFeeScheduleImport = async (req, res) => {
 const confirmFeeScheduleImport = async (req, res) => {
   let lock = null;
   try {
+    assertTenantContext(req);
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+    const resolvedTenant = resolveTenantContext(req);
+    const tenantId = resolvedTenant.isValid && resolvedTenant.isSaaS ? resolvedTenant.tenantId : null;
+
     const idempotencyKey = req.headers['idempotency-key'];
     if (!idempotencyKey) {
       return res.status(400).json({ success: false, message: 'Thiếu Idempotency-Key trong header để bảo đảm chống import trùng.' });
@@ -634,7 +690,7 @@ const confirmFeeScheduleImport = async (req, res) => {
     const fingerprint = importService.computeFinanceBatchFingerprint('fee_schedule', { period }, normalizedRows);
 
     // 3. Khóa chống import trùng: nếu đã completed, trả về kết quả ngay lập tức mà không validate lại DB
-    lock = await acquireImportLock({ idempotencyKey, fingerprint, userId: req.user._id });
+    lock = await acquireImportLock({ idempotencyKey, fingerprint, userId: req.user._id, tenantId });
     if (lock.status === 'cached') {
       return res.status(200).json(lock.response);
     }
@@ -643,24 +699,30 @@ const confirmFeeScheduleImport = async (req, res) => {
     }
 
     if (previewToken) {
-      importService.verifyPreviewToken(previewToken, 'fee_schedule', req.user._id, fingerprint);
+      importService.verifyPreviewToken(previewToken, 'fee_schedule', req.user._id, fingerprint, tenantId);
     }
 
     const resultPayload = await runStudentTransaction(async (session) => {
+      // Re-verify actor và trạng thái active trong session
+      const actor = await User.findOne({ _id: req.user._id, status: 'active', ...tenantFilter }).session(session);
+      if (!actor || !['admin', 'accountant'].includes(actor.role)) {
+        throw httpError('Người dùng không có quyền nhập mức thu hoặc tài khoản đã bị khóa', 403);
+      }
+
       // 4. Đối chiếu trạng thái DB (lớp học đang hoạt động) trong session
-      const canonicalRows = await importService.validateFeeScheduleBatchStrict(normalizedRows, { session });
+      const canonicalRows = await importService.validateFeeScheduleBatchStrict(normalizedRows, { session, context: req });
 
       // Khóa và kiểm tra kỳ kế toán
       const periods = [...new Set(canonicalRows.map(r => r.period))];
       for (const p of periods) {
-        await lockOpenPeriod(fromPeriod(p), session);
+        await lockOpenPeriod(fromPeriod(p), session, req);
       }
 
       // Concurrency guard: Re-verify & conditional write guard trên Classroom nếu áp dụng lớp cụ thể
       const uniqueClassIds = [...new Set(canonicalRows.map(r => r.classroomId ? String(r.classroomId) : null).filter(Boolean))];
       if (uniqueClassIds.length > 0) {
         const classGuard = await Classroom.updateMany(
-          { _id: { $in: uniqueClassIds }, status: 'active' },
+          { _id: { $in: uniqueClassIds }, status: 'active', ...tenantFilter },
           { $inc: { __v: 1 } },
           { session }
         );
@@ -671,7 +733,8 @@ const confirmFeeScheduleImport = async (req, res) => {
 
       // Kiểm tra xung đột DB trong transaction
       const existing = await FeeSchedule.find({
-        period: { $in: periods }
+        period: { $in: periods },
+        ...tenantFilter
       }).session(session).lean();
 
       const existingSet = new Set(existing.map(s => `${s.period}___${String(s.classroomId || '__all__')}`));
@@ -684,6 +747,7 @@ const confirmFeeScheduleImport = async (req, res) => {
 
       // Tạo mới các FeeSchedule từ dữ liệu canonical
       const docsToInsert = canonicalRows.map(r => ({
+        ...(tenantId ? { tenantId } : { tenantId: null }),
         period: r.period,
         classroomId: r.classroomId || null,
         classroomName: r.classroomId ? r.classroomName : '',
@@ -695,7 +759,7 @@ const confirmFeeScheduleImport = async (req, res) => {
         discount: r.discount,
         dueDate: r.dueDateDate || r.dueDate,
         note: r.note,
-        updatedBy: req.user._id
+        updatedBy: actor._id
       }));
 
       const created = await FeeSchedule.insertMany(docsToInsert, { session });
@@ -703,10 +767,10 @@ const confirmFeeScheduleImport = async (req, res) => {
       // Ghi audit log
       for (const sched of created) {
         await AuditLog.create([{
-          actorId: req.user._id,
-          actorUsername: req.user.username,
-          actorName: actorName(req.user),
-          actorRole: req.user.role,
+          actorId: actor._id,
+          actorUsername: actor.username,
+          actorName: actorName(actor),
+          actorRole: actor.role,
           action: 'FEE_SCHEDULE_IMPORTED',
           targetType: 'FeeSchedule',
           targetId: sched._id,
@@ -749,22 +813,27 @@ const confirmFeeScheduleImport = async (req, res) => {
 
 const getInvoiceTemplate = async (req, res) => {
   try {
-    const workbook = await importService.generateInvoiceTemplateWorkbook();
+    assertTenantContext(req);
+    const workbook = await importService.generateInvoiceTemplateWorkbook(req);
     const filename = 'MauNhap_HoaDonHocPhi.xlsx';
     await sendWorkbookResponse(res, workbook, filename);
   } catch (err) {
     console.error('Lỗi tải mẫu hóa đơn:', err);
-    return res.status(500).json({ success: false, message: 'Không thể sinh file mẫu hóa đơn.' });
+    return res.status(err.statusCode || 500).json({ success: false, message: err.message || 'Không thể sinh file mẫu hóa đơn.' });
   }
 };
 
 const previewInvoiceImport = async (req, res) => {
   try {
+    assertTenantContext(req);
+    const resolvedTenant = resolveTenantContext(req);
+    const tenantId = resolvedTenant.isValid && resolvedTenant.isSaaS ? resolvedTenant.tenantId : null;
+
     if (!req.file || !req.file.buffer) {
       return res.status(400).json({ success: false, message: 'Vui lòng chọn tập tin Excel (.xlsx) để tải lên.' });
     }
     const { defaultPeriod } = req.body;
-    const result = await importService.parseAndValidateInvoices(req.file.buffer, { defaultPeriod });
+    const result = await importService.parseAndValidateInvoices(req.file.buffer, { defaultPeriod, context: req });
 
     let previewToken = null;
     // Chỉ cấp previewToken khi toàn bộ lô đủ điều kiện nhập (không có dòng lỗi, không có xung đột, kỳ mở)
@@ -779,6 +848,7 @@ const previewInvoiceImport = async (req, res) => {
       previewToken = importService.createPreviewToken({
         type: 'invoice',
         userId: req.user._id,
+        tenantId,
         fingerprint,
         snapshot
       });
@@ -794,6 +864,11 @@ const previewInvoiceImport = async (req, res) => {
 const confirmInvoiceImport = async (req, res) => {
   let lock = null;
   try {
+    assertTenantContext(req);
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+    const resolvedTenant = resolveTenantContext(req);
+    const tenantId = resolvedTenant.isValid && resolvedTenant.isSaaS ? resolvedTenant.tenantId : null;
+
     const idempotencyKey = req.headers['idempotency-key'];
     if (!idempotencyKey) {
       return res.status(400).json({ success: false, message: 'Thiếu Idempotency-Key trong header để bảo đảm chống import trùng.' });
@@ -811,7 +886,7 @@ const confirmInvoiceImport = async (req, res) => {
     const fingerprint = importService.computeFinanceBatchFingerprint('invoice', { period }, normalizedRows);
 
     // 3. Khóa chống import trùng: nếu đã completed, trả về kết quả cũ ngay lập tức mà không kiểm tra trạng thái DB
-    lock = await acquireImportLock({ idempotencyKey, fingerprint, userId: req.user._id });
+    lock = await acquireImportLock({ idempotencyKey, fingerprint, userId: req.user._id, tenantId });
     if (lock.status === 'cached') {
       return res.status(200).json(lock.response);
     }
@@ -820,19 +895,26 @@ const confirmInvoiceImport = async (req, res) => {
     }
 
     // 4. Bắt buộc kiểm tra previewToken đối với yêu cầu mới/chưa hoàn thành
-    const previewData = importService.verifyPreviewToken(previewToken, 'invoice', req.user._id, fingerprint);
+    const previewData = importService.verifyPreviewToken(previewToken, 'invoice', req.user._id, fingerprint, tenantId);
 
     const resultPayload = await runStudentTransaction(async (session) => {
+      // Re-verify actor và trạng thái active trong session
+      const actor = await User.findOne({ _id: req.user._id, status: 'active', ...tenantFilter }).session(session);
+      if (!actor || !['admin', 'accountant'].includes(actor.role)) {
+        throw httpError('Người dùng không có quyền nhập hóa đơn hoặc tài khoản đã bị khóa', 403);
+      }
+
       // 5. Đối chiếu trạng thái DB (học sinh đang học, lớp đang hoạt động) và đối chiếu với snapshot xem trước
       const canonicalRows = await importService.validateInvoiceBatchStrict(normalizedRows, {
         session,
-        previewSnapshot: previewData.snapshot
+        previewSnapshot: previewData.snapshot,
+        context: req
       });
 
       // Khóa và kiểm tra kỳ kế toán
       const periods = [...new Set(canonicalRows.map(r => r.period))];
       for (const p of periods) {
-        await lockOpenPeriod(fromPeriod(p), session);
+        await lockOpenPeriod(fromPeriod(p), session, req);
       }
 
       // Concurrency guard: Conditional write guard trên Student và Classroom trong transaction
@@ -845,7 +927,8 @@ const confirmInvoiceImport = async (req, res) => {
         {
           _id: { $in: uniqueStudentIds },
           status: 'enrolled',
-          classroomId: { $in: uniqueClassroomIds }
+          classroomId: { $in: uniqueClassroomIds },
+          ...tenantFilter
         },
         {
           $inc: { __v: 1 }
@@ -862,7 +945,8 @@ const confirmInvoiceImport = async (req, res) => {
       const classGuard = await Classroom.updateMany(
         {
           _id: { $in: uniqueClassroomIds },
-          status: 'active'
+          status: 'active',
+          ...tenantFilter
         },
         {
           $inc: { __v: 1 }
@@ -878,7 +962,8 @@ const confirmInvoiceImport = async (req, res) => {
       const existingInvoices = await TuitionFee.find({
         studentId: { $in: uniqueStudentIds },
         period: { $in: periods },
-        status: { $ne: 'cancelled' }
+        status: { $ne: 'cancelled' },
+        ...tenantFilter
       }).session(session).select('studentId period').lean();
 
       const existingSet = new Set(existingInvoices.map(inv => `${String(inv.studentId)}___${inv.period}`));
@@ -891,6 +976,7 @@ const confirmInvoiceImport = async (req, res) => {
 
       // Tạo mới các TuitionFee CHƯA THU (unpaid, paidAmount = 0) từ dữ liệu canonical
       const docsToInsert = canonicalRows.map(r => ({
+        ...(tenantId ? { tenantId } : { tenantId: null }),
         studentId: r.studentId,
         studentName: r.studentName,
         classroomId: r.classroomId,
@@ -907,7 +993,7 @@ const confirmInvoiceImport = async (req, res) => {
         status: 'unpaid',
         dueDate: r.dueDateDate || r.dueDate,
         note: r.note,
-        createdBy: req.user._id
+        createdBy: actor._id
       }));
 
       const created = await TuitionFee.insertMany(docsToInsert, { session });
@@ -915,10 +1001,10 @@ const confirmInvoiceImport = async (req, res) => {
       // Ghi audit log
       for (const inv of created) {
         await AuditLog.create([{
-          actorId: req.user._id,
-          actorUsername: req.user.username,
-          actorName: actorName(req.user),
-          actorRole: req.user.role,
+          actorId: actor._id,
+          actorUsername: actor.username,
+          actorName: actorName(actor),
+          actorRole: actor.role,
           action: 'TUITION_INVOICE_IMPORTED',
           targetType: 'TuitionFee',
           targetId: inv._id,

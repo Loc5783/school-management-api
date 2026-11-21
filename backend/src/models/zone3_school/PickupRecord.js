@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 // snapshot so later edits to a student's authorized-picker list cannot alter
 // historical records.
 const PickupRecordSchema = new mongoose.Schema({
+  tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
   studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true, index: true },
   studentName: { type: String, required: true, trim: true },
   classroomId: { type: mongoose.Schema.Types.ObjectId, ref: 'Classroom', required: true, index: true },
@@ -40,6 +41,21 @@ const PickupRecordSchema = new mongoose.Schema({
 PickupRecordSchema.index({ studentId: 1, pickupDate: 1, status: 1 });
 PickupRecordSchema.index({ classroomId: 1, pickupDate: 1, status: 1 });
 PickupRecordSchema.index({ requesterId: 1, pickupDate: -1 });
-PickupRecordSchema.index({ pickupCode: 1 }, { unique: true, sparse: true });
+// Multi-tenant compound unique index
+PickupRecordSchema.index({ tenantId: 1, pickupCode: 1 }, {
+  unique: true,
+  sparse: true,
+  partialFilterExpression: { tenantId: { $type: 'objectId' } }
+});
+// Legacy unique index
+PickupRecordSchema.index({ pickupCode: 1 }, {
+  unique: true,
+  sparse: true,
+  partialFilterExpression: { tenantId: null }
+});
+
+PickupRecordSchema.index({ tenantId: 1, studentId: 1, pickupDate: 1, status: 1 });
+PickupRecordSchema.index({ tenantId: 1, classroomId: 1, pickupDate: 1, status: 1 });
+PickupRecordSchema.index({ tenantId: 1, requesterId: 1, pickupDate: -1 });
 
 module.exports = mongoose.model('PickupRecord', PickupRecordSchema);

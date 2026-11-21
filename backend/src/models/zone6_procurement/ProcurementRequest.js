@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 
 const ProcurementRequestSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant'
+    },
     requesterId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',

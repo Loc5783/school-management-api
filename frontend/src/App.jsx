@@ -1,6 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Login from './pages/Login';
-import Register from './pages/Register';
 import AccountManagement from './pages/AccountManagement';
 import Dashboard from './pages/Dashboard';
 import PrincipalOverview from './pages/PrincipalOverview';
@@ -143,7 +142,7 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
+        <Route path="/register" element={<Navigate to="/login" replace />} />
         <Route path="/parent-accounts" element={<RoleRoute roles={['admin']}><Navigate to="/accounts?tab=parents" replace /></RoleRoute>} />
         <Route path="/accounts" element={<RoleRoute roles={['admin', 'hr']}><AccountManagement /></RoleRoute>} />
         <Route path="/principal" element={<RoleRoute roles={['admin', 'principal']}><PrincipalOverview /></RoleRoute>} />
@@ -207,6 +206,7 @@ function App() {
         <Route path="/reports" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><Reports /></RoleRoute>} />
         <Route path="/assets" element={<RoleRoute roles={['admin', 'principal', 'teacher']}><AssetManagement /></RoleRoute>} />
         <Route path="/hr" element={<RoleRoute roles={['admin', 'principal', 'accountant', 'hr']}><EmployeeManagement /></RoleRoute>} />
+        <Route path="/employees" element={<RoleRoute roles={['admin', 'principal', 'accountant', 'hr']}><EmployeeManagement /></RoleRoute>} />
         <Route path="/payroll" element={<RoleRoute roles={['admin', 'principal', 'accountant', 'hr']}><PayrollManagement /></RoleRoute>} />
         <Route path="/parent-dashboard" element={<ParentRoute><ParentPortal /></ParentRoute>} />
         <Route path="/parent-portal" element={<ParentRoute><ParentPortal /></ParentRoute>} />

@@ -5,7 +5,14 @@ const AttendanceRecalculationQueue = require('../models/zone2_hr/AttendanceRecal
 const RawAttendance = require('../models/zone2_hr/RawAttendance');
 const RawAttendanceEvent = require('../models/zone2_hr/RawAttendanceEvent');
 const TimekeepingCorrectionRequest = require('../models/zone2_hr/TimekeepingCorrectionRequest');
-const { queueRecalculation, withTransaction } = require('./attendanceAdjustmentService');
+const User = require('../models/zone1_system/User');
+const { queueRecalculation, withTransaction, TimekeepingError } = require('./attendanceAdjustmentService');
+const {
+  buildTenantFilter,
+  createTrustedTenantContext,
+  resolveUserAndTenantContext,
+  resolveTenantContext
+} = require('./tenantFilterService');
 const {
   DEFAULT_SCHOOL_TIMEZONE,
   getWorkDate,
@@ -13,6 +20,32 @@ const {
   isValidWorkDate,
   startOfWorkDate
 } = require('../utils/dateHelpers');
+
+const resolveTenantScope = (user, context) => {
+  if (user) {
+    const resolved = resolveUserAndTenantContext(user, context);
+    if (!resolved.isValid) {
+      throw new TimekeepingError('Ngữ cảnh tenant không hợp lệ hoặc người dùng không khớp', 403, 'FORBIDDEN');
+    }
+    return {
+      filter: resolved.isSaaS ? { tenantId: resolved.tenantId } : { tenantId: null },
+      tenantId: resolved.tenantId ? resolved.tenantId.toString() : null
+    };
+  }
+
+  if (context) {
+    const resolved = resolveTenantContext(context);
+    if (!resolved.isValid) {
+      throw new TimekeepingError('Ngữ cảnh tenant không hợp lệ hoặc bị thiếu', 403, 'FORBIDDEN');
+    }
+    return {
+      filter: resolved.isSaaS ? { tenantId: resolved.tenantId } : { tenantId: null },
+      tenantId: resolved.tenantId ? resolved.tenantId.toString() : null
+    };
+  }
+
+  throw new TimekeepingError('Thiếu thông tin người dùng và ngữ cảnh trường', 403, 'FORBIDDEN');
+};
 
 const buildInputHash = (value) => crypto
   .createHash('sha256')
@@ -24,37 +57,58 @@ const toWorkDate = (value, timezone = DEFAULT_SCHOOL_TIMEZONE) => {
   return getWorkDate(value, timezone);
 };
 
-const getCalculationInputs = async ({ userId, workDate, timezone, session }) => {
+const getCalculationInputs = async ({ userId, workDate, timezone, tenantFilter = {}, session }) => {
   const { start, end } = getWorkDateRange(workDate, timezone);
-  // MongoDB does not allow parallel operations on the same transaction session.
-  // Sequential reads here prevent the queue worker from failing after a valid kiosk log.
+  // Sequential reads prevent queue worker failure in concurrent transactions
   const events = await RawAttendanceEvent.find({
     userId,
     isValid: true,
-    workDate: start
+    workDate: start,
+    ...tenantFilter
   }).sort({ occurredAt: 1 }).session(session || null);
   const adjustments = await TimekeepingCorrectionRequest.find({
     userId,
     workDate: { $gte: start, $lt: end },
-    status: 'APPROVED'
+    status: 'APPROVED',
+    ...tenantFilter
   }).sort({ requestedAt: 1 }).session(session || null);
-  // Read-only fallback for records created by the pre-event implementation.
   const legacyRaw = await RawAttendance.find({
     userId,
-    workDate: { $gte: start, $lt: end }
+    workDate: { $gte: start, $lt: end },
+    ...tenantFilter
   }).session(session || null);
-  const existingRecord = await AttendanceRecord.findOne({ userId, workDate: start }).session(session || null);
+  const existingRecord = await AttendanceRecord.findOne({ userId, workDate: start, ...tenantFilter }).session(session || null);
 
   return { adjustments, events, existingRecord, legacyRaw, start };
 };
 
 const resolveTimeline = ({ events, adjustments, legacyRaw, existingRecord }) => {
-  const rawCheckIn = events.filter((event) => event.eventType === 'CHECK_IN')[0]?.occurredAt
+  let rawCheckIn = events.filter((event) => event.eventType === 'CHECK_IN')[0]?.occurredAt
     || legacyRaw.map((item) => item.checkInTime).filter(Boolean).sort((a, b) => a - b)[0]
     || (existingRecord?.source === 'manual' ? existingRecord.checkInTime : null);
-  const rawCheckOut = events.filter((event) => event.eventType === 'CHECK_OUT').at(-1)?.occurredAt
+  let rawCheckOut = events.filter((event) => event.eventType === 'CHECK_OUT').at(-1)?.occurredAt
     || legacyRaw.map((item) => item.checkOutTime).filter(Boolean).sort((a, b) => b - a)[0]
     || null;
+
+  // Process biometric PUNCH events from physical devices
+  const punchEvents = events
+    .filter((event) => event.eventType === 'PUNCH')
+    .map((e) => e.occurredAt)
+    .sort((a, b) => a - b);
+
+  if (punchEvents.length > 0) {
+    if (!rawCheckIn) {
+      // First punch of the work date is the check-in time
+      rawCheckIn = punchEvents[0];
+    }
+    if (!rawCheckOut && punchEvents.length > 1) {
+      // Last punch after check-in is the check-out time
+      const lastPunch = punchEvents[punchEvents.length - 1];
+      if (lastPunch > rawCheckIn) {
+        rawCheckOut = lastPunch;
+      }
+    }
+  }
 
   const adjustmentCheckIn = adjustments
     .filter((item) => item.adjustmentType === 'MISSING_CHECK_IN')
@@ -74,15 +128,33 @@ const resolveTimeline = ({ events, adjustments, legacyRaw, existingRecord }) => 
   return { checkInSource, checkInTime, checkOutSource, checkOutTime };
 };
 
-const calculateAttendanceForUserDate = async ({ userId, workDate, actorId = null, calculatedBy = 'queue_worker' }) => {
+const calculateAttendanceForUserDate = async ({ userId, workDate, actorId = null, calculatedBy = 'queue_worker', context = null }) => {
   const timezone = DEFAULT_SCHOOL_TIMEZONE;
   const normalizedWorkDate = toWorkDate(workDate, timezone);
+
+  let scope;
+  if (context) {
+    scope = resolveTenantScope(null, context);
+  } else {
+    // Resolve user's actual tenant to prevent cross-tenant calculation leak
+    const targetUser = await User.findById(userId).select('_id tenantId status');
+    if (!targetUser) throw new TimekeepingError('Không tìm thấy tài khoản người dùng để tính công', 404, 'USER_NOT_FOUND');
+    const trusted = createTrustedTenantContext({ tenantId: targetUser.tenantId ? targetUser.tenantId.toString() : null, isLegacy: !targetUser.tenantId });
+    scope = resolveTenantScope(targetUser, trusted);
+  }
+
+  // Authoritative check: User MUST exist and match the scope filter
+  const targetUser = await User.findOne({ _id: userId, ...scope.filter }).select('_id tenantId status');
+  if (!targetUser) {
+    throw new TimekeepingError('Không tìm thấy tài khoản người dùng trong phạm vi trường để tính công', 404, 'USER_NOT_FOUND');
+  }
 
   return withTransaction(async (session) => {
     const inputs = await getCalculationInputs({
       userId,
       workDate: normalizedWorkDate,
       timezone,
+      tenantFilter: scope.filter,
       session
     });
     const timeline = resolveTimeline(inputs);
@@ -98,8 +170,12 @@ const calculateAttendanceForUserDate = async ({ userId, workDate, actorId = null
     });
 
     const oldRecord = inputs.existingRecord;
+    if (oldRecord && (oldRecord.isLocked || oldRecord.isPeriodLocked)) {
+      return oldRecord;
+    }
     const calculationVersion = (oldRecord?.calculationVersion || 0) + 1;
     const recordData = {
+      tenantId: scope.tenantId || null,
       employeeName: oldRecord?.employeeName || inputs.events[0]?.employeeName || inputs.adjustments[0]?.employeeName || 'Nhân viên',
       checkInTime: timeline.checkInTime,
       checkOutTime: timeline.checkOutTime,
@@ -119,7 +195,7 @@ const calculateAttendanceForUserDate = async ({ userId, workDate, actorId = null
     };
 
     const record = await AttendanceRecord.findOneAndUpdate(
-      { userId, workDate: inputs.start },
+      { userId, workDate: inputs.start, ...scope.filter },
       {
         $set: recordData,
         $setOnInsert: { userId, workDate: inputs.start }
@@ -129,13 +205,14 @@ const calculateAttendanceForUserDate = async ({ userId, workDate, actorId = null
 
     if (inputs.adjustments.length) {
       await TimekeepingCorrectionRequest.updateMany(
-        { _id: { $in: inputs.adjustments.map((item) => item._id) } },
+        { _id: { $in: inputs.adjustments.map((item) => item._id) }, ...scope.filter },
         { $set: { attendanceRecordId: record._id } },
         { session }
       );
     }
 
     await AttendanceAuditLog.create([{
+      tenantId: scope.tenantId || null,
       actor: actorId,
       action: 'ATTENDANCE_RECALCULATED',
       entity: 'AttendanceRecord',
@@ -150,15 +227,17 @@ const calculateAttendanceForUserDate = async ({ userId, workDate, actorId = null
   });
 };
 
-const enqueueUsersForWorkDate = async (workDate, reason, session = null) => {
+const enqueueUsersForWorkDate = async (workDate, reason, context = null, session = null) => {
   const timezone = DEFAULT_SCHOOL_TIMEZONE;
   const normalizedWorkDate = toWorkDate(workDate, timezone);
   const { start, end } = getWorkDateRange(normalizedWorkDate, timezone);
+  const scope = resolveTenantScope(null, context);
+
   const [eventUsers, adjustmentUsers, legacyUsers, manualUsers] = await Promise.all([
-    RawAttendanceEvent.distinct('userId', { workDate: start, isValid: true }).session(session || null),
-    TimekeepingCorrectionRequest.distinct('userId', { workDate: { $gte: start, $lt: end }, status: 'APPROVED' }).session(session || null),
-    RawAttendance.distinct('userId', { workDate: { $gte: start, $lt: end } }).session(session || null),
-    AttendanceRecord.distinct('userId', { workDate: start }).session(session || null)
+    RawAttendanceEvent.distinct('userId', { workDate: start, isValid: true, ...scope.filter }).session(session || null),
+    TimekeepingCorrectionRequest.distinct('userId', { workDate: { $gte: start, $lt: end }, status: 'APPROVED', ...scope.filter }).session(session || null),
+    RawAttendance.distinct('userId', { workDate: { $gte: start, $lt: end }, ...scope.filter }).session(session || null),
+    AttendanceRecord.distinct('userId', { workDate: start, ...scope.filter }).session(session || null)
   ]);
   const userIds = new Map();
   [...eventUsers, ...adjustmentUsers, ...legacyUsers, ...manualUsers].forEach((id) => userIds.set(id.toString(), id));
@@ -166,19 +245,22 @@ const enqueueUsersForWorkDate = async (workDate, reason, session = null) => {
     userId,
     workDate: start,
     reason,
+    tenantId: scope.tenantId || null,
+    tenantFilter: scope.filter,
     session
   })));
   return userIds.size;
 };
 
-const claimQueueItem = async (workerId) => {
+const claimQueueItem = async (workerId, queueFilter = {}) => {
   const now = new Date();
   const leaseUntil = new Date(now.getTime() + 5 * 60 * 1000);
   return AttendanceRecalculationQueue.findOneAndUpdate(
     {
       status: { $in: ['PENDING', 'FAILED'] },
       nextAttemptAt: { $lte: now },
-      $or: [{ lockedUntil: null }, { lockedUntil: { $lt: now } }]
+      $or: [{ lockedUntil: null }, { lockedUntil: { $lt: now } }],
+      ...queueFilter
     },
     {
       $set: { status: 'PROCESSING', lockedBy: workerId, lockedUntil: leaseUntil },
@@ -188,17 +270,69 @@ const claimQueueItem = async (workerId) => {
   );
 };
 
-const processQueuedRecalculations = async ({ workerId, maxItems = 100, actorId = null }) => {
+const processQueuedRecalculations = async ({
+  workerId,
+  maxItems = 100,
+  actorId = null,
+  queueFilter = null,
+  isGlobalWorker = false,
+  context = null
+} = {}) => {
+  if (!isGlobalWorker && !context) {
+    throw new TimekeepingError(
+      'Yêu cầu xử lý hàng đợi phải có ngữ cảnh trường đáng tin cậy hoặc cờ global worker',
+      403,
+      'FORBIDDEN'
+    );
+  }
+
+  let effectiveQueueFilter;
+
+  if (isGlobalWorker === true) {
+    effectiveQueueFilter = queueFilter && typeof queueFilter === 'object' ? { ...queueFilter } : {};
+  } else {
+    const scope = resolveTenantScope(null, context);
+    const expectedTenantId = scope.tenantId || null;
+
+    if (queueFilter && typeof queueFilter === 'object') {
+      if (queueFilter.tenantId !== undefined && String(queueFilter.tenantId || null) !== String(expectedTenantId)) {
+        throw new TimekeepingError(
+          'Điều kiện lọc hàng đợi không khớp với ngữ cảnh trường được xác thực',
+          403,
+          'FORBIDDEN'
+        );
+      }
+    }
+
+    effectiveQueueFilter = {
+      ...(queueFilter || {}),
+      tenantId: expectedTenantId
+    };
+  }
+
   const processed = [];
   for (let index = 0; index < maxItems; index += 1) {
-    const item = await claimQueueItem(workerId);
+    const item = await claimQueueItem(workerId, effectiveQueueFilter || {});
     if (!item) break;
     try {
+      // Create isolated context per queue item based on item's verified tenantId
+      const itemContext = item.tenantId
+        ? createTrustedTenantContext({ tenantId: item.tenantId })
+        : createTrustedTenantContext({ isLegacy: true });
+
+      const itemFilter = buildTenantFilter(itemContext);
+      // Validate user belongs to the same tenant as the queue item
+      const itemUser = await User.findOne({ _id: item.userId, ...itemFilter });
+      if (!itemUser) {
+        throw new Error('User tenant mismatch or user not found for recalculation item');
+      }
+
       const record = await calculateAttendanceForUserDate({
         userId: item.userId,
         workDate: item.workDate,
         actorId,
-        calculatedBy: 'queue_worker'
+        calculatedBy: 'queue_worker',
+        context: itemContext
       });
       await AttendanceRecalculationQueue.updateOne(
         { _id: item._id, lockedBy: workerId },
@@ -233,21 +367,30 @@ const processQueuedRecalculations = async ({ workerId, maxItems = 100, actorId =
   return processed;
 };
 
-const recalculateAttendanceForDate = async (workDate, actorId = null) => {
+const recalculateAttendanceForDate = async (workDate, actorId = null, context = null) => {
   const normalizedWorkDate = toWorkDate(workDate);
-  const queued = await enqueueUsersForWorkDate(normalizedWorkDate, 'MANUAL_RECALCULATION');
+  const scope = resolveTenantScope(null, context);
+  const queued = await enqueueUsersForWorkDate(normalizedWorkDate, 'MANUAL_RECALCULATION', context);
+  const queueFilter = {
+    workDate: normalizedWorkDate,
+    tenantId: scope.tenantId || null
+  };
   const records = await processQueuedRecalculations({
     workerId: `manual-${process.pid}`,
     actorId,
-    maxItems: Math.max(queued, 1)
+    maxItems: Math.max(queued, 1),
+    queueFilter,
+    context
   });
   return records;
 };
 
 module.exports = {
   calculateAttendanceForUserDate,
+  claimQueueItem,
   enqueueUsersForWorkDate,
   processQueuedRecalculations,
   recalculateAttendanceForDate,
+  resolveTenantScope,
   toWorkDate
 };

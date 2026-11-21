@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 
 const StudentTransferHistorySchema = new mongoose.Schema({
+  tenantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tenant'
+  },
   studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true, index: true },
   studentCode: { type: String, required: true, trim: true },
   studentName: { type: String, required: true, trim: true },

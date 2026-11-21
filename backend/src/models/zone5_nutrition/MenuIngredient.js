@@ -1,6 +1,11 @@
 const mongoose = require('mongoose');
 
 const MenuIngredientSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant',
+        index: true
+    },
     menuId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Menu',

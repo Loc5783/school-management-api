@@ -15,6 +15,7 @@ const { isValidObjectId } = require('../utils/idValidation');
 const { recordPayment } = require('../services/paymentTransactionService');
 const { runStudentTransaction } = require('../services/studentCoreService');
 const { lockOpenPeriod, fromPeriod } = require('../services/accountingPeriodService');
+const { assertTenantContext, buildTenantFilter, resolveTenantContext } = require('../services/tenantFilterService');
 
 const PERIOD_PATTERN = /^(0[1-9]|1[0-2])-\d{4}$/;
 const parseMoney = (value, field) => {
@@ -53,16 +54,32 @@ const validateInvoiceInput = ({ period, tuitionBase, mealFee, busFee, extraFee, 
     return { ...amounts, additionalItems: normalizedAdditionalItems, totalAmount, dueDate: due };
 };
 const invoiceScope = async (req, invoice) => {
+    if (!invoice) return false;
+    assertTenantContext(req);
+    const resolved = resolveTenantContext(req);
+    if (!resolved.isValid) return false;
+
+    if (resolved.isSaaS) {
+        if (!invoice.tenantId || String(invoice.tenantId) !== String(resolved.tenantId)) return false;
+    } else {
+        if (invoice.tenantId != null) return false;
+    }
+
     if (!isParent(req.user)) return true;
-    return canAccessStudent(req.user, invoice.studentId);
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+    const student = await Student.findOne({ _id: invoice.studentId, ...tenantFilter }).select('_id tenantId');
+    if (!student) return false;
+    return canAccessStudent(req.user, student, req);
 };
 
 const getFinanceClassrooms = async (req, res) => {
     try {
-        const data = await Classroom.find({ status: 'active' }).select('_id name').sort({ name: 1 }).lean();
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+        const data = await Classroom.find({ status: 'active', ...tenantFilter }).select('_id name').sort({ name: 1 }).lean();
         return res.json({ success: true, data });
     } catch (error) {
-        return res.status(500).json({ message: 'Không thể tải danh sách lớp cho kỳ thu' });
+        return res.status(error.statusCode || 500).json({ message: error.statusCode ? error.message : 'Không thể tải danh sách lớp cho kỳ thu' });
     }
 };
 
@@ -70,26 +87,41 @@ const getFeeSchedules = async (req, res) => {
     const period = String(req.query.period || '');
     if (!PERIOD_PATTERN.test(period)) return res.status(400).json({ message: 'Kỳ thu phải có dạng MM-YYYY' });
     try {
-        const data = await FeeSchedule.find({ period }).sort({ classroomName: 1 }).lean();
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+        const data = await FeeSchedule.find({ period, ...tenantFilter }).sort({ classroomName: 1 }).lean();
         return res.json({ success: true, data });
-    } catch (error) { return res.status(500).json({ message: 'Không thể tải mức thu đã lưu' }); }
+    } catch (error) { return res.status(error.statusCode || 500).json({ message: error.statusCode ? error.message : 'Không thể tải mức thu đã lưu' }); }
 };
 
 const saveFeeSchedule = async (req, res) => {
     try {
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+        const resolvedTenant = resolveTenantContext(req);
+        const tenantId = resolvedTenant.isValid && resolvedTenant.isSaaS ? resolvedTenant.tenantId : null;
+
         const { classroomId, period, note } = req.body;
         const input = validateInvoiceInput(req.body);
         if (classroomId && !isValidObjectId(classroomId)) return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
-        const classroom = classroomId ? await Classroom.findOne({ _id: classroomId, status: 'active' }).select('name') : null;
+        const classroom = classroomId ? await Classroom.findOne({ _id: classroomId, status: 'active', ...tenantFilter }).select('name') : null;
         if (classroomId && !classroom) return res.status(404).json({ message: 'Không tìm thấy lớp đang hoạt động' });
         const normalizedNote = String(note || '').trim();
         if (normalizedNote.length > 1000) return res.status(422).json({ message: 'Ghi chú tối đa 1000 ký tự' });
-        const scope = { period, classroomId: classroom?._id || null };
+        const scope = { period, classroomId: classroom?._id || null, ...tenantFilter };
         const data = await runStudentTransaction(async (session) => {
-            await lockOpenPeriod(fromPeriod(period), session);
+            const actor = await User.findOne({ _id: req.user._id, status: 'active', ...tenantFilter }).session(session);
+            if (!actor || !['admin', 'accountant'].includes(actor.role)) {
+                const err = new Error('Người dùng không có quyền lưu mức thu hoặc tài khoản đã bị khóa');
+                err.statusCode = 403;
+                throw err;
+            }
+            await lockOpenPeriod(fromPeriod(period), session, req);
             return FeeSchedule.findOneAndUpdate(scope, { $set: {
                 ...input, period, classroomId: scope.classroomId, classroomName: classroom?.name || '',
-                note: normalizedNote, updatedBy: req.user._id
+                note: normalizedNote, updatedBy: actor._id
+            }, $setOnInsert: {
+                ...(tenantId ? { tenantId } : { tenantId: null })
             } }, { upsert: true, returnDocument: 'after', runValidators: true, session });
         });
         return res.json({ success: true, data, message: 'Đã lưu mức thu. Hóa đơn đã lập không thay đổi.' });
@@ -101,12 +133,20 @@ const saveFeeSchedule = async (req, res) => {
 
 const deleteFeeSchedule = async (req, res) => {
     try {
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'ID mức thu không hợp lệ' });
         const deleted = await runStudentTransaction(async (session) => {
-            const schedule = await FeeSchedule.findById(req.params.id).session(session);
+            const actor = await User.findOne({ _id: req.user._id, status: 'active', ...tenantFilter }).session(session);
+            if (!actor || !['admin', 'accountant'].includes(actor.role)) {
+                const err = new Error('Người dùng không có quyền xóa mức thu hoặc tài khoản đã bị khóa');
+                err.statusCode = 403;
+                throw err;
+            }
+            const schedule = await FeeSchedule.findOne({ _id: req.params.id, ...tenantFilter }).session(session);
             if (!schedule) return null;
-            await lockOpenPeriod(fromPeriod(schedule.period), session);
-            return FeeSchedule.findByIdAndDelete(req.params.id, { session });
+            await lockOpenPeriod(fromPeriod(schedule.period), session, req);
+            return FeeSchedule.findOneAndDelete({ _id: schedule._id, ...tenantFilter }, { session });
         });
         if (!deleted) return res.status(404).json({ message: 'Không tìm thấy mức thu' });
         return res.json({ success: true, message: 'Đã xóa mức thu mẫu. Hóa đơn đã lập không thay đổi.' });
@@ -114,17 +154,19 @@ const deleteFeeSchedule = async (req, res) => {
 };
 
 const getAccountingProcurementOverview = async (req, res) => {
-    const period = String(req.query.period || '');
-    if (!PERIOD_PATTERN.test(period)) return res.status(400).json({ message: 'Kỳ tra cứu phải có dạng MM-YYYY' });
     try {
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+        const period = String(req.query.period || '');
+        if (!PERIOD_PATTERN.test(period)) return res.status(400).json({ message: 'Kỳ tra cứu phải có dạng MM-YYYY' });
         const [month, year] = period.split('-').map(Number);
         const start = startOfWorkDate(`${year}-${String(month).padStart(2, '0')}-01`);
         const nextMonth = new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10);
         const end = startOfWorkDate(nextMonth);
         const [requests, orders] = await Promise.all([
-            ProcurementRequest.find({ createdAt: { $gte: start, $lt: end }, status: { $in: ['pending', 'approved_l1'] } })
+            ProcurementRequest.find({ createdAt: { $gte: start, $lt: end }, status: { $in: ['pending', 'approved_l1'] }, ...tenantFilter })
                 .select('requesterName category totalEstimatedCost status createdAt').sort({ createdAt: -1 }).lean(),
-            PurchaseOrder.find({ orderDate: { $gte: start, $lt: end }, status: 'ordered' })
+            PurchaseOrder.find({ orderDate: { $gte: start, $lt: end }, status: 'ordered', ...tenantFilter })
                 .select('orderCode supplierName totalAmount status orderDate').sort({ orderDate: -1 }).lean()
         ]);
         return res.json({ success: true, data: {
@@ -133,7 +175,7 @@ const getAccountingProcurementOverview = async (req, res) => {
             orderedCommitment: orders.reduce((sum, item) => sum + (Number(item.totalAmount) || 0), 0)
         } });
     } catch (error) {
-        return res.status(500).json({ message: 'Không thể tải đề xuất và đơn mua của kỳ này' });
+        return res.status(error.statusCode || 500).json({ message: error.statusCode ? error.message : 'Không thể tải đề xuất và đơn mua của kỳ này' });
     }
 };
 
@@ -142,6 +184,11 @@ const getAccountingProcurementOverview = async (req, res) => {
 // ==============================
 const createTuitionFee = async (req, res) => {
     try {
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+        const resolvedTenant = resolveTenantContext(req);
+        const tenantId = resolvedTenant.isValid && resolvedTenant.isSaaS ? resolvedTenant.tenantId : null;
+
         const { studentId, period, tuitionBase, mealFee, busFee, extraFee, discount, dueDate, note, additionalItems } = req.body;
         const input = validateInvoiceInput({ period, tuitionBase, mealFee, busFee, extraFee, discount, dueDate, additionalItems });
 
@@ -149,36 +196,55 @@ const createTuitionFee = async (req, res) => {
             return res.status(400).json({ message: 'ID học sinh không hợp lệ' });
         }
 
-        // Kiểm tra học sinh
-        const student = await Student.findById(studentId);
+        // Kiểm tra học sinh trong cùng tenant
+        const student = await Student.findOne({ _id: studentId, status: 'enrolled', ...tenantFilter });
         if (!student) {
-            return res.status(404).json({ message: 'Không tìm thấy học sinh' });
+            return res.status(404).json({ message: 'Không tìm thấy học sinh đang theo học' });
         }
 
-        // Kiểm tra đã có hóa đơn cho kỳ này chưa
-        const existing = await TuitionFee.findOne({ studentId, period });
-        if (existing) {
-            return res.status(400).json({ message: 'Học sinh đã có hóa đơn cho kỳ này' });
+        if (!student.classroomId) {
+            return res.status(400).json({ message: 'Học sinh chưa được xếp lớp' });
         }
 
-        const classroom = await Classroom.findById(student.classroomId);
+        const classroom = await Classroom.findOne({ _id: student.classroomId, status: 'active', ...tenantFilter });
         if (!classroom) {
-            return res.status(404).json({ message: 'Không tìm thấy lớp học' });
+            return res.status(404).json({ message: 'Không tìm thấy lớp học của học sinh' });
+        }
+
+        // Kiểm tra đã có hóa đơn cho kỳ này chưa trong tenant
+        const existing = await TuitionFee.findOne({ studentId, period, status: { $ne: 'cancelled' }, ...tenantFilter });
+        if (existing) {
+            return res.status(409).json({ message: 'Học sinh đã có hóa đơn cho kỳ này' });
         }
 
         // Tính tổng
         const fee = new TuitionFee({
+            ...(tenantId ? { tenantId } : { tenantId: null }),
             studentId,
             studentName: student.fullName,
-            classroomId: student.classroomId,
+            classroomId: classroom._id,
             className: classroom.name,
             period,
             ...input,
-            note
+            note: String(note || '').trim()
         });
 
         await runStudentTransaction(async (session) => {
-            await lockOpenPeriod(fromPeriod(period), session);
+            const actor = await User.findOne({ _id: req.user._id, status: 'active', ...tenantFilter }).session(session);
+            if (!actor || !['admin', 'accountant'].includes(actor.role)) {
+                const err = new Error('Người dùng không có quyền tạo hóa đơn học phí hoặc tài khoản đã bị khóa');
+                err.statusCode = 403;
+                throw err;
+            }
+            await lockOpenPeriod(fromPeriod(period), session, req);
+
+            const existingInTx = await TuitionFee.findOne({ studentId, period, status: { $ne: 'cancelled' }, ...tenantFilter }).session(session);
+            if (existingInTx) {
+                const err = new Error('Học sinh đã có hóa đơn cho kỳ này');
+                err.statusCode = 409;
+                throw err;
+            }
+
             await fee.save({ session });
         });
 
@@ -198,6 +264,11 @@ const createTuitionFee = async (req, res) => {
 // ==============================
 const createBulkTuitionFees = async (req, res) => {
     try {
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+        const resolvedTenant = resolveTenantContext(req);
+        const tenantId = resolvedTenant.isValid && resolvedTenant.isSaaS ? resolvedTenant.tenantId : null;
+
         const { classroomId, applyToAll = false, period, tuitionBase, mealFee, busFee, extraFee, discount, dueDate, note, additionalItems } = req.body;
         const input = validateInvoiceInput({ period, tuitionBase, mealFee, busFee, extraFee, discount, dueDate, additionalItems });
 
@@ -206,21 +277,33 @@ const createBulkTuitionFees = async (req, res) => {
         }
 
         const classrooms = applyToAll
-            ? await Classroom.find({ status: 'active' }).select('_id name')
-            : [await Classroom.findOne({ _id: classroomId, status: 'active' }).select('_id name')];
+            ? await Classroom.find({ status: 'active', ...tenantFilter }).select('_id name')
+            : [await Classroom.findOne({ _id: classroomId, status: 'active', ...tenantFilter }).select('_id name')];
         if (!classrooms.length || classrooms.some((classroom) => !classroom)) return res.status(404).json({ message: applyToAll ? 'Không có lớp đang hoạt động' : 'Không tìm thấy lớp học' });
         const classroomIds = classrooms.map((classroom) => classroom._id);
         const classroomNames = new Map(classrooms.map((classroom) => [String(classroom._id), classroom.name]));
-        const students = await Student.find({ classroomId: { $in: classroomIds }, status: 'enrolled' });
+        const students = await Student.find({ classroomId: { $in: classroomIds }, status: 'enrolled', ...tenantFilter });
         if (students.length === 0) {
             return res.status(404).json({ message: applyToAll ? 'Không có học sinh đang theo học trong các lớp hoạt động' : 'Không có học sinh nào trong lớp' });
         }
 
-        const existed = await TuitionFee.find({ studentId: { $in: students.map((student) => student._id) }, period, status: { $ne: 'cancelled' } }).select('studentName className');
+        const existed = await TuitionFee.find({
+            studentId: { $in: students.map((student) => student._id) },
+            period,
+            status: { $ne: 'cancelled' },
+            ...tenantFilter
+        }).select('studentName className');
         if (existed.length) return res.status(409).json({ message: `${applyToAll ? 'Các lớp đã chọn' : 'Lớp'} đã có ${existed.length} hóa đơn kỳ ${period}. Không lập chồng hóa đơn.`, data: existed });
         const result = await runStudentTransaction(async (session) => {
-            await lockOpenPeriod(fromPeriod(period), session);
+            const actor = await User.findOne({ _id: req.user._id, status: 'active', ...tenantFilter }).session(session);
+            if (!actor || !['admin', 'accountant'].includes(actor.role)) {
+                const err = new Error('Người dùng không có quyền tạo hóa đơn hàng loạt hoặc tài khoản đã bị khóa');
+                err.statusCode = 403;
+                throw err;
+            }
+            await lockOpenPeriod(fromPeriod(period), session, req);
             const fees = students.map((student) => ({
+                ...(tenantId ? { tenantId } : { tenantId: null }),
                 studentId: student._id,
                 studentName: student.fullName,
                 classroomId: student.classroomId,
@@ -245,16 +328,24 @@ const createBulkTuitionFees = async (req, res) => {
 
 const previewBulkTuitionFees = async (req, res) => {
     try {
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+
         const { classroomId, applyToAll = false, period } = req.body;
         const input = validateInvoiceInput(req.body);
         if (!applyToAll && !isValidObjectId(classroomId)) return res.status(400).json({ message: 'Vui lòng chọn lớp hợp lệ' });
         const classrooms = applyToAll
-            ? await Classroom.find({ status: 'active' }).select('_id name').lean()
-            : [await Classroom.findOne({ _id: classroomId, status: 'active' }).select('_id name').lean()];
+            ? await Classroom.find({ status: 'active', ...tenantFilter }).select('_id name').lean()
+            : [await Classroom.findOne({ _id: classroomId, status: 'active', ...tenantFilter }).select('_id name').lean()];
         if (!classrooms.length || classrooms.some((item) => !item)) return res.status(404).json({ message: 'Không tìm thấy lớp đang hoạt động' });
         const classIds = classrooms.map((item) => item._id);
-        const students = await Student.find({ classroomId: { $in: classIds }, status: 'enrolled' }).select('_id classroomId').lean();
-        const existing = await TuitionFee.find({ studentId: { $in: students.map((item) => item._id) }, period, status: { $ne: 'cancelled' } }).select('studentId').lean();
+        const students = await Student.find({ classroomId: { $in: classIds }, status: 'enrolled', ...tenantFilter }).select('_id classroomId').lean();
+        const existing = await TuitionFee.find({
+            studentId: { $in: students.map((item) => item._id) },
+            period,
+            status: { $ne: 'cancelled' },
+            ...tenantFilter
+        }).select('studentId').lean();
         const existingIds = new Set(existing.map((item) => String(item.studentId)));
         const byClass = classrooms.map((item) => {
             const classStudents = students.filter((student) => String(student.classroomId) === String(item._id));
@@ -272,15 +363,17 @@ const previewBulkTuitionFees = async (req, res) => {
 // ==============================
 const makePayment = async (req, res) => {
     try {
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         const idempotencyKey = req.get('Idempotency-Key') || req.body.idempotencyKey || req.body.txnRef;
-        const { payment, invoice, replayed } = await recordPayment(req.body, req.user, idempotencyKey);
+        const { payment, invoice, replayed } = await recordPayment(req.body, req.user, idempotencyKey, req);
         if (!replayed) {
             // Thanh toán đã commit trong transaction riêng. Thông báo là tác vụ
             // phụ; không được để lỗi thông báo biến một khoản thu thành lỗi giả.
             try {
                 const [parents, principals] = await Promise.all([
-                    User.find({ role: 'parent', 'parentInfo.studentIds': invoice.studentId, status: 'active' }).select('_id'),
-                    User.find({ role: 'principal', status: 'active' }).select('_id')
+                    User.find({ role: 'parent', 'parentInfo.studentIds': invoice.studentId, status: 'active', ...tenantFilter }).select('_id'),
+                    User.find({ role: 'principal', status: 'active', ...tenantFilter }).select('_id')
                 ]);
                 const collectedBy = req.user.profile?.fullName || req.user.username;
                 const amountText = `${Number(payment.amount).toLocaleString('vi-VN')}đ`;
@@ -328,23 +421,29 @@ const makePayment = async (req, res) => {
 // ==============================
 const getTuitionByStudent = async (req, res) => {
     try {
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         const { studentId } = req.params;
         if (!isValidStudentId(studentId)) {
             return res.status(400).json({ message: 'ID học sinh không hợp lệ' });
         }
 
-        if (isParent(req.user) && !canAccessStudent(req.user, studentId)) {
+        const student = await Student.findOne({ _id: studentId, ...tenantFilter }).select('_id tenantId classroomId');
+        if (!student) {
+            return res.status(404).json({ message: 'Không tìm thấy học sinh' });
+        }
+
+        if (isParent(req.user) && !canAccessStudent(req.user, student, req)) {
             return res.status(403).json({ message: 'Bạn không có quyền xem học phí của học sinh này' });
         }
 
-        const fees = await TuitionFee.find({ studentId }).sort({ period: -1 });
-        res.json({
+        const fees = await TuitionFee.find({ studentId, ...tenantFilter }).sort({ period: -1 });
+        return res.json({
             message: 'Lấy danh sách hóa đơn thành công',
             data: fees
         });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: 'Lỗi server' });
+        return res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Lỗi server' });
     }
 };
 
@@ -353,44 +452,67 @@ const getTuitionByStudent = async (req, res) => {
 // ==============================
 const getTuitionByClass = async (req, res) => {
     try {
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         const { classroomId } = req.params;
         const { period } = req.query;
         if (!isValidObjectId(classroomId)) {
             return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
         }
-        const filter = { classroomId };
-        if (period) filter.period = period;
+        const classroom = await Classroom.findOne({ _id: classroomId, ...tenantFilter }).select('_id');
+        if (!classroom) {
+            return res.status(404).json({ message: 'Không tìm thấy lớp học' });
+        }
+        const filter = { classroomId, ...tenantFilter };
+        if (period) {
+            if (!PERIOD_PATTERN.test(period)) return res.status(400).json({ message: 'Kỳ thu phải có dạng MM-YYYY' });
+            filter.period = period;
+        }
 
         const fees = await TuitionFee.find(filter).sort({ studentName: 1 });
-        res.json({
+        return res.json({
             message: 'Lấy danh sách hóa đơn theo lớp thành công',
             data: fees
         });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: 'Lỗi server' });
+        return res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Lỗi server' });
     }
 };
 
 // Danh sách nghiệp vụ cho kế toán: lọc, tìm và phân trang phía server.
 const getInvoices = async (req, res) => {
     try {
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         const { classroomId, period, status, search = '', page = 1, limit = 20 } = req.query;
         const safePage = Math.max(1, Number(page) || 1); const safeLimit = Math.min(100, Math.max(1, Number(limit) || 20));
-        const filter = {};
-        if (classroomId) { if (!isValidObjectId(classroomId)) return res.status(400).json({ message: 'ID lớp học không hợp lệ' }); filter.classroomId = new mongoose.Types.ObjectId(classroomId); }
+        const filter = { ...tenantFilter };
+        if (classroomId) {
+            if (!isValidObjectId(classroomId)) return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
+            const classroom = await Classroom.findOne({ _id: classroomId, ...tenantFilter }).select('_id');
+            if (!classroom) return res.status(404).json({ message: 'Không tìm thấy lớp học' });
+            filter.classroomId = new mongoose.Types.ObjectId(classroomId);
+        }
         if (period) { if (!PERIOD_PATTERN.test(period)) return res.status(400).json({ message: 'Kỳ thu phải có dạng MM-YYYY' }); filter.period = period; }
         if (status) { if (!['unpaid', 'partial', 'paid', 'cancelled'].includes(status)) return res.status(400).json({ message: 'Trạng thái hóa đơn không hợp lệ' }); filter.status = status; }
         if (String(search).trim()) filter.$or = [{ studentName: new RegExp(String(search).trim(), 'i') }, { className: new RegExp(String(search).trim(), 'i') }];
         const [data, total] = await Promise.all([TuitionFee.find(filter).sort({ dueDate: 1, studentName: 1 }).skip((safePage - 1) * safeLimit).limit(safeLimit), TuitionFee.countDocuments(filter)]);
         return res.json({ success: true, data, pagination: { page: safePage, limit: safeLimit, total, totalPages: Math.ceil(total / safeLimit) } });
-    } catch (err) { console.error(err); return res.status(500).json({ message: 'Không thể lấy danh sách hóa đơn' }); }
+    } catch (err) { return res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Không thể lấy danh sách hóa đơn' }); }
 };
 
 const getDebtReport = async (req, res) => {
     try {
-        const { classroomId, period } = req.query; const filter = { status: { $in: ['unpaid', 'partial'] } };
-        if (classroomId) { if (!isValidObjectId(classroomId)) return res.status(400).json({ message: 'ID lớp học không hợp lệ' }); filter.classroomId = new mongoose.Types.ObjectId(classroomId); }
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+        const { classroomId, period } = req.query;
+        const filter = { status: { $in: ['unpaid', 'partial'] }, ...tenantFilter };
+        if (classroomId) {
+            if (!isValidObjectId(classroomId)) return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
+            const classroom = await Classroom.findOne({ _id: classroomId, ...tenantFilter }).select('_id');
+            if (!classroom) return res.status(404).json({ message: 'Không tìm thấy lớp học' });
+            filter.classroomId = new mongoose.Types.ObjectId(classroomId);
+        }
         if (period) { if (!PERIOD_PATTERN.test(period)) return res.status(400).json({ message: 'Kỳ thu phải có dạng MM-YYYY' }); filter.period = period; }
         const page = Number(req.query.page || 1);
         const limit = Number(req.query.limit || 10);
@@ -407,7 +529,7 @@ const getDebtReport = async (req, res) => {
         const debts = data.map((invoice) => ({ ...invoice, remainingAmount: Math.max(0, invoice.totalAmount - invoice.paidAmount), overdue: invoice.dueDate < overdueBefore }));
         return res.json({ success: true, data: debts, summary: { invoices: summary.invoices, totalDebt: summary.totalDebt, overdueDebt: summary.overdueDebt },
             pagination: { page, limit, total: summary.invoices, totalPages: Math.max(1, Math.ceil(summary.invoices / limit)) } });
-    } catch (err) { console.error(err); return res.status(500).json({ message: 'Không thể lập báo cáo công nợ' }); }
+    } catch (err) { return res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Không thể lập báo cáo công nợ' }); }
 };
 
 // ==============================
@@ -415,35 +537,38 @@ const getDebtReport = async (req, res) => {
 // ==============================
 const getPaymentsByInvoice = async (req, res) => {
     try {
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         const { invoiceId } = req.params;
         if (!isValidObjectId(invoiceId)) {
             return res.status(400).json({ message: 'ID hóa đơn không hợp lệ' });
         }
-        const invoice = await TuitionFee.findById(invoiceId).select('studentId');
+        const invoice = await TuitionFee.findOne({ _id: invoiceId, ...tenantFilter }).select('studentId tenantId');
         if (!invoice) return res.status(404).json({ message: 'Không tìm thấy hóa đơn' });
         if (!await invoiceScope(req, invoice)) return res.status(403).json({ message: 'Bạn không có quyền xem biên lai của học sinh này' });
-        const payments = await Payment.find({ invoiceId }).sort({ paidAt: -1 });
-        res.json({
+        const payments = await Payment.find({ invoiceId, ...tenantFilter }).sort({ paidAt: -1 });
+        return res.json({
             message: 'Lấy lịch sử thanh toán thành công',
             data: payments
         });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: 'Lỗi server' });
+        return res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Lỗi server' });
     }
 };
 
 const getReceipt = async (req, res) => {
     try {
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         const { paymentId } = req.params;
         if (!isValidObjectId(paymentId)) return res.status(400).json({ message: 'ID biên lai không hợp lệ' });
-        const payment = await Payment.findById(paymentId);
+        const payment = await Payment.findOne({ _id: paymentId, ...tenantFilter });
         if (!payment) return res.status(404).json({ message: 'Không tìm thấy biên lai' });
-        const invoice = await TuitionFee.findById(payment.invoiceId);
+        const invoice = await TuitionFee.findOne({ _id: payment.invoiceId, ...tenantFilter });
         if (!invoice) return res.status(404).json({ message: 'Không tìm thấy hóa đơn tương ứng' });
         if (!await invoiceScope(req, invoice)) return res.status(403).json({ message: 'Bạn không có quyền xem biên lai này' });
         return res.json({ success: true, data: { receiptNumber: payment.receiptNumber || `PT-LEGACY-${payment._id.toString().slice(-6).toUpperCase()}`, paidAt: payment.paidAt, amount: payment.amount, method: payment.method, txnRef: payment.txnRef || '', note: payment.note || '', studentName: invoice.studentName, className: invoice.className, period: invoice.period, invoiceId: invoice._id, totalAmount: invoice.totalAmount, paidAmount: invoice.paidAmount, tuitionBase: invoice.tuitionBase, mealFee: invoice.mealFee, busFee: invoice.busFee, extraFee: invoice.extraFee, additionalItems: invoice.additionalItems || [], discount: invoice.discount } });
-    } catch (err) { console.error(err); return res.status(500).json({ message: 'Không thể lấy biên lai' }); }
+    } catch (err) { return res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Không thể lấy biên lai' }); }
 };
 
 // ==============================
@@ -451,49 +576,66 @@ const getReceipt = async (req, res) => {
 // ==============================
 const cancelTuitionFee = async (req, res) => {
     try {
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         const { id } = req.params;
         if (!isValidObjectId(id)) {
             return res.status(400).json({ message: 'ID hóa đơn không hợp lệ' });
         }
         const reason = String(req.body.reason || '').trim();
         if (reason.length < 5) return res.status(422).json({ message: 'Vui lòng nhập lý do hủy hóa đơn (ít nhất 5 ký tự)' });
-        const current = await TuitionFee.findById(id);
+        const current = await TuitionFee.findOne({ _id: id, ...tenantFilter });
         if (!current) return res.status(404).json({ message: 'Không tìm thấy hóa đơn' });
         if (current.status === 'cancelled') return res.status(409).json({ message: 'Hóa đơn đã được hủy trước đó' });
         if (current.paidAmount > 0) return res.status(409).json({ message: 'Hóa đơn đã có giao dịch thu tiền, hãy dùng nghiệp vụ hoàn tiền hoặc điều chỉnh thay vì hủy' });
         // Conditional update prevents a concurrent payment from leaving us with
         // a paid invoice that was nevertheless cancelled.
         const fee = await runStudentTransaction(async (session) => {
-            await lockOpenPeriod(fromPeriod(current.period), session);
-            return TuitionFee.findOneAndUpdate({ _id: id, paidAmount: 0, status: { $ne: 'cancelled' } }, {
-                status: 'cancelled', cancelledAt: new Date(), cancelledBy: req.user._id,
-                cancelledByName: req.user.profile?.fullName || req.user.username, cancelReason: reason
+            const actor = await User.findOne({ _id: req.user._id, status: 'active', ...tenantFilter }).session(session);
+            if (!actor || actor.role !== 'admin') {
+                const err = new Error('Chỉ quản trị viên mới có quyền hủy hóa đơn');
+                err.statusCode = 403;
+                throw err;
+            }
+            await lockOpenPeriod(fromPeriod(current.period), session, req);
+            return TuitionFee.findOneAndUpdate({ _id: id, paidAmount: 0, status: { $ne: 'cancelled' }, ...tenantFilter }, {
+                status: 'cancelled', cancelledAt: new Date(), cancelledBy: actor._id,
+                cancelledByName: actor.profile?.fullName || actor.username, cancelReason: reason
             }, { returnDocument: 'after', session });
         });
         if (!fee) return res.status(409).json({ message: 'Hóa đơn vừa thay đổi trạng thái hoặc đã phát sinh thanh toán; vui lòng tải lại và kiểm tra lại' });
-        res.json({
+        return res.json({
             message: 'Hủy hóa đơn thành công',
             data: fee
         });
     } catch (err) {
-        console.error(err);
-        res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Lỗi server' });
+        return res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Lỗi server' });
     }
 };
 
 const sendDebtReminders = async (req, res) => {
     try {
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+        const resolvedTenant = resolveTenantContext(req);
+        const tenantId = resolvedTenant.isValid && resolvedTenant.isSaaS ? resolvedTenant.tenantId : null;
+
         const { period, classroomId, overdueOnly = false } = req.body;
         if (!PERIOD_PATTERN.test(String(period || ''))) return res.status(400).json({ message: 'Chọn kỳ thu trước khi nhắc công nợ' });
-        const filter = { status: { $in: ['unpaid', 'partial'] } };
+        const filter = { status: { $in: ['unpaid', 'partial'] }, ...tenantFilter };
         filter.period = period;
-        if (classroomId) { if (!isValidObjectId(classroomId)) return res.status(400).json({ message: 'ID lớp học không hợp lệ' }); filter.classroomId = classroomId; }
+        if (classroomId) {
+            if (!isValidObjectId(classroomId)) return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
+            const classroom = await Classroom.findOne({ _id: classroomId, ...tenantFilter }).select('_id');
+            if (!classroom) return res.status(404).json({ message: 'Không tìm thấy lớp học' });
+            filter.classroomId = classroomId;
+        }
         const today = getWorkDate();
         if (overdueOnly) filter.dueDate = { $lt: new Date(`${today}T00:00:00.000Z`) };
         const invoices = await TuitionFee.find(filter).select('studentId studentName period totalAmount paidAmount dueDate');
         const studentIds = invoices.map((invoice) => invoice.studentId);
         const parentUsers = studentIds.length
-            ? await User.find({ role: 'parent', status: 'active', 'parentInfo.studentIds': { $in: studentIds } }).select('_id parentInfo.studentIds')
+            ? await User.find({ role: 'parent', status: 'active', 'parentInfo.studentIds': { $in: studentIds }, ...tenantFilter }).select('_id parentInfo.studentIds')
             : [];
         const notificationDocs = [];
         const parentsByStudent = new Map();
@@ -517,13 +659,18 @@ const sendDebtReminders = async (req, res) => {
             filter: { deduplicationKey: document.deduplicationKey }, update: { $setOnInsert: document }, upsert: true
         } })), { ordered: false }) : null;
         const created = result?.upsertedCount || 0;
-        res.json({ success: true, message: `Đã tạo ${created} thông báo nhắc học phí mới${notificationDocs.length - created ? `; ${notificationDocs.length - created} thông báo đã gửi trong hôm nay nên không gửi lại` : ''}.`,
+        return res.json({ success: true, message: `Đã tạo ${created} thông báo nhắc học phí mới${notificationDocs.length - created ? `; ${notificationDocs.length - created} thông báo đã gửi trong hôm nay nên không gửi lại` : ''}.`,
             data: { invoices: invoices.length, notifications: created, skippedToday: notificationDocs.length - created, unlinkedInvoices: invoices.filter((invoice) => !parentsByStudent.has(String(invoice.studentId))).length } });
-    } catch (err) { console.error(err); res.status(500).json({ message: 'Không thể gửi nhắc nợ' }); }
+    } catch (err) { return res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Không thể gửi nhắc nợ' }); }
 };
 
 const adjustTuitionFee = async (req, res) => {
     try {
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+        const resolvedTenant = resolveTenantContext(req);
+        const tenantId = resolvedTenant.isValid && resolvedTenant.isSaaS ? resolvedTenant.tenantId : null;
+
         const { id } = req.params;
         const { type, amount, reason } = req.body;
         if (!isValidObjectId(id)) return res.status(400).json({ message: 'ID hóa đơn không hợp lệ' });
@@ -535,9 +682,15 @@ const adjustTuitionFee = async (req, res) => {
         if (normalizedReason.length < 5) return res.status(422).json({ message: 'Vui lòng nhập lý do điều chỉnh (ít nhất 5 ký tự)' });
         if (normalizedReason.length > 1000) return res.status(422).json({ message: 'Lý do tối đa 1000 ký tự' });
         const result = await runStudentTransaction(async (session) => {
-            const invoice = await TuitionFee.findById(id).session(session);
+            const actor = await User.findOne({ _id: req.user._id, status: 'active', ...tenantFilter }).session(session);
+            if (!actor || !['admin', 'accountant'].includes(actor.role)) {
+                const err = new Error('Người dùng không có quyền điều chỉnh hóa đơn hoặc tài khoản đã bị khóa');
+                err.statusCode = 403;
+                throw err;
+            }
+            const invoice = await TuitionFee.findOne({ _id: id, ...tenantFilter }).session(session);
             if (!invoice) throw Object.assign(new Error('Không tìm thấy hóa đơn'), { statusCode: 404 });
-            await lockOpenPeriod(fromPeriod(invoice.period), session);
+            await lockOpenPeriod(fromPeriod(invoice.period), session, req);
             if (invoice.status === 'cancelled') throw Object.assign(new Error('Không thể điều chỉnh hóa đơn đã hủy'), { statusCode: 409 });
             const before = { totalAmount: invoice.totalAmount, paidAmount: invoice.paidAmount, status: invoice.status };
             if (type === 'discount') {
@@ -553,16 +706,16 @@ const adjustTuitionFee = async (req, res) => {
             await invoice.save({ session });
             const after = { totalAmount: invoice.totalAmount, paidAmount: invoice.paidAmount, status: invoice.status };
             const adjustment = (await InvoiceAdjustment.create([{
+                ...(tenantId ? { tenantId } : { tenantId: null }),
                 invoiceId: invoice._id, type, amount: value, reason: normalizedReason,
-                recordedBy: req.user._id, recordedByName: req.user.profile?.fullName || req.user.username, before, after
+                recordedBy: actor._id, recordedByName: actor.profile?.fullName || actor.username, before, after
             }], { session }))[0];
             return { invoice, adjustment };
         });
-        res.json({ success: true, message: 'Đã điều chỉnh hóa đơn và cập nhật công nợ', data: result });
+        return res.json({ success: true, message: 'Đã điều chỉnh hóa đơn và cập nhật công nợ', data: result });
     } catch (err) {
         if (err.code === 11000) return res.status(409).json({ message: 'Yêu cầu hoàn tiền đã được xử lý. Vui lòng tải lại hóa đơn.' });
-        console.error(err);
-        res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Không thể điều chỉnh hóa đơn' });
+        return res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Không thể điều chỉnh hóa đơn' });
     }
 };
 
@@ -570,17 +723,32 @@ const adjustTuitionFee = async (req, res) => {
 // Dùng khi trường phát sinh khoản chung sau khi đã lập học phí ban đầu.
 const addBulkInvoiceItem = async (req, res) => {
     try {
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+        const resolvedTenant = resolveTenantContext(req);
+        const tenantId = resolvedTenant.isValid && resolvedTenant.isSaaS ? resolvedTenant.tenantId : null;
+
         const { period, classroomId, name, amount, reason } = req.body;
         if (!PERIOD_PATTERN.test(String(period || ''))) return res.status(400).json({ message: 'Kỳ thu phải có dạng MM-YYYY' });
         if (classroomId && !isValidObjectId(classroomId)) return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
+        if (classroomId) {
+            const classroom = await Classroom.findOne({ _id: classroomId, ...tenantFilter }).select('_id');
+            if (!classroom) return res.status(404).json({ message: 'Không tìm thấy lớp học' });
+        }
         const [item] = validateAdditionalItems([{ name, amount }]);
         const normalizedReason = String(reason || `Bổ sung khoản thu: ${item.name}`).trim();
         if (normalizedReason.length < 5 || normalizedReason.length > 1000) return res.status(422).json({ message: 'Lý do bổ sung phải có từ 5 đến 1000 ký tự' });
-        const filter = { period, status: { $ne: 'cancelled' } };
+        const filter = { period, status: { $ne: 'cancelled' }, ...tenantFilter };
         if (classroomId) filter.classroomId = classroomId;
 
         const result = await runStudentTransaction(async (session) => {
-            await lockOpenPeriod(fromPeriod(period), session);
+            const actor = await User.findOne({ _id: req.user._id, status: 'active', ...tenantFilter }).session(session);
+            if (!actor || !['admin', 'accountant'].includes(actor.role)) {
+                const err = new Error('Người dùng không có quyền bổ sung khoản thu hoặc tài khoản đã bị khóa');
+                err.statusCode = 403;
+                throw err;
+            }
+            await lockOpenPeriod(fromPeriod(period), session, req);
             const invoices = await TuitionFee.find(filter).session(session);
             if (!invoices.length) throw Object.assign(new Error('Không có hóa đơn đang hiệu lực phù hợp để bổ sung khoản thu'), { statusCode: 404 });
             const adjustments = [];
@@ -591,32 +759,34 @@ const addBulkInvoiceItem = async (req, res) => {
                 invoice.status = invoice.paidAmount >= invoice.totalAmount ? 'paid' : (invoice.paidAmount > 0 ? 'partial' : 'unpaid');
                 await invoice.save({ session });
                 adjustments.push({
+                    ...(tenantId ? { tenantId } : { tenantId: null }),
                     invoiceId: invoice._id, type: 'surcharge', amount: item.amount, reason: normalizedReason,
-                    recordedBy: req.user._id, recordedByName: req.user.profile?.fullName || req.user.username,
+                    recordedBy: actor._id, recordedByName: actor.profile?.fullName || actor.username,
                     before, after: { totalAmount: invoice.totalAmount, paidAmount: invoice.paidAmount, status: invoice.status }
                 });
             }
             await InvoiceAdjustment.insertMany(adjustments, { session });
             return { invoiceCount: invoices.length, totalAdded: invoices.length * item.amount };
         });
-        res.json({ success: true, message: `Đã thêm “${item.name}” vào ${result.invoiceCount} hóa đơn`, data: result });
+        return res.json({ success: true, message: `Đã thêm “${item.name}” vào ${result.invoiceCount} hóa đơn`, data: result });
     } catch (err) {
-        console.error(err);
-        res.status(err.statusCode || 500).json({ message: err.message || 'Không thể bổ sung khoản thu hàng loạt' });
+        return res.status(err.statusCode || 500).json({ message: err.message || 'Không thể bổ sung khoản thu hàng loạt' });
     }
 };
 
 const getInvoiceAdjustments = async (req, res) => {
     try {
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         const { id } = req.params;
         if (!isValidObjectId(id)) return res.status(400).json({ message: 'ID hóa đơn không hợp lệ' });
-        const invoice = await TuitionFee.findById(id).select('studentId');
+        const invoice = await TuitionFee.findOne({ _id: id, ...tenantFilter }).select('studentId tenantId');
         if (!invoice) return res.status(404).json({ message: 'Không tìm thấy hóa đơn' });
         if (!await invoiceScope(req, invoice)) return res.status(403).json({ message: 'Bạn không có quyền xem lịch sử điều chỉnh' });
         const fields = req.user.role === 'parent' ? 'type amount reason paidAt createdAt' : undefined;
-        const data = await InvoiceAdjustment.find({ invoiceId: id }).select(fields).sort({ createdAt: -1 });
-        res.json({ success: true, data });
-    } catch (err) { res.status(500).json({ message: 'Không thể lấy lịch sử điều chỉnh' }); }
+        const data = await InvoiceAdjustment.find({ invoiceId: id, ...tenantFilter }).select(fields).sort({ createdAt: -1 });
+        return res.json({ success: true, data });
+    } catch (err) { return res.status(err.statusCode || 500).json({ message: 'Không thể lấy lịch sử điều chỉnh' }); }
 };
 
 module.exports = {

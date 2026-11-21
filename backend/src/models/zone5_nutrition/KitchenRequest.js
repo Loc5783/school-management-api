@@ -1,10 +1,14 @@
 const mongoose = require('mongoose');
 
 const KitchenRequestSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant',
+        index: true
+    },
     requestCode: {
         type: String,
         required: true,
-        unique: true,
         uppercase: true,
         trim: true
     },
@@ -66,5 +70,13 @@ const KitchenRequestSchema = new mongoose.Schema({
 
 KitchenRequestSchema.index({ status: 1 });
 KitchenRequestSchema.index({ requestType: 1 });
+KitchenRequestSchema.index(
+    { tenantId: 1, requestCode: 1 },
+    { name: 'tenantId_1_requestCode_1_unique', unique: true, partialFilterExpression: { tenantId: { $type: 'objectId' } } }
+);
+KitchenRequestSchema.index(
+    { requestCode: 1 },
+    { name: 'legacy_requestCode_1_unique', unique: true, partialFilterExpression: { tenantId: null } }
+);
 
 module.exports = mongoose.model('KitchenRequest', KitchenRequestSchema);

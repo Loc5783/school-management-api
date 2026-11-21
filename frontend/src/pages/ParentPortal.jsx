@@ -137,17 +137,17 @@ export default function ParentPortal() {
             startDate: startDate.toISOString().slice(0, 10),
             endDate: end,
           },
-        }),
-        api.get(`/finance/tuition/student/${selected._id}`),
+        }).catch(() => ({ data: { data: [] } })),
+        api.get(`/finance/tuition/student/${selected._id}`).catch(() => ({ data: { data: [] } })),
         api.get("/nutrition/menus", {
           params: { classroomId: selected.classroomId },
-        }),
-        getLeaveRequests(),
+        }).catch(() => ({ data: { data: [] } })),
+        getLeaveRequests().catch(() => ({ data: { data: [] } })),
         api.get("/class-communication/announcements", {
           params: { classroomId: selected.classroomId },
-        }),
-        api.get("/notifications", { params: { limit: 8 } }),
-        api.get("/student-profile-change-requests", { params: { studentId: selected._id, limit: 10 } }),
+        }).catch(() => ({ data: { data: [] } })),
+        api.get("/notifications", { params: { limit: 8 } }).catch(() => ({ data: { data: [] } })),
+        api.get("/student-profile-change-requests", { params: { studentId: selected._id, limit: 10 } }).catch(() => ({ data: { data: [] } })),
       ]);
       const leaves = (leaveRes.data.data || []).filter(
         (item) => String(item.studentId) === selected._id,

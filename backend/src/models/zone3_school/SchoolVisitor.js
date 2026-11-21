@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const SchoolVisitorSchema = new mongoose.Schema({
+  tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
   fullName: { type: String, required: true, trim: true, maxlength: 120 },
   phone: { type: String, trim: true, maxlength: 20, default: '' },
   organization: { type: String, trim: true, maxlength: 160, default: '' },
@@ -24,5 +25,18 @@ const SchoolVisitorSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 SchoolVisitorSchema.index({ visitDate: 1, status: 1, checkInAt: -1 });
-SchoolVisitorSchema.index({ clientEventId: 1 }, { unique: true, sparse: true });
+// Multi-tenant clientEventId unique index
+SchoolVisitorSchema.index({ tenantId: 1, clientEventId: 1 }, {
+  unique: true,
+  sparse: true,
+  partialFilterExpression: { tenantId: { $type: 'objectId' } }
+});
+// Legacy unique index
+SchoolVisitorSchema.index({ clientEventId: 1 }, {
+  unique: true,
+  sparse: true,
+  partialFilterExpression: { tenantId: null }
+});
+
+SchoolVisitorSchema.index({ tenantId: 1, visitDate: 1, status: 1, checkInAt: -1 });
 module.exports = mongoose.model('SchoolVisitor', SchoolVisitorSchema);

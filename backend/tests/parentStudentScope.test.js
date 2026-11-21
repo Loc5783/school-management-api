@@ -613,18 +613,13 @@ describe('parent student data scope', () => {
         expect(Array.isArray(response.body.data.students)).toBe(true);
     });
 
-    test('only permits public parent registration and always assigns one parent role', async () => {
-        await request(app)
-            .post('/api/auth/register')
-            .send({ username: 'phuhuynh-test', password: 'mat-khau-test-123', role: 'teacher', profile: { fullName: 'Phụ huynh test' } })
-            .expect(400);
-
+    test('public parent registration is disabled and returns 403 Forbidden', async () => {
         const response = await request(app)
             .post('/api/auth/register')
-            .send({ username: 'phuhuynh-hop-le', password: 'mat-khau-test-123', profile: { fullName: 'Phụ huynh hợp lệ' }, parentInfo: { requestedClassroomId: classroomA, registrationNote: 'Phụ huynh của bé An, cần liên kết hồ sơ.' } })
-            .expect(201);
-        expect(response.body.data).toEqual(expect.objectContaining({ role: 'parent', status: 'inactive' }));
-        expect(await User.exists({ username: 'phuhuynh-hop-le', role: 'parent' })).toBeTruthy();
+            .send({ username: 'phuhuynh-hop-le', password: 'mat-khau-test-123', profile: { fullName: 'Phụ huynh hợp lệ' } })
+            .expect(403);
+        expect(response.body.message).toMatch(/vô hiệu hóa/i);
+        expect(await User.exists({ username: 'phuhuynh-hop-le' })).toBeFalsy();
     });
 
     test('lets an administrator create and assign exactly one internal role', async () => {

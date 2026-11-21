@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const GuardDeviceSchema = new mongoose.Schema({
+  tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
   name: { type: String, required: true, trim: true, maxlength: 120 },
   kind: { type: String, required: true, enum: ['camera', 'plate_reader', 'face_reader', 'rfid_reader', 'gate_controller'] },
   location: { type: String, required: true, trim: true, maxlength: 160 },

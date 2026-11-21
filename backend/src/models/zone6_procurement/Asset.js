@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const AssetSchema = new mongoose.Schema({
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
     itemId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'ItemMaster',
@@ -73,6 +74,7 @@ const AssetSchema = new mongoose.Schema({
 AssetSchema.index({ itemId: 1 });
 AssetSchema.index({ assignedTo: 1 });
 AssetSchema.index({ status: 1 });
+AssetSchema.index({ tenantId: 1, qrCode: 1 });
 AssetSchema.index({ qrCode: 1 });
 
 module.exports = mongoose.model('Asset', AssetSchema);

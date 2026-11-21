@@ -9,6 +9,10 @@ const daySchema = new mongoose.Schema({
 }, { _id: false });
 
 const schema = new mongoose.Schema({
+  tenantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tenant'
+  },
   employeeId: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', required: true },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   period: { type: String, required: true, match: /^\d{4}-(0[1-9]|1[0-2])$/ },

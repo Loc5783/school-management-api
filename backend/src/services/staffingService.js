@@ -4,6 +4,7 @@ const LeaveRequest = require('../models/zone2_hr/LeaveRequest');
 const StaffShift = require('../models/zone2_hr/StaffShift');
 const StaffReplacement = require('../models/zone2_hr/StaffReplacement');
 const { getWorkDate, addWorkDays } = require('../utils/dateHelpers');
+const { buildTenantFilter } = require('./tenantFilterService');
 
 const weekdayOf = (date) => new Date(`${date}T00:00:00.000Z`).getUTCDay();
 const worksOn = (shift, date) => shift.status === 'active' && shift.validFrom <= date && shift.validUntil >= date && shift.weekdays.includes(weekdayOf(date));
@@ -11,13 +12,14 @@ const leaveOn = (leave, date) => leave.status === 'approved' && (leave.workDates
   ? leave.workDates.includes(date)
   : getWorkDate(leave.startDate) <= date && getWorkDate(leave.endDate) >= date);
 
-const getStaffingSnapshot = async (date) => {
+const getStaffingSnapshot = async (date, context) => {
+  const tenantFilter = buildTenantFilter(context, { throwOnInvalid: true });
   const [classes, employees, leaves, shifts, replacements] = await Promise.all([
-    Classroom.find({ status: 'active' }).select('name schoolYear teachers homeroomTeacherId requiredTeachers teachingWeekdays').lean(),
-    Employee.find({ status: { $ne: 'resigned' } }).select('fullName employeeCode payrollRole status userId').populate('userId', 'role status').lean(),
-    LeaveRequest.find({ status: 'approved' }).select('employeeId startDate endDate workDates status').lean(),
-    StaffShift.find({ status: 'active', validFrom: { $lte: date }, validUntil: { $gte: date } }).lean(),
-    StaffReplacement.find({ date, status: 'active' }).lean()
+    Classroom.find({ status: 'active', ...tenantFilter }).select('name schoolYear teachers homeroomTeacherId requiredTeachers teachingWeekdays tenantId').lean(),
+    Employee.find({ status: { $ne: 'resigned' }, ...tenantFilter }).select('fullName employeeCode payrollRole status userId tenantId').populate({ path: 'userId', match: tenantFilter, select: 'role status tenantId' }).lean(),
+    LeaveRequest.find({ status: 'approved', ...tenantFilter }).select('employeeId startDate endDate workDates status tenantId').lean(),
+    StaffShift.find({ status: 'active', validFrom: { $lte: date }, validUntil: { $gte: date }, ...tenantFilter }).lean(),
+    StaffReplacement.find({ date, status: 'active', ...tenantFilter }).lean()
   ]);
   const byUserId = new Map(employees.filter((employee) => employee.userId?._id).map((employee) => [String(employee.userId._id), employee]));
   const byEmployeeId = new Map(employees.map((employee) => [String(employee._id), employee]));
@@ -57,7 +59,8 @@ const getStaffingSnapshot = async (date) => {
     uncoveredShifts: duties.filter((item) => item.uncovered).length };
 };
 
-const getStaffingTimetable = async ({ startDate, daysCount = 7, schoolYear, role, classroomId, employeeId, shiftId }) => {
+const getStaffingTimetable = async ({ startDate, daysCount = 7, schoolYear, role, classroomId, employeeId, shiftId, context }) => {
+  const tenantFilter = buildTenantFilter(context, { throwOnInvalid: true });
   const days = [];
   let cur = startDate;
   for (let i = 0; i < daysCount; i++) {
@@ -66,11 +69,11 @@ const getStaffingTimetable = async ({ startDate, daysCount = 7, schoolYear, role
   }
 
   const [classes, employees, leaves, allShifts, allReplacements] = await Promise.all([
-    Classroom.find({ status: 'active', ...(schoolYear ? { schoolYear } : {}), ...(classroomId ? { _id: classroomId } : {}) }).select('name schoolYear teachers homeroomTeacherId requiredTeachers teachingWeekdays').lean(),
-    Employee.find({ status: { $ne: 'resigned' } }).select('fullName employeeCode payrollRole status userId position').populate('userId', 'role status').lean(),
-    LeaveRequest.find({ status: 'approved' }).select('employeeId startDate endDate workDates status').lean(),
-    StaffShift.find({ status: 'active', validFrom: { $lte: days[days.length - 1] }, validUntil: { $gte: days[0] }, ...(shiftId ? { _id: shiftId } : {}) }).lean(),
-    StaffReplacement.find({ date: { $in: days }, status: 'active' }).lean()
+    Classroom.find({ status: 'active', ...(schoolYear ? { schoolYear } : {}), ...(classroomId ? { _id: classroomId } : {}), ...tenantFilter }).select('name schoolYear teachers homeroomTeacherId requiredTeachers teachingWeekdays tenantId').lean(),
+    Employee.find({ status: { $ne: 'resigned' }, ...tenantFilter }).select('fullName employeeCode payrollRole status userId position tenantId').populate({ path: 'userId', match: tenantFilter, select: 'role status tenantId' }).lean(),
+    LeaveRequest.find({ status: 'approved', ...tenantFilter }).select('employeeId startDate endDate workDates status tenantId').lean(),
+    StaffShift.find({ status: 'active', validFrom: { $lte: days[days.length - 1] }, validUntil: { $gte: days[0] }, ...(shiftId ? { _id: shiftId } : {}), ...tenantFilter }).lean(),
+    StaffReplacement.find({ date: { $in: days }, status: 'active', ...tenantFilter }).lean()
   ]);
 
   const byUserId = new Map(employees.filter((e) => e.userId?._id).map((e) => [String(e.userId._id), e]));

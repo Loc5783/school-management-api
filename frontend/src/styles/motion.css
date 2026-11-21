@@ -1,0 +1,641 @@
+/**
+ * ============================================================================
+ * HOA NẮNG DESIGN SYSTEM - MOTION & ELEVATION SPECIFICATION
+ * ============================================================================
+ * Phân hệ chuyển động, chiều sâu và vi tương tác (micro-interactions) cho
+ * Hệ thống Quản trị Trường Mầm non Hoa Nắng.
+ *
+ * Tôn chỉ thiết kế:
+ * 1. Giữ trọn 100% nhận diện Hoa Nắng (ấm áp mầm non, xanh dương & vàng nắng).
+ * 2. Ứng dụng spring physics curve (cubic-bezier) tạo độ nảy nhẹ, vui tươi, thân thiện.
+ * 3. Đổ bóng đa tầng (multi-layered shadows) kết hợp ánh sáng viền (rim lighting).
+ * 4. Tôn trọng người dùng nhạy cảm tiền đình qua @media (prefers-reduced-motion).
+ * ============================================================================
+ */
+
+:root {
+  /* --- 1. MOTION TOKENS --- */
+  --hn-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);     /* Nảy nhẹ, sống động */
+  --hn-ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);         /* Chuyển động chuẩn mượt */
+  --hn-ease-out: cubic-bezier(0, 0, 0.2, 1);              /* Giảm tốc êm dịu */
+  --hn-ease-in: cubic-bezier(0.4, 0, 1, 1);               /* Tăng tốc */
+
+  --hn-dur-fast: 150ms;                                   /* Nút bấm, hover micro */
+  --hn-dur-normal: 240ms;                                 /* Thẻ, drawer, tabs */
+  --hn-dur-slow: 350ms;                                   /* Modal, trang, layout */
+
+  /* --- 2. ELEVATION & SHADOW TOKENS (Hoa Nắng Palette) --- */
+  --hn-shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --hn-shadow-sm: 0 2px 6px -1px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.03);
+  --hn-shadow-md: 0 4px 16px -2px rgba(27, 48, 87, 0.06), 0 2px 4px rgba(27, 48, 87, 0.03);
+  --hn-shadow-lg: 0 12px 30px -4px rgba(27, 48, 87, 0.09), 0 4px 8px rgba(27, 48, 87, 0.04);
+
+  --hn-shadow-card: 0 4px 20px -2px rgba(27, 48, 87, 0.05), 0 1px 3px rgba(27, 48, 87, 0.03);
+  --hn-shadow-card-hover: 0 16px 36px -4px rgba(65, 105, 225, 0.16), 0 4px 10px rgba(65, 105, 225, 0.05);
+
+  --hn-shadow-primary-btn: 0 6px 16px rgba(63, 84, 194, 0.22);
+  --hn-shadow-primary-hover: 0 10px 24px rgba(63, 84, 194, 0.32);
+
+  --hn-shadow-modal: 0 25px 60px -15px rgba(20, 35, 70, 0.28), 0 10px 24px -5px rgba(20, 35, 70, 0.10);
+  --hn-shadow-popover: 0 14px 38px -6px rgba(15, 23, 42, 0.16), 0 4px 12px rgba(15, 23, 42, 0.06);
+
+  /* --- 3. RIM LIGHTING & GLASSMORPHISM --- */
+  --hn-rim-light: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  --hn-rim-light-subtle: inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  --hn-rim-light-bottom: inset 0 -1px 0 rgba(0, 0, 0, 0.04);
+
+  --hn-glass-blur: blur(12px);
+  --hn-glass-bg: rgba(255, 255, 255, 0.88);
+  --hn-glass-border: rgba(226, 232, 240, 0.85);
+}
+
+/* ============================================================================
+ * AMBIENT BACKGROUND DEPTH (Mesh Gradient ấm áp Hoa Nắng)
+ * ============================================================================
+ */
+.app-shell {
+  background-color: #f8fafc;
+  background-image:
+    radial-gradient(at 0% 0%, rgba(245, 158, 11, 0.04) 0px, transparent 45%),
+    radial-gradient(at 100% 0%, rgba(65, 105, 225, 0.05) 0px, transparent 50%),
+    radial-gradient(at 50% 100%, rgba(16, 185, 129, 0.025) 0px, transparent 50%) !important;
+  background-attachment: fixed;
+}
+
+/* ============================================================================
+ * 1. SIDEBAR & BRAND NAVIGATION MICRO-INTERACTIONS
+ * ============================================================================
+ */
+.desktop-sidebar {
+  box-shadow: 4px 0 25px rgba(20, 35, 70, 0.04);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: width var(--hn-dur-normal) var(--hn-ease-smooth);
+}
+
+/* Logo Mặt trời Hoa Nắng nảy nhẹ khi hover */
+.brand {
+  transition: transform var(--hn-dur-normal) var(--hn-ease-spring);
+}
+.brand .brand-mark {
+  transition: transform var(--hn-dur-slow) var(--hn-ease-spring), box-shadow var(--hn-dur-normal) ease;
+  will-change: transform;
+}
+.brand:hover .brand-mark {
+  transform: scale(1.12) rotate(16deg);
+  box-shadow: 0 0 18px rgba(245, 158, 11, 0.45);
+}
+
+/* Sidebar Nav Links */
+.sidebar .nav-link,
+.sidebar .nav-sub-link {
+  position: relative;
+  transition:
+    transform var(--hn-dur-fast) var(--hn-ease-spring),
+    background-color var(--hn-dur-fast) ease,
+    color var(--hn-dur-fast) ease,
+    border-color var(--hn-dur-fast) ease,
+    box-shadow var(--hn-dur-fast) ease;
+  will-change: transform;
+}
+
+.sidebar .nav-link:hover,
+.sidebar .nav-sub-link:hover {
+  transform: translateX(6px);
+  background: rgba(255, 255, 255, 0.18) !important;
+  border-color: rgba(255, 255, 255, 0.22) !important;
+}
+
+.sidebar .nav-link:active,
+.sidebar .nav-sub-link:active {
+  transform: translateX(5px) scale(0.98);
+}
+
+/* Trạng thái Active với Rim Light & Shadow */
+.sidebar .nav-link.active,
+.sidebar .nav-sub-link.active {
+  transform: translateX(5px);
+  box-shadow:
+    0 4px 14px rgba(20, 35, 70, 0.12),
+    var(--hn-rim-light) !important;
+  font-weight: 700;
+}
+
+/* Thanh chỉ báo bên trái cho Nav link active */
+.sidebar .nav-link.active::before,
+.sidebar .nav-sub-link.active::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 25%;
+  height: 50%;
+  width: 4px;
+  border-radius: 4px;
+  background: #ffffff;
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.8);
+}
+
+/* Accordion Headers */
+.nav-accordion-header {
+  transition: background-color var(--hn-dur-fast) ease, color var(--hn-dur-fast) ease;
+}
+.nav-accordion-header:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.nav-accordion-chevron {
+  transition: transform var(--hn-dur-normal) var(--hn-ease-spring);
+  will-change: transform;
+}
+.nav-accordion-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+/* Tenant Badge với hiệu ứng Shimmer tinh tế */
+.school-tenant-badge {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.25) !important;
+  background: rgba(255, 255, 255, 0.12) !important;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: var(--hn-rim-light-subtle);
+  transition: transform var(--hn-dur-normal) var(--hn-ease-spring), border-color var(--hn-dur-normal) ease;
+}
+.school-tenant-badge:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.4) !important;
+}
+
+/* Status Dot nhịp thở nhẹ nhàng */
+.tenant-status-dot {
+  animation: hnDotBreathe 2.4s ease-in-out infinite;
+}
+@keyframes hnDotBreathe {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5);
+  }
+  50% {
+    transform: scale(0.9);
+    opacity: 0.75;
+    box-shadow: 0 0 0 4px rgba(52, 211, 153, 0);
+  }
+}
+
+/* User Account Card & Logout */
+.sidebar-bottom .account-card {
+  transition: transform var(--hn-dur-fast) var(--hn-ease-spring), background-color var(--hn-dur-fast) ease;
+}
+.sidebar-bottom .account-card:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.14) !important;
+}
+
+.sidebar-logout {
+  transition:
+    transform var(--hn-dur-fast) var(--hn-ease-spring),
+    background-color var(--hn-dur-fast) ease,
+    color var(--hn-dur-fast) ease !important;
+}
+.sidebar-logout:hover {
+  transform: translateY(-2px);
+  background: rgba(239, 68, 68, 0.18) !important;
+  color: #fee2e2 !important;
+}
+.sidebar-logout:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* ============================================================================
+ * 2. TOPBAR HEADER & NOTIFICATION POPOVER
+ * ============================================================================
+ */
+.topbar {
+  backdrop-filter: var(--hn-glass-blur);
+  -webkit-backdrop-filter: var(--hn-glass-blur);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.85);
+  transition: background-color var(--hn-dur-normal) ease;
+}
+
+.topbar-tenant-tag {
+  transition: transform var(--hn-dur-fast) var(--hn-ease-spring);
+}
+.topbar-tenant-tag:hover {
+  transform: scale(1.05);
+}
+
+/* Bell Notification Button */
+.notification-menu .icon-button {
+  transition:
+    transform var(--hn-dur-fast) var(--hn-ease-spring),
+    box-shadow var(--hn-dur-fast) ease,
+    border-color var(--hn-dur-fast) ease;
+}
+.notification-menu .icon-button:hover {
+  transform: translateY(-2px) scale(1.04);
+  box-shadow: 0 4px 12px rgba(45, 85, 155, 0.14);
+  border-color: #cbd5e1;
+}
+.notification-menu .icon-button:active {
+  transform: translateY(1px) scale(0.97);
+}
+
+.notification-count {
+  animation: hnBadgePulse 2s infinite ease-in-out;
+}
+@keyframes hnBadgePulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.12); }
+}
+
+/* Notification Popover Animation */
+.notification-popover {
+  border-radius: 20px !important;
+  border: 1px solid rgba(226, 232, 240, 0.9) !important;
+  box-shadow: var(--hn-shadow-popover), var(--hn-rim-light) !important;
+  animation: hnPopoverSlide 0.24s var(--hn-ease-spring) both;
+  transform-origin: top right;
+}
+@keyframes hnPopoverSlide {
+  from {
+    opacity: 0;
+    transform: scale(0.94) translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* ============================================================================
+ * 3. STAT CARDS (3D DEPTH & PERSPECTIVE LIFT)
+ * ============================================================================
+ */
+.stat-grid {
+  perspective: 900px;
+}
+
+.stat-card {
+  position: relative;
+  border-radius: 18px !important;
+  border: 1px solid rgba(236, 240, 246, 0.9) !important;
+  box-shadow: var(--hn-shadow-card), var(--hn-rim-light) !important;
+  transition:
+    transform var(--hn-dur-slow) var(--hn-ease-spring),
+    box-shadow var(--hn-dur-slow) ease,
+    border-color var(--hn-dur-normal) ease !important;
+  transform-style: preserve-3d;
+  will-change: transform, box-shadow;
+}
+
+.stat-card:hover {
+  transform: translateY(-6px) translateZ(8px);
+  border-color: rgba(65, 105, 225, 0.32) !important;
+  box-shadow: var(--hn-shadow-card-hover), var(--hn-rim-light) !important;
+}
+
+/* Icon phóng to và xoay nảy khi hover thẻ */
+.stat-icon {
+  transition:
+    transform 0.45s var(--hn-ease-spring),
+    box-shadow var(--hn-dur-normal) ease !important;
+  will-change: transform;
+}
+
+.stat-card:hover .stat-icon {
+  transform: scale(1.16) rotate(12deg);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.08);
+}
+
+/* ============================================================================
+ * 4. CONTENT CARDS & QUICK PANELS
+ * ============================================================================
+ */
+.content-card,
+.quick-panel {
+  border-radius: 18px !important;
+  border: 1px solid rgba(234, 240, 247, 0.9) !important;
+  box-shadow: var(--hn-shadow-card), var(--hn-rim-light) !important;
+  transition:
+    box-shadow var(--hn-dur-normal) ease,
+    border-color var(--hn-dur-normal) ease;
+}
+
+.content-card:hover,
+.quick-panel:hover {
+  box-shadow: var(--hn-shadow-md), var(--hn-rim-light);
+}
+
+/* Quick Action Row Interaction */
+.quick-action {
+  transition:
+    transform var(--hn-dur-fast) var(--hn-ease-spring),
+    background-color var(--hn-dur-fast) ease,
+    border-color var(--hn-dur-fast) ease !important;
+}
+.quick-action:hover {
+  transform: translateX(5px);
+  background: #f8fbff !important;
+}
+.quick-action:hover .quick-icon {
+  transform: scale(1.12) rotate(8deg);
+}
+.quick-action .quick-icon {
+  transition: transform 0.35s var(--hn-ease-spring);
+}
+.quick-action:hover svg:last-child {
+  transform: translateX(3px);
+}
+.quick-action svg:last-child {
+  transition: transform var(--hn-dur-fast) var(--hn-ease-spring);
+}
+
+/* Attendance Donut Chart Hover Lift */
+.attendance-donut {
+  transition: transform 0.35s var(--hn-ease-spring);
+  will-change: transform;
+}
+.attendance-donut:hover {
+  transform: scale(1.05);
+}
+
+/* ============================================================================
+ * 5. BUTTONS & MICRO-INTERACTIONS
+ * ============================================================================
+ */
+.button-primary,
+.btn-primary {
+  box-shadow: var(--hn-shadow-primary-btn), var(--hn-rim-light) !important;
+  transition:
+    transform var(--hn-dur-fast) var(--hn-ease-spring),
+    box-shadow var(--hn-dur-fast) ease,
+    background-color var(--hn-dur-fast) ease !important;
+  will-change: transform, box-shadow;
+}
+
+.button-primary:hover:not(:disabled),
+.btn-primary:hover:not(:disabled) {
+  transform: translateY(-2px) !important;
+  box-shadow: var(--hn-shadow-primary-hover), var(--hn-rim-light) !important;
+}
+
+.button-primary:active:not(:disabled),
+.btn-primary:active:not(:disabled) {
+  transform: translateY(1px) scale(0.97) !important;
+  box-shadow: 0 2px 6px rgba(63, 84, 194, 0.18) !important;
+}
+
+.button-secondary,
+.btn-secondary {
+  box-shadow: var(--hn-shadow-xs), var(--hn-rim-light);
+  transition:
+    transform var(--hn-dur-fast) var(--hn-ease-spring),
+    background-color var(--hn-dur-fast) ease,
+    border-color var(--hn-dur-fast) ease,
+    box-shadow var(--hn-dur-fast) ease !important;
+}
+
+.button-secondary:hover:not(:disabled),
+.btn-secondary:hover:not(:disabled) {
+  transform: translateY(-2px) !important;
+  background: #f9faff !important;
+  border-color: #cbd5e1 !important;
+  box-shadow: var(--hn-shadow-sm), var(--hn-rim-light) !important;
+}
+
+.button-secondary:active:not(:disabled),
+.btn-secondary:active:not(:disabled) {
+  transform: translateY(1px) scale(0.97) !important;
+}
+
+/* Keyboard Accessibility Focus Visible */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+  outline: 2px solid #3b82f6 !important;
+  outline-offset: 2px !important;
+}
+
+/* ============================================================================
+ * 6. DATA TABLES & ROW HOVER HIGHLIGHT
+ * ============================================================================
+ */
+.table-wrap {
+  border-radius: 16px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.data-table tbody tr,
+.table-modern tbody tr {
+  transition: background-color var(--hn-dur-fast) ease;
+}
+
+.data-table tbody tr:hover,
+.table-modern tbody tr:hover {
+  background-color: rgba(65, 105, 225, 0.04) !important;
+}
+
+/* Badges mầm non thân thiện */
+.status-badge {
+  box-shadow: var(--hn-rim-light-subtle);
+  transition: transform var(--hn-dur-fast) var(--hn-ease-spring);
+}
+.status-badge:hover {
+  transform: scale(1.05);
+}
+
+/* ============================================================================
+ * 7. TABS & FILTER SLIDER ELEVATION
+ * ============================================================================
+ */
+.chat-tabs,
+.method-tabs,
+.filter-tabs {
+  padding: 4px !important;
+  border-radius: 14px !important;
+  background: #f1f5f9 !important;
+}
+
+.chat-tabs button,
+.method-tabs button,
+.filter-tabs button {
+  transition:
+    transform var(--hn-dur-fast) var(--hn-ease-spring),
+    color var(--hn-dur-fast) ease,
+    background-color var(--hn-dur-fast) ease,
+    box-shadow var(--hn-dur-fast) ease !important;
+}
+
+.chat-tabs button:hover:not(.active),
+.method-tabs button:hover:not(.active),
+.filter-tabs button:hover:not(.active) {
+  color: #2563eb !important;
+  transform: translateY(-1px);
+}
+
+.chat-tabs button.active,
+.method-tabs button.active,
+.filter-tabs button.active {
+  box-shadow:
+    0 3px 10px rgba(40, 65, 132, 0.12),
+    var(--hn-rim-light) !important;
+  transform: translateY(-1px);
+  font-weight: 700;
+}
+
+.chat-tabs button:active,
+.method-tabs button:active,
+.filter-tabs button:active {
+  transform: translateY(0) scale(0.97);
+}
+
+/* ============================================================================
+ * 8. MODAL DIALOGS & SHEET ANIMATIONS
+ * ============================================================================
+ */
+.modal-backdrop,
+.mobile-nav-backdrop {
+  backdrop-filter: blur(8px) !important;
+  -webkit-backdrop-filter: blur(8px) !important;
+  background: rgba(15, 23, 42, 0.45) !important;
+  animation: hnFadeIn 0.22s ease both;
+}
+
+.modal-content,
+.dialog-content {
+  border-radius: 22px !important;
+  border: 1px solid rgba(255, 255, 255, 0.6) !important;
+  box-shadow: var(--hn-shadow-modal), var(--hn-rim-light) !important;
+  animation: hnModalEnter 0.28s var(--hn-ease-spring) both;
+}
+
+@keyframes hnFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes hnModalEnter {
+  from {
+    opacity: 0;
+    transform: scale(0.94) translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* Mobile Sidebar Drawer Slide In */
+.mobile-sidebar {
+  animation: hnDrawerSlide 0.28s var(--hn-ease-smooth) both;
+}
+@keyframes hnDrawerSlide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+/* ============================================================================
+ * 9. SKELETON & SHIMMER LOADING SYSTEM
+ * ============================================================================
+ */
+.hn-skeleton,
+.skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(226, 232, 240, 0.6) 25%,
+    rgba(241, 245, 249, 0.9) 50%,
+    rgba(226, 232, 240, 0.6) 75%
+  ) !important;
+  background-size: 200% 100% !important;
+  animation: hnShimmerWave 1.8s ease-in-out infinite !important;
+  border-radius: 8px;
+}
+
+@keyframes hnShimmerWave {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ============================================================================
+ * 10. LOGIN PAGE MOTION & GLOW ENHANCEMENTS
+ * ============================================================================
+ */
+.login-page-refresh {
+  position: relative;
+  overflow: hidden;
+}
+
+/* Presentation Glows */
+.login-glow {
+  filter: blur(60px);
+  animation: hnAmbientGlow 6s ease-in-out infinite alternate;
+}
+@keyframes hnAmbientGlow {
+  0% { transform: scale(1) translate(0, 0); opacity: 0.35; }
+  100% { transform: scale(1.15) translate(15px, -15px); opacity: 0.55; }
+}
+
+/* Preview metrics cards hover lift */
+.preview-metric-card {
+  transition:
+    transform var(--hn-dur-fast) var(--hn-ease-spring),
+    box-shadow var(--hn-dur-fast) ease !important;
+  will-change: transform;
+}
+.preview-metric-card:hover {
+  transform: translateY(-4px) scale(1.02);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.12) !important;
+}
+
+/* Form input focus glow & elevation */
+.login-field .login-input-wrap {
+  transition:
+    border-color var(--hn-dur-fast) ease,
+    box-shadow var(--hn-dur-fast) ease,
+    transform var(--hn-dur-fast) var(--hn-ease-spring);
+}
+.login-field input:focus ~ .login-input-wrap,
+.login-field .login-input-wrap:focus-within {
+  border-color: #4762dc !important;
+  box-shadow: 0 0 0 3.5px rgba(71, 98, 220, 0.16) !important;
+  transform: translateY(-1px);
+}
+
+/* Form error shake nhẹ */
+.form-error {
+  animation: hnShake 0.32s var(--hn-ease-spring) both;
+}
+@keyframes hnShake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+
+/* ============================================================================
+ * 11. ACCESSIBILITY: PREFERS-REDUCED-MOTION
+ * ============================================================================
+ * Khi người dùng thiết lập prefers-reduced-motion trong hệ điều hành,
+ * toàn bộ animations và transforms sẽ bị vô hiệu hóa hoặc thu gọn về 0.01ms.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+    transform: none !important;
+  }
+  .stat-card:hover,
+  .quick-action:hover,
+  .sidebar .nav-link:hover,
+  .brand:hover .brand-mark,
+  .button-primary:hover,
+  .preview-metric-card:hover {
+    transform: none !important;
+  }
+}

@@ -1,10 +1,13 @@
 const mongoose = require('mongoose');
 
 const PurchaseOrderSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant'
+    },
     orderCode: {
         type: String,
         required: true,
-        unique: true,
         trim: true,
         uppercase: true
     },
@@ -93,5 +96,9 @@ PurchaseOrderSchema.index({ requestId: 1 }, { unique: true });
 PurchaseOrderSchema.index({ supplierId: 1 });
 PurchaseOrderSchema.index({ status: 1 });
 PurchaseOrderSchema.index({ orderDate: -1 }); // sắp xếp mới nhất trước
+
+// Multi-tenant orderCode unique
+PurchaseOrderSchema.index({ tenantId: 1, orderCode: 1 }, { unique: true, partialFilterExpression: { tenantId: { $type: 'objectId' } } });
+PurchaseOrderSchema.index({ orderCode: 1 }, { unique: true, partialFilterExpression: { tenantId: null } });
 
 module.exports = mongoose.model('PurchaseOrder', PurchaseOrderSchema);

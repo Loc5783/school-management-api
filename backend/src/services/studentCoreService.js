@@ -17,7 +17,7 @@ const STATUS_TRANSITIONS = {
 const isClassroomCountedStatus = (status) => ACTIVE_CLASSROOM_STATUSES.has(status);
 const canTransitionStudentStatus = (fromStatus, toStatus) => fromStatus === toStatus || STATUS_TRANSITIONS[fromStatus]?.has(toStatus);
 
-const generateStudentCode = async (date = new Date(), session = null) => {
+const generateStudentCode = async (date = new Date(), session = null, tenantId = null) => {
     const normalizedDate = date instanceof Date ? date : new Date(date);
     if (Number.isNaN(normalizedDate.getTime())) {
         const error = new Error('Ngày nhập học không hợp lệ để tạo mã học sinh');
@@ -25,9 +25,17 @@ const generateStudentCode = async (date = new Date(), session = null) => {
         throw error;
     }
     const year = normalizedDate.getFullYear();
+    const query = { year };
+    const setOnInsert = { year };
+    if (tenantId) {
+        query.tenantId = tenantId;
+        setOnInsert.tenantId = tenantId;
+    } else {
+        query.tenantId = null;
+    }
     const counter = await StudentCodeCounter.findOneAndUpdate(
-        { year },
-        { $inc: { sequence: 1 }, $setOnInsert: { year } },
+        query,
+        { $inc: { sequence: 1 }, $setOnInsert: setOnInsert },
         { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true, session }
     );
     return `HS-${year}-${String(counter.sequence).padStart(6, '0')}`;

@@ -16,6 +16,7 @@ import InternalCommunicationManagement from '../components/InternalCommunication
 import HrReports from '../components/HrReports';
 import HrAuditJournal from '../components/HrAuditJournal';
 import StaffPersonalRequests from '../components/StaffPersonalRequests';
+import TimekeepingDeviceManagement from '../components/TimekeepingDeviceManagement';
 import {
   createEmployee,
   getEmployees,
@@ -56,15 +57,21 @@ const profileFieldText = { employeeCode: 'Mã nhân viên', fullName: 'Họ và 
 export default function EmployeeManagement() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
+  const initialUser = JSON.parse(localStorage.getItem('user') || '{}');
+  const userRole = initialUser.role || '';
   const initialTab = searchParams.get('tab') || 'employees';
-  const validTabs = ['employees', 'staffing', 'transfers', 'timekeeping', 'leave', 'credentials', 'development', 'parent-evaluations', 'handover', 'internal', 'reports', 'requests', 'audit'];
+  const validTabs = ['employees', 'staffing', 'transfers', 'timekeeping', 'devices', 'leave', ...(userRole === 'admin' ? ['credentials'] : []), 'development', 'parent-evaluations', 'handover', 'internal', 'reports', 'requests', 'audit'];
   const [tab, setTab] = useState(validTabs.includes(initialTab) ? initialTab : 'employees');
 
   useEffect(() => {
     if (searchParams.get('tab') === 'payroll') {
       navigate('/payroll', { replace: true });
     }
-  }, [searchParams, navigate]);
+    if (searchParams.get('tab') === 'credentials' && userRole !== 'admin') {
+      setSearchParams({ tab: 'employees' });
+      setTab('employees');
+    }
+  }, [searchParams, navigate, userRole]);
   const [staffingDate, setStaffingDate] = useState('');
   const [employees, setEmployees] = useState([]);
   const [staffAccounts, setStaffAccounts] = useState([]);
@@ -109,7 +116,7 @@ export default function EmployeeManagement() {
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
-    const allowed = ['employees', 'timekeeping', 'requests', ...(role === 'admin' ? ['audit'] : []), ...(canManageHr ? ['staffing', 'transfers', 'credentials', 'development', 'handover', 'internal'] : []), ...(canReviewHr ? ['leave', 'reports', 'parent-evaluations'] : [])];
+    const allowed = ['employees', 'timekeeping', 'devices', 'requests', ...(role === 'admin' ? ['audit'] : []), ...(canManageHr ? ['staffing', 'transfers', 'credentials', 'development', 'handover', 'internal'] : []), ...(canReviewHr ? ['leave', 'reports', 'parent-evaluations'] : [])];
     setTab(allowed.includes(initialTab) ? initialTab : 'employees');
   }, [initialTab, canManageHr, canReviewHr, role]);
 
@@ -272,8 +279,9 @@ export default function EmployeeManagement() {
               ...(canManageHr ? [['staffing', 'Phân công công việc', 'classes']] : []),
               ...(canManageHr ? [['transfers', 'Chuyển lớp học sinh', 'students']] : []),
               ['timekeeping', canApproveTimekeeping ? 'Quản lý & duyệt chấm công' : 'Theo dõi chấm công', 'clock'],
+              ['devices', 'Máy chấm công (ISAPI)', 'shield'],
               ...(canReviewHr ? [['leave', 'Nghỉ phép nhân viên', 'calendar']] : []),
-              ...(canManageHr ? [['credentials', 'Năng lực & giấy tờ', 'shield']] : []),
+              ...(role === 'admin' ? [['credentials', 'Năng lực & giấy tờ', 'shield']] : []),
               ...(canManageHr ? [['development', 'Đào tạo chuyên môn', 'users']] : []),
               ...(canReviewHr ? [['parent-evaluations', 'Đánh giá phụ huynh', 'chat']] : []),
               ...(canManageHr ? [['handover', 'Bàn giao & nghỉ việc', 'users']] : []),
@@ -306,7 +314,7 @@ export default function EmployeeManagement() {
 
         {tab === 'staffing' && canManageHr && <StaffingManagement employees={employees} initialDate={staffingDate} />}
         {tab === 'transfers' && canManageHr && <StudentTransferManagement />}
-        {tab === 'credentials' && canManageHr && <CredentialManagement />}
+        {tab === 'credentials' && role === 'admin' && <CredentialManagement />}
 
         {tab === 'development' && canManageHr && <StaffDevelopment />}
         {tab === 'parent-evaluations' && canReviewHr && <ParentEvaluationReportView />}
@@ -395,6 +403,12 @@ export default function EmployeeManagement() {
               </div>
             </section>}
           </div>
+        )}
+
+        {tab === 'devices' && (
+          <section className="content-card">
+            <TimekeepingDeviceManagement />
+          </section>
         )}
 
         

@@ -5,6 +5,7 @@ const User = require('../models/zone1_system/User');
 const Conversation = require('../models/zone1_system/Conversation');
 const ChatMessage = require('../models/zone1_system/ChatMessage');
 const { getLinkedStudentIds } = require('../services/studentAccessService');
+const { buildTenantFilter } = require('../services/tenantFilterService');
 
 const eligibleStatuses = ['enrolled', 'temporarily_absent'];
 const pageOf = (query) => ({
@@ -22,10 +23,11 @@ const contact = (user, student) => ({
     studentName: student.fullName,
     className: student.className || ''
 });
-const unreadCountsFor = async (conversations, userId) => {
+const unreadCountsFor = async (conversations, userId, tenantFilter = {}) => {
     if (!conversations.length) return new Map();
+    const match = { conversationId: { $in: conversations.map((item) => item._id) }, senderId: { $ne: userId }, readAt: null, deletedAt: null, ...tenantFilter };
     const counts = await ChatMessage.aggregate([
-        { $match: { conversationId: { $in: conversations.map((item) => item._id) }, senderId: { $ne: userId }, readAt: null, deletedAt: null } },
+        { $match: match },
         { $group: { _id: '$conversationId', count: { $sum: 1 }, latestAt: { $max: '$createdAt' } } }
     ]);
     return new Map(counts.map((item) => [String(item._id), item]));
@@ -43,24 +45,25 @@ const messageView = (message) => {
     const raw = typeof message.toObject === 'function' ? message.toObject() : message;
     return { ...raw, body: raw.deletedAt ? '' : raw.body, deleted: Boolean(raw.deletedAt), edited: Boolean(raw.editedAt) };
 };
-const refreshConversationPreview = async (conversationId) => {
-    const latest = await ChatMessage.findOne({ conversationId, deletedAt: null }).sort({ _id: -1 }).select('body createdAt').lean();
-    await Conversation.updateOne({ _id: conversationId }, { $set: { lastMessageText: latest?.body || '', lastMessageAt: latest?.createdAt || null } });
+const refreshConversationPreview = async (conversationId, tenantFilter = {}) => {
+    const latest = await ChatMessage.findOne({ conversationId, deletedAt: null, ...tenantFilter }).sort({ _id: -1 }).select('body createdAt').lean();
+    await Conversation.updateOne({ _id: conversationId, ...tenantFilter }, { $set: { lastMessageText: latest?.body || '', lastMessageAt: latest?.createdAt || null } });
 };
 
 // Recheck the live school relationship on every read and write. A former teacher
 // or an unlinked parent must not retain access to conversation history.
-const canChat = async (parentId, teacherId, studentId) => {
+const canChat = async (parentId, teacherId, studentId, tenantFilter = {}) => {
     const [parent, teacher, student] = await Promise.all([
-        User.findOne({ _id: parentId, role: 'parent', status: 'active' }).select('parentInfo.studentIds').lean(),
-        User.findOne({ _id: teacherId, role: 'teacher', status: 'active' }).select('_id').lean(),
-        Student.findOne({ _id: studentId, status: { $in: eligibleStatuses } }).select('classroomId').lean()
+        User.findOne({ _id: parentId, role: 'parent', status: 'active', ...tenantFilter }).select('parentInfo.studentIds').lean(),
+        User.findOne({ _id: teacherId, role: 'teacher', status: 'active', ...tenantFilter }).select('_id').lean(),
+        Student.findOne({ _id: studentId, status: { $in: eligibleStatuses }, ...tenantFilter }).select('classroomId').lean()
     ]);
     if (!parent || !teacher || !student || !getLinkedStudentIds(parent).includes(String(student._id))) return false;
     return Boolean(await Classroom.exists({
         _id: student.classroomId,
         status: 'active',
-        homeroomTeacherId: teacher._id
+        homeroomTeacherId: teacher._id,
+        ...tenantFilter
     }));
 };
 
@@ -69,10 +72,11 @@ const getAccessibleConversation = async (req, res) => {
         res.status(400).json({ message: 'ID cuộc trò chuyện không hợp lệ' });
         return null;
     }
-    const conversation = await Conversation.findById(req.params.id);
+    const tenantFilter = buildTenantFilter(req);
+    const conversation = await Conversation.findOne({ _id: req.params.id, ...tenantFilter });
     const participantId = req.user.role === 'parent' ? conversation?.parentId : conversation?.teacherId;
     if (!conversation || String(participantId) !== String(req.user._id)
-        || !await canChat(conversation.parentId, conversation.teacherId, conversation.studentId)) {
+        || !await canChat(conversation.parentId, conversation.teacherId, conversation.studentId, tenantFilter)) {
         res.status(404).json({ message: 'Không tìm thấy cuộc trò chuyện được phép truy cập' });
         return null;
     }
@@ -82,17 +86,18 @@ const getAccessibleConversation = async (req, res) => {
 const listContacts = async (req, res) => {
     try {
         const { page, limit } = pageOf(req.query);
+        const tenantFilter = buildTenantFilter(req);
         let contacts = [];
         if (req.user.role === 'parent') {
             const students = await Student.find({
-                _id: { $in: getLinkedStudentIds(req.user) }, status: { $in: eligibleStatuses }
+                _id: { $in: getLinkedStudentIds(req.user) }, status: { $in: eligibleStatuses }, ...tenantFilter
             }).select('_id fullName classroomId className').lean();
             const classrooms = await Classroom.find({
-                _id: { $in: students.map((student) => student.classroomId) }, status: 'active'
+                _id: { $in: students.map((student) => student.classroomId) }, status: 'active', ...tenantFilter
             }).select('_id homeroomTeacherId').lean();
             const classroomById = new Map(classrooms.map((item) => [String(item._id), item]));
             const teacherIds = [...new Set(classrooms.map((item) => item.homeroomTeacherId).filter(Boolean).map(String))];
-            const teachers = await User.find({ _id: { $in: teacherIds }, role: 'teacher', status: 'active' })
+            const teachers = await User.find({ _id: { $in: teacherIds }, role: 'teacher', status: 'active', ...tenantFilter })
                 .select('_id username profile.fullName').lean();
             const teacherById = new Map(teachers.map((item) => [String(item._id), item]));
             contacts = students.map((student) => {
@@ -102,14 +107,14 @@ const listContacts = async (req, res) => {
             }).filter(Boolean);
         } else {
             const classrooms = await Classroom.find({
-                status: 'active', homeroomTeacherId: req.user._id
+                status: 'active', homeroomTeacherId: req.user._id, ...tenantFilter
             }).select('_id').lean();
             const students = await Student.find({
-                classroomId: { $in: classrooms.map((item) => item._id) }, status: { $in: eligibleStatuses }
+                classroomId: { $in: classrooms.map((item) => item._id) }, status: { $in: eligibleStatuses }, ...tenantFilter
             }).select('_id fullName className').lean();
             const studentById = new Map(students.map((item) => [String(item._id), item]));
             const parents = await User.find({
-                role: 'parent', status: 'active', 'parentInfo.studentIds': { $in: students.map((item) => item._id) }
+                role: 'parent', status: 'active', 'parentInfo.studentIds': { $in: students.map((item) => item._id) }, ...tenantFilter
             }).select('_id username profile.fullName parentInfo.studentIds').lean();
             contacts = parents.flatMap((parent) => getLinkedStudentIds(parent)
                 .map((id) => studentById.get(id)).filter(Boolean).map((student) => contact(parent, student)));
@@ -128,10 +133,11 @@ const listContacts = async (req, res) => {
 const listConversations = async (req, res) => {
     try {
         const { page, limit } = pageOf(req.query);
+        const tenantFilter = buildTenantFilter(req);
         const ownField = req.user.role === 'parent' ? 'parentId' : 'teacherId';
         const archived = req.query.archived === 'true';
         const archiveFilter = archived ? { archivedBy: req.user._id } : { archivedBy: { $ne: req.user._id } };
-        const candidates = await Conversation.find({ [ownField]: req.user._id, ...archiveFilter })
+        const candidates = await Conversation.find({ [ownField]: req.user._id, ...archiveFilter, ...tenantFilter })
             .populate('parentId', 'username profile.fullName')
             .populate('teacherId', 'username profile.fullName')
             .populate('studentId', 'fullName className')
@@ -139,25 +145,26 @@ const listConversations = async (req, res) => {
         const accessible = [];
         for (const item of candidates) {
             if (item.parentId && item.teacherId && item.studentId
-                && await canChat(item.parentId._id, item.teacherId._id, item.studentId._id)) {
+                && await canChat(item.parentId._id, item.teacherId._id, item.studentId._id, tenantFilter)) {
                 accessible.push(item);
             }
         }
         const selected = accessible.slice((page - 1) * limit, page * limit);
-        const unread = await unreadCountsFor(selected, req.user._id);
+        const unread = await unreadCountsFor(selected, req.user._id, tenantFilter);
         return res.json({ data: selected.map((item) => conversationView(item, req.user.role, unread.get(String(item._id))?.count || 0)), pagination: { page, limit, total: accessible.length, totalPages: Math.ceil(accessible.length / limit) } });
     } catch (error) { return fail(res, error, 'Không thể tải cuộc trò chuyện'); }
 };
 
 const listUnread = async (req, res) => {
     try {
+        const tenantFilter = buildTenantFilter(req);
         const ownField = req.user.role === 'parent' ? 'parentId' : 'teacherId';
-        const conversations = await Conversation.find({ [ownField]: req.user._id, archivedBy: { $ne: req.user._id } }).select('_id parentId teacherId studentId');
-        const unread = await unreadCountsFor(conversations, req.user._id);
+        const conversations = await Conversation.find({ [ownField]: req.user._id, archivedBy: { $ne: req.user._id }, ...tenantFilter }).select('_id parentId teacherId studentId');
+        const unread = await unreadCountsFor(conversations, req.user._id, tenantFilter);
         const candidates = conversations.filter((item) => unread.has(String(item._id)));
-        const people = await User.find({ _id: { $in: candidates.map((item) => req.user.role === 'parent' ? item.teacherId : item.parentId) } })
+        const people = await User.find({ _id: { $in: candidates.map((item) => req.user.role === 'parent' ? item.teacherId : item.parentId) }, ...tenantFilter })
             .select('_id username profile.fullName').lean();
-        const students = await Student.find({ _id: { $in: candidates.map((item) => item.studentId) } })
+        const students = await Student.find({ _id: { $in: candidates.map((item) => item.studentId) }, ...tenantFilter })
             .select('_id fullName').lean();
         const personById = new Map(people.map((item) => [String(item._id), item]));
         const studentById = new Map(students.map((item) => [String(item._id), item]));
@@ -165,7 +172,7 @@ const listUnread = async (req, res) => {
         for (const item of candidates) {
             if (!personById.has(String(req.user.role === 'parent' ? item.teacherId : item.parentId))
                 || !studentById.has(String(item.studentId))
-                || !await canChat(item.parentId, item.teacherId, item.studentId)) continue;
+                || !await canChat(item.parentId, item.teacherId, item.studentId, tenantFilter)) continue;
             const count = unread.get(String(item._id));
             const sender = personById.get(String(req.user.role === 'parent' ? item.teacherId : item.parentId));
             visible.push({ conversationId: item._id, count: count.count, latestAt: count.latestAt,
@@ -181,10 +188,11 @@ const getConversation = async (req, res) => {
     try {
         const conversation = await getAccessibleConversation(req, res);
         if (!conversation) return;
+        const tenantFilter = buildTenantFilter(req);
         await conversation.populate('parentId', 'username profile.fullName');
         await conversation.populate('teacherId', 'username profile.fullName');
         await conversation.populate('studentId', 'fullName className');
-        const unread = await unreadCountsFor([conversation], req.user._id);
+        const unread = await unreadCountsFor([conversation], req.user._id, tenantFilter);
         return res.json({ data: conversationView(conversation, req.user.role, unread.get(String(conversation._id))?.count || 0) });
     } catch (error) { return fail(res, error, 'Không thể tải cuộc trò chuyện'); }
 };
@@ -195,22 +203,27 @@ const openConversation = async (req, res) => {
         if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(studentId)) {
             return res.status(400).json({ message: 'ID người nhận hoặc học sinh không hợp lệ' });
         }
+        const tenantFilter = buildTenantFilter(req);
+        const tenantId = req.tenantId || req.user?.tenantId;
         const parentId = req.user.role === 'parent' ? req.user._id : userId;
         const teacherId = req.user.role === 'teacher' ? req.user._id : userId;
-        if (!await canChat(parentId, teacherId, studentId)) {
+        if (!await canChat(parentId, teacherId, studentId, tenantFilter)) {
             return res.status(403).json({ message: 'Bạn chỉ có thể trò chuyện với giáo viên/phụ huynh đang liên quan đến học sinh này' });
         }
+        const setOnInsert = { parentId, teacherId, studentId };
+        if (tenantId) setOnInsert.tenantId = tenantId;
         const conversation = await Conversation.findOneAndUpdate(
-            { parentId, teacherId, studentId },
-            { $setOnInsert: { parentId, teacherId, studentId } },
+            { parentId, teacherId, studentId, ...tenantFilter },
+            { $setOnInsert: setOnInsert },
             { upsert: true, new: true, setDefaultsOnInsert: true }
         );
         return res.json({ data: { _id: conversation._id } });
     } catch (error) {
         if (error.code === 11000) {
+            const tenantFilter = buildTenantFilter(req);
             const parentId = req.user.role === 'parent' ? req.user._id : req.body.userId;
             const teacherId = req.user.role === 'teacher' ? req.user._id : req.body.userId;
-            const existing = await Conversation.findOne({ parentId, teacherId, studentId: req.body.studentId });
+            const existing = await Conversation.findOne({ parentId, teacherId, studentId: req.body.studentId, ...tenantFilter });
             if (existing) return res.json({ data: { _id: existing._id } });
         }
         return fail(res, error, 'Không thể mở cuộc trò chuyện');
@@ -221,9 +234,10 @@ const listMessages = async (req, res) => {
     try {
         const conversation = await getAccessibleConversation(req, res);
         if (!conversation) return;
+        const tenantFilter = buildTenantFilter(req);
         const { limit } = pageOf(req.query);
         if (req.query.before && !mongoose.isValidObjectId(req.query.before)) return res.status(400).json({ message: 'Mốc tin nhắn không hợp lệ' });
-        const filter = { conversationId: conversation._id };
+        const filter = { conversationId: conversation._id, ...tenantFilter };
         if (req.query.before) filter._id = { $lt: req.query.before };
         const messages = await ChatMessage.find(filter).sort({ _id: -1 }).limit(limit + 1).lean();
         return res.json({ data: messages.slice(0, limit).reverse().map(messageView), hasMore: messages.length > limit });
@@ -237,7 +251,10 @@ const sendMessage = async (req, res) => {
         if (typeof req.body.body !== 'string') return res.status(400).json({ message: 'Nội dung tin nhắn không hợp lệ' });
         const body = req.body.body.trim();
         if (!body || body.length > 2000) return res.status(400).json({ message: 'Tin nhắn phải có từ 1 đến 2000 ký tự' });
-        const message = await ChatMessage.create({ conversationId: conversation._id, senderId: req.user._id, body });
+        const tenantId = req.tenantId || req.user?.tenantId;
+        const messageData = { conversationId: conversation._id, senderId: req.user._id, body };
+        if (tenantId) messageData.tenantId = tenantId;
+        const message = await ChatMessage.create(messageData);
         await Conversation.updateOne({ _id: conversation._id }, { $set: { lastMessageText: body, lastMessageAt: message.createdAt }, $pull: { archivedBy: { $in: [conversation.parentId, conversation.teacherId] } } });
         return res.status(201).json({ data: messageView(message) });
     } catch (error) { return fail(res, error, 'Không thể gửi tin nhắn'); }
@@ -250,12 +267,13 @@ const updateMessage = async (req, res) => {
         if (typeof req.body.body !== 'string') return res.status(400).json({ message: 'Nội dung tin nhắn không hợp lệ' });
         const body = req.body.body.trim();
         if (!body || body.length > 2000) return res.status(400).json({ message: 'Tin nhắn phải có từ 1 đến 2000 ký tự' });
+        const tenantFilter = buildTenantFilter(req);
         const message = await ChatMessage.findOneAndUpdate(
-            { _id: req.params.messageId, conversationId: conversation._id, senderId: req.user._id, deletedAt: null },
+            { _id: req.params.messageId, conversationId: conversation._id, senderId: req.user._id, deletedAt: null, ...tenantFilter },
             { $set: { body, editedAt: new Date() } }, { returnDocument: 'after', runValidators: true }
         );
         if (!message) return res.status(404).json({ message: 'Không tìm thấy tin nhắn của bạn để chỉnh sửa' });
-        const latest = await ChatMessage.findOne({ conversationId: conversation._id, deletedAt: null }).sort({ _id: -1 }).select('_id');
+        const latest = await ChatMessage.findOne({ conversationId: conversation._id, deletedAt: null, ...tenantFilter }).sort({ _id: -1 }).select('_id');
         if (String(latest?._id) === String(message._id)) await Conversation.updateOne({ _id: conversation._id }, { $set: { lastMessageText: body } });
         return res.json({ success: true, data: messageView(message) });
     } catch (error) { return fail(res, error, 'Không thể chỉnh sửa tin nhắn'); }
@@ -265,12 +283,13 @@ const deleteMessage = async (req, res) => {
     try {
         const conversation = await getAccessibleConversation(req, res); if (!conversation) return;
         if (!mongoose.isValidObjectId(req.params.messageId)) return res.status(400).json({ message: 'ID tin nhắn không hợp lệ' });
+        const tenantFilter = buildTenantFilter(req);
         const message = await ChatMessage.findOneAndUpdate(
-            { _id: req.params.messageId, conversationId: conversation._id, senderId: req.user._id, deletedAt: null },
+            { _id: req.params.messageId, conversationId: conversation._id, senderId: req.user._id, deletedAt: null, ...tenantFilter },
             { $set: { deletedAt: new Date(), readAt: new Date() } }, { returnDocument: 'after' }
         );
         if (!message) return res.status(404).json({ message: 'Không tìm thấy tin nhắn của bạn để xóa' });
-        await refreshConversationPreview(conversation._id);
+        await refreshConversationPreview(conversation._id, tenantFilter);
         return res.json({ success: true, data: messageView(message) });
     } catch (error) { return fail(res, error, 'Không thể xóa tin nhắn'); }
 };
@@ -278,8 +297,9 @@ const deleteMessage = async (req, res) => {
 const setConversationArchived = async (req, res) => {
     try {
         const conversation = await getAccessibleConversation(req, res); if (!conversation) return;
+        const tenantFilter = buildTenantFilter(req);
         const archived = req.body.archived !== false;
-        await Conversation.updateOne({ _id: conversation._id }, archived
+        await Conversation.updateOne({ _id: conversation._id, ...tenantFilter }, archived
             ? { $addToSet: { archivedBy: req.user._id } }
             : { $pull: { archivedBy: req.user._id } });
         return res.json({ success: true, archived, message: archived ? 'Đã lưu trữ cuộc trò chuyện' : 'Đã khôi phục cuộc trò chuyện' });
@@ -293,10 +313,11 @@ const markRead = async (req, res) => {
         if (req.body?.upTo && !mongoose.isValidObjectId(req.body.upTo)) {
             return res.status(400).json({ message: 'Mốc tin nhắn không hợp lệ' });
         }
-        const filter = { conversationId: conversation._id, senderId: { $ne: req.user._id }, readAt: null };
+        const tenantFilter = buildTenantFilter(req);
+        const filter = { conversationId: conversation._id, senderId: { $ne: req.user._id }, readAt: null, ...tenantFilter };
         if (req.body?.upTo) filter._id = { $lte: req.body.upTo };
         await ChatMessage.updateMany(filter, { $set: { readAt: new Date() } });
-        const unreadCount = await ChatMessage.countDocuments({ conversationId: conversation._id, senderId: { $ne: req.user._id }, readAt: null });
+        const unreadCount = await ChatMessage.countDocuments({ conversationId: conversation._id, senderId: { $ne: req.user._id }, readAt: null, ...tenantFilter });
         return res.json({ success: true, unreadCount });
     } catch (error) { return fail(res, error, 'Không thể đánh dấu đã đọc'); }
 };

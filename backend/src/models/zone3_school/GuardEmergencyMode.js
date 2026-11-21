@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const GuardEmergencyModeSchema = new mongoose.Schema({
+  tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
   activeKey: { type: String, default: 'GLOBAL', immutable: true },
   level: { type: String, enum: ['security', 'fire', 'medical', 'evacuation', 'lockdown'], required: true },
   title: { type: String, required: true, trim: true, maxlength: 160 },
@@ -16,6 +17,17 @@ const GuardEmergencyModeSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 GuardEmergencyModeSchema.index({ status: 1, activatedAt: -1 });
-GuardEmergencyModeSchema.index({ activeKey: 1 }, { unique: true, partialFilterExpression: { status: 'active' } });
+// Multi-tenant compound unique index for active emergency per tenant
+GuardEmergencyModeSchema.index({ tenantId: 1, activeKey: 1 }, {
+  unique: true,
+  partialFilterExpression: { status: 'active', tenantId: { $type: 'objectId' } }
+});
+// Legacy unique index
+GuardEmergencyModeSchema.index({ activeKey: 1 }, {
+  unique: true,
+  partialFilterExpression: { status: 'active', tenantId: null }
+});
+
+GuardEmergencyModeSchema.index({ tenantId: 1, status: 1, activatedAt: -1 });
 
 module.exports = mongoose.model('GuardEmergencyMode', GuardEmergencyModeSchema);

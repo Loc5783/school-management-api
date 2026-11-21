@@ -9,6 +9,7 @@ const historySchema = new mongoose.Schema({
 }, { _id: false });
 
 const mealServingSchema = new mongoose.Schema({
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
     dateKey: { type: String, required: true, match: /^\d{4}-\d{2}-\d{2}$/ },
     classroomId: { type: mongoose.Schema.Types.ObjectId, ref: 'Classroom', required: true },
     plannedAtCook: { type: Number, required: true, min: 0 },
@@ -23,6 +24,13 @@ const mealServingSchema = new mongoose.Schema({
     history: [historySchema]
 }, { timestamps: true, optimisticConcurrency: true });
 
-mealServingSchema.index({ dateKey: 1, classroomId: 1 }, { unique: true });
+mealServingSchema.index(
+    { tenantId: 1, dateKey: 1, classroomId: 1 },
+    { name: 'tenantId_1_dateKey_1_classroomId_1_unique', unique: true, partialFilterExpression: { tenantId: { $type: 'objectId' } } }
+);
+mealServingSchema.index(
+    { dateKey: 1, classroomId: 1 },
+    { name: 'legacy_dateKey_1_classroomId_1_unique', unique: true, partialFilterExpression: { tenantId: null } }
+);
 
 module.exports = mongoose.model('MealServing', mealServingSchema);

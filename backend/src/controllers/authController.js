@@ -29,15 +29,10 @@ const validatePublicRegistration = ({ username, password, profile, parentInfo })
 };
 
 const getRegistrationClassrooms = async (req, res) => {
-  try {
-    const classrooms = await Classroom.find({ status: 'active' })
-      .select('name fullName ageGroup schoolYear')
-      .sort({ schoolYear: -1, name: 1 });
-    return res.json({ success: true, data: classrooms });
-  } catch (err) {
-    console.error('Registration classrooms failed:', err.message);
-    return res.status(500).json({ success: false, message: 'Không thể tải danh sách lớp học' });
-  }
+  return res.status(403).json({
+    success: false,
+    message: 'Chức năng tự đăng ký tài khoản đã bị vô hiệu hóa.'
+  });
 };
 
 const changeMyPassword = async (req, res) => {
@@ -60,59 +55,12 @@ const changeMyPassword = async (req, res) => {
   }
 };
 
-// Public registration is intentionally limited to pending parent accounts.
+// Chức năng tự đăng ký tài khoản công khai đã bị vô hiệu hóa
 const register = async (req, res) => {
-  try {
-    const { username, password, profile, parentInfo } = req.body;
-    if (Object.hasOwn(req.body, 'role') || Object.hasOwn(req.body, 'permissions')) {
-      return res.status(400).json({ message: 'Đăng ký công khai không cho phép chọn vai trò hoặc quyền' });
-    }
-    const validationError = validatePublicRegistration({ username, password, profile, parentInfo });
-    if (validationError) return res.status(400).json({ message: validationError });
-
-    const requestedClassroom = await Classroom.findOne({ _id: parentInfo.requestedClassroomId, status: 'active' }).select('_id');
-    if (!requestedClassroom) return res.status(400).json({ message: 'Lớp học đã chọn không tồn tại hoặc không còn hoạt động' });
-
-    // Kiểm tra username đã tồn tại
-    const existingUser = await User.findOne({ username });
-    if (existingUser) {
-      return res.status(400).json({ message: 'Tên đăng nhập đã tồn tại' });
-    }
-
-    // Hash password
-    const hashedPassword = await hashPassword(password);
-
-    // Principal activates the account and links children after verification.
-    const user = new User({
-      username: username.trim(),
-      passwordHash: hashedPassword,
-      role: 'parent',
-      profile: {
-        fullName: profile.fullName.trim(),
-        phone: profile.phone?.trim(),
-        email: profile.email?.trim().toLowerCase(),
-        address: profile.address?.trim()
-      },
-      parentInfo: {
-        studentIds: [],
-        requestedClassroomId: requestedClassroom._id,
-        registrationNote: String(parentInfo.registrationNote).trim()
-      },
-      permissions: [],
-      status: 'inactive'
-    });
-
-    await user.save();
-
-    res.status(201).json({
-      message: 'Đã gửi đăng ký. Nhà trường sẽ kích hoạt tài khoản sau khi xác minh.',
-      data: { id: user._id, username: user.username, role: user.role, status: user.status }
-    });
-  } catch (err) {
-    if (err?.code === 11000) return res.status(400).json({ message: 'Tên đăng nhập đã tồn tại' });
-    console.error('Public registration failed:', err.message);
-    res.status(500).json({ message: 'Lỗi server' });
-  }
+  return res.status(403).json({
+    success: false,
+    message: 'Chức năng tự đăng ký tài khoản đã bị vô hiệu hóa. Vui lòng liên hệ nhà trường để được cấp tài khoản.'
+  });
 };
 
 // Đăng nhập
@@ -121,7 +69,7 @@ const login = async (req, res) => {
     const { username, password } = req.body;
 
     // Tìm user
-    const user = await User.findOne({ username });
+    const user = await User.findOne({ username: String(username || "").trim(), tenantId: { $in: [null, undefined] } });
     if (!user) {
       return res.status(401).json({ message: 'Tên đăng nhập hoặc mật khẩu không đúng' });
     }

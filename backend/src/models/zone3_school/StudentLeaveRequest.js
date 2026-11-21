@@ -3,6 +3,10 @@ const mongoose = require('mongoose');
 // Đơn xin nghỉ là chứng từ nghiệp vụ riêng. Bản ghi điểm danh chỉ được tạo khi
 // đơn đã được duyệt, nhờ đó báo cáo không nhầm đơn đang chờ với một ngày nghỉ có phép.
 const StudentLeaveRequestSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant'
+    },
     studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true, index: true },
     studentName: { type: String, required: true, trim: true },
     classroomId: { type: mongoose.Schema.Types.ObjectId, ref: 'Classroom', required: true, index: true },
@@ -22,5 +26,10 @@ const StudentLeaveRequestSchema = new mongoose.Schema({
 StudentLeaveRequestSchema.index({ studentId: 1, startDate: 1, endDate: 1, status: 1 });
 StudentLeaveRequestSchema.index({ classroomId: 1, status: 1, startDate: 1 });
 StudentLeaveRequestSchema.index({ requesterId: 1, createdAt: -1 });
+
+// Indexes hỗ trợ multi-tenant (SaaS 1C)
+StudentLeaveRequestSchema.index({ tenantId: 1, status: 1, createdAt: -1 });
+StudentLeaveRequestSchema.index({ tenantId: 1, classroomId: 1, status: 1 });
+StudentLeaveRequestSchema.index({ tenantId: 1, studentId: 1, status: 1 });
 
 module.exports = mongoose.model('StudentLeaveRequest', StudentLeaveRequestSchema);

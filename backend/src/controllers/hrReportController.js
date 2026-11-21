@@ -33,7 +33,7 @@ const handleError = (res, error) => {
 const overview = async (req, res) => {
   try {
     const filters = parseReportFilters(req.query);
-    const report = await getHrReport(filters);
+    const report = await getHrReport(filters, req);
     const rows = report.rows[filters.section];
     const totalPages = Math.max(1, Math.ceil(rows.length / 10));
     const page = Math.min(filters.page, totalPages);
@@ -47,7 +47,7 @@ const overview = async (req, res) => {
 const exportCsv = async (req, res) => {
   try {
     const filters = parseReportFilters(req.query);
-    const report = await getHrReport(filters);
+    const report = await getHrReport(filters, req);
     const columns = CSV_COLUMNS[filters.section];
     const lines = [columns.map(([, label]) => csvValue(label)).join(','),
       ...report.rows[filters.section].map((row) => columns.map(([key]) => csvValue(exportValue(filters.section, key, row[key]))).join(','))];

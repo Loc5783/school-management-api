@@ -1,6 +1,11 @@
 const mongoose = require('mongoose');
 
 const IngredientMasterSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant',
+        index: true
+    },
     name: {
         type: String,
         required: true,
@@ -9,7 +14,6 @@ const IngredientMasterSchema = new mongoose.Schema({
     code: {
         type: String,
         required: true,
-        unique: true,
         uppercase: true,
         trim: true
     },
@@ -57,6 +61,14 @@ const IngredientMasterSchema = new mongoose.Schema({
 });
 
 IngredientMasterSchema.index({ category: 1 });
+IngredientMasterSchema.index(
+    { tenantId: 1, code: 1 },
+    { name: 'tenantId_1_code_1_unique', unique: true, partialFilterExpression: { tenantId: { $type: 'objectId' } } }
+);
+IngredientMasterSchema.index(
+    { code: 1 },
+    { name: 'legacy_code_1_unique', unique: true, partialFilterExpression: { tenantId: null } }
+);
 
 module.exports = mongoose.model('IngredientMaster', IngredientMasterSchema);
 

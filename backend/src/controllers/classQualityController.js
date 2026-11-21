@@ -7,6 +7,7 @@ const ParentFeedback = require('../models/zone3_school/ParentFeedback');
 const StaffReview = require('../models/zone2_hr/StaffReview');
 const Employee = require('../models/zone2_hr/Employee');
 const { getWorkDate, startOfWorkDate } = require('../utils/dateHelpers');
+const { buildTenantFilter } = require('../services/tenantFilterService');
 
 const getClassQualityReport = async (req, res) => {
   try {
@@ -20,8 +21,9 @@ const getClassQualityReport = async (req, res) => {
     const start = startOfWorkDate(startStr);
     const end = new Date(startOfWorkDate(endStr).getTime() + 24 * 60 * 60 * 1000);
 
+    const tenantFilter = buildTenantFilter(req);
     // Lọc theo lớp nếu có
-    const classFilter = { status: 'active' };
+    const classFilter = { status: 'active', ...tenantFilter };
     if (classroomId) {
       if (!mongoose.isValidObjectId(classroomId)) {
         return res.status(422).json({ message: 'ID lớp học không hợp lệ.' });
@@ -47,7 +49,7 @@ const getClassQualityReport = async (req, res) => {
     const classIds = classrooms.map((c) => c._id);
 
     // Lấy tất cả học sinh đang học trong các lớp này
-    const students = await Student.find({ classroomId: { $in: classIds }, status: 'active' })
+    const students = await Student.find({ classroomId: { $in: classIds }, status: 'active', ...tenantFilter })
       .select('fullName classroomId gender dateOfBirth allergies')
       .lean();
 
@@ -61,7 +63,8 @@ const getClassQualityReport = async (req, res) => {
     // Lấy dữ liệu điểm danh trong khoảng ngày
     const attendances = await StudentAttendance.find({
       classroomId: { $in: classIds },
-      attendDate: { $gte: start, $lt: end }
+      attendDate: { $gte: start, $lt: end },
+      ...tenantFilter
     }).select('studentId classroomId status attendDate attendanceDateKey checkInTime note').lean();
 
     const attendancesByClass = new Map();
@@ -74,7 +77,8 @@ const getClassQualityReport = async (req, res) => {
     // Lấy báo cáo chăm sóc hàng ngày
     const careReports = await ClassroomDailyCareReport.find({
       classroomId: { $in: classIds },
-      reportDate: { $gte: start, $lt: end }
+      reportDate: { $gte: start, $lt: end },
+      ...tenantFilter
     }).sort({ reportDate: -1 }).lean();
 
     const careReportsByClass = new Map();
@@ -87,7 +91,8 @@ const getClassQualityReport = async (req, res) => {
     // Lấy phản hồi của phụ huynh
     const feedbacks = await ParentFeedback.find({
       classroomId: { $in: classIds },
-      createdAt: { $gte: start, $lt: end }
+      createdAt: { $gte: start, $lt: end },
+      ...tenantFilter
     }).lean();
 
     const feedbacksByClass = new Map();
@@ -102,7 +107,7 @@ const getClassQualityReport = async (req, res) => {
       ...new Set(classrooms.flatMap((c) => [c.homeroomTeacherId, ...(c.teachers || []).map((t) => t.teacherId)].filter(Boolean).map(String)))
     ];
 
-    const employees = await Employee.find({ userId: { $in: teacherUserIds } })
+    const employees = await Employee.find({ userId: { $in: teacherUserIds }, ...tenantFilter })
       .select('fullName userId employeeCode')
       .lean();
     const employeeByUserId = new Map(employees.map((e) => [String(e.userId), e]));
@@ -112,7 +117,8 @@ const getClassQualityReport = async (req, res) => {
     const periodMonths = [startStr.slice(0, 7), endStr.slice(0, 7)];
     const staffReviews = await StaffReview.find({
       employeeId: { $in: employeeIds },
-      period: { $in: periodMonths }
+      period: { $in: periodMonths },
+      ...tenantFilter
     }).lean();
 
     const reviewsByEmployeeId = new Map(staffReviews.map((r) => [String(r.employeeId), r]));

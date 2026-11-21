@@ -12,12 +12,30 @@ const {
     reviewLeaveRequest,
     getAbsenceReport
 } = require('../controllers/attendanceController');
+const {
+    pingWebhook,
+    handleWebhook,
+    getWebhookLogs,
+    getWebhookLogById
+} = require('../controllers/timekeepingWebhookController');
 const auth = require('../middlewares/auth');
 const roleCheck = require('../middlewares/roleCheck');
+const webhookTestAuth = require('../middlewares/webhookTestAuth');
 
 const router = express.Router();
 
-// Tất cả đều yêu cầu xác thực
+// Sử dụng express.raw cục bộ riêng cho route /webhook (giống JussStudio/BE) để lấy trọn Buffer gốc lên tới 50MB
+const rawWebhookBody = express.raw({ type: '*/*', limit: '50mb' });
+
+// NOTE: Đặt các route Webhook máy chấm công Hikvision TRƯỚC `router.use(auth)` vì thiết bị phần cứng
+// bắn HTTP trực tiếp không mang JWT đăng nhập của giáo viên/nhân sự.
+router.get('/webhook', webhookTestAuth, pingWebhook);
+router.get('/webhook/logs', webhookTestAuth, getWebhookLogs);
+router.get('/webhook/logs/:id', webhookTestAuth, getWebhookLogById);
+router.post('/webhook', webhookTestAuth, rawWebhookBody, handleWebhook);
+router.post('/webhook/:schoolCode', webhookTestAuth, rawWebhookBody, handleWebhook);
+
+// Tất cả các route nghiệp vụ bên dưới đều yêu cầu xác thực người dùng
 router.use(auth);
 
 // Điểm danh

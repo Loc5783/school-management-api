@@ -21,6 +21,10 @@ const parentFeedbackRoutes = require('./src/routes/parentFeedbackRoutes');
 const parentTeacherEvaluationRoutes = require('./src/routes/parentTeacherEvaluationRoutes');
 const guardRoutes = require('./src/routes/guardRoutes');
 const guardDeviceIngestRoutes = require('./src/routes/guardDeviceIngestRoutes');
+const timekeepingWebhookRoutes = require('./src/routes/timekeepingWebhookRoutes');
+
+// Biểu thức chính quy cho phép truy cập từ localhost và toàn bộ dải IP mạng LAN nội bộ (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+const LAN_OR_LOCAL_ORIGIN_REGEX = /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$/;
 
 const createApp = () => {
     const app = express();
@@ -31,14 +35,20 @@ const createApp = () => {
 
     app.use(cors({
         origin(origin, callback) {
-            if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+            if (!origin || allowedOrigins.includes(origin) || LAN_OR_LOCAL_ORIGIN_REGEX.test(origin)) {
+                return callback(null, true);
+            }
             return callback(new Error('Origin không được phép truy cập API'));
         },
-        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-        allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key', 'X-Device-Api-Key']
+        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+        allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key', 'X-Device-Api-Key', 'X-Webhook-Token', 'X-School-Code']
     }));
-    app.use(express.json());
 
+    // Tăng giới hạn JSON/urlencoded lên 15MB (giống JussStudio/BE); multipart/form-data từ máy chấm công sẽ đi thẳng vào express.raw() của route /webhook
+    app.use(express.json({ limit: '15mb' }));
+    app.use(express.urlencoded({ extended: true, limit: '15mb' }));
+
+    app.use('/api/webhooks/timekeeping', timekeepingWebhookRoutes);
     app.use('/api/auth', authRoutes);
     app.use('/api/classrooms', classroomRoutes);
     app.use('/api/students', studentRoutes);

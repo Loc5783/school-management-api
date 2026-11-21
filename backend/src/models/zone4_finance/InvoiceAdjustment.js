@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 
 const InvoiceAdjustmentSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant'
+    },
     invoiceId: { type: mongoose.Schema.Types.ObjectId, ref: 'TuitionFee', required: true, index: true },
     type: { type: String, enum: ['discount', 'surcharge', 'refund'], required: true },
     amount: { type: Number, required: true, min: 0 },

@@ -7,11 +7,12 @@ const ClassroomAnnouncement = require('../models/zone3_school/ClassroomAnnouncem
 const ClassroomDailyCareReport = require('../models/zone3_school/ClassroomDailyCareReport');
 const { canAccessClassroom, getTeacherClassroomIds, hasSchoolWideReadAccess } = require('../services/schoolDataAccessService');
 const { getLinkedStudentIds, isParent } = require('../services/studentAccessService');
+const { buildTenantFilter } = require('../services/tenantFilterService');
 
-const readableClassroomIds = async (user) => {
+const readableClassroomIds = async (user, tenantFilter = {}) => {
     if (user.role === 'teacher') return getTeacherClassroomIds(user);
     if (isParent(user)) {
-        const students = await Student.find({ _id: { $in: getLinkedStudentIds(user) }, status: { $in: ['enrolled', 'temporarily_absent'] } }).select('classroomId').lean();
+        const students = await Student.find({ _id: { $in: getLinkedStudentIds(user) }, status: { $in: ['enrolled', 'temporarily_absent'] }, ...tenantFilter }).select('classroomId').lean();
         return [...new Set(students.map((student) => String(student.classroomId)))];
     }
     return hasSchoolWideReadAccess(user) ? null : [];
@@ -19,8 +20,9 @@ const readableClassroomIds = async (user) => {
 
 const listAnnouncements = async (req, res) => {
     try {
-        const ids = await readableClassroomIds(req.user);
-        const filter = ids ? { classroomId: { $in: ids } } : {};
+        const tenantFilter = buildTenantFilter(req);
+        const ids = await readableClassroomIds(req.user, tenantFilter);
+        const filter = ids ? { classroomId: { $in: ids }, ...tenantFilter } : { ...tenantFilter };
         if (req.query.classroomId) {
             if (!mongoose.isValidObjectId(req.query.classroomId)) return res.status(400).json({ message: 'ID lớp không hợp lệ' });
             if (ids && !ids.includes(String(req.query.classroomId))) return res.status(403).json({ message: 'Bạn không có quyền xem thông báo lớp này' });
@@ -39,20 +41,46 @@ const createAnnouncement = async (req, res) => {
         const title = String(req.body.title || '').trim();
         const content = String(req.body.content || '').trim();
         if (!title || title.length > 160 || !content || content.length > 2000) return res.status(422).json({ message: 'Vui lòng nhập tiêu đề và nội dung thông báo hợp lệ' });
-        const classroom = await Classroom.findOne({ _id: classroomId, status: 'active' }).select('name');
+        const tenantFilter = buildTenantFilter(req);
+        const tenantId = req.tenantId || req.user?.tenantId;
+        const classroom = await Classroom.findOne({ _id: classroomId, status: 'active', ...tenantFilter }).select('name');
         if (!classroom) return res.status(404).json({ message: 'Không tìm thấy lớp đang hoạt động' });
-        const announcement = await ClassroomAnnouncement.create({ classroomId, className: classroom.name, title, content, createdBy: req.user._id, createdByName: req.user.profile?.fullName || req.user.username });
-        const studentIds = await Student.distinct('_id', { classroomId, status: { $in: ['enrolled', 'temporarily_absent'] } });
-        const parents = await User.find({ role: 'parent', status: 'active', 'parentInfo.studentIds': { $in: studentIds } }).select('_id').lean();
-        if (parents.length) await Notification.insertMany(parents.map((parent) => ({ recipientId: parent._id, title: `${classroom.name}: ${title}`, message: content, type: 'info', link: '/parent-portal', createdBy: req.user._id, metadata: { classroomId, announcementId: announcement._id } })));
+        const announcementData = {
+            classroomId,
+            className: classroom.name,
+            title,
+            content,
+            createdBy: req.user._id,
+            createdByName: req.user.profile?.fullName || req.user.username
+        };
+        if (tenantId) announcementData.tenantId = tenantId;
+        const announcement = await ClassroomAnnouncement.create(announcementData);
+        const studentIds = await Student.distinct('_id', { classroomId, status: { $in: ['enrolled', 'temporarily_absent'] }, ...tenantFilter });
+        const parents = await User.find({ role: 'parent', status: 'active', 'parentInfo.studentIds': { $in: studentIds }, ...tenantFilter }).select('_id').lean();
+        if (parents.length) {
+            await Notification.insertMany(parents.map((parent) => {
+                const notif = {
+                    recipientId: parent._id,
+                    title: `${classroom.name}: ${title}`,
+                    message: content,
+                    type: 'info',
+                    link: '/parent-portal',
+                    createdBy: req.user._id,
+                    metadata: { classroomId, announcementId: announcement._id }
+                };
+                if (tenantId) notif.tenantId = tenantId;
+                return notif;
+            }));
+        }
         return res.status(201).json({ success: true, message: `Đã gửi thông báo tới ${parents.length} phụ huynh`, data: announcement });
     } catch (error) { console.error(error); return res.status(500).json({ message: 'Không thể gửi thông báo lớp' }); }
 };
 
 const listClassCareReports = async (req, res) => {
     try {
-        const ids = await readableClassroomIds(req.user);
-        const filter = ids ? { classroomId: { $in: ids } } : {};
+        const tenantFilter = buildTenantFilter(req);
+        const ids = await readableClassroomIds(req.user, tenantFilter);
+        const filter = ids ? { classroomId: { $in: ids }, ...tenantFilter } : { ...tenantFilter };
         if (req.query.classroomId) {
             if (!mongoose.isValidObjectId(req.query.classroomId)) return res.status(400).json({ message: 'ID lớp không hợp lệ' });
             if (ids && !ids.includes(String(req.query.classroomId))) return res.status(403).json({ message: 'Bạn không có quyền xem sổ chăm sóc lớp này' });
@@ -72,7 +100,9 @@ const saveClassCareReport = async (req, res) => {
         const { classroomId } = req.body;
         if (!mongoose.isValidObjectId(classroomId)) return res.status(400).json({ message: 'ID lớp không hợp lệ' });
         if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, classroomId)) return res.status(403).json({ message: 'Bạn không được ghi sổ cho lớp khác' });
-        const classroom = await Classroom.findOne({ _id: classroomId, status: 'active' }).select('name');
+        const tenantFilter = buildTenantFilter(req);
+        const tenantId = req.tenantId || req.user?.tenantId;
+        const classroom = await Classroom.findOne({ _id: classroomId, status: 'active', ...tenantFilter }).select('name');
         if (!classroom) return res.status(404).json({ message: 'Không tìm thấy lớp đang hoạt động' });
         const reportDate = new Date(req.body.reportDate || new Date());
         if (Number.isNaN(reportDate.getTime())) return res.status(422).json({ message: 'Ngày ghi nhận không hợp lệ' });
@@ -83,29 +113,43 @@ const saveClassCareReport = async (req, res) => {
         const rawNotes = Array.isArray(req.body.studentNotes) ? req.body.studentNotes : [];
         const noteIds = rawNotes.map((item) => String(item.studentId || '')).filter(Boolean);
         if (new Set(noteIds).size !== noteIds.length || noteIds.some((id) => !mongoose.isValidObjectId(id))) return res.status(422).json({ message: 'Danh sách học sinh cần lưu ý không hợp lệ hoặc bị trùng' });
-        const students = await Student.find({ _id: { $in: noteIds }, classroomId, status: { $in: ['enrolled', 'temporarily_absent'] } }).select('fullName').lean();
+        const students = await Student.find({ _id: { $in: noteIds }, classroomId, status: { $in: ['enrolled', 'temporarily_absent'] }, ...tenantFilter }).select('fullName').lean();
         if (students.length !== noteIds.length) return res.status(422).json({ message: 'Chỉ được gắn học sinh đang thuộc lớp này' });
         const byId = new Map(students.map((student) => [String(student._id), student]));
         const studentNotes = rawNotes.map((item) => ({ studentId: item.studentId, studentName: byId.get(String(item.studentId)).fullName, note: String(item.note || '').trim().slice(0, 1000) })).filter((item) => item.note);
         if (!Object.values(common).some(Boolean) && !studentNotes.length) return res.status(422).json({ message: 'Vui lòng nhập nhận xét chung hoặc ít nhất một lưu ý riêng' });
+        const setPayload = {
+            classroomId,
+            className: classroom.name,
+            reportDate,
+            dateKey,
+            ...common,
+            studentNotes,
+            recordedBy: req.user._id,
+            recordedByName: req.user.profile?.fullName || req.user.username,
+            sentAt: new Date()
+        };
+        if (tenantId) setPayload.tenantId = tenantId;
         const report = await ClassroomDailyCareReport.findOneAndUpdate(
-            { classroomId, dateKey },
-            { $set: { classroomId, className: classroom.name, reportDate, dateKey, ...common, studentNotes, recordedBy: req.user._id, recordedByName: req.user.profile?.fullName || req.user.username, sentAt: new Date() } },
+            { classroomId, dateKey, ...tenantFilter },
+            { $set: setPayload, $setOnInsert: tenantId ? { tenantId } : {} },
             { upsert: true, returnDocument: 'after', runValidators: true }
         );
-        const classStudentIds = await Student.distinct('_id', { classroomId, status: { $in: ['enrolled', 'temporarily_absent'] } });
-        const parents = await User.find({ role: 'parent', status: 'active', 'parentInfo.studentIds': { $in: classStudentIds } }).select('_id parentInfo.studentIds').lean();
+        const classStudentIds = await Student.distinct('_id', { classroomId, status: { $in: ['enrolled', 'temporarily_absent'] }, ...tenantFilter });
+        const parents = await User.find({ role: 'parent', status: 'active', 'parentInfo.studentIds': { $in: classStudentIds }, ...tenantFilter }).select('_id parentInfo.studentIds').lean();
         const noteByStudent = new Map(studentNotes.map((note) => [String(note.studentId), note]));
         if (parents.length) await Notification.insertMany(parents.map((parent) => {
             const privateNotes = (parent.parentInfo?.studentIds || []).map(String).map((id) => noteByStudent.get(id)).filter(Boolean);
             const privateNote = privateNotes[0];
-            return {
+            const notif = {
                 recipientId: parent._id,
                 title: privateNotes.length ? `Lưu ý riêng về ${privateNotes.map((note) => note.studentName).join(', ')}` : `Sổ chăm sóc lớp ${classroom.name}`,
                 message: privateNotes.length ? privateNotes.map((note) => `${note.studentName}: ${note.note}`).join(' · ') : `Giáo viên đã cập nhật tình hình chung của lớp ngày ${reportDate.toLocaleDateString('vi-VN')}.`,
                 type: privateNote ? 'warning' : 'info', link: '/parent-portal', createdBy: req.user._id,
                 metadata: { classroomId, careReportId: report._id, studentId: privateNote?.studentId || null }
             };
+            if (tenantId) notif.tenantId = tenantId;
+            return notif;
         }));
         return res.json({ success: true, message: `Đã lưu sổ lớp và gửi tới ${parents.length} phụ huynh`, data: report });
     } catch (error) { console.error(error); return res.status(error.code === 11000 ? 409 : 500).json({ message: error.code === 11000 ? 'Sổ chăm sóc ngày này vừa được cập nhật, vui lòng tải lại' : 'Không thể lưu sổ chăm sóc lớp' }); }

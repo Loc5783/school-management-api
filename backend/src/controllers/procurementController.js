@@ -6,6 +6,7 @@ const Asset = require('../models/zone6_procurement/Asset');
 const Supplier = require('../models/zone5_nutrition/Supplier'); // dùng chung từ Zone 5
 const User = require('../models/zone1_system/User');
 const Notification = require('../models/zone1_system/Notification');
+const { buildTenantFilter } = require('../services/tenantFilterService');
 
 const startOfToday = () => {
     const value = new Date();
@@ -30,7 +31,8 @@ const parseExpectedDelivery = (value) => {
 // ==============================
 const createItem = async (req, res) => {
     try {
-        const item = new ItemMaster(req.body);
+        const tenantId = req.tenantId || req.user?.tenantId;
+        const item = new ItemMaster({ ...req.body, ...(tenantId ? { tenantId } : {}) });
         await item.save();
         res.status(201).json({ message: 'Tạo mặt hàng thành công', data: item });
     } catch (err) {
@@ -45,7 +47,8 @@ const getItems = async (req, res) => {
         const filter = {};
         if (category) filter.category = category;
         if (status) filter.status = status;
-        const items = await ItemMaster.find(filter).sort({ name: 1 });
+        const tenantFilter = buildTenantFilter(req);
+        const items = await ItemMaster.find({ ...filter, ...tenantFilter }).sort({ name: 1 });
         res.json({ message: 'Lấy danh sách mặt hàng thành công', data: items });
     } catch (err) {
         console.error(err);
@@ -55,7 +58,8 @@ const getItems = async (req, res) => {
 
 const updateItem = async (req, res) => {
     try {
-        const item = await ItemMaster.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        const tenantFilter = buildTenantFilter(req);
+        const item = await ItemMaster.findOneAndUpdate({ _id: req.params.id, ...tenantFilter }, req.body, { new: true });
         if (!item) return res.status(404).json({ message: 'Không tìm thấy mặt hàng' });
         res.json({ message: 'Cập nhật mặt hàng thành công', data: item });
     } catch (err) {
@@ -66,7 +70,8 @@ const updateItem = async (req, res) => {
 
 const deleteItem = async (req, res) => {
     try {
-        const item = await ItemMaster.findByIdAndDelete(req.params.id);
+        const tenantFilter = buildTenantFilter(req);
+        const item = await ItemMaster.findOneAndDelete({ _id: req.params.id, ...tenantFilter });
         if (!item) return res.status(404).json({ message: 'Không tìm thấy mặt hàng' });
         res.json({ message: 'Xóa mặt hàng thành công' });
     } catch (err) {
@@ -89,7 +94,9 @@ const createProcurementRequest = async (req, res) => {
             return { ...item, totalEstimated: total };
         });
 
+        const tenantId = req.tenantId || req.user?.tenantId;
         const request = new ProcurementRequest({
+            ...(tenantId ? { tenantId } : {}),
             ...rest,
             items: processedItems,
             totalEstimatedCost,
@@ -111,7 +118,8 @@ const getProcurementRequests = async (req, res) => {
         if (req.user.role === 'teacher') filter.requesterId = req.user._id;
         if (status) filter.status = status;
         if (urgency) filter.urgency = urgency;
-        const requests = await ProcurementRequest.find(filter).sort({ createdAt: -1 });
+        const tenantFilter = buildTenantFilter(req);
+        const requests = await ProcurementRequest.find({ ...filter, ...tenantFilter }).sort({ createdAt: -1 });
         res.json({ message: 'Lấy danh sách đề xuất thành công', data: requests });
     } catch (err) {
         console.error(err);
@@ -125,7 +133,8 @@ const approveProcurementRequest = async (req, res) => {
         const { id } = req.params;
         const { level, status, rejectionReason } = req.body; // level: 1 hoặc 2
 
-        const request = await ProcurementRequest.findById(id);
+        const tenantFilter = buildTenantFilter(req);
+        const request = await ProcurementRequest.findOne({ _id: id, ...tenantFilter });
         if (!request) return res.status(404).json({ message: 'Không tìm thấy đề xuất' });
 
         if (!['pending', 'approved_l1'].includes(request.status)) {
@@ -174,19 +183,21 @@ const createPurchaseOrder = async (req, res) => {
         }
 
         // Kiểm tra đề xuất đã được duyệt chưa
-        const request = await ProcurementRequest.findById(requestId);
+        const tenantFilter = buildTenantFilter(req);
+        const tenantId = req.tenantId || req.user?.tenantId;
+        const request = await ProcurementRequest.findOne({ _id: requestId, ...tenantFilter });
         if (!request) return res.status(404).json({ message: 'Không tìm thấy đề xuất' });
         if (request.status !== 'approved_l2') {
             return res.status(409).json({ message: request.status === 'purchased' ? 'Đề xuất này đã có đơn đặt hàng' : 'Đề xuất chưa được phê duyệt để đặt hàng' });
         }
-        if (await PurchaseOrder.exists({ requestId })) return res.status(409).json({ message: 'Đề xuất này đã có đơn đặt hàng' });
+        if (await PurchaseOrder.exists({ requestId, ...tenantFilter })) return res.status(409).json({ message: 'Đề xuất này đã có đơn đặt hàng' });
 
         // Kiểm tra supplier
         let supplier = null;
         let supplierName = String(manualSupplierName || '').trim();
         if (supplierId) {
             if (!mongoose.isValidObjectId(supplierId)) return res.status(400).json({ message: 'Nhà cung cấp không hợp lệ' });
-            supplier = await Supplier.findById(supplierId);
+            supplier = await Supplier.findOne({ _id: supplierId, ...tenantFilter });
             if (!supplier || supplier.status !== 'active') return res.status(422).json({ message: 'Nhà cung cấp không tồn tại hoặc đang ngừng hợp tác' });
             supplierName = supplier.name;
         }
@@ -220,6 +231,7 @@ const createPurchaseOrder = async (req, res) => {
         const orderCode = `PO-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
 
         const order = new PurchaseOrder({
+            ...(tenantId ? { tenantId } : {}),
             orderCode,
             requestId,
               supplierId: supplier?._id || null,
@@ -251,7 +263,8 @@ const getPurchaseOrders = async (req, res) => {
         const { status } = req.query;
         const filter = {};
         if (status) filter.status = status;
-        const orders = await PurchaseOrder.find(filter).sort({ orderDate: -1 });
+        const tenantFilter = buildTenantFilter(req);
+        const orders = await PurchaseOrder.find({ ...filter, ...tenantFilter }).sort({ orderDate: -1 });
         res.json({ message: 'Lấy danh sách đơn hàng thành công', data: orders });
     } catch (err) {
         console.error(err);
@@ -264,10 +277,11 @@ const updatePurchaseOrderStatus = async (req, res) => {
         const { id } = req.params;
         const { status } = req.body;
         if (!['delivered', 'cancelled'].includes(status)) return res.status(400).json({ message: 'Chỉ có thể xác nhận đã giao hoặc hủy đơn' });
-        const current = await PurchaseOrder.findById(id);
+        const tenantFilter = buildTenantFilter(req);
+        const current = await PurchaseOrder.findOne({ _id: id, ...tenantFilter });
         if (!current) return res.status(404).json({ message: 'Không tìm thấy đơn hàng' });
         if (current.status !== 'ordered') return res.status(409).json({ message: 'Chỉ đơn đang đặt mới có thể xác nhận giao hoặc hủy' });
-        const order = await PurchaseOrder.findByIdAndUpdate(id, { status }, { new: true });
+        const order = await PurchaseOrder.findOneAndUpdate({ _id: id, ...tenantFilter }, { status }, { new: true });
         res.json({ message: 'Cập nhật đơn hàng thành công', data: order });
     } catch (err) {
         console.error(err);
@@ -281,7 +295,8 @@ const updatePurchaseOrderDetails = async (req, res) => {
         if (!mongoose.isValidObjectId(id)) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ' });
         const deliveryResult = parseExpectedDelivery(req.body.expectedDelivery);
         if (deliveryResult.error) return res.status(422).json({ message: deliveryResult.error });
-        const order = await PurchaseOrder.findById(id);
+        const tenantFilter = buildTenantFilter(req);
+        const order = await PurchaseOrder.findOne({ _id: id, ...tenantFilter });
         if (!order) return res.status(404).json({ message: 'Không tìm thấy đơn hàng' });
         if (order.status !== 'ordered') return res.status(409).json({ message: 'Chỉ đơn đang đặt mới được sửa ngày giao' });
         order.expectedDelivery = deliveryResult.date;
@@ -296,7 +311,8 @@ const updatePurchaseOrderDetails = async (req, res) => {
 
 const getProcurementSuppliers = async (req, res) => {
     try {
-        const suppliers = await Supplier.find({ status: 'active' }).select('name code contactPerson phone categories rating').sort({ name: 1 });
+        const tenantFilter = buildTenantFilter(req);
+        const suppliers = await Supplier.find({ status: 'active', ...tenantFilter }).select('name code contactPerson phone categories rating').sort({ name: 1 });
         res.json({ success: true, data: suppliers });
     } catch (err) {
         console.error(err);
@@ -309,7 +325,8 @@ const getProcurementSuppliers = async (req, res) => {
 // ==============================
 const createAsset = async (req, res) => {
     try {
-        const asset = new Asset(req.body);
+        const tenantId = req.tenantId || req.user?.tenantId;
+        const asset = new Asset({ ...req.body, ...(tenantId ? { tenantId } : {}) });
         await asset.save();
         res.status(201).json({ message: 'Tạo tài sản thành công', data: asset });
     } catch (err) {
@@ -326,7 +343,8 @@ const getAssets = async (req, res) => {
         if (status) filter.status = status;
         if (category) filter.category = category;
         if (assignedTo) filter.assignedTo = assignedTo;
-        const assets = await Asset.find(filter).sort({ createdAt: -1 });
+        const tenantFilter = buildTenantFilter(req);
+        const assets = await Asset.find({ ...filter, ...tenantFilter }).sort({ createdAt: -1 });
         res.json({ message: 'Lấy danh sách tài sản thành công', data: assets });
     } catch (err) {
         console.error(err);
@@ -337,7 +355,8 @@ const getAssets = async (req, res) => {
 const updateAsset = async (req, res) => {
     try {
         const { id } = req.params;
-        const asset = await Asset.findByIdAndUpdate(id, req.body, { new: true });
+        const tenantFilter = buildTenantFilter(req);
+        const asset = await Asset.findOneAndUpdate({ _id: id, ...tenantFilter }, req.body, { new: true });
         if (!asset) return res.status(404).json({ message: 'Không tìm thấy tài sản' });
         res.json({ message: 'Cập nhật tài sản thành công', data: asset });
     } catch (err) {
@@ -348,7 +367,8 @@ const updateAsset = async (req, res) => {
 
 const deleteAsset = async (req, res) => {
     try {
-        const asset = await Asset.findByIdAndDelete(req.params.id);
+        const tenantFilter = buildTenantFilter(req);
+        const asset = await Asset.findOneAndDelete({ _id: req.params.id, ...tenantFilter });
         if (!asset) return res.status(404).json({ message: 'Không tìm thấy tài sản' });
         res.json({ message: 'Xóa tài sản thành công' });
     } catch (err) {
@@ -365,8 +385,9 @@ const addMaintenance = async (req, res) => {
             ...req.body,
             recordedBy: req.user._id
         };
-        const asset = await Asset.findByIdAndUpdate(
-            id,
+        const tenantFilter = buildTenantFilter(req);
+        const asset = await Asset.findOneAndUpdate(
+            { _id: id, ...tenantFilter },
             { 
                 $push: { maintenanceHistory: maintenanceRecord },
                 status: 'maintenance'
@@ -386,8 +407,9 @@ const liquidateAsset = async (req, res) => {
     try {
         const { id } = req.params;
         const { liquidationDate, liquidationValue, reason, note } = req.body;
-        const asset = await Asset.findByIdAndUpdate(
-            id,
+        const tenantFilter = buildTenantFilter(req);
+        const asset = await Asset.findOneAndUpdate(
+            { _id: id, ...tenantFilter },
             {
                 liquidation: {
                     liquidationDate,

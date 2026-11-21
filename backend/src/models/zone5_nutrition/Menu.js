@@ -69,6 +69,11 @@ const DayMealSchema = new mongoose.Schema({
 }, { _id: false });
 
 const MenuSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant',
+        index: true
+    },
     classroomId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Classroom',
@@ -160,7 +165,14 @@ const MenuSchema = new mongoose.Schema({
     timestamps: true
 });
 
-MenuSchema.index({ classroomId: 1, schoolYear: 1, weekNumber: 1 }, { unique: true });
+MenuSchema.index(
+    { tenantId: 1, classroomId: 1, schoolYear: 1, weekNumber: 1 },
+    { name: 'tenantId_1_classroomId_1_schoolYear_1_weekNumber_1_unique', unique: true, partialFilterExpression: { tenantId: { $type: 'objectId' } } }
+);
+MenuSchema.index(
+    { classroomId: 1, schoolYear: 1, weekNumber: 1 },
+    { name: 'legacy_classroomId_1_schoolYear_1_weekNumber_1_unique', unique: true, partialFilterExpression: { tenantId: null } }
+);
 MenuSchema.index({ startDate: 1, endDate: 1 });
 MenuSchema.index({ status: 1 });
 

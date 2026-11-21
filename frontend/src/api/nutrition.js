@@ -62,3 +62,4 @@ export const confirmReceivedServings = (classroomId, data) => api.put(`/nutritio
 export const getKitchenRequests = (params) => api.get('/nutrition/requests', { params });
 export const createKitchenRequest = (data) => api.post('/nutrition/requests', data);
 export const approveKitchenRequest = (id, data) => api.put(`/nutrition/requests/${id}/approve`, data);
+export const getKitchenClassrooms = (params) => api.get('/nutrition/classrooms', { params });

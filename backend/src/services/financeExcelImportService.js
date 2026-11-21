@@ -5,6 +5,7 @@ const Student = require('../models/zone3_school/Student');
 const FeeSchedule = require('../models/zone4_finance/FeeSchedule');
 const TuitionFee = require('../models/zone4_finance/TuitionFee');
 const { assertOpen, fromPeriod } = require('../services/accountingPeriodService');
+const { buildTenantFilter } = require('./tenantFilterService');
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
 const MAX_ROWS = 500;
@@ -297,10 +298,11 @@ const getPreviewSecret = () => {
  * Tạo token ký phía server cho kết quả xem trước import (previewToken)
  * Gắn chặt với: type, userId, fingerprint (payload nghiệp vụ), snapshot (học sinh & lớp đối chiếu), thời hạn 15 phút.
  */
-const createPreviewToken = ({ type, userId, fingerprint, snapshot = [], expiresInMs = 15 * 60 * 1000 }) => {
+const createPreviewToken = ({ type, userId, tenantId = null, fingerprint, snapshot = [], expiresInMs = 15 * 60 * 1000 }) => {
   const payload = {
     type,
     userId: String(userId),
+    tenantId: tenantId ? String(tenantId) : null,
     fingerprint,
     snapshot: snapshot.map(s => ({
       studentCode: String(s.studentCode || '').trim().toUpperCase(),
@@ -323,7 +325,7 @@ const createPreviewToken = ({ type, userId, fingerprint, snapshot = [], expiresI
  * - Kiểm tra thời hạn hiệu lực (15 phút)
  * - Trả về payload giải mã chứa snapshot học sinh/lớp
  */
-const verifyPreviewToken = (token, expectedType, userId, fingerprint) => {
+const verifyPreviewToken = (token, expectedType, userId, fingerprint, expectedTenantId = undefined) => {
   if (!token || typeof token !== 'string' || !token.trim()) {
     throw Object.assign(
       new Error('Yêu cầu nhập dữ liệu bắt buộc phải có mã xác thực xem trước (previewToken). Vui lòng tải file và xem trước lại.'),
@@ -373,6 +375,17 @@ const verifyPreviewToken = (token, expectedType, userId, fingerprint) => {
       new Error('Mã xác thực xem trước thuộc về tài khoản người dùng khác. Vui lòng tự thực hiện xem trước.'),
       { statusCode: 403 }
     );
+  }
+
+  if (expectedTenantId !== undefined) {
+    const payloadTenant = payload.tenantId ? String(payload.tenantId) : null;
+    const targetTenant = expectedTenantId ? String(expectedTenantId) : null;
+    if (payloadTenant !== targetTenant) {
+      throw Object.assign(
+        new Error('Mã xác thực xem trước thuộc về đơn vị trường học khác. Vui lòng tự thực hiện xem trước.'),
+        { statusCode: 403 }
+      );
+    }
   }
 
   if (payload.fingerprint !== fingerprint) {
@@ -695,8 +708,9 @@ const validateAdditionalItems = (items, rowNum) => {
 /**
  * Sinh file Excel mẫu Mức thu (FeeSchedule)
  */
-const generateFeeScheduleTemplateWorkbook = async () => {
-  const classrooms = await Classroom.find({ status: 'active' }).select('name').sort({ name: 1 }).lean();
+const generateFeeScheduleTemplateWorkbook = async (context) => {
+  const tenantFilter = buildTenantFilter(context, { throwOnInvalid: true });
+  const classrooms = await Classroom.find({ status: 'active', ...tenantFilter }).select('name').sort({ name: 1 }).lean();
 
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Hệ thống Quản lý Mầm Non Hoa Nắng';
@@ -797,8 +811,9 @@ const generateFeeScheduleTemplateWorkbook = async () => {
 /**
  * Sinh file Excel mẫu Hóa đơn học phí (TuitionFee - CHƯA THU)
  */
-const generateInvoiceTemplateWorkbook = async () => {
-  const students = await Student.find({ status: 'enrolled' })
+const generateInvoiceTemplateWorkbook = async (context) => {
+  const tenantFilter = buildTenantFilter(context, { throwOnInvalid: true });
+  const students = await Student.find({ status: 'enrolled', ...tenantFilter })
     .select('studentCode fullName className')
     .sort({ className: 1, fullName: 1 })
     .limit(200)
@@ -922,8 +937,9 @@ const computeFinanceBatchFingerprint = (type, context, rows) => {
 /**
  * Phân tích và kiểm tra file Excel Mức thu (FeeSchedule)
  */
-const parseAndValidateFeeSchedules = async (buffer, { defaultPeriod = '' } = {}) => {
+const parseAndValidateFeeSchedules = async (buffer, { defaultPeriod = '', context = null } = {}) => {
   assertZipSafety(buffer);
+  const tenantFilter = buildTenantFilter(context, { throwOnInvalid: true });
 
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(buffer);
@@ -942,7 +958,7 @@ const parseAndValidateFeeSchedules = async (buffer, { defaultPeriod = '' } = {})
   const headerRow = dataSheet.getRow(1);
   const headerMap = mapAndValidateHeaders(headerRow, FEE_SCHEDULE_COLUMNS);
 
-  const activeClassrooms = await Classroom.find({ status: 'active' }).select('_id name').lean();
+  const activeClassrooms = await Classroom.find({ status: 'active', ...tenantFilter }).select('_id name').lean();
   const classroomByName = new Map();
   activeClassrooms.forEach(c => {
     classroomByName.set(normalizeHeader(c.name), c);
@@ -1175,7 +1191,7 @@ const parseAndValidateFeeSchedules = async (buffer, { defaultPeriod = '' } = {})
   const periodsInFile = [...new Set(parsedRows.map(r => r.period).filter(p => PERIOD_REGEX.test(p)))];
   for (const p of periodsInFile) {
     try {
-      await assertOpen(fromPeriod(p));
+      await assertOpen(fromPeriod(p), null, context);
     } catch {
       periodClosedFound = true;
       closedPeriodName = p;
@@ -1185,7 +1201,8 @@ const parseAndValidateFeeSchedules = async (buffer, { defaultPeriod = '' } = {})
 
   // Kiểm tra xung đột với dữ liệu hiện có trong DB
   const existingSchedules = await FeeSchedule.find({
-    period: { $in: periodsInFile }
+    period: { $in: periodsInFile },
+    ...tenantFilter
   }).select('period classroomId classroomName').lean();
   const existingMap = new Set(existingSchedules.map(s => `${s.period}___${String(s.classroomId || '__all__')}`));
 
@@ -1227,8 +1244,9 @@ const parseAndValidateFeeSchedules = async (buffer, { defaultPeriod = '' } = {})
 /**
  * Phân tích và kiểm tra file Excel Hóa đơn học phí (TuitionFee - CHƯA THU)
  */
-const parseAndValidateInvoices = async (buffer, { defaultPeriod = '' } = {}) => {
+const parseAndValidateInvoices = async (buffer, { defaultPeriod = '', context = null } = {}) => {
   assertZipSafety(buffer);
+  const tenantFilter = buildTenantFilter(context, { throwOnInvalid: true });
 
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(buffer);
@@ -1464,9 +1482,10 @@ const parseAndValidateInvoices = async (buffer, { defaultPeriod = '' } = {}) => 
   // Tra cứu danh sách học sinh và danh sách lớp đang hoạt động từ DB
   const [existingStudents, activeClassrooms] = await Promise.all([
     Student.find({
-      studentCode: { $in: Array.from(candidateStudentCodes) }
+      studentCode: { $in: Array.from(candidateStudentCodes) },
+      ...tenantFilter
     }).select('_id studentCode fullName classroomId className status').lean(),
-    Classroom.find({ status: 'active' }).select('_id name status').lean()
+    Classroom.find({ status: 'active', ...tenantFilter }).select('_id name status').lean()
   ]);
 
   const studentMap = new Map();
@@ -1536,7 +1555,7 @@ const parseAndValidateInvoices = async (buffer, { defaultPeriod = '' } = {}) => 
 
   for (const p of periodsInFile) {
     try {
-      await assertOpen(fromPeriod(p));
+      await assertOpen(fromPeriod(p), null, context);
     } catch {
       periodClosedFound = true;
       closedPeriodName = p;
@@ -1548,7 +1567,8 @@ const parseAndValidateInvoices = async (buffer, { defaultPeriod = '' } = {}) => 
   const existingInvoices = await TuitionFee.find({
     studentId: { $in: validStudentIds },
     period: { $in: periodsInFile },
-    status: { $ne: 'cancelled' }
+    status: { $ne: 'cancelled' },
+    ...tenantFilter
   }).select('studentId period').lean();
 
   const existingInvoiceSet = new Set(existingInvoices.map(inv => `${String(inv.studentId)}___${inv.period}`));
@@ -1782,10 +1802,11 @@ const normalizeFeeSchedulePayloadStrict = (rows, defaultPeriod = '') => {
 /**
  * Xác thực Mức thu đối chiếu với DB (Classroom đang hoạt động)
  */
-const validateFeeScheduleBatchStrict = async (rows, { session } = {}) => {
+const validateFeeScheduleBatchStrict = async (rows, { session, context = null } = {}) => {
   const normalizedRows = normalizeFeeSchedulePayloadStrict(rows);
+  const tenantFilter = buildTenantFilter(context, { throwOnInvalid: true });
 
-  const activeClassrooms = await Classroom.find({ status: 'active' }).session(session).select('_id name').lean();
+  const activeClassrooms = await Classroom.find({ status: 'active', ...tenantFilter }).session(session).select('_id name').lean();
   const classroomByName = new Map();
   const classroomById = new Map();
   activeClassrooms.forEach(c => {
@@ -1935,16 +1956,20 @@ const normalizeInvoicePayloadStrict = (rows, defaultPeriod = '') => {
  * - Nếu có previewSnapshot: đối chiếu lớp hiện tại với lớp lúc xem trước; nếu học sinh đã chuyển lớp -> hủy và báo lỗi 422
  * - Dữ liệu chính thức khi ghi lấy từ DB
  */
-const validateInvoiceBatchStrict = async (rows, { session, previewSnapshot } = {}) => {
+const validateInvoiceBatchStrict = async (rows, { session, previewSnapshot, context = null } = {}) => {
   const normalizedRows = normalizeInvoicePayloadStrict(rows);
+  const tenantFilter = buildTenantFilter(context, { throwOnInvalid: true });
 
   const studentCodes = [...new Set(normalizedRows.map(r => r.studentCode))];
-  const [dbStudents, activeClassrooms] = await Promise.all([
-    Student.find({
-      studentCode: { $in: studentCodes }
-    }).session(session).select('_id studentCode fullName classroomId className status').lean(),
-    Classroom.find({ status: 'active' }).session(session).select('_id name status').lean()
-  ]);
+  const dbStudents = await Student.find({
+    studentCode: { $in: studentCodes },
+    ...tenantFilter
+  }).session(session).select('_id studentCode fullName classroomId className status').lean();
+
+  const activeClassrooms = await Classroom.find({
+    status: 'active',
+    ...tenantFilter
+  }).session(session).select('_id name status').lean();
 
   const studentMap = new Map();
   dbStudents.forEach(s => studentMap.set(s.studentCode, s));

@@ -7,6 +7,7 @@ const {
     getMenus,
     getMenuById,
     getClassroomDietaryAlerts,
+    getKitchenClassrooms,
     createMenu,
     updateMenu,
     submitMenuForApproval,
@@ -17,6 +18,7 @@ const {
     checkAllergiesDryRun,
     // Dishes & Ingredients
     getDishes,
+    getDishById,
     createDish,
     updateDish,
     deleteDish,
@@ -66,6 +68,7 @@ const kitchenReconciliation = require('../controllers/kitchenReconciliationContr
 router.use(auth);
 
 // ===== THỰC ĐƠN TUẦN THEO LỚP & DỊ ỨNG =====
+router.get('/classrooms', roleCheck(['admin', 'principal', 'chef', 'teacher']), getKitchenClassrooms);
 router.get('/menus', roleCheck(['admin', 'principal', 'chef', 'teacher', 'parent']), getMenus);
 router.get('/classrooms/:id/dietary-alerts', roleCheck(['admin', 'principal', 'chef', 'teacher']), getClassroomDietaryAlerts);
 router.get('/menus/:id', roleCheck(['admin', 'principal', 'chef', 'teacher', 'parent']), getMenuById);

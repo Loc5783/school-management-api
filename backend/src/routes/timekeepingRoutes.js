@@ -18,6 +18,7 @@ const {
   submitAdjustmentDraft,
   updateAdjustmentDraft
 } = require('../controllers/timekeepingController');
+const deviceCtrl = require('../controllers/timekeepingDeviceController');
 const auth = require('../middlewares/auth');
 const deviceAuth = require('../middlewares/deviceAuth');
 const roleCheck = require('../middlewares/roleCheck');
@@ -62,5 +63,18 @@ router.patch('/corrections/:id/reject', roleCheck(approvalRoles), rejectCorrecti
 router.post('/recalculate/:date', roleCheck(approvalRoles), recalculateAttendance);
 
 router.get('/device-events', roleCheck(approvalRoles), getDeviceEvents);
+
+// Timekeeping Device & Person Mapping Management Endpoints
+router.get('/devices', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.listDevices);
+router.post('/devices', roleCheck(['admin']), deviceCtrl.createDevice);
+router.get('/devices-unmapped', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.getUnmappedEvents);
+router.get('/devices/:id', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.getDeviceById);
+router.patch('/devices/:id', roleCheck(['admin']), deviceCtrl.updateDevice);
+router.post('/devices/:id/test-connection', roleCheck(['admin']), deviceCtrl.testDeviceConn);
+router.post('/devices/:id/sync', roleCheck(['admin', 'principal']), deviceCtrl.triggerDeviceSync);
+router.get('/devices/:id/person-mappings', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.listPersonMappings);
+router.post('/devices/:id/person-mappings', roleCheck(['admin']), deviceCtrl.upsertPersonMapping);
+router.delete('/devices/:id/person-mappings/:mappingId', roleCheck(['admin']), deviceCtrl.deletePersonMapping);
+router.get('/devices/:id/sync-logs', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.getSyncLogs);
 
 module.exports = router;

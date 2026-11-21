@@ -1,6 +1,11 @@
 const mongoose = require('mongoose');
 
 const KitchenStaffSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant',
+        index: true
+    },
     userId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
@@ -13,7 +18,6 @@ const KitchenStaffSchema = new mongoose.Schema({
     staffCode: {
         type: String,
         required: true,
-        unique: true,
         uppercase: true,
         trim: true
     },
@@ -64,5 +68,13 @@ const KitchenStaffSchema = new mongoose.Schema({
 
 KitchenStaffSchema.index({ position: 1 });
 KitchenStaffSchema.index({ status: 1 });
+KitchenStaffSchema.index(
+    { tenantId: 1, staffCode: 1 },
+    { name: 'tenantId_1_staffCode_1_unique', unique: true, partialFilterExpression: { tenantId: { $type: 'objectId' } } }
+);
+KitchenStaffSchema.index(
+    { staffCode: 1 },
+    { name: 'legacy_staffCode_1_unique', unique: true, partialFilterExpression: { tenantId: null } }
+);
 
 module.exports = mongoose.model('KitchenStaff', KitchenStaffSchema);

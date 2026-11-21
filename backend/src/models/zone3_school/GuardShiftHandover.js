@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const GuardShiftHandoverSchema = new mongoose.Schema({
+  tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
   handoverDate: { type: String, required: true, match: /^\d{4}-\d{2}-\d{2}$/, index: true },
   shiftName: { type: String, enum: ['morning', 'afternoon', 'evening'], required: true },
   receiverName: { type: String, required: true, trim: true, maxlength: 120 },
@@ -22,6 +23,7 @@ const GuardShiftHandoverSchema = new mongoose.Schema({
   handedOverAt: { type: Date, default: Date.now, required: true }
 }, { timestamps: true });
 
+GuardShiftHandoverSchema.index({ tenantId: 1, handoverDate: 1, handedOverAt: -1 });
 GuardShiftHandoverSchema.index({ handoverDate: 1, handedOverAt: -1 });
 GuardShiftHandoverSchema.index({ receiverId: 1, status: 1, handedOverAt: -1 });
 module.exports = mongoose.model('GuardShiftHandover', GuardShiftHandoverSchema);

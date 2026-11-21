@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const GuardDeviceEventSchema = new mongoose.Schema({
+  tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
   deviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'GuardDevice', required: true, index: true },
   externalEventId: { type: String, required: true, trim: true, maxlength: 120 },
   eventType: { type: String, required: true, enum: ['plate', 'face', 'card', 'behavior', 'gate_state'] },

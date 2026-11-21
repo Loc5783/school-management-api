@@ -1,6 +1,11 @@
 const mongoose = require('mongoose');
 
 const SupplierSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant',
+        index: true
+    },
     name: {
         type: String,
         required: true,
@@ -9,7 +14,6 @@ const SupplierSchema = new mongoose.Schema({
     code: {
         type: String,
         required: true,
-        unique: true,
         uppercase: true,
         trim: true
     },
@@ -66,5 +70,13 @@ const SupplierSchema = new mongoose.Schema({
 });
 
 SupplierSchema.index({ status: 1 });
+SupplierSchema.index(
+    { tenantId: 1, code: 1 },
+    { name: 'tenantId_1_code_1_unique', unique: true, partialFilterExpression: { tenantId: { $type: 'objectId' } } }
+);
+SupplierSchema.index(
+    { code: 1 },
+    { name: 'legacy_code_1_unique', unique: true, partialFilterExpression: { tenantId: null } }
+);
 
 module.exports = mongoose.model('Supplier', SupplierSchema);

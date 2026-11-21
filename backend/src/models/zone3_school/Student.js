@@ -15,6 +15,10 @@ const StudentStatusHistorySchema = new mongoose.Schema({
 }, { _id: false });
 
 const StudentSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant'
+    },
     studentCode: {
         type: String,
         trim: true,
@@ -57,15 +61,11 @@ const StudentSchema = new mongoose.Schema({
     attendanceCardId: {
         type: String,
         trim: true,
-        uppercase: true,
-        unique: true,
-        sparse: true
+        uppercase: true
     },
     faceProfileId: {
         type: String,
-        trim: true,
-        unique: true,
-        sparse: true
+        trim: true
     },
     schoolYear: {
         type: String,
@@ -172,7 +172,38 @@ const StudentSchema = new mongoose.Schema({
 StudentSchema.index({ classroomId: 1 });
 StudentSchema.index({ status: 1 });
 StudentSchema.index({ fullName: 'text' });
-StudentSchema.index({ studentCode: 1 }, { unique: true });
+// Multi-tenant studentCode unique index
+StudentSchema.index({ tenantId: 1, studentCode: 1 }, {
+    unique: true,
+    partialFilterExpression: { tenantId: { $type: 'objectId' } }
+});
+// Legacy backward compatibility unique index
+StudentSchema.index({ studentCode: 1 }, {
+    unique: true,
+    partialFilterExpression: { tenantId: null }
+});
+
+// Multi-tenant attendanceCardId unique index
+StudentSchema.index({ tenantId: 1, attendanceCardId: 1 }, {
+    unique: true,
+    partialFilterExpression: { tenantId: { $type: 'objectId' }, attendanceCardId: { $type: 'string' } }
+});
+StudentSchema.index({ attendanceCardId: 1 }, {
+    unique: true,
+    partialFilterExpression: { tenantId: null, attendanceCardId: { $type: 'string' } }
+});
+
+// Multi-tenant faceProfileId unique index
+StudentSchema.index({ tenantId: 1, faceProfileId: 1 }, {
+    unique: true,
+    partialFilterExpression: { tenantId: { $type: 'objectId' }, faceProfileId: { $type: 'string' } }
+});
+StudentSchema.index({ faceProfileId: 1 }, {
+    unique: true,
+    partialFilterExpression: { tenantId: null, faceProfileId: { $type: 'string' } }
+});
+
+StudentSchema.index({ tenantId: 1, classroomId: 1, status: 1 });
 StudentSchema.index({ classroomId: 1, status: 1, fullName: 1 });
 
 // Middleware tự động gán className trước khi lưu

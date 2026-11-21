@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import React, { Component, useCallback, useEffect, useState } from 'react';
 import {
   getStaffing, getStaffingTimetable, getEmployeeLeaves, saveClassroomStaffing, createStaffShift,
   cancelStaffShift, createStaffReplacement, cancelStaffReplacement
@@ -21,7 +21,7 @@ const getMondayOfWeek = (d) => {
   return new Date(date.setDate(diff)).toISOString().slice(0, 10);
 };
 
-export default function StaffingManagement({ employees, initialDate }) {
+function StaffingManagementInner({ employees, initialDate }) {
   const [date, setDate] = useState(initialDate || today);
   const [startDate, setStartDate] = useState(() => getMondayOfWeek(initialDate || today()));
   const [viewMode, setViewMode] = useState('timetable'); // 'timetable' | 'day'
@@ -45,8 +45,8 @@ export default function StaffingManagement({ employees, initialDate }) {
   const employeeName = (value) => employees.find((employee) => idOf(employee._id) === idOf(value))?.fullName || 'Nhân viên';
 
   const chosenTarget = replacementForm.kind === 'classroom'
-    ? snapshot?.classrooms.find((item) => idOf(item._id) === replacementForm.targetId)
-    : snapshot?.duties.find((item) => idOf(item._id) === replacementForm.targetId);
+    ? (snapshot?.classrooms || []).find((item) => idOf(item._id) === replacementForm.targetId)
+    : (snapshot?.duties || []).find((item) => idOf(item._id) === replacementForm.targetId);
   const eligibleTargets = replacementForm.kind === 'classroom'
     ? (snapshot?.classrooms || []).filter((item) => item.schoolDay)
     : snapshot?.duties || [];
@@ -55,11 +55,11 @@ export default function StaffingManagement({ employees, initialDate }) {
     ? (chosenTarget?.assigned || []).filter((item) => leaves.some((leave) => idOf(leave.employeeId) === idOf(item._id) && leaveCovers(leave, date)))
     : chosenTarget ? employees.filter((employee) => idOf(employee._id) === idOf(chosenTarget.employeeId) && leaves.some((leave) => idOf(leave.employeeId) === idOf(employee._id) && leaveCovers(leave, date))).map((employee) => ({ _id: employee._id, name: employee.fullName })) : [];
   
-  const replacementCandidates = (replacementForm.kind === 'classroom' ? teachers : shiftWorkers.filter((employee) => employee.userId?.role === chosenTarget?.role))
+  const replacementCandidates = (replacementForm.kind === 'classroom' ? teachers : shiftWorkers.filter((employee) => (employee.userId?.role || employee.payrollRole) === (chosenTarget?.role || chosenTarget?.payrollRole)))
     .filter((employee) => !leaves.some((leave) => idOf(leave.employeeId) === idOf(employee._id) && leaveCovers(leave, date)))
     .filter((employee) => !(snapshot?.replacements || []).some((item) => idOf(item.replacementEmployeeId) === idOf(employee._id)))
     .filter((employee) => replacementForm.kind === 'classroom'
-      ? !(snapshot?.classrooms || []).some((classroom) => classroom.schoolYear === chosenTarget?.schoolYear && classroom.assigned.some((item) => idOf(item._id) === idOf(employee._id)))
+      ? !(snapshot?.classrooms || []).some((classroom) => classroom.schoolYear === chosenTarget?.schoolYear && (classroom.assigned || []).some((item) => idOf(item._id) === idOf(employee._id)))
       : !(snapshot?.duties || []).some((duty) => idOf(duty.employeeId) === idOf(employee._id)));
 
   const load = useCallback(async () => {
@@ -77,11 +77,13 @@ export default function StaffingManagement({ employees, initialDate }) {
         }),
         getEmployeeLeaves({ status: 'approved' })
       ]);
-      const data = staffingRes.data.data;
+      const data = staffingRes.data?.data || staffingRes.data || {};
+      const timetable = timetableRes.data?.data || timetableRes.data || {};
+      const leavesList = leaveRes.data?.data || leaveRes.data || [];
       setSnapshot(data);
-      setTimetableData(timetableRes.data.data);
-      setLeaves(leaveRes.data.data || []);
-      setClassDrafts(Object.fromEntries(data.classrooms.map((item) => [idOf(item._id), {
+      setTimetableData(timetable);
+      setLeaves(leavesList);
+      setClassDrafts(Object.fromEntries((data.classrooms || []).map((item) => [idOf(item._id), {
         homeroomTeacherId: idOf(item.homeroomTeacherId),
         supportTeacherIds: (item.supportTeacherIds || []).map(idOf),
         requiredTeachers: item.requiredTeachers,
@@ -560,7 +562,7 @@ export default function StaffingManagement({ employees, initialDate }) {
               </div>
             </div>
             <div className="staffing-class-list">
-              {snapshot.classrooms.map((classroom) => {
+              {(snapshot?.classrooms || []).map((classroom) => {
                 const key = idOf(classroom._id);
                 const draft = classDrafts[key] || {};
                 return (
@@ -651,7 +653,7 @@ export default function StaffingManagement({ employees, initialDate }) {
               </div>
             </div>
             <div className="staffing-shift-list">
-              {snapshot.shifts.map((shift) => (
+              {(snapshot?.shifts || []).map((shift) => (
                 <article key={shift._id}>
                   <div>
                     <strong>{shift.name}</strong>
@@ -668,7 +670,7 @@ export default function StaffingManagement({ employees, initialDate }) {
                   </button>
                 </article>
               ))}
-              {!snapshot.shifts.length && <p style={{ padding: '0 20px' }}>Chưa có ca bếp/bảo vệ nào.</p>}
+              {!(snapshot?.shifts || []).length && <p style={{ padding: '0 20px' }}>Chưa có ca bếp/bảo vệ nào.</p>}
             </div>
 
             <form
@@ -684,7 +686,7 @@ export default function StaffingManagement({ employees, initialDate }) {
                   <option value="">Chọn bếp hoặc bảo vệ</option>
                   {shiftWorkers.map((employee) => (
                     <option key={employee._id} value={employee._id}>
-                      {employee.fullName} · {employee.userId.role === 'chef' ? 'Bếp' : 'Bảo vệ'}
+                      {employee.fullName} · {(employee.userId?.role || employee.payrollRole) === 'chef' ? 'Bếp' : 'Bảo vệ'}
                     </option>
                   ))}
                 </select>
@@ -776,12 +778,12 @@ export default function StaffingManagement({ employees, initialDate }) {
                 <select required disabled={!eligibleTargets.length} value={replacementForm.targetId} onChange={(e) => setTarget(replacementForm.kind, e.target.value)}>
                   <option value="">{eligibleTargets.length ? 'Chọn' : 'Không có lịch trong ngày này'}</option>
                   {replacementForm.kind === 'classroom'
-                    ? snapshot.classrooms.map((item) => (
+                    ? (snapshot?.classrooms || []).map((item) => (
                         <option key={item._id} value={item._id} disabled={!item.schoolDay}>
                           {item.name}{item.schoolDay ? '' : ' · Không học ngày này'}
                         </option>
                       ))
-                    : snapshot.duties.map((item) => (
+                    : (snapshot?.duties || []).map((item) => (
                         <option key={item._id} value={item._id}>{item.name} · {item.employeeName}</option>
                       ))}
                 </select>
@@ -828,5 +830,40 @@ export default function StaffingManagement({ employees, initialDate }) {
         </>
       )}
     </div>
+  );
+}
+
+class StaffingErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error, errorInfo) {
+    console.error('StaffingManagement render error:', error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="content-card" style={{ padding: '24px', borderLeft: '4px solid #ef4444' }}>
+          <h3 style={{ color: '#b91c1c', marginBottom: '8px' }}>Không thể hiển thị phân công nhân sự</h3>
+          <p style={{ color: '#4b5563', marginBottom: '12px' }}>Đã xảy ra sự cố hiển thị. Vui lòng bấm thử lại để tải lại phân công.</p>
+          <button type="button" className="button button-secondary" onClick={() => this.setState({ hasError: false })}>
+            Thử lại
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export default function StaffingManagement(props) {
+  return (
+    <StaffingErrorBoundary>
+      <StaffingManagementInner {...props} />
+    </StaffingErrorBoundary>
   );
 }

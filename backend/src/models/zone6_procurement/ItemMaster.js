@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const ItemMasterSchema = new mongoose.Schema({
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
     category: {
         type: String,
         enum: ['food', 'equipment', 'stationery', 'toy', 'furniture', 'it'],
@@ -30,6 +31,7 @@ const ItemMasterSchema = new mongoose.Schema({
     timestamps: true
 });
 
+ItemMasterSchema.index({ tenantId: 1, category: 1 });
 ItemMasterSchema.index({ category: 1 });
 ItemMasterSchema.index({ name: 'text' });
 

@@ -14,6 +14,7 @@ const TaskHistorySchema = new mongoose.Schema({
 }, { _id: false });
 
 const PrincipalTaskSchema = new mongoose.Schema({
+  tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant' },
   title: { type: String, required: true, trim: true, maxlength: 200 },
   description: { type: String, trim: true, maxlength: 2000, default: '' },
   department: {

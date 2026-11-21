@@ -1,11 +1,11 @@
 const mongoose = require('mongoose');
 
 const EvaluationPeriodSchema = new mongoose.Schema({
+  tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
   code: {
     type: String,
     required: true,
-    unique: true,
-    trim: true,
+        trim: true,
     uppercase: true
   },
   name: {
@@ -41,5 +41,9 @@ const EvaluationPeriodSchema = new mongoose.Schema({
 });
 
 EvaluationPeriodSchema.index({ schoolYear: 1, status: 1 });
+
+// Multi-tenant code unique
+EvaluationPeriodSchema.index({ tenantId: 1, code: 1 }, { unique: true, partialFilterExpression: { tenantId: { $type: 'objectId' } } });
+EvaluationPeriodSchema.index({ code: 1 }, { unique: true, partialFilterExpression: { tenantId: null } });
 
 module.exports = mongoose.model('EvaluationPeriod', EvaluationPeriodSchema);

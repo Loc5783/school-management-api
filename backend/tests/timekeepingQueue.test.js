@@ -47,7 +47,7 @@ test('turns a valid kiosk check-in event into an attendance record without faili
     deviceId: 'WEB_KIOSK', externalEventId: 'guard-queue-2026-09-16-in', userId: guard._id,
     eventType: 'CHECK_IN', source: 'MANUAL_CODE', occurredAt
   });
-  const processed = await processQueuedRecalculations({ workerId: 'queue-test', maxItems: 5 });
+  const processed = await processQueuedRecalculations({ workerId: 'queue-test', maxItems: 5, isGlobalWorker: true });
 
   expect(processed).toHaveLength(1);
   const record = await AttendanceRecord.findOne({ userId: guard._id });

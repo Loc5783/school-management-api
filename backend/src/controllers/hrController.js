@@ -16,6 +16,11 @@ const { getWorkDate, isValidWorkDate, startOfWorkDate } = require('../utils/date
 const { getStaffingSnapshot } = require('../services/staffingService');
 const { REVIEW_MONTHLY_SALARY_BELOW, isUnverifiedLowMonthlySalary } = require('../services/salaryPolicy');
 const { lockOpenPeriod } = require('../services/accountingPeriodService');
+const {
+    buildTenantFilter,
+    assertTenantContext,
+    InvalidTenantContextError
+} = require('../services/tenantFilterService');
 
 // `admin` is retained as the legacy system-owner role and is treated as the principal
 // for HR purposes. Parent accounts must never enter the employee/payroll workflow.
@@ -77,21 +82,21 @@ const runHrTransaction = async (operation) => {
     } finally { await session.endSession(); }
 };
 
-const resolveDepartment = async (departmentId, session) => {
+const resolveDepartment = async (departmentId, session, tenantFilter = {}) => {
     if (!departmentId) return { departmentId: undefined, departmentName: '' };
     if (!isValidObjectId(departmentId)) throw httpError('ID tổ/bộ phận không hợp lệ');
-    const department = await Department.findOne({ _id: departmentId, status: 'active' }).session(session);
+    const department = await Department.findOne({ _id: departmentId, status: 'active', ...tenantFilter }).session(session);
     if (!department) throw httpError('Không tìm thấy tổ/bộ phận đang hoạt động', 404);
     return { departmentId: department._id, departmentName: department.name };
 };
 
-const resolveStaffAccount = async (userId, employeeId, session) => {
+const resolveStaffAccount = async (userId, employeeId, session, tenantFilter = {}) => {
     if (!userId) return null;
     if (!isValidObjectId(userId)) throw httpError('ID tài khoản nhân sự không hợp lệ');
-    const user = await User.findById(userId).session(session);
+    const user = await User.findOne({ _id: userId, ...tenantFilter }).session(session);
     if (!user || !STAFF_ACCOUNT_ROLES.includes(user.role)) throw httpError('Tài khoản được chọn không phải tài khoản nhân sự hợp lệ', 422);
     if (user.status !== 'active') throw httpError('Chỉ có thể liên kết tài khoản nhân sự đang hoạt động', 422);
-    const linked = await Employee.findOne({ userId: user._id, ...(employeeId ? { _id: { $ne: employeeId } } : {}) }).session(session);
+    const linked = await Employee.findOne({ userId: user._id, ...(employeeId ? { _id: { $ne: employeeId } } : {}), ...tenantFilter }).session(session);
     if (linked) throw httpError('Tài khoản này đã được liên kết với một hồ sơ nhân sự khác', 409);
     return user;
 };
@@ -120,10 +125,10 @@ const validateEmployeeData = (data, linkedUser = null) => {
     }
 };
 
-const syncLinkedUser = async (user, employee, session) => {
+const syncLinkedUser = async (user, employee, session, tenantFilter = {}) => {
     if (!user) return;
     const code = String(employee.employeeCode).trim().toUpperCase();
-    const duplicateCode = await User.exists({ 'employeeInfo.employeeId': code, _id: { $ne: user._id } }).session(session);
+    const duplicateCode = await User.exists({ 'employeeInfo.employeeId': code, _id: { $ne: user._id }, ...tenantFilter }).session(session);
     if (duplicateCode) throw httpError('Mã nhân viên đang được dùng bởi một tài khoản khác', 409);
     await User.updateOne({ _id: user._id }, {
         $set: {
@@ -142,7 +147,7 @@ const clearFormerLinkedUser = async (user, employeeCode, session) => {
     await User.updateOne({ _id: user._id }, { $unset: { employeeInfo: 1 } }, { session });
 };
 
-const getAvailableEmployeeCode = async (user, session) => {
+const getAvailableEmployeeCode = async (user, session, tenantFilter = {}) => {
     const year = new Date().getFullYear();
     const fallback = `${EMPLOYEE_CODE_PREFIX_BY_ROLE[user.role] || 'NV'}-${year}-${String(user._id).slice(-6).toUpperCase()}`;
     const requested = String(user.employeeInfo?.employeeId || '').trim().toUpperCase();
@@ -150,7 +155,7 @@ const getAvailableEmployeeCode = async (user, session) => {
     for (const code of candidates) {
         const [usedByEmployee, usedByAnotherUser] = await Promise.all([
             Employee.exists({ employeeCode: code }).session(session),
-            User.exists({ 'employeeInfo.employeeId': code, _id: { $ne: user._id } }).session(session)
+            User.exists({ 'employeeInfo.employeeId': code, _id: { $ne: user._id }, ...tenantFilter }).session(session)
         ]);
         if (!usedByEmployee && !usedByAnotherUser) return code;
     }
@@ -161,48 +166,104 @@ const getAvailableEmployeeCode = async (user, session) => {
 
 const getDepartments = async (req, res) => {
     try {
-        const departments = await Department.find().sort({ name: 1 });
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+        const departments = await Department.find(tenantFilter).sort({ name: 1 });
         res.json({ message: 'Lấy danh sách tổ/bộ phận thành công', data: departments });
     } catch (error) {
-        res.status(500).json({ message: 'Lỗi máy chủ', error: error.message });
+        const status = error.statusCode || (error.name === 'InvalidTenantContextError' ? 403 : 500);
+        res.status(status).json({ message: 'Lỗi máy chủ', error: error.message });
     }
 };
 
 const createDepartment = async (req, res) => {
     try {
+        const tenantContext = assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         const { code, name, description } = req.body;
         if (!code || !name) {
             return res.status(400).json({ message: 'Mã và tên tổ/bộ phận là bắt buộc' });
         }
-        const existing = await Department.findOne({ code: code.toUpperCase() });
-        if (existing) {
-            return res.status(400).json({ message: 'Mã tổ/bộ phận đã tồn tại' });
-        }
-        const dept = await Department.create({ code, name, description });
+        const dept = await runHrTransaction(async (session) => {
+            const currentActor = await User.findOne({
+                _id: req.user._id,
+                role: 'admin',
+                status: 'active',
+                ...tenantFilter
+            }).session(session);
+            if (!currentActor) {
+                throw httpError('Tài khoản thực hiện không còn quyền hoặc đã bị khóa/hạ quyền', 403);
+            }
+            const existing = await Department.findOne({ code: code.toUpperCase(), ...tenantFilter }).session(session);
+            if (existing) {
+                throw httpError('Mã tổ/bộ phận đã tồn tại', 400);
+            }
+            const created = (await Department.create([{
+                code: code.toUpperCase(),
+                name,
+                description,
+                tenantId: tenantContext.tenantId || null
+            }], { session }))[0];
+            return created;
+        });
         res.status(201).json({ message: 'Tạo tổ/bộ phận thành công', data: dept });
     } catch (error) {
-        res.status(500).json({ message: 'Lỗi máy chủ', error: error.message });
+        if (error.code === 11000) {
+            return res.status(409).json({ message: 'Mã tổ/bộ phận đã tồn tại trên hệ thống' });
+        }
+        const status = error.statusCode || (error.name === 'InvalidTenantContextError' ? 403 : 500);
+        res.status(status).json({ message: error.message || 'Lỗi máy chủ', error: error.message });
     }
 };
 
 const updateDepartment = async (req, res) => {
     try {
-        const dept = await Department.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
-        if (!dept) return res.status(404).json({ message: 'Không tìm thấy tổ/bộ phận' });
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+        if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'ID tổ/bộ phận không hợp lệ' });
+        const allowedFields = ['name', 'description', 'status'];
+        const updateData = {};
+        for (const field of allowedFields) {
+            if (Object.hasOwn(req.body, field)) updateData[field] = req.body[field];
+        }
+        if (Object.hasOwn(req.body, 'code') && req.body.code) {
+            updateData.code = String(req.body.code).trim().toUpperCase();
+        }
+        const dept = await runHrTransaction(async (session) => {
+            const currentActor = await User.findOne({
+                _id: req.user._id,
+                role: 'admin',
+                status: 'active',
+                ...tenantFilter
+            }).session(session);
+            if (!currentActor) {
+                throw httpError('Tài khoản thực hiện không còn quyền hoặc đã bị khóa/hạ quyền', 403);
+            }
+            if (updateData.code) {
+                const dup = await Department.findOne({ code: updateData.code, _id: { $ne: req.params.id }, ...tenantFilter }).session(session);
+                if (dup) throw httpError('Mã tổ/bộ phận đã tồn tại', 400);
+            }
+            const updated = await Department.findOneAndUpdate({ _id: req.params.id, ...tenantFilter }, { $set: updateData }, { new: true, runValidators: true, session });
+            if (!updated) throw httpError('Không tìm thấy tổ/bộ phận', 404);
+            return updated;
+        });
         res.json({ message: 'Cập nhật tổ/bộ phận thành công', data: dept });
     } catch (error) {
-        res.status(500).json({ message: 'Lỗi máy chủ', error: error.message });
+        if (error.code === 11000) {
+            return res.status(409).json({ message: 'Mã tổ/bộ phận đã tồn tại trên hệ thống' });
+        }
+        const status = error.statusCode || (error.name === 'InvalidTenantContextError' ? 403 : 500);
+        res.status(status).json({ message: error.message || 'Lỗi máy chủ', error: error.message });
     }
 };
 
 const getStaffAccounts = async (req, res) => {
     try {
-        const users = await User.find({ role: { $in: STAFF_ACCOUNT_ROLES } })
-            .select('username role status profile employeeInfo')
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+        const users = await User.find({ role: { $in: STAFF_ACCOUNT_ROLES }, ...tenantFilter })
+            .select('username role status profile employeeInfo tenantId')
             .sort({ 'profile.fullName': 1, username: 1 })
             .lean();
-        const linkedProfiles = await Employee.find({ userId: { $in: users.map((user) => user._id) } })
-            .select('userId employeeCode fullName departmentId departmentName position payrollRole status')
+        const linkedProfiles = await Employee.find({ userId: { $in: users.map((user) => user._id) }, ...tenantFilter })
+            .select('userId employeeCode fullName departmentId departmentName position payrollRole status tenantId')
             .lean();
         const profileByUserId = new Map(linkedProfiles.map((profile) => [String(profile.userId), profile]));
         res.json({
@@ -215,23 +276,35 @@ const getStaffAccounts = async (req, res) => {
             }))
         });
     } catch (error) {
-        res.status(500).json({ message: 'Không thể lấy danh sách tài khoản nhân sự' });
+        const status = error.statusCode || (error.name === 'InvalidTenantContextError' ? 403 : 500);
+        res.status(status).json({ message: 'Không thể lấy danh sách tài khoản nhân sự' });
     }
 };
 
 const syncStaffAccounts = async (req, res) => {
     try {
+        const tenantContext = assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         const result = await runHrTransaction(async (session) => {
-            const accounts = await User.find({ role: { $in: STAFF_ACCOUNT_ROLES }, status: 'active' })
-                .select('username role profile employeeInfo status')
+            const currentActor = await User.findOne({
+                _id: req.user._id,
+                role: { $in: ['admin', 'hr'] },
+                status: 'active',
+                ...tenantFilter
+            }).session(session);
+            if (!currentActor) {
+                throw httpError('Tài khoản thực hiện không còn quyền hoặc đã bị khóa/hạ quyền', 403);
+            }
+            const accounts = await User.find({ role: { $in: STAFF_ACCOUNT_ROLES }, status: 'active', ...tenantFilter })
+                .select('username role profile employeeInfo status tenantId')
                 .session(session);
-            const linkedUserIds = new Set((await Employee.find({ userId: { $in: accounts.map((account) => account._id) } }).select('userId').session(session))
+            const linkedUserIds = new Set((await Employee.find({ userId: { $in: accounts.map((account) => account._id) }, ...tenantFilter }).select('userId').session(session))
                 .map((employee) => String(employee.userId)));
             const created = [];
 
             for (const account of accounts) {
                 if (linkedUserIds.has(String(account._id))) continue;
-                const employeeCode = await getAvailableEmployeeCode(account, session);
+                const employeeCode = await getAvailableEmployeeCode(account, session, tenantFilter);
                 const employee = (await Employee.create([{
                     userId: account._id,
                     employeeCode,
@@ -242,16 +315,18 @@ const syncStaffAccounts = async (req, res) => {
                     payrollRole: DEFAULT_PAYROLL_ROLE_BY_ACCOUNT_ROLE[account.role],
                     // A zero salary deliberately means “needs HR setup”; it is excluded from payroll.
                     salaryConfig: { baseSalary: Number(account.employeeInfo?.baseSalary) || 0, positionAllowance: 0, lunchAllowance: 0 },
-                    status: 'active'
+                    status: 'active',
+                    tenantId: tenantContext.tenantId || null
                 }], { session }))[0];
-                await syncLinkedUser(account, employee, session);
+                await syncLinkedUser(account, employee, session, tenantFilter);
                 created.push({ _id: employee._id, employeeCode: employee.employeeCode, fullName: employee.fullName, role: account.role, salaryConfigured: employee.salaryConfig.baseSalary > 0 });
             }
             return { created, existing: accounts.length - created.length };
         });
         res.json({ message: result.created.length ? `Đã liên kết ${result.created.length} tài khoản nội bộ với hồ sơ nhân sự` : 'Tất cả tài khoản nội bộ đang hoạt động đã có hồ sơ nhân sự', data: result });
     } catch (error) {
-        res.status(error.statusCode || 500).json({ message: error.message || 'Không thể đồng bộ tài khoản nhân sự' });
+        const status = error.statusCode || (error.name === 'InvalidTenantContextError' ? 403 : 500);
+        res.status(status).json({ message: error.message || 'Không thể đồng bộ tài khoản nhân sự' });
     }
 };
 
@@ -268,12 +343,16 @@ const employeeView = (employee, role) => {
 };
 const getEmployees = async (req, res) => {
     try {
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         const { status, position, payrollRole, departmentId, search } = req.query;
-        const filter = {};
+        const filter = { ...tenantFilter };
         if (status) filter.status = status;
         if (position) filter.position = position;
         if (payrollRole) filter.payrollRole = payrollRole;
-        if (departmentId) filter.departmentId = departmentId;
+        if (departmentId) {
+            if (!isValidObjectId(departmentId)) return res.status(400).json({ message: 'ID tổ/bộ phận không hợp lệ' });
+            filter.departmentId = departmentId;
+        }
         if (search) {
             filter.$or = [
                 { fullName: { $regex: search, $options: 'i' } },
@@ -282,53 +361,84 @@ const getEmployees = async (req, res) => {
             ];
         }
         const employees = await Employee.find(filter)
-            .populate('departmentId', 'name code')
-            .populate('userId', 'username role status profile employeeInfo')
+            .populate({ path: 'departmentId', match: tenantFilter, select: 'name code tenantId' })
+            .populate({ path: 'userId', match: tenantFilter, select: 'username role status profile employeeInfo tenantId' })
             .sort({ fullName: 1 });
-        // Với hồ sơ tạo trước khi có payrollRole, Mongoose có thể trả default
-        // "teacher" dù chưa hề lưu xuống DB. Tài khoản liên kết là nguồn chuẩn.
         const data = employees.map((employee) => {
             const item = employee.toObject();
+            if (!item.departmentId || String(item.departmentId.tenantId || '') !== String(employee.tenantId || '')) {
+                item.departmentId = null;
+            }
+            if (!item.userId || String(item.userId.tenantId || '') !== String(employee.tenantId || '')) {
+                item.userId = null;
+            }
             const linkedRole = DEFAULT_PAYROLL_ROLE_BY_ACCOUNT_ROLE[item.userId?.role];
             if (linkedRole) item.payrollRole = linkedRole;
             return employeeView(item, req.user.role);
         });
         res.json({ message: 'Lấy danh sách nhân viên thành công', data });
     } catch (error) {
-        res.status(500).json({ message: 'Lỗi máy chủ', error: error.message });
+        const status = error.statusCode || (error.name === 'InvalidTenantContextError' ? 403 : 500);
+        res.status(status).json({ message: 'Lỗi máy chủ', error: error.message });
     }
 };
 
 const getEmployeeById = async (req, res) => {
     try {
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'ID nhân viên không hợp lệ' });
-        const employee = await Employee.findById(req.params.id).populate('departmentId', 'name code').populate('userId', 'username role status profile employeeInfo');
+        const employee = await Employee.findOne({ _id: req.params.id, ...tenantFilter })
+            .populate({ path: 'departmentId', match: tenantFilter, select: 'name code tenantId' })
+            .populate({ path: 'userId', match: tenantFilter, select: 'username role status profile employeeInfo tenantId' });
         if (!employee) return res.status(404).json({ message: 'Không tìm thấy nhân viên' });
-        res.json({ message: 'Lấy thông tin nhân viên thành công', data: employeeView(employee, req.user.role) });
+        const item = employee.toObject();
+        if (!item.departmentId || String(item.departmentId.tenantId || '') !== String(employee.tenantId || '')) {
+            item.departmentId = null;
+        }
+        if (!item.userId || String(item.userId.tenantId || '') !== String(employee.tenantId || '')) {
+            item.userId = null;
+        }
+        res.json({ message: 'Lấy thông tin nhân viên thành công', data: employeeView(item, req.user.role) });
     } catch (error) {
-        res.status(500).json({ message: 'Lỗi máy chủ', error: error.message });
+        const status = error.statusCode || (error.name === 'InvalidTenantContextError' ? 403 : 500);
+        res.status(status).json({ message: 'Lỗi máy chủ', error: error.message });
     }
 };
 
 const getEmployeeHistory = async (req, res) => {
     try {
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'ID nhân viên không hợp lệ' });
-        const employee = await Employee.findById(req.params.id).select('createdAt');
+        const employee = await Employee.findOne({ _id: req.params.id, ...tenantFilter }).select('createdAt');
         if (!employee) return res.status(404).json({ message: 'Không tìm thấy nhân viên' });
         const history = await AuditLog.find({ targetType: 'Employee', targetId: employee._id,
             action: { $in: ['EMPLOYEE_CREATED', 'EMPLOYEE_UPDATED', 'EMPLOYEE_RESIGNED'] } })
             .select('action actorUsername before after reason occurredAt').sort({ occurredAt: -1 }).limit(100).lean();
         res.json({ data: history, createdAt: employee.createdAt });
-    } catch (error) { res.status(500).json({ message: 'Không thể tải lịch sử hồ sơ' }); }
+    } catch (error) {
+        const status = error.statusCode || (error.name === 'InvalidTenantContextError' ? 403 : 500);
+        res.status(status).json({ message: 'Không thể tải lịch sử hồ sơ' });
+    }
 };
 
 const createEmployee = async (req, res) => {
     try {
+        const tenantContext = assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         const data = pickEmployeeFields(req.body);
         normalizeProfileDates(data);
         const requestedUserId = Object.hasOwn(req.body, 'userId') ? req.body.userId : null;
         const employee = await runHrTransaction(async (session) => {
-            const linkedUser = await resolveStaffAccount(requestedUserId, null, session);
+            const currentActor = await User.findOne({
+                _id: req.user._id,
+                role: { $in: ['admin', 'hr'] },
+                status: 'active',
+                ...tenantFilter
+            }).session(session);
+            if (!currentActor) {
+                throw httpError('Tài khoản thực hiện không còn quyền hoặc đã bị khóa/hạ quyền', 403);
+            }
+            const linkedUser = await resolveStaffAccount(requestedUserId, null, session, tenantFilter);
             data.employeeCode = String(data.employeeCode || linkedUser?.employeeInfo?.employeeId || '').trim().toUpperCase();
             data.fullName = String(data.fullName || linkedUser?.profile?.fullName || '').trim();
             data.phone = String(data.phone || linkedUser?.profile?.phone || '').trim();
@@ -339,33 +449,49 @@ const createEmployee = async (req, res) => {
             validateEmployeeData(data, linkedUser);
             const existing = await Employee.exists({ employeeCode: data.employeeCode });
             if (existing) throw httpError('Mã nhân viên đã tồn tại', 409);
-            const department = await resolveDepartment(data.departmentId, session);
-            const created = (await Employee.create([{ ...data, ...department, userId: linkedUser?._id }], { session }))[0];
-            await syncLinkedUser(linkedUser, created, session);
-            await AuditLog.create([{ actorId: req.user._id, actorUsername: req.user.username,
+            const department = await resolveDepartment(data.departmentId, session, tenantFilter);
+            const created = (await Employee.create([{
+                ...data,
+                ...department,
+                userId: linkedUser?._id,
+                tenantId: tenantContext.tenantId || null
+            }], { session }))[0];
+            await syncLinkedUser(linkedUser, created, session, tenantFilter);
+            await AuditLog.create([{ actorId: currentActor._id, actorUsername: currentActor.username,
                 action: 'EMPLOYEE_CREATED', targetType: 'Employee', targetId: created._id,
                 after: profileSnapshot(created) }], { session });
             return created;
         });
         res.status(201).json({ message: 'Tạo nhân viên thành công', data: employee });
     } catch (error) {
-        res.status(error.statusCode || (error.code === 11000 ? 409 : 500)).json({ message: error.message || 'Không thể tạo hồ sơ nhân viên' });
+        const status = error.statusCode || (error.code === 11000 ? 409 : (error.name === 'InvalidTenantContextError' ? 403 : 500));
+        res.status(status).json({ message: error.code === 11000 ? 'Mã nhân viên đã tồn tại' : (error.message || 'Không thể tạo hồ sơ nhân viên') });
     }
 };
 
 const updateEmployee = async (req, res) => {
     try {
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'ID nhân viên không hợp lệ' });
         const fields = pickEmployeeFields(req.body);
         normalizeProfileDates(fields);
         const userIdWasProvided = Object.hasOwn(req.body, 'userId');
         const employee = await runHrTransaction(async (session) => {
-            const current = await Employee.findById(req.params.id).session(session);
-            if (await StaffHandover.exists({ employeeId: req.params.id, status: 'scheduled' }).session(session)) throw httpError('Hồ sơ đang chờ bàn giao có hiệu lực. Hãy hủy lịch bàn giao trước khi sửa.', 409);
+            const currentActor = await User.findOne({
+                _id: req.user._id,
+                role: { $in: ['admin', 'hr'] },
+                status: 'active',
+                ...tenantFilter
+            }).session(session);
+            if (!currentActor) {
+                throw httpError('Tài khoản thực hiện không còn quyền hoặc đã bị khóa/hạ quyền', 403);
+            }
+            const current = await Employee.findOne({ _id: req.params.id, ...tenantFilter }).session(session);
             if (!current) throw httpError('Không tìm thấy nhân viên', 404);
-            const formerLinkedUser = current.userId ? await User.findById(current.userId).session(session) : null;
+            if (await StaffHandover.exists({ employeeId: req.params.id, status: 'scheduled' }).session(session)) throw httpError('Hồ sơ đang chờ bàn giao có hiệu lực. Hãy hủy lịch bàn giao trước khi sửa.', 409);
+            const formerLinkedUser = current.userId ? await User.findOne({ _id: current.userId, ...tenantFilter }).session(session) : null;
             const linkedUser = userIdWasProvided
-                ? (req.body.userId ? await resolveStaffAccount(req.body.userId, current._id, session) : null)
+                ? (req.body.userId ? await resolveStaffAccount(req.body.userId, current._id, session, tenantFilter) : null)
                 : formerLinkedUser;
             const next = { ...current.toObject(), ...fields };
             if (fields.salaryConfig && Number(fields.salaryConfig.baseSalary) !== Number(current.salaryConfig?.baseSalary) && fields.salaryConfig.lowMonthlySalaryConfirmed !== true) fields.salaryConfig.lowMonthlySalaryConfirmed = false;
@@ -376,30 +502,29 @@ const updateEmployee = async (req, res) => {
             next.email = String(next.email || '').trim().toLowerCase();
             next.payrollRole = next.payrollRole || DEFAULT_PAYROLL_ROLE_BY_ACCOUNT_ROLE[linkedUser?.role] || payrollRoleFromPosition(next.position);
             if (next.contractType === 'indefinite') { fields.endDate = null; next.endDate = null; }
-            // Hồ sơ legacy sẽ được migration backfill; dòng này bảo đảm lần sửa
-            // hợp lệ đầu tiên cũng chuẩn hóa luôn, không chờ migration.
             if (!current.payrollRole) fields.payrollRole = next.payrollRole;
             validateEmployeeData(next, linkedUser);
-            const department = Object.hasOwn(fields, 'departmentId') ? await resolveDepartment(fields.departmentId, session) : {};
+            const department = Object.hasOwn(fields, 'departmentId') ? await resolveDepartment(fields.departmentId, session, tenantFilter) : {};
             const update = { $set: { ...fields, ...department } };
             if (userIdWasProvided) {
                 if (req.body.userId) update.$set.userId = linkedUser._id;
                 else update.$unset = { userId: 1 };
             }
-            const updated = await Employee.findByIdAndUpdate(current._id, update, { new: true, runValidators: true, session });
+            const updated = await Employee.findOneAndUpdate({ _id: current._id, ...tenantFilter }, update, { new: true, runValidators: true, session });
             if (userIdWasProvided && String(formerLinkedUser?._id || '') !== String(linkedUser?._id || '')) {
                 await clearFormerLinkedUser(formerLinkedUser, current.employeeCode, session);
             }
-            await syncLinkedUser(linkedUser, updated, session);
+            await syncLinkedUser(linkedUser, updated, session, tenantFilter);
             const changes = changedSnapshot(profileSnapshot(current), profileSnapshot(updated));
-            if (Object.keys(changes.after).length) await AuditLog.create([{ actorId: req.user._id, actorUsername: req.user.username,
+            if (Object.keys(changes.after).length) await AuditLog.create([{ actorId: currentActor._id, actorUsername: currentActor.username,
                 action: 'EMPLOYEE_UPDATED', targetType: 'Employee', targetId: updated._id,
                 before: changes.before, after: changes.after }], { session });
             return updated;
         });
         res.json({ message: 'Cập nhật nhân viên thành công', data: employee });
     } catch (error) {
-        res.status(error.statusCode || (error.code === 11000 ? 409 : 500)).json({ message: error.message || 'Không thể cập nhật hồ sơ nhân viên' });
+        const status = error.statusCode || (error.code === 11000 ? 409 : (error.name === 'InvalidTenantContextError' ? 403 : 500));
+        res.status(status).json({ message: error.code === 11000 ? 'Mã nhân viên đã tồn tại' : (error.message || 'Không thể cập nhật hồ sơ nhân viên') });
     }
 };
 
@@ -411,6 +536,8 @@ const deleteEmployee = async (req, res) => {
 
 const createLeaveRequest = async (req, res) => {
     try {
+        const tenantContext = assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         const { employeeId, leaveType, startDate, endDate, reason } = req.body;
         if (!employeeId || !leaveType || !startDate || !endDate || !reason) {
             return res.status(400).json({ message: 'Thiếu thông tin đơn xin nghỉ phép' });
@@ -421,51 +548,105 @@ const createLeaveRequest = async (req, res) => {
         if (!['annual', 'sick', 'maternity', 'personal', 'unpaid', 'compensatory'].includes(leaveType)) return res.status(422).json({ message: 'Loại nghỉ không hợp lệ' });
         const cleanReason = String(reason).trim();
         if (cleanReason.length < 5 || cleanReason.length > 500) return res.status(422).json({ message: 'Lý do phải từ 5 đến 500 ký tự' });
-        const employee = await Employee.findById(employeeId).populate('userId', 'role status');
-        if (!employee || employee.status === 'resigned') return res.status(404).json({ message: 'Không tìm thấy nhân viên đang làm việc' });
-        if (!['admin', 'principal'].includes(req.user.role) && String(employee.userId?._id) !== String(req.user._id)) {
-            return res.status(403).json({ message: 'Bạn chỉ có thể tạo đơn nghỉ cho hồ sơ nhân sự của mình' });
-        }
-        const existing = await LeaveRequest.exists({ employeeId, status: { $in: ['pending', 'approved'] }, startDate: { $lte: new Date(`${endDate}T23:59:59.999Z`) }, endDate: { $gte: new Date(`${startDate}T00:00:00.000Z`) } });
-        if (existing) return res.status(409).json({ message: 'Nhân viên đã có đơn chờ duyệt hoặc đã duyệt trùng khoảng ngày này' });
-        const workDates = await scheduledLeaveDates(employee, startDate, endDate);
-        if (!workDates?.length) return res.status(422).json({ message: 'Khoảng nghỉ không có ngày làm việc theo phân công hiện tại' });
-        const leaveRequest = await runHrTransaction(async (session) => {
-        const [created] = await LeaveRequest.create([{
-            employeeId,
-            employeeCode: employee.employeeCode,
-            employeeName: employee.fullName,
-            departmentName: employee.departmentName || '',
-            leaveType,
-            startDate: new Date(`${startDate}T12:00:00.000Z`),
-            endDate: new Date(`${endDate}T12:00:00.000Z`),
-            totalDays: workDates.length,
-            workDates,
-            reason: cleanReason,
-            requestedBy: req.user._id
-        }], { session });
-        await require('../services/credentialService').audit(req.user, 'EMPLOYEE_LEAVE_CREATED', 'LeaveRequest', created._id, {}, created.toObject(), session);
-        return created;
+
+        const { leaveRequest, employee, workDates, actor } = await runHrTransaction(async (session) => {
+            // 1. Re-verify actor in transaction
+            const currentActor = await User.findOne({
+                _id: req.user._id,
+                status: 'active',
+                ...tenantFilter
+            }).session(session);
+            if (!currentActor) throw httpError('Tài khoản thực hiện không tồn tại hoặc đã bị khóa', 403);
+            if (!['admin', 'teacher', 'accountant', 'chef', 'guard', 'hr'].includes(currentActor.role)) {
+                throw httpError('Bạn không có quyền tạo đơn xin nghỉ phép', 403);
+            }
+
+            // 2. Re-verify employee in transaction
+            const emp = await Employee.findOne({ _id: employeeId, ...tenantFilter })
+                .populate({ path: 'userId', match: tenantFilter, select: 'role status tenantId' })
+                .session(session);
+            if (!emp || emp.status === 'resigned') throw httpError('Không tìm thấy nhân viên đang làm việc', 404);
+
+            if (emp.userId && String(emp.userId.tenantId || '') !== String(emp.tenantId || '')) {
+                throw httpError('Phát hiện liên kết hồ sơ nhân sự ngoại lai không hợp lệ', 409);
+            }
+
+            // Ownership check
+            if (!['admin', 'principal'].includes(currentActor.role) && String(emp.userId?._id) !== String(currentActor._id)) {
+                throw httpError('Bạn chỉ có thể tạo đơn nghỉ cho hồ sơ nhân sự của mình', 403);
+            }
+
+            // 3. Write skew coordination: touch employee document in session
+            const touchEmp = await Employee.findOneAndUpdate(
+                { _id: employeeId, status: { $ne: 'resigned' }, ...tenantFilter },
+                { $inc: { __v: 1 } },
+                { session, new: true }
+            );
+            if (!touchEmp) throw httpError('Không tìm thấy nhân viên đang làm việc', 404);
+
+            // 4. Overlapping leave check inside session
+            const existing = await LeaveRequest.exists({
+                employeeId,
+                status: { $in: ['pending', 'approved'] },
+                startDate: { $lte: new Date(`${endDate}T23:59:59.999Z`) },
+                endDate: { $gte: new Date(`${startDate}T00:00:00.000Z`) },
+                ...tenantFilter
+            }).session(session);
+            if (existing) throw httpError('Nhân viên đã có đơn chờ duyệt hoặc đã duyệt trùng khoảng ngày này', 409);
+
+            // 5. Calculate workDates with session & scoped helper
+            const dates = await scheduledLeaveDates(emp, startDate, endDate, req, { session });
+            if (!dates?.length) throw httpError('Khoảng nghỉ không có ngày làm việc theo phân công hiện tại', 422);
+
+            const [created] = await LeaveRequest.create([{
+                employeeId,
+                employeeCode: emp.employeeCode,
+                employeeName: emp.fullName,
+                departmentName: emp.departmentName || '',
+                leaveType,
+                startDate: new Date(`${startDate}T12:00:00.000Z`),
+                endDate: new Date(`${endDate}T12:00:00.000Z`),
+                totalDays: dates.length,
+                workDates: dates,
+                reason: cleanReason,
+                requestedBy: currentActor._id,
+                tenantId: tenantContext.tenantId || null
+            }], { session });
+
+            await require('../services/credentialService').audit(currentActor, 'EMPLOYEE_LEAVE_CREATED', 'LeaveRequest', created._id, {}, created.toObject(), session);
+            return { leaveRequest: created, employee: emp, workDates: dates, actor: currentActor };
         });
 
         try {
-            const reviewers = await User.find({ role: { $in: ['admin', 'principal'] }, status: 'active', _id: { $ne: req.user._id } }).select('_id').lean();
-            if (reviewers.length) await Notification.insertMany(reviewers.map((reviewer) => ({ recipientId: reviewer._id,
-                title: 'Đơn nghỉ nhân viên chờ duyệt', message: `${employee.fullName} xin nghỉ ${workDates.length} ngày (${startDate} đến ${endDate}).`,
-                type: 'leave_request', link: '/hr?tab=leave', createdBy: req.user._id })));
+            const reviewers = await User.find({ role: { $in: ['admin', 'principal'] }, status: 'active', _id: { $ne: actor._id }, ...tenantFilter }).select('_id').lean();
+            if (reviewers.length) {
+                await Notification.insertMany(reviewers.map((reviewer) => ({
+                    recipientId: reviewer._id,
+                    title: 'Đơn nghỉ nhân viên chờ duyệt',
+                    message: `${employee.fullName} xin nghỉ ${workDates.length} ngày (${startDate} đến ${endDate}).`,
+                    type: 'leave_request',
+                    link: '/hr?tab=leave',
+                    createdBy: actor._id
+                })));
+            }
         } catch (notificationError) { console.error('Không gửi được thông báo đơn nghỉ:', notificationError); }
 
         res.status(201).json({ message: 'Tạo đơn xin nghỉ phép thành công', data: leaveRequest });
     } catch (error) {
-        res.status(500).json({ message: 'Lỗi máy chủ', error: error.message });
+        const status = error.statusCode || (error.name === 'InvalidTenantContextError' ? 403 : 500);
+        res.status(status).json({ message: error.message || 'Lỗi máy chủ' });
     }
 };
 
 const getLeaveRequests = async (req, res) => {
     try {
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         const { employeeId, status, leaveType, year } = req.query;
-        const filter = {};
-        if (employeeId) filter.employeeId = employeeId;
+        const filter = { ...tenantFilter };
+        if (employeeId) {
+            if (!isValidObjectId(employeeId)) return res.status(400).json({ message: 'ID nhân viên không hợp lệ' });
+            filter.employeeId = employeeId;
+        }
         if (status) filter.status = status;
         if (leaveType) filter.leaveType = leaveType;
         if (year) {
@@ -487,60 +668,112 @@ const getLeaveRequests = async (req, res) => {
         const requests = await LeaveRequest.find(filter).sort({ createdAt: -1 });
         res.json({ message: 'Lấy danh sách đơn nghỉ phép thành công', data: requests });
     } catch (error) {
-        res.status(500).json({ message: 'Lỗi máy chủ', error: error.message });
+        const status = error.statusCode || (error.name === 'InvalidTenantContextError' ? 403 : 500);
+        res.status(status).json({ message: 'Lỗi máy chủ', error: error.message });
     }
 };
 
 const processLeaveRequest = async (req, res) => {
     try {
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         const { approved, rejectionReason } = req.body;
         if (typeof approved !== 'boolean') return res.status(422).json({ message: 'Quyết định duyệt phải là đúng hoặc sai' });
         if (!approved && String(rejectionReason || '').trim().length < 5) return res.status(422).json({ message: 'Cần ghi lý do từ chối ít nhất 5 ký tự' });
-        const leaveRequest = await LeaveRequest.findById(req.params.id);
-        if (!leaveRequest) return res.status(404).json({ message: 'Không tìm thấy đơn nghỉ phép' });
-        if (leaveRequest.status !== 'pending') {
-            return res.status(409).json({ message: 'Đơn này đã được xử lý' });
-        }
-        const employee = await Employee.findById(leaveRequest.employeeId).select('userId status');
-        if (!employee || employee.status === 'resigned') return res.status(409).json({ message: 'Nhân viên đã nghỉ việc, không thể duyệt đơn' });
-        if (String(employee.userId) === String(req.user._id)) return res.status(403).json({ message: 'Không được tự duyệt đơn nghỉ của mình' });
-        if (approved) {
-            const overlap = await LeaveRequest.exists({ _id: { $ne: leaveRequest._id }, employeeId: leaveRequest.employeeId, status: 'approved', startDate: { $lte: leaveRequest.endDate }, endDate: { $gte: leaveRequest.startDate } });
-            if (overlap) return res.status(409).json({ message: 'Đã có đơn nghỉ được duyệt trùng ngày' });
-        }
+        if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'ID đơn nghỉ phép không hợp lệ' });
+
         const updated = await runHrTransaction(async (session) => {
-            const result = await LeaveRequest.findOneAndUpdate({ _id: leaveRequest._id, status: 'pending' }, { $set: {
-                status: approved ? 'approved' : 'rejected', approvedBy: req.user._id,
-                approvedByName: req.user.profile?.fullName || req.user.username || '', approvedAt: new Date(),
-                rejectionReason: approved ? '' : String(rejectionReason).trim().slice(0, 500)
-            } }, { new: true, session });
+            // 1. Re-verify actor in transaction: must be active and in ['admin', 'principal']
+            const currentActor = await User.findOne({
+                _id: req.user._id,
+                role: { $in: ['admin', 'principal'] },
+                status: 'active',
+                ...tenantFilter
+            }).session(session);
+            if (!currentActor) throw httpError('Tài khoản duyệt đơn không còn quyền quản lý hoặc đã bị khóa/hạ quyền', 403);
+
+            const leaveRequest = await LeaveRequest.findOne({ _id: req.params.id, ...tenantFilter }).session(session);
+            if (!leaveRequest) throw httpError('Không tìm thấy đơn nghỉ phép', 404);
+            if (leaveRequest.status !== 'pending') {
+                throw httpError('Đơn này đã được xử lý', 409);
+            }
+            const employee = await Employee.findOne({ _id: leaveRequest.employeeId, ...tenantFilter }).select('userId status tenantId').session(session);
+            if (!employee || employee.status === 'resigned') throw httpError('Nhân viên đã nghỉ việc, không thể duyệt đơn', 409);
+            if (String(employee.userId) === String(currentActor._id)) throw httpError('Không được tự duyệt đơn nghỉ của mình', 403);
+
+            // Write skew coordination: touch employee
+            await Employee.findOneAndUpdate({ _id: leaveRequest.employeeId, status: { $ne: 'resigned' }, ...tenantFilter }, { $inc: { __v: 1 } }, { session });
+
+            if (approved) {
+                const overlap = await LeaveRequest.exists({
+                    _id: { $ne: leaveRequest._id },
+                    employeeId: leaveRequest.employeeId,
+                    status: 'approved',
+                    startDate: { $lte: leaveRequest.endDate },
+                    endDate: { $gte: leaveRequest.startDate },
+                    ...tenantFilter
+                }).session(session);
+                if (overlap) throw httpError('Đã có đơn nghỉ được duyệt trùng ngày', 409);
+            }
+            const result = await LeaveRequest.findOneAndUpdate(
+                { _id: leaveRequest._id, status: 'pending', ...tenantFilter },
+                { $set: {
+                    status: approved ? 'approved' : 'rejected',
+                    approvedBy: currentActor._id,
+                    approvedByName: currentActor.profile?.fullName || currentActor.username || '',
+                    approvedAt: new Date(),
+                    rejectionReason: approved ? '' : String(rejectionReason).trim().slice(0, 500)
+                } },
+                { new: true, session }
+            );
             if (!result) throw httpError('Đơn đã được người khác xử lý', 409);
-            await AuditLog.create([{ actorId: req.user._id, actorUsername: req.user.username || 'staff',
-                action: approved ? 'EMPLOYEE_LEAVE_APPROVED' : 'EMPLOYEE_LEAVE_REJECTED', targetType: 'LeaveRequest', targetId: result._id,
-                before: { status: 'pending' }, after: { status: result.status, totalDays: result.totalDays, startDate: result.startDate, endDate: result.endDate },
-                reason: approved ? 'Duyệt đơn nghỉ phép' : result.rejectionReason }], { session });
-            return result;
+
+            await AuditLog.create([{
+                actorId: currentActor._id,
+                actorUsername: currentActor.username || 'staff',
+                action: approved ? 'EMPLOYEE_LEAVE_APPROVED' : 'EMPLOYEE_LEAVE_REJECTED',
+                targetType: 'LeaveRequest',
+                targetId: result._id,
+                before: { status: 'pending' },
+                after: { status: result.status, totalDays: result.totalDays, startDate: result.startDate, endDate: result.endDate },
+                reason: approved ? 'Duyệt đơn nghỉ phép' : result.rejectionReason
+            }], { session });
+
+            return { result, employee, actor: currentActor };
         });
-        if (employee?.userId) {
-            await Notification.create({
-                recipientId: employee.userId,
-                title: approved ? 'Đơn nghỉ phép đã được duyệt' : 'Đơn nghỉ phép bị từ chối',
-                message: approved ? `Đơn nghỉ ${updated.totalDays} ngày của bạn đã được duyệt.` : updated.rejectionReason,
-                type: 'leave_request', link: '/timekeeping?tab=leave', createdBy: req.user._id
-            }).catch((notificationError) => console.error('Không gửi được thông báo đơn nghỉ:', notificationError));
+
+        // Verify recipient User belongs to same tenant before sending notification!
+        if (updated.employee?.userId) {
+            const validRecipient = await User.findOne({ _id: updated.employee.userId, ...tenantFilter }).select('_id').lean();
+            if (validRecipient) {
+                await Notification.create({
+                    recipientId: validRecipient._id,
+                    title: approved ? 'Đơn nghỉ phép đã được duyệt' : 'Đơn nghỉ phép bị từ chối',
+                    message: approved ? `Đơn nghỉ ${updated.result.totalDays} ngày của bạn đã được duyệt.` : updated.result.rejectionReason,
+                    type: 'leave_request',
+                    link: '/timekeeping?tab=leave',
+                    createdBy: updated.actor._id
+                }).catch((notificationError) => console.error('Không gửi được thông báo đơn nghỉ:', notificationError));
+            }
         }
         if (approved) {
             try {
-                const hrUsers = await User.find({ role: 'hr', status: 'active', _id: { $ne: req.user._id } }).select('_id').lean();
-                if (hrUsers.length) await Notification.insertMany(hrUsers.map((hrUser) => ({ recipientId: hrUser._id,
-                    title: 'Cần kiểm tra phân công khi nhân viên nghỉ',
-                    message: `${updated.employeeName} nghỉ ${updated.totalDays} ngày; kiểm tra lớp hoặc ca cần người thay.`,
-                    type: 'leave_request', link: '/hr?tab=leave', createdBy: req.user._id })));
+                const hrUsers = await User.find({ role: 'hr', status: 'active', _id: { $ne: updated.actor._id }, ...tenantFilter }).select('_id').lean();
+                if (hrUsers.length) {
+                    await Notification.insertMany(hrUsers.map((hrUser) => ({
+                        recipientId: hrUser._id,
+                        title: 'Cần kiểm tra phân công khi nhân viên nghỉ',
+                        message: `${updated.result.employeeName} nghỉ ${updated.result.totalDays} ngày; kiểm tra lớp hoặc ca cần người thay.`,
+                        type: 'leave_request',
+                        link: '/hr?tab=leave',
+                        createdBy: updated.actor._id
+                    })));
+                }
             } catch (notificationError) { console.error('Không gửi được thông báo sắp xếp người thay:', notificationError); }
         }
-        res.json({ message: approved ? 'Đã duyệt đơn nghỉ phép; lịch phân công và cảnh báo thiếu người sẽ cập nhật theo ngày nghỉ' : 'Đã từ chối đơn nghỉ phép', data: updated });
+        res.json({ message: approved ? 'Đã duyệt đơn nghỉ phép; lịch phân công và cảnh báo thiếu người sẽ cập nhật theo ngày nghỉ' : 'Đã từ chối đơn nghỉ phép', data: updated.result });
     } catch (error) {
-        res.status(error.statusCode || 500).json({ message: error.statusCode ? error.message : 'Không thể xử lý đơn nghỉ phép' });
+        const status = error.statusCode || (error.name === 'InvalidTenantContextError' ? 403 : 500);
+        res.status(status).json({ message: error.message || 'Không thể xử lý đơn nghỉ phép' });
     }
 };
 
@@ -551,9 +784,12 @@ const generateMonthlyPayroll = async (req, res) => {
         const { month, year } = req.body;
         if (!Number.isInteger(Number(month)) || Number(month) < 1 || Number(month) > 12 || !Number.isInteger(Number(year)) || Number(year) < 2000 || Number(year) > 2100) return res.status(400).json({ message: 'Tháng và năm không hợp lệ' });
 
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+        const tenantId = req.tenantId || req.user?.tenantId || null;
+
         // A linked employee whose salary is not configured is a valid HR profile,
         // but must not create a zero-value payroll record by accident.
-        const employees = await Employee.find({ status: { $in: ['active', 'on_leave'] }, userId: { $ne: null } })
+        const employees = await Employee.find({ status: { $in: ['active', 'on_leave'] }, userId: { $ne: null }, ...tenantFilter })
             .populate('userId', 'role');
         if (employees.length === 0) return res.status(400).json({ message: 'Không có nhân viên đang hoạt động' });
 
@@ -571,7 +807,7 @@ const generateMonthlyPayroll = async (req, res) => {
                 if (!Number.isSafeInteger(Number(employee.salaryConfig?.baseSalary)) || Number(employee.salaryConfig?.baseSalary) <= 0) throw new Error('Chưa thiết lập lương cơ bản theo tháng trong hồ sơ nhân sự');
                 if (isUnverifiedLowMonthlySalary(employee.salaryConfig)) throw new Error(`Lương ${employee.salaryConfig.baseSalary.toLocaleString('vi-VN')}đ/tháng dễ nhầm với tiền một công. HR cần mở hồ sơ, chọn đúng đơn vị và xác nhận trước khi lập lương.`);
                 // Accounting-reviewed payroll cannot be silently recalculated by HR.
-                const existing = await Payroll.findOne({ employeeId: employee._id, month, year });
+                const existing = await Payroll.findOne({ employeeId: employee._id, month, year, ...tenantFilter });
                 if (existing && existing.status !== 'draft') {
                     errors.push({ employee: employee.fullName, reason: 'Bảng lương đã được kế toán đối soát, xác nhận hoặc chi trả' });
                     continue;
@@ -584,7 +820,8 @@ const generateMonthlyPayroll = async (req, res) => {
                     finalized: true,
                     status: 'present',
                     checkInTime: { $ne: null },
-                    checkOutTime: { $ne: null }
+                    checkOutTime: { $ne: null },
+                    ...tenantFilter
                 });
                 const attendedDates = new Set(attendanceRecords.map((rec) => getWorkDate(rec.workDate)));
                 const actualWorkDays = attendanceRecords.reduce((sum, rec) => sum + (rec.workday ?? 1), 0);
@@ -673,6 +910,8 @@ const generateMonthlyPayroll = async (req, res) => {
                     note: existing?.note || ''
                 };
 
+                if (tenantId) payrollData.tenantId = tenantId;
+
                 if (existing) {
                     await runHrTransaction(async (session) => {
                       await lockOpenPeriod(`${year}-${String(month).padStart(2, '0')}`, session);
@@ -707,7 +946,10 @@ const getPayrollByMonth = async (req, res) => {
     try {
         const { month, year } = req.query;
         if (!month || !year) return res.status(400).json({ message: 'Tháng và năm là bắt buộc' });
-        const payrolls = await Payroll.find({ month: Number(month), year: Number(year) }).sort({ payrollRole: 1, employeeName: 1 });
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+        const payrolls = await Payroll.find({ month: Number(month), year: Number(year), ...tenantFilter })
+            .populate('employeeId', 'employeeCode fullName position')
+            .sort({ payrollRole: 1, employeeName: 1 });
         const salaryReviewCount = payrolls.filter((payroll) => payroll.baseSalary > 0 && payroll.baseSalary < REVIEW_MONTHLY_SALARY_BELOW).length;
         const totalNet = payrolls.reduce((sum, p) => sum + p.netSalary, 0);
         const byRole = payrolls.reduce((summary, payroll) => {
@@ -729,13 +971,14 @@ const getPayrollByMonth = async (req, res) => {
 
 const getLeaveOverview = async (req, res) => {
     try {
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         const year = Number(req.query.year || new Date().getFullYear());
         const date = String(req.query.date || getWorkDate());
         if (!Number.isInteger(year) || year < 2000 || year > 2100 || !isValidWorkDate(date)) return res.status(422).json({ message: 'Năm hoặc ngày theo dõi không hợp lệ' });
         const [employees, requests, staffing] = await Promise.all([
-            Employee.find().select('_id employeeCode fullName payrollRole status').lean(),
-            LeaveRequest.find({ startDate: { $lte: new Date(`${year}-12-31T23:59:59.999Z`) }, endDate: { $gte: new Date(`${year}-01-01T00:00:00.000Z`) } }).select('employeeId employeeName leaveType startDate endDate totalDays workDates status approvedByName approvedAt').lean(),
-            getStaffingSnapshot(date)
+            Employee.find(tenantFilter).select('_id employeeCode fullName payrollRole status').lean(),
+            LeaveRequest.find({ startDate: { $lte: new Date(`${year}-12-31T23:59:59.999Z`) }, endDate: { $gte: new Date(`${year}-01-01T00:00:00.000Z`) }, ...tenantFilter }).select('employeeId employeeName leaveType startDate endDate totalDays workDates status approvedByName approvedAt').lean(),
+            getStaffingSnapshot(date, req)
         ]);
         const byEmployee = new Map(employees.map((employee) => [String(employee._id), { ...employee, approvedDays: 0, pendingDays: 0, byType: {}, legacyDays: 0 }]));
         for (const request of requests) {
@@ -751,18 +994,23 @@ const getLeaveOverview = async (req, res) => {
         return res.json({ data: { year, date, employees: [...byEmployee.values()],
             impact: { teacherShortages: staffing.teacherShortages, missingTeacherTotal: staffing.missingTeacherTotal,
                 uncoveredShifts: staffing.duties.filter((shift) => shift.uncovered).map((shift) => ({ _id: shift._id, name: shift.name, employeeName: shift.employeeName })) } } });
-    } catch (error) { return res.status(500).json({ message: 'Không thể tổng hợp nghỉ phép và phân công' }); }
+    } catch (error) {
+        const status = error.statusCode || (error.name === 'InvalidTenantContextError' ? 403 : 500);
+        return res.status(status).json({ message: 'Không thể tổng hợp nghỉ phép và phân công' });
+    }
 };
 
 const getMyLeaveRequests = async (req, res) => {
     try {
-        const employee = await Employee.findOne({ userId: req.user._id }).select('_id employeeCode fullName position');
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+        const employee = await Employee.findOne({ userId: req.user._id, ...tenantFilter }).select('_id employeeCode fullName position');
         if (!employee) return res.status(404).json({ message: 'Tài khoản chưa được liên kết với hồ sơ nhân sự. Vui lòng liên hệ bộ phận HR.' });
-        const requests = await LeaveRequest.find({ employeeId: employee._id }).sort({ createdAt: -1 }).limit(50);
+        const requests = await LeaveRequest.find({ employeeId: employee._id, ...tenantFilter }).sort({ createdAt: -1 }).limit(50);
         return res.json({ success: true, data: { employee, requests } });
     } catch (error) {
         console.error(error);
-        return res.status(500).json({ message: 'Không thể tải đơn nghỉ phép cá nhân' });
+        const status = error.statusCode || (error.name === 'InvalidTenantContextError' ? 403 : 500);
+        return res.status(status).json({ message: 'Không thể tải đơn nghỉ phép cá nhân' });
     }
 };
 
@@ -775,9 +1023,10 @@ const getMyPayroll = async (req, res) => {
         if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year) || year < 2000 || year > 2100) {
             return res.status(400).json({ message: 'Tháng hoặc năm không hợp lệ' });
         }
-        const employee = await Employee.findOne({ userId: req.user._id }).select('_id employeeCode fullName position payrollRole status');
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+        const employee = await Employee.findOne({ userId: req.user._id, ...tenantFilter }).select('_id employeeCode fullName position payrollRole status');
         if (!employee) return res.status(404).json({ message: 'Tài khoản chưa được liên kết với hồ sơ nhân sự. Vui lòng liên hệ bộ phận HR.' });
-        const payroll = await Payroll.findOne({ employeeId: employee._id, month, year, status: { $in: ['confirmed', 'paid'] } }).lean();
+        const payroll = await Payroll.findOne({ employeeId: employee._id, month, year, status: { $in: ['confirmed', 'paid'] }, ...tenantFilter }).lean();
         return res.json({ success: true, message: payroll ? 'Lấy phiếu lương thành công' : 'Chưa có phiếu lương cho kỳ này', data: { employee, payroll, month, year } });
     } catch (error) {
         console.error(error);
@@ -791,12 +1040,13 @@ const updatePayrollStatus = async (req, res) => {
         if (!['reviewed', 'confirmed', 'paid'].includes(status)) {
             return res.status(400).json({ message: 'Trạng thái không hợp lệ (reviewed | confirmed | paid)' });
         }
-        const payroll = await Payroll.findById(req.params.id);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+        const payroll = await Payroll.findOne({ _id: req.params.id, ...tenantFilter });
         if (!payroll) return res.status(404).json({ message: 'Không tìm thấy bảng lương' });
         if (payroll.status === 'paid') return res.status(400).json({ message: 'Bảng lương đã thanh toán, không thể thay đổi' });
 
         if (status === 'reviewed') {
-            const profile = await Employee.findById(payroll.employeeId).select('salaryConfig');
+            const profile = await Employee.findOne({ _id: payroll.employeeId, ...tenantFilter }).select('salaryConfig');
             if (isUnverifiedLowMonthlySalary(profile?.salaryConfig) || (payroll.baseSalary > 0 && payroll.baseSalary < REVIEW_MONTHLY_SALARY_BELOW && Number(profile?.salaryConfig?.baseSalary) !== payroll.baseSalary)) return res.status(409).json({ message: 'Mức lương tháng trên phiếu dễ nhầm với tiền một công. HR cần xác minh hồ sơ và tính lại bản nháp trước khi kế toán đối soát.' });
             if (!['admin', 'accountant'].includes(req.user.role) || payroll.status !== 'draft') return res.status(403).json({ message: 'Chỉ kế toán được đối soát bảng lương nháp' });
             if (!payroll.insuranceConfirmed || !payroll.insuranceBasisNote?.trim()) return res.status(409).json({ message: 'Cần đối soát khoản bảo hiểm, ghi căn cứ và xác nhận trước khi duyệt lương.' });
@@ -804,12 +1054,12 @@ const updatePayrollStatus = async (req, res) => {
         }
         if (status === 'confirmed') {
             if (!['admin', 'principal'].includes(req.user.role) || payroll.status !== 'reviewed') return res.status(403).json({ message: 'Hiệu trưởng chỉ xác nhận bảng lương đã được kế toán đối soát' });
-            const payrollEmployee = await Employee.findById(payroll.employeeId).select('userId');
+            const payrollEmployee = await Employee.findOne({ _id: payroll.employeeId, ...tenantFilter }).select('userId');
             if (payrollEmployee?.userId && String(payrollEmployee.userId) === String(req.user._id)) return res.status(403).json({ message: 'Không được tự duyệt phiếu lương của mình. Cần người có quyền duyệt khác xử lý.' });
             const periodPrefix = `${payroll.year}-${String(payroll.month).padStart(2, '0')}-`;
-            const approved = await OvertimeRequest.find({ employeeId: payroll.employeeId, status: 'approved', workDate: { $regex: `^${periodPrefix}` } }).lean();
+            const approved = await OvertimeRequest.find({ employeeId: payroll.employeeId, status: 'approved', workDate: { $regex: `^${periodPrefix}` }, ...tenantFilter }).lean();
             const minutes = approved.reduce((sum, request) => sum + request.approvedMinutes, 0);
-            const rate = await OvertimeRate.findOne({ employeeId: payroll.employeeId, month: payroll.month, year: payroll.year }).lean();
+            const rate = await OvertimeRate.findOne({ employeeId: payroll.employeeId, month: payroll.month, year: payroll.year, ...tenantFilter }).lean();
             const amount = Math.round(minutes / 60 * (rate?.hourlyAmount || 0));
             if (minutes && !rate) return res.status(409).json({ message: 'HR chưa đặt đơn giá làm thêm cho kỳ lương' });
             if (payroll.overtimeMinutes !== minutes || payroll.overtimePay !== amount || (payroll.overtimeHourlyAmount || 0) !== (rate?.hourlyAmount || 0)) return res.status(409).json({ message: 'Giờ hoặc đơn giá làm thêm đã thay đổi. Hãy tính lại bảng lương nháp trước khi xác nhận.' });
@@ -833,7 +1083,7 @@ const updatePayrollStatus = async (req, res) => {
           const months = [`${payroll.year}-${String(payroll.month).padStart(2, '0')}`];
           if (status === 'paid') months.push(paidDate.slice(0, 7));
           for (const month of [...new Set(months)].sort()) await lockOpenPeriod(month, session);
-          const saved = await Payroll.findOneAndUpdate({ _id: payroll._id, status: payroll.status, updatedAt: payroll.updatedAt }, { $set: fields }, { new: true, session });
+          const saved = await Payroll.findOneAndUpdate({ _id: payroll._id, status: payroll.status, updatedAt: payroll.updatedAt, ...tenantFilter }, { $set: fields }, { new: true, session });
           if (!saved) throw httpError('Trạng thái bảng lương vừa thay đổi. Hãy tải lại trang.', 409);
           await PayrollEvent.create([{ payrollId: payroll._id, actorId: req.user._id, action: status, before, after: fields }], { session });
           return saved;
@@ -849,12 +1099,13 @@ const reopenConfirmedPayroll = async (req, res) => {
         if (!isValidObjectId(req.params.id)) return res.status(422).json({ message: 'Mã phiếu lương không hợp lệ.' });
         const reason = String(req.body?.reason || '').trim();
         if (reason.length < 10 || reason.length > 500) return res.status(422).json({ message: 'Cần ghi lý do mở lại phiếu từ 10 đến 500 ký tự.' });
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
         const payroll = await runHrTransaction(async (session) => {
-            const periodPayroll = await Payroll.findById(req.params.id).select('month year').session(session);
+            const periodPayroll = await Payroll.findOne({ _id: req.params.id, ...tenantFilter }).select('month year').session(session);
             if (periodPayroll) await lockOpenPeriod(`${periodPayroll.year}-${String(periodPayroll.month).padStart(2, '0')}`, session);
-            const current = await Payroll.findOne({ _id: req.params.id, status: 'confirmed' }).session(session);
+            const current = await Payroll.findOne({ _id: req.params.id, status: 'confirmed', ...tenantFilter }).session(session);
             if (!current) throw httpError('Chỉ mở lại được phiếu đã xác nhận nhưng chưa chi trả.', 409);
-            const result = await Payroll.findOneAndUpdate({ _id: current._id, status: 'confirmed', updatedAt: current.updatedAt }, {
+            const result = await Payroll.findOneAndUpdate({ _id: current._id, status: 'confirmed', updatedAt: current.updatedAt, ...tenantFilter }, {
                 $set: { status: 'draft', insuranceConfirmed: false, insuranceBasisNote: '' },
                 $unset: { confirmedAt: 1, confirmedBy: 1, reviewedAt: 1, reviewedBy: 1 }
             }, { returnDocument: 'after', session });
@@ -873,7 +1124,8 @@ const reopenConfirmedPayroll = async (req, res) => {
 
 const updatePayrollAdjustment = async (req, res) => {
     try {
-        const payroll = await Payroll.findById(req.params.id);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+        const payroll = await Payroll.findOne({ _id: req.params.id, ...tenantFilter });
         if (!payroll) return res.status(404).json({ message: 'Không tìm thấy bảng lương' });
         if (payroll.status !== 'draft') return res.status(409).json({ message: 'Chỉ được điều chỉnh bảng lương nháp; bảng lương đã xác nhận hoặc chi trả không thể sửa trực tiếp' });
 

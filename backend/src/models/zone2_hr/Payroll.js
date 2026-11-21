@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 
 const PayrollSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant'
+    },
     employeeId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Employee',

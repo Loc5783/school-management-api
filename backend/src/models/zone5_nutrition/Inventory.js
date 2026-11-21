@@ -1,6 +1,11 @@
 const mongoose = require('mongoose');
 
 const InventorySchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant',
+        index: true
+    },
     ingredientId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'IngredientMaster',
@@ -55,7 +60,14 @@ const InventorySchema = new mongoose.Schema({
     timestamps: true
 });
 
-InventorySchema.index({ ingredientId: 1, batchNumber: 1 }, { unique: true });
+InventorySchema.index(
+    { tenantId: 1, ingredientId: 1, batchNumber: 1 },
+    { name: 'tenantId_1_ingredientId_1_batchNumber_1_unique', unique: true, partialFilterExpression: { tenantId: { $type: 'objectId' } } }
+);
+InventorySchema.index(
+    { ingredientId: 1, batchNumber: 1 },
+    { name: 'legacy_ingredientId_1_batchNumber_1_unique', unique: true, partialFilterExpression: { tenantId: null } }
+);
 InventorySchema.index({ expiryDate: 1 });
 InventorySchema.index({ status: 1 });
 

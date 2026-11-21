@@ -10,6 +10,10 @@ const amounts = {
 };
 
 const DailyCashReconciliationSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant'
+    },
     workDate: { type: String, required: true, unique: true },
     actual: { type: new mongoose.Schema(amounts, { _id: false }), required: true },
     bookSnapshot: { type: new mongoose.Schema(amounts, { _id: false }), required: true },

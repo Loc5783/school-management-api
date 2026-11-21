@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 
 const AccountingPeriodSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant'
+    },
     month: { type: String, required: true, unique: true, match: /^20\d{2}-(0[1-9]|1[0-2])$/ },
     status: { type: String, enum: ['closed', 'open'], required: true },
     revision: { type: Number, default: 1, required: true },

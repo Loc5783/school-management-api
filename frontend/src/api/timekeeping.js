@@ -18,3 +18,15 @@ export const getOvertimeRequests = () => api.get('/timekeeping/overtime');
 export const reviewOvertimeRequest = (id, data) => api.patch(`/timekeeping/overtime/${id}/review`, data);
 export const getOvertimeRates = (month, year) => api.get('/timekeeping/overtime-rates', { params: { month, year } });
 export const setOvertimeRate = (employeeId, data) => api.put(`/timekeeping/overtime-rates/${employeeId}`, data);
+
+// Timekeeping Hardware Devices & Biometric Person Mapping
+export const listTimekeepingDevices = () => api.get('/timekeeping/devices');
+export const createTimekeepingDevice = (data) => api.post('/timekeeping/devices', data);
+export const updateTimekeepingDevice = (id, data) => api.patch(`/timekeeping/devices/${id}`, data);
+export const testTimekeepingDeviceConnection = (id) => api.post(`/timekeeping/devices/${id}/test-connection`);
+export const syncTimekeepingDevice = (id, options = {}) => api.post(`/timekeeping/devices/${id}/sync`, options);
+export const listPersonMappings = (deviceId) => api.get(`/timekeeping/devices/${deviceId}/person-mappings`);
+export const upsertPersonMapping = (deviceId, data) => api.post(`/timekeeping/devices/${deviceId}/person-mappings`, data);
+export const deletePersonMapping = (deviceId, mappingId) => api.delete(`/timekeeping/devices/${deviceId}/person-mappings/${mappingId}`);
+export const getTimekeepingDeviceSyncLogs = (deviceId) => api.get(`/timekeeping/devices/${deviceId}/sync-logs`);
+export const getUnmappedDeviceEvents = (deviceCode) => api.get('/timekeeping/devices-unmapped', { params: deviceCode ? { deviceCode } : {} });

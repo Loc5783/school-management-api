@@ -6,22 +6,25 @@ const FoodInspection = require('../models/zone5_nutrition/FoodInspection');
 const { expectedDishes } = require('./kitchenSafetyController');
 const { calculateDailyServingPlan } = require('../services/nutritionService');
 const { getWorkDate, isValidWorkDate, startOfWorkDate, addWorkDays } = require('../utils/dateHelpers');
+const { buildTenantFilter } = require('../services/tenantFilterService');
 
-const loadReport = async (dateKey) => {
+const loadReport = async (dateKey, req = null) => {
     const start = startOfWorkDate(dateKey);
     const end = startOfWorkDate(addWorkDays(dateKey, 1));
+    const tenantFilter = req ? buildTenantFilter(req) : {};
+    const tenantId = req?.tenantId || req?.user?.tenantId;
     const [plan, servings, movements, closing, safetyDishes, inspections] = await Promise.all([
-        calculateDailyServingPlan(dateKey),
-        MealServing.find({ dateKey }).lean(),
-        InventoryTransaction.find({ type: { $in: ['export', 'return', 'spoilage', 'adjustment'] }, createdAt: { $gte: start, $lt: end } }).sort({ createdAt: 1 }).lean(),
-        KitchenDayClosing.findOne({ dateKey }).lean(),
-        expectedDishes(dateKey),
-        FoodInspection.find({ mealDateKey: dateKey }).select('mealType stage').lean()
+        calculateDailyServingPlan(dateKey, null, tenantId),
+        MealServing.find({ dateKey, ...tenantFilter }).lean(),
+        InventoryTransaction.find({ type: { $in: ['export', 'return', 'spoilage', 'adjustment'] }, ...tenantFilter, createdAt: { $gte: start, $lt: end } }).sort({ createdAt: 1 }).lean(),
+        KitchenDayClosing.findOne({ dateKey, ...tenantFilter }).lean(),
+        expectedDishes(dateKey, req),
+        FoodInspection.find({ mealDateKey: dateKey, ...tenantFilter }).select('mealType stage').lean()
     ]);
     const servingByClass = new Map(servings.map((item) => [String(item.classroomId), item]));
     const planByClass = new Map(plan.classBreakdown.map((item) => [String(item.classroomId), item]));
     const missingIds = servings.map((item) => item.classroomId).filter((id) => !planByClass.has(String(id)));
-    const oldClasses = missingIds.length ? await Classroom.find({ _id: { $in: missingIds } }).select('name fullName').lean() : [];
+    const oldClasses = missingIds.length ? await Classroom.find({ _id: { $in: missingIds }, ...tenantFilter }).select('name fullName').lean() : [];
     const oldClassNames = new Map(oldClasses.map((item) => [String(item._id), item.name || item.fullName]));
     const ids = new Set([...planByClass.keys(), ...servingByClass.keys()]);
     const rows = [...ids].map((id) => {
@@ -84,7 +87,7 @@ const getReconciliation = async (req, res) => {
     const dateKey = req.query.date || getWorkDate();
     if (!isValidWorkDate(dateKey)) return res.status(400).json({ message: 'Ngày đối chiếu không hợp lệ' });
     try {
-        res.json({ success: true, data: await loadReport(dateKey) });
+        res.json({ success: true, data: await loadReport(dateKey, req) });
     } catch (error) {
         res.status(500).json({ message: 'Không thể tải đối chiếu cuối ngày' });
     }
@@ -100,13 +103,14 @@ const closeReconciliation = async (req, res) => {
     if (typeof noteInput !== 'string' || note.length > 2000) return res.status(400).json({ message: 'Ghi chú không hợp lệ hoặc quá dài' });
     if (![leftoverCookedCount, disposedCookedCount].every((value) => Number.isInteger(value) && value >= 0)) return res.status(400).json({ message: 'Số suất còn lại/hủy phải là số nguyên không âm' });
     try {
-        const report = await loadReport(dateKey);
+        const report = await loadReport(dateKey, req);
         if (report.closing) return res.status(409).json({ message: 'Ngày này đã được chốt' });
         if (report.blockers.length) return res.status(409).json({ message: report.blockers.join(' ') });
         if (report.hasVariance && !note) return res.status(409).json({ message: 'Có chênh lệch suất; cần ghi rõ lý do trước khi chốt' });
         if (leftoverCookedCount + disposedCookedCount !== report.totals.cooked - report.totals.delivered) return res.status(409).json({ message: 'Suất nấu chưa giao phải được ghi đủ là suất còn lại hoặc đã hủy' });
         if (disposedCookedCount > 0 && !note) return res.status(409).json({ message: 'Có suất đã hủy; cần ghi rõ nguyên nhân' });
         const closing = await KitchenDayClosing.create({
+            tenantId: req.tenantId || req.user?.tenantId,
             dateKey, note, closedBy: req.user._id, leftoverCookedCount, disposedCookedCount,
             rows: report.rows.map((row) => ({ classroomId: row.classroomId, className: row.className, planned: row.planned, cooked: row.cooked, delivered: row.delivered, received: row.received, notes: row.notes })),
             stockMovements: report.stockMovements, stockTransactions: report.stockTransactions

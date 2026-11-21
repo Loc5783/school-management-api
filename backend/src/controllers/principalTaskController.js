@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const PrincipalTask = require('../models/zone1_system/PrincipalTask');
 const Notification = require('../models/zone1_system/Notification');
 const User = require('../models/zone1_system/User');
+const { buildTenantFilter } = require('../services/tenantFilterService');
 
 const getActorName = (user) => user.profile?.fullName || user.username || 'Người dùng';
 
@@ -29,9 +30,12 @@ const createTask = async (req, res) => {
       return res.status(422).json({ message: 'Bộ phận phụ trách không hợp lệ.' });
     }
 
+    const tenantFilter = buildTenantFilter(req);
+    const tenantId = req.tenantId || req.user?.tenantId;
+
     // Chống tạo trùng việc khi người dùng bấm duyệt nhiều lần hoặc tải lại trang
     if (deduplicationKey) {
-      const existing = await PrincipalTask.findOne({ deduplicationKey }).lean();
+      const existing = await PrincipalTask.findOne({ deduplicationKey, ...tenantFilter }).lean();
       if (existing) {
         return res.status(200).json({
           message: 'Công việc này đã được tạo trước đó.',
@@ -46,7 +50,7 @@ const createTask = async (req, res) => {
       if (!mongoose.isValidObjectId(assignedTo)) {
         return res.status(422).json({ message: 'ID người phụ trách không hợp lệ.' });
       }
-      assignedUser = await User.findById(assignedTo).select('username profile role').lean();
+      assignedUser = await User.findOne({ _id: assignedTo, ...tenantFilter }).select('username profile role').lean();
       if (!assignedUser) {
         return res.status(404).json({ message: 'Không tìm thấy người được phân công.' });
       }
@@ -56,6 +60,7 @@ const createTask = async (req, res) => {
     const parsedDueDate = dueDate ? new Date(dueDate) : null;
 
     const task = new PrincipalTask({
+      ...(tenantId ? { tenantId } : {}),
       title: title.trim(),
       description: description.trim(),
       department,
@@ -96,13 +101,14 @@ const createTask = async (req, res) => {
         };
         const targetRole = deptRoleMap[department];
         if (targetRole) {
-          const deptUsers = await User.find({ role: targetRole, status: 'active' }).select('_id').lean();
+          const deptUsers = await User.find({ role: targetRole, status: 'active', ...tenantFilter }).select('_id').lean();
           recipientUserIds = deptUsers.map((u) => u._id);
         }
       }
 
       if (recipientUserIds.length > 0) {
         const notifications = recipientUserIds.map((recipientId) => ({
+          ...(tenantId ? { tenantId } : {}),
           recipientId,
           title: `Nhiệm vụ mới từ Hiệu trưởng: ${task.title}`,
           message: `${task.description ? task.description.slice(0, 150) : task.title} · Hạn xử lý: ${parsedDueDate ? parsedDueDate.toLocaleDateString('vi-VN') : 'Không có'}`,
@@ -123,12 +129,7 @@ const createTask = async (req, res) => {
     });
   } catch (error) {
     if (error.code === 11000) {
-      const existing = await PrincipalTask.findOne({ deduplicationKey: req.body.deduplicationKey }).lean();
-      return res.status(200).json({
-        message: 'Công việc đã tồn tại trong hệ thống.',
-        data: existing,
-        alreadyExists: true
-      });
+      return res.status(409).json({ message: 'Mã công việc đã tồn tại. Vui lòng tải lại và thử lại.' });
     }
     console.error('Lỗi tạo công việc giao việc:', error);
     return res.status(500).json({ message: 'Không thể tạo công việc giao việc.' });
@@ -142,7 +143,8 @@ const getTasks = async (req, res) => {
     const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
     const { department, status, priority, overdue } = req.query;
 
-    const filter = {};
+    const tenantFilter = buildTenantFilter(req);
+    const filter = { ...tenantFilter };
 
     // Phân quyền dữ liệu theo vai trò
     const isExecutive = ['admin', 'principal'].includes(req.user.role);
@@ -159,9 +161,14 @@ const getTasks = async (req, res) => {
       if (!userDept) {
         return res.status(403).json({ message: 'Bạn không có quyền truy cập danh sách nhiệm vụ này.' });
       }
-      filter.$or = [
-        { department: userDept },
-        { assignedTo: req.user._id }
+      filter.$and = [
+        { ...tenantFilter },
+        {
+          $or: [
+            { department: userDept },
+            { assignedTo: req.user._id }
+          ]
+        }
       ];
     } else if (department && ['hr', 'accountant', 'chef', 'guard', 'teacher'].includes(department)) {
       filter.department = department;
@@ -219,7 +226,8 @@ const updateTaskStatus = async (req, res) => {
       return res.status(422).json({ message: 'ID công việc không hợp lệ.' });
     }
 
-    const task = await PrincipalTask.findById(id);
+    const tenantFilter = buildTenantFilter(req);
+    const task = await PrincipalTask.findOne({ _id: id, ...tenantFilter });
     if (!task) {
       return res.status(404).json({ message: 'Không tìm thấy công việc.' });
     }
@@ -294,6 +302,7 @@ const updateTaskStatus = async (req, res) => {
       const notifyTarget = isExecutive ? task.assignedTo : task.assignedBy;
       if (notifyTarget && String(notifyTarget) !== String(req.user._id)) {
         await Notification.create({
+          ...(req.tenantId || req.user?.tenantId ? { tenantId: req.tenantId || req.user.tenantId } : {}),
           recipientId: notifyTarget,
           title: `Cập nhật nhiệm vụ: ${task.title}`,
           message: `${actorName} đã cập nhật trạng thái thành "${status}": ${(note || resultNote || '').slice(0, 100)}`,
@@ -326,7 +335,8 @@ const getDepartmentStaff = async (req, res) => {
       guard: 'guard',
       teacher: 'teacher'
     };
-    const filter = { status: 'active' };
+    const tenantFilter = buildTenantFilter(req);
+    const filter = { status: 'active', ...tenantFilter };
     if (department && deptRoleMap[department]) {
       filter.role = deptRoleMap[department];
     } else {

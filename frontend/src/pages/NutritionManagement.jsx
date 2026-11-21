@@ -37,7 +37,8 @@ import {
   getDailyServingPlan,
   getKitchenRequests,
   createKitchenRequest,
-  approveKitchenRequest
+  approveKitchenRequest,
+  getKitchenClassrooms
 } from '../api/nutrition';
 
 const MENU_DAYS = [
@@ -292,7 +293,10 @@ function MealPlanFields({ day, onChange, getDishOptions }) {
   );
 }
 
-function ClassroomDietaryAlertPanel({ alerts, blockedAllergens = [] }) {
+function ClassroomDietaryAlertPanel({ alerts = [], blockedAllergens = [], selectedClassId = true }) {
+  if (!selectedClassId) {
+    return <div className="nutrition-class-alerts nutrition-class-alerts--clear">Vui lòng chọn lớp học để xem cảnh báo dị ứng hoặc ghi chú y tế.</div>;
+  }
   if (!alerts.length) {
     return <div className="nutrition-class-alerts nutrition-class-alerts--clear">Không có hồ sơ dị ứng hoặc ghi chú y tế cần bếp lưu ý ở lớp này.</div>;
   }
@@ -336,6 +340,7 @@ export default function NutritionManagement() {
 
   // Data states
   const [classrooms, setClassrooms] = useState([]);
+  const [classroomLoadError, setClassroomLoadError] = useState('');
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedWeekStart] = useState(() => getMonday());
   const [currentMenu, setCurrentMenu] = useState(null);
@@ -488,20 +493,26 @@ export default function NutritionManagement() {
 
   // 1. Tải danh sách lớp học
   useEffect(() => {
+    let alive = true;
     const fetchClassrooms = async () => {
       try {
-        const res = await api.get('/classrooms');
-        const list = res.data.data || res.data || [];
+        const res = await getKitchenClassrooms();
+        const list = res.data?.data || res.data || [];
+        if (!alive) return;
         setClassrooms(list);
+        setClassroomLoadError('');
         if (list.length > 0 && !selectedClassId) {
           setSelectedClassId(list[0]._id);
           setNewMenuForm(createBlankMenu(list[0]._id, selectedWeekStart));
         }
       } catch (err) {
+        if (!alive) return;
         console.error('Lỗi lấy lớp học:', err);
+        setClassroomLoadError(err.response?.data?.message || 'Không thể tải danh sách lớp học cho nhà bếp.');
       }
     };
     fetchClassrooms();
+    return () => { alive = false; };
   }, [selectedClassId, selectedWeekStart]);
 
   // 2. Tải dữ liệu tương ứng theo Tab
@@ -1899,7 +1910,7 @@ export default function NutritionManagement() {
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                     required
                   >
-                    <option value="">-- Chọn lớp --</option>
+                    <option value="">{classrooms.length ? '-- Chọn lớp --' : (classroomLoadError || 'Chưa có lớp học nào đang hoạt động')}</option>
                     {classrooms.map((c) => (
                       <option key={c._id} value={c._id}>{c.name} ({c.ageGroup} tuổi)</option>
                     ))}
@@ -1918,7 +1929,7 @@ export default function NutritionManagement() {
                 </div>
               </div>
 
-              <ClassroomDietaryAlertPanel alerts={classroomDietaryAlerts} blockedAllergens={classroomBlockedAllergens} />
+              <ClassroomDietaryAlertPanel alerts={classroomDietaryAlerts} blockedAllergens={classroomBlockedAllergens} selectedClassId={newMenuForm?.classroomId} />
 
               {dishes.length === 0 ? (
                 <div className="nutrition-empty-catalog">

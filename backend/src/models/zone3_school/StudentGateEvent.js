@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const StudentGateEventSchema = new mongoose.Schema({
+  tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
   studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true, index: true },
   studentName: { type: String, required: true, trim: true },
   studentCode: { type: String, required: true, trim: true },
@@ -20,6 +21,19 @@ const StudentGateEventSchema = new mongoose.Schema({
 
 StudentGateEventSchema.index({ studentId: 1, gateDate: 1, direction: 1 }, { unique: true });
 StudentGateEventSchema.index({ gateDate: 1, occurredAt: -1 });
-StudentGateEventSchema.index({ clientEventId: 1 }, { unique: true, sparse: true });
+// Multi-tenant clientEventId unique index
+StudentGateEventSchema.index({ tenantId: 1, clientEventId: 1 }, {
+  unique: true,
+  sparse: true,
+  partialFilterExpression: { tenantId: { $type: 'objectId' } }
+});
+// Legacy unique index
+StudentGateEventSchema.index({ clientEventId: 1 }, {
+  unique: true,
+  sparse: true,
+  partialFilterExpression: { tenantId: null }
+});
+
+StudentGateEventSchema.index({ tenantId: 1, studentId: 1, gateDate: 1, direction: 1 });
 
 module.exports = mongoose.model('StudentGateEvent', StudentGateEventSchema);

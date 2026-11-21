@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const StudentProfileChangeRequestSchema = new mongoose.Schema({
+  tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
   studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true, index: true },
   studentName: { type: String, required: true, trim: true },
   classroomId: { type: mongoose.Schema.Types.ObjectId, ref: 'Classroom', required: true, index: true },
@@ -16,6 +17,8 @@ const StudentProfileChangeRequestSchema = new mongoose.Schema({
   reviewedAt: { type: Date, default: null }
 }, { timestamps: true });
 
+StudentProfileChangeRequestSchema.index({ tenantId: 1, studentId: 1, status: 1, createdAt: -1 });
+StudentProfileChangeRequestSchema.index({ tenantId: 1, requesterId: 1, createdAt: -1 });
 StudentProfileChangeRequestSchema.index({ studentId: 1, status: 1, createdAt: -1 });
 StudentProfileChangeRequestSchema.index({ requesterId: 1, createdAt: -1 });
 StudentProfileChangeRequestSchema.index({ status: 1, createdAt: -1 });

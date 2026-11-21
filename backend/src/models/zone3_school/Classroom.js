@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 
 const ClassroomSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant'
+    },
     name: {
         type: String,
         required: true,
@@ -87,8 +91,20 @@ ClassroomSchema.index({ name: 1 });
 ClassroomSchema.index({ schoolYear: 1 });
 ClassroomSchema.index({ status: 1 });
 ClassroomSchema.index(
+    { tenantId: 1, schoolYear: 1, homeroomTeacherId: 1 },
+    {
+        name: 'tenantId_1_schoolYear_1_homeroomTeacherId_1_unique',
+        unique: true,
+        partialFilterExpression: { status: 'active', homeroomTeacherId: { $type: 'objectId' }, tenantId: { $type: 'objectId' } }
+    }
+);
+ClassroomSchema.index(
     { schoolYear: 1, homeroomTeacherId: 1 },
-    { name: 'schoolYear_1_homeroomTeacherId_1', unique: true, partialFilterExpression: { status: 'active', homeroomTeacherId: { $type: 'objectId' } } }
+    {
+        name: 'legacy_schoolYear_1_homeroomTeacherId_1_unique',
+        unique: true,
+        partialFilterExpression: { status: 'active', homeroomTeacherId: { $type: 'objectId' }, tenantId: null }
+    }
 );
 
 module.exports = mongoose.model('Classroom', ClassroomSchema);

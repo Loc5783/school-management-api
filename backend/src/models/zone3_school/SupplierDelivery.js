@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const SupplierDeliverySchema = new mongoose.Schema({
+  tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
   deliveryDate: { type: String, required: true, match: /^\d{4}-\d{2}-\d{2}$/, index: true },
   purchaseOrderId: { type: mongoose.Schema.Types.ObjectId, ref: 'PurchaseOrder', default: null, index: true },
   orderCode: { type: String, trim: true, uppercase: true, maxlength: 50, default: '' },
@@ -24,6 +25,19 @@ const SupplierDeliverySchema = new mongoose.Schema({
 }, { timestamps: true });
 
 SupplierDeliverySchema.index({ deliveryDate: 1, status: 1, checkInAt: -1 });
-SupplierDeliverySchema.index({ clientEventId: 1 }, { unique: true, sparse: true });
+// Multi-tenant clientEventId unique index
+SupplierDeliverySchema.index({ tenantId: 1, clientEventId: 1 }, {
+  unique: true,
+  sparse: true,
+  partialFilterExpression: { tenantId: { $type: 'objectId' } }
+});
+// Legacy unique index
+SupplierDeliverySchema.index({ clientEventId: 1 }, {
+  unique: true,
+  sparse: true,
+  partialFilterExpression: { tenantId: null }
+});
+
+SupplierDeliverySchema.index({ tenantId: 1, deliveryDate: 1, status: 1, checkInAt: -1 });
 
 module.exports = mongoose.model('SupplierDelivery', SupplierDeliverySchema);

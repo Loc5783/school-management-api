@@ -4,6 +4,7 @@ const FoodInspection = require('../models/zone5_nutrition/FoodInspection');
 const MealServing = require('../models/zone5_nutrition/MealServing');
 const { calculateDailyServingPlan, checkAllergyAndDiseaseConflicts } = require('../services/nutritionService');
 const { addWorkDays, getWorkDate, isValidWorkDate, startOfWorkDate } = require('../utils/dateHelpers');
+const { buildTenantFilter } = require('../services/tenantFilterService');
 
 const MEALS = ['breakfast', 'morningSnack', 'lunch', 'afternoonSnack'];
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
@@ -15,11 +16,13 @@ const getMealItems = (day, mealType) => {
     if (mealType !== 'lunch') return simple(day[mealType]);
     return [...lunch('mainDishes', 'mainDish'), ...lunch('stirFryDishes', 'stirFryDish'), ...lunch('soupDishes', 'soupDish'), ...lunch('desserts', 'dessert')];
 };
-const expectedDishes = async (date) => {
-    const plan = await calculateDailyServingPlan(date);
-    const cooked = await MealServing.find({ dateKey: date, cookedCount: { $gt: 0 } }).select('classroomId').lean();
+const expectedDishes = async (date, req = null) => {
+    const tenantFilter = req ? buildTenantFilter(req) : {};
+    const tenantId = req?.tenantId || req?.user?.tenantId;
+    const plan = await calculateDailyServingPlan(date, null, tenantId);
+    const cooked = await MealServing.find({ dateKey: date, ...tenantFilter, cookedCount: { $gt: 0 } }).select('classroomId').lean();
     const activeClassIds = [...new Set([...plan.classBreakdown.filter((item) => item.recommendedServings > 0).map((item) => String(item.classroomId)), ...cooked.map((item) => String(item.classroomId))])];
-    const menus = await Menu.find({ classroomId: { $in: activeClassIds }, status: 'published', startDate: { $lt: dateRange(date).$lt }, endDate: { $gte: dateRange(date).$gte } }).lean();
+    const menus = await Menu.find({ classroomId: { $in: activeClassIds }, ...tenantFilter, status: 'published', startDate: { $lt: dateRange(date).$lt }, endDate: { $gte: dateRange(date).$gte } }).lean();
     const weekday = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][new Date(`${date}T00:00:00.000Z`).getUTCDay()];
     const missingMenus = activeClassIds.filter((id) => !menus.some((menu) => String(menu.classroomId) === String(id) && menu.days?.some((day) => day.dayOfWeek === weekday)));
     const names = Object.fromEntries(MEALS.map((meal) => [meal, new Set()]));
@@ -42,10 +45,11 @@ const getKitchenSafetyDay = async (req, res) => {
     try {
         const date = req.query.date || getWorkDate();
         if (!isValidWorkDate(date)) throw fail('Ngày không hợp lệ');
+        const tenantFilter = buildTenantFilter(req);
         const [inspections, samples, dishes] = await Promise.all([
-            FoodInspection.find({ mealDate: dateRange(date) }).sort({ mealType: 1 }).lean(),
-            FoodSample.find({ mealDate: dateRange(date) }).sort({ mealType: 1, dishName: 1 }).lean(),
-            expectedDishes(date)
+            FoodInspection.find({ mealDate: dateRange(date), ...tenantFilter }).sort({ mealType: 1 }).lean(),
+            FoodSample.find({ mealDate: dateRange(date), ...tenantFilter }).sort({ mealType: 1, dishName: 1 }).lean(),
+            expectedDishes(date, req)
         ]);
         res.json({ success: true, data: { date, inspections, samples, ...dishes } });
     } catch (error) { sendError(res, error); }
@@ -69,20 +73,28 @@ const recordKitchenSafetyStep = async (req, res) => {
         if (typeof noteInput !== 'string') throw fail('Ghi chú kiểm thực không hợp lệ');
         const note = noteInput.trim();
         if (note.length > 500 || (!passed && !note)) throw fail('Mục không đạt phải có ghi chú xử lý, tối đa 500 ký tự');
-        let inspection = await FoodInspection.findOne({ mealDateKey: date, mealType });
+        const tenantFilter = buildTenantFilter(req);
+        let inspection = await FoodInspection.findOne({ mealDateKey: date, mealType, ...tenantFilter });
         if (!inspection) {
             if (step !== 1) throw fail('Cần kiểm tra nguyên liệu đầu vào trước', 409);
-            inspection = new FoodInspection({ mealDateKey: date, mealDate: startOfWorkDate(date), mealType, inspectorId: req.user._id, inspectorName: req.user.profile?.fullName || req.user.username });
+            inspection = new FoodInspection({
+                tenantId: req.tenantId || req.user?.tenantId,
+                mealDateKey: date,
+                mealDate: startOfWorkDate(date),
+                mealType,
+                inspectorId: req.user._id,
+                inspectorName: req.user.profile?.fullName || req.user.username
+            });
         }
         if (inspection.stage === 'ready') throw fail('Bữa đã hoàn tất kiểm thực; không thể ghi đè', 409);
         if (step === 1 && inspection.step2Check?.checkTime) throw fail('Đã sang bước chế biến; không thể sửa lại bước nguyên liệu', 409);
         if (step === 2 && inspection.stage !== 'raw_checked' && !(inspection.stage === 'held' && inspection.step2Check?.checkTime)) throw fail('Cần hoàn tất bước kiểm tra nguyên liệu trước', 409);
         if (step === 3 && inspection.stage !== 'processing_checked' && !(inspection.stage === 'held' && inspection.step3Check?.checkTime)) throw fail('Cần hoàn tất bước kiểm tra chế biến trước', 409);
         if (step === 3 && passed) {
-            const dishes = await expectedDishes(date);
+            const dishes = await expectedDishes(date, req);
             if (dishes.missingMenus || !dishes.expected[mealType].length) throw fail('Thiếu thực đơn đã công bố hoặc chưa có món cho bữa này', 409);
             if (dishes.allergyConflicts[mealType]) throw fail('Thực đơn bữa này còn xung đột dị ứng theo hồ sơ hiện tại; chưa thể xác nhận phục vụ', 409);
-            const samples = await FoodSample.find({ mealDate: dateRange(date), mealType, status: 'stored' }).select('dishName').lean();
+            const samples = await FoodSample.find({ mealDate: dateRange(date), mealType, status: 'stored', ...tenantFilter }).select('dishName').lean();
             const sampled = new Set(samples.map((item) => item.dishName.trim().toLocaleLowerCase('vi')));
             const missing = dishes.expected[mealType].filter((name) => !sampled.has(name.toLocaleLowerCase('vi')));
             if (missing.length) throw fail(`Chưa lưu mẫu các món: ${missing.join(', ')}`, 409);

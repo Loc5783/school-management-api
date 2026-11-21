@@ -61,7 +61,9 @@ const normalizeCredential = (body, requirement, file = null) => {
 };
 const inTransaction = async (operation) => {
   const topology = await mongoose.connection.db.admin().command({ hello: 1 });
-  if (!topology.setName && topology.msg !== 'isdbgrid') throw fail('MongoDB cần Replica Set để lưu thay đổi nhân sự cùng lịch sử thao tác', 503);
+  if (!topology.setName && topology.msg !== 'isdbgrid' && process.env.ALLOW_STANDALONE_MONGODB !== 'true') {
+    throw fail('MongoDB cần Replica Set để lưu thay đổi nhân sự cùng lịch sử thao tác', 503);
+  }
   const session = await mongoose.startSession();
   try { let result; await session.withTransaction(async () => { result = await operation(session); }); return result; }
   finally { await session.endSession(); }

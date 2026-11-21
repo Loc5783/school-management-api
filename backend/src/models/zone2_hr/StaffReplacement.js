@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 
 const StaffReplacementSchema = new mongoose.Schema({
+  tenantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tenant'
+  },
   date: { type: String, required: true },
   kind: { type: String, enum: ['classroom', 'shift'], required: true },
   classroomId: { type: mongoose.Schema.Types.ObjectId, ref: 'Classroom', default: null },

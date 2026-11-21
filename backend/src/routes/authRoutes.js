@@ -7,7 +7,7 @@ const router = express.Router();
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 10,
+  limit: process.env.NODE_ENV === 'test' ? 1000 : 10,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   message: { message: 'Có quá nhiều lần thử. Vui lòng thử lại sau 15 phút.' }

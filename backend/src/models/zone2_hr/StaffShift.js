@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 
 const StaffShiftSchema = new mongoose.Schema({
+  tenantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tenant'
+  },
   employeeId: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', required: true },
   role: { type: String, enum: ['chef', 'guard'], required: true },
   name: { type: String, required: true, trim: true, maxlength: 80 },

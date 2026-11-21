@@ -2,6 +2,10 @@ const mongoose = require('mongoose');
 const { sanitizeAuditValue, safeReason, stampActor } = require('../../services/hrAuditSafety');
 
 const AttendanceAuditLogSchema = new mongoose.Schema({
+  tenantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tenant'
+  },
   actorName: { type: String, default: '' }, actorRole: { type: String, default: '' },
   actor: {
     type: mongoose.Schema.Types.ObjectId,

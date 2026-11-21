@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const SecurityIncidentSchema = new mongoose.Schema({
+  tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
   incidentDate: { type: String, required: true, match: /^\d{4}-\d{2}-\d{2}$/, index: true },
   category: { type: String, enum: ['unauthorized_person', 'invalid_picker', 'child_safety', 'accident', 'lost_property', 'equipment', 'fire', 'traffic', 'other'], required: true },
   severity: { type: String, enum: ['normal', 'serious', 'emergency'], default: 'normal', index: true },
@@ -34,5 +35,18 @@ const SecurityIncidentSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 SecurityIncidentSchema.index({ status: 1, severity: 1, createdAt: -1 });
-SecurityIncidentSchema.index({ clientEventId: 1 }, { unique: true, sparse: true });
+// Multi-tenant clientEventId unique index
+SecurityIncidentSchema.index({ tenantId: 1, clientEventId: 1 }, {
+  unique: true,
+  sparse: true,
+  partialFilterExpression: { tenantId: { $type: 'objectId' } }
+});
+// Legacy unique index
+SecurityIncidentSchema.index({ clientEventId: 1 }, {
+  unique: true,
+  sparse: true,
+  partialFilterExpression: { tenantId: null }
+});
+
+SecurityIncidentSchema.index({ tenantId: 1, status: 1, severity: 1, createdAt: -1 });
 module.exports = mongoose.model('SecurityIncident', SecurityIncidentSchema);

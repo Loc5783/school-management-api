@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 
 const OutboxEventSchema = new mongoose.Schema({
+  tenantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tenant'
+  },
   type: {
     type: String,
     required: true

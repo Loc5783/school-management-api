@@ -2,7 +2,8 @@ const Student = require('../models/zone3_school/Student');
 const StudentProfileChangeRequest = require('../models/zone3_school/StudentProfileChangeRequest');
 const Notification = require('../models/zone1_system/Notification');
 const AuditLog = require('../models/zone1_system/AuditLog');
-const { canAccessStudent } = require('../services/studentAccessService');
+const { canAccessStudent, isParent } = require('../services/studentAccessService');
+const { buildTenantFilter, resolveTenantContext } = require('../services/tenantFilterService');
 const { isValidObjectId } = require('../utils/idValidation');
 
 const PARENT_CHANGE_FIELDS = new Set(['fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'allergies', 'disease', 'emergencyContact', 'authorizedPickers']);
@@ -26,11 +27,13 @@ const createRequest = async (req, res) => {
   try {
     const { studentId, changes } = req.body || {};
     if (!isValidObjectId(studentId)) throw error('ID học sinh không hợp lệ');
-    const student = await Student.findById(studentId);
+    const tenantId = req.tenantId || req.user?.tenantId;
+    const tenantFilter = buildTenantFilter(req, { failClosed: true });
+    const student = await Student.findOne({ _id: studentId, ...tenantFilter });
     if (!student) throw error('Không tìm thấy học sinh', 404);
-    if (!canAccessStudent(req.user, student._id)) throw error('Bạn chỉ được gửi yêu cầu cho con đã liên kết', 403);
+    if (!isParent(req.user) || !canAccessStudent(req.user, student, req)) throw error('Bạn chỉ được gửi yêu cầu cho con đã liên kết', 403);
     if (await StudentProfileChangeRequest.exists({ studentId: student._id, status: 'pending' })) throw error('Hồ sơ này đang có một yêu cầu cập nhật chờ duyệt', 409);
-    const request = await StudentProfileChangeRequest.create({ studentId: student._id, studentName: student.fullName, classroomId: student.classroomId, className: student.className || '', requesterId: req.user._id, requesterName: actorName(req.user), changes: cleanChanges(changes), baseUpdatedAt: student.updatedAt });
+    const request = await StudentProfileChangeRequest.create({ ...(tenantId ? { tenantId } : {}), studentId: student._id, studentName: student.fullName, classroomId: student.classroomId, className: student.className || '', requesterId: req.user._id, requesterName: actorName(req.user), changes: cleanChanges(changes), baseUpdatedAt: student.updatedAt });
     await writeAudit(req, 'STUDENT_PROFILE_CHANGE_REQUESTED', request, {}, { fields: Object.keys(request.changes) });
     return res.status(201).json({ success: true, message: 'Đã gửi yêu cầu cập nhật hồ sơ. Nhà trường sẽ phê duyệt trước khi áp dụng.', data: request });
   } catch (err) { return res.status(err.status || 500).json({ success: false, message: err.message || 'Không thể gửi yêu cầu cập nhật' }); }
@@ -38,8 +41,8 @@ const createRequest = async (req, res) => {
 
 const listRequests = async (req, res) => {
   try {
-    const filter = {};
-    if (req.user.role === 'parent') filter.requesterId = req.user._id;
+    const tenantFilter = buildTenantFilter(req);
+    const filter = req.user.role === 'parent' ? { requesterId: req.user._id, ...tenantFilter } : { ...tenantFilter };
     if (req.query.studentId) { if (!isValidObjectId(req.query.studentId)) throw error('ID học sinh không hợp lệ'); if (req.user.role === 'parent' && !canAccessStudent(req.user, req.query.studentId)) throw error('Bạn không có quyền xem yêu cầu của học sinh này', 403); filter.studentId = req.query.studentId; }
     if (req.query.status) { if (!['pending', 'approved', 'rejected', 'cancelled'].includes(req.query.status)) throw error('Trạng thái không hợp lệ'); filter.status = req.query.status; }
     const data = await StudentProfileChangeRequest.find(filter).sort({ createdAt: -1 }).limit(200).lean();
@@ -53,10 +56,11 @@ const reviewRequest = async (req, res) => {
     if (!['approved', 'rejected'].includes(decision)) throw error('Quyết định duyệt không hợp lệ');
     if (decision === 'rejected' && !String(reviewNote).trim()) throw error('Cần nhập lý do từ chối');
     if (!isValidObjectId(req.params.id)) throw error('ID yêu cầu không hợp lệ');
-    const request = await StudentProfileChangeRequest.findById(req.params.id);
+    const tenantFilter = buildTenantFilter(req);
+    const request = await StudentProfileChangeRequest.findOne({ _id: req.params.id, ...tenantFilter });
     if (!request) throw error('Không tìm thấy yêu cầu', 404);
     if (request.status !== 'pending') throw error('Yêu cầu này đã được xử lý', 409);
-    const student = await Student.findById(request.studentId);
+    const student = await Student.findOne({ _id: request.studentId, ...tenantFilter });
     if (!student) throw error('Học sinh không còn tồn tại', 404);
     if (decision === 'approved') {
       if (student.updatedAt.getTime() !== new Date(request.baseUpdatedAt).getTime()) throw error('Hồ sơ đã thay đổi sau khi gửi yêu cầu. Hãy kiểm tra lại trước khi duyệt.', 409);

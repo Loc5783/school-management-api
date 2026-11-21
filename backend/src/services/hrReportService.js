@@ -143,7 +143,7 @@ const buildHrReport = ({ employees, leaves, overtime, payrolls, handovers, resig
     rows: { people: peopleRows, movements: movementRows, staffing: staffingRows, leave: leaveRows, overtime: overtimeRows, payroll: payrollRows } };
 };
 
-const getHrReport = async (filters) => {
+const getHrReport = async (filters, context) => {
   const months = [];
   for (let index = monthIndex(filters.fromMonth); index <= monthIndex(filters.toMonth); index++) months.push({ year: Math.floor(index / 12), month: index % 12 + 1 });
   const [employees, leaves, overtime, payrolls, handovers, resignations, staffing] = await Promise.all([
@@ -153,7 +153,7 @@ const getHrReport = async (filters) => {
     Payroll.find({ $or: months }).select('employeeCode employeeName payrollRole year month status grossSalary netSalary allowances deductions overtimePay paidAt').lean(),
     StaffHandover.find({ status: 'completed', effectiveAt: { $gte: filters.start, $lt: filters.end } }).select('employeeId effectiveAt kind').lean(),
     AuditLog.find({ action: 'EMPLOYEE_RESIGNED', targetType: 'Employee', occurredAt: { $gte: filters.start, $lt: filters.end } }).select('targetId occurredAt').sort({ occurredAt: -1 }).lean(),
-    getStaffingSnapshot(filters.staffingDate)
+    getStaffingSnapshot(filters.staffingDate, context)
   ]);
   return buildHrReport({ employees, leaves, overtime, payrolls, handovers, resignations, staffing }, filters);
 };

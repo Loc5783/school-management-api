@@ -1,4 +1,5 @@
 import api from './axiosConfig';
+import { downloadExcelFile } from './finance';
 export const getHrAudit = (params, signal) => api.get('/hr/audit', { params, signal });
 export const getHrAuditOptions = () => api.get('/hr/audit/options');
 export const getHrAuditEntry = (source, id) => api.get(`/hr/audit/${source}/${id}`);
@@ -98,3 +99,9 @@ export const getPayroll = (params) => api.get('/hr/payroll', { params });
 export const updatePayrollStatus = (id, data) => api.patch(`/hr/payroll/${id}/status`, data);
 export const reopenConfirmedPayroll = (id, data) => api.patch(`/hr/payroll/${id}/reopen`, data);
 export const updatePayrollAdjustment = (id, data) => api.patch(`/hr/payroll/${id}/adjustments`, data);
+export const exportPayroll = (param1, param2) => {
+  const params = (typeof param1 === 'object' && param1 !== null)
+    ? { ...param1 }
+    : { month: param1, year: param2 };
+  return downloadExcelFile('/hr/payroll/export', params, `BangLuong_${params.month || ""}_${params.year || ""}.xlsx`);
+};

@@ -345,6 +345,14 @@ export default function AppShell({ title, subtitle, actions, children }) {
   const navRef = useRef(null);
   const chatUnreadRequestRef = useRef(0);
   const [user, setUser] = useState(null);
+  const [tenant, setTenant] = useState(() => {
+    try {
+      const saved = localStorage.getItem('tenant');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [permissions, setPermissions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [notifications, setNotifications] = useState([]);
@@ -442,10 +450,20 @@ export default function AppShell({ title, subtitle, actions, children }) {
     const fetchUser = async () => {
       try {
         const res = await api.get('/auth/me');
-        setUser(res.data);
-        setPermissions(res.data.permissions || []);
+        const userData = res.data?.data || res.data;
+        setUser(userData);
+        setPermissions(userData.permissions || []);
+        if (res.data?.tenant) {
+          setTenant(res.data.tenant);
+          localStorage.setItem('tenant', JSON.stringify(res.data.tenant));
+        } else {
+          setTenant(null);
+          localStorage.removeItem('tenant');
+        }
       } catch (err) {
         console.error('Lỗi lấy user:', err);
+        setTenant(null);
+        localStorage.removeItem('tenant');
       } finally {
         setLoading(false);
       }
@@ -921,10 +939,19 @@ export default function AppShell({ title, subtitle, actions, children }) {
     );
   };
 
-  const logout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    navigate('/login');
+  const logout = async () => {
+    try {
+      await api.post('/auth/logout');
+    } catch {
+      // Bỏ qua lỗi kết nối khi logout
+    } finally {
+      setUser(null);
+      setTenant(null);
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      localStorage.removeItem('tenant');
+      navigate('/login');
+    }
   };
 
   return (
@@ -942,6 +969,15 @@ export default function AppShell({ title, subtitle, actions, children }) {
                 <Icon name="close" size={20} />
               </button>
             </div>
+            {tenant && (
+              <div className="school-tenant-badge" title={`Cơ sở: ${tenant.name || tenant.code} (${tenant.code})`}>
+                <span className="tenant-status-dot" />
+                <div className="tenant-info-text">
+                  <span className="tenant-school-name">{tenant.name || tenant.code}</span>
+                  <span className="tenant-school-code">{tenant.code}</span>
+                </div>
+              </div>
+            )}
             <nav className="sidebar-nav" aria-label="Điều hướng chính di động">
               {renderNavigation(true)}
             </nav>
@@ -973,6 +1009,15 @@ export default function AppShell({ title, subtitle, actions, children }) {
           <span className="brand-mark"><Icon name="sun" size={22} stroke={2.2} /></span>
           <span><strong>Hoa Nắng</strong><small>Mầm Non Hạnh Phúc</small></span>
         </NavLink>
+        {tenant && (
+          <div className="school-tenant-badge" title={`Cơ sở: ${tenant.name || tenant.code} (${tenant.code})`}>
+            <span className="tenant-status-dot" />
+            <div className="tenant-info-text">
+              <span className="tenant-school-name">{tenant.name || tenant.code}</span>
+              <span className="tenant-school-code">{tenant.code}</span>
+            </div>
+          </div>
+        )}
         <nav ref={navRef} className="sidebar-nav" aria-label="Điều hướng chính">
           {renderNavigation()}
         </nav>
@@ -1003,7 +1048,15 @@ export default function AppShell({ title, subtitle, actions, children }) {
                 <Icon name="menu" size={22} />
               </button>
               <div>
-                <p className="eyebrow">HỆ THỐNG QUẢN LÝ TRƯỜNG MẦM NON</p>
+                <div className="topbar-eyebrow-row">
+                  <p className="eyebrow">HỆ THỐNG QUẢN LÝ TRƯỜNG MẦM NON</p>
+                  {tenant && (
+                    <span className="topbar-tenant-tag" title={`Cơ sở: ${tenant.name || tenant.code}`}>
+                      <Icon name="shield" size={13} />
+                      {tenant.code}
+                    </span>
+                  )}
+                </div>
                 <h1>{title}</h1>
               </div>
             </div>

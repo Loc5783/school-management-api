@@ -163,21 +163,24 @@ const checkAllergyAndDiseaseConflicts = async (classroomId, days = []) => {
  * Chỉ học sinh đã được ghi nhận có mặt hoặc đi muộn mới được tính suất.
  * Học sinh chưa điểm danh được thống kê riêng để bếp theo dõi khi số liệu thay đổi.
  */
-const calculateDailyServingPlan = async (date, classroomIds = null) => {
+const calculateDailyServingPlan = async (date, classroomIds = null, tenantId = null) => {
     const targetDate = date ? new Date(date) : new Date();
     const dateKey = getWorkDate(targetDate, DEFAULT_SCHOOL_TIMEZONE);
     const classroomQuery = { status: 'active' };
+    if (tenantId) classroomQuery.tenantId = tenantId;
     if (Array.isArray(classroomIds)) classroomQuery._id = { $in: classroomIds };
 
     const classrooms = await Classroom.find(classroomQuery).select('name fullName').lean();
     const activeClassroomIds = classrooms.map((item) => item._id);
     const students = await Student.find({
         classroomId: { $in: activeClassroomIds },
-        status: 'enrolled'
+        status: 'enrolled',
+        ...(tenantId ? { tenantId } : {})
     }).select('_id fullName classroomId').lean();
     const attendances = await StudentAttendance.find({
         attendanceDateKey: dateKey,
-        classroomId: { $in: activeClassroomIds }
+        classroomId: { $in: activeClassroomIds },
+        ...(tenantId ? { tenantId } : {})
     }).select('studentId classroomId status').lean();
 
     const attendanceByStudent = new Map(attendances.map((item) => [String(item.studentId), item]));
@@ -239,9 +242,9 @@ const calculateDailyServingPlan = async (date, classroomIds = null) => {
 /**
  * Tính toán số suất ăn và chi phí nguyên liệu xuất kho trong ngày.
  */
-const calculateDailyMealReport = async (date) => {
+const calculateDailyMealReport = async (date, tenantId = null) => {
     const targetDate = date ? new Date(date) : new Date();
-    const servingPlan = await calculateDailyServingPlan(targetDate);
+    const servingPlan = await calculateDailyServingPlan(targetDate, null, tenantId);
     const { dateKey, totalStudentsPresent, totalRecommendedServings, classBreakdown } = servingPlan;
 
     // Lấy chi phí nguyên liệu đã xuất kho trong ngày
@@ -252,6 +255,7 @@ const calculateDailyMealReport = async (date) => {
 
     const exportTransactions = await InventoryTransaction.find({
         type: 'export',
+        ...(tenantId ? { tenantId } : {}),
         createdAt: { $gte: startOfDay, $lte: endOfDay }
     }).sort({ createdAt: -1 });
 
@@ -313,19 +317,22 @@ const cloneWeeklyMenu = async (sourceMenuId, {
     targetStartDate,
     targetEndDate,
     userId,
-    userName
+    userName,
+    tenantId = null
 }) => {
-    const source = await Menu.findById(sourceMenuId);
+    const tenantFilter = tenantId ? { tenantId } : {};
+    const source = await Menu.findOne({ _id: sourceMenuId, ...tenantFilter });
     if (!source) throw new Error('Không tìm thấy thực đơn nguồn');
 
-    const targetClassroom = await Classroom.findById(targetClassroomId);
+    const targetClassroom = await Classroom.findOne({ _id: targetClassroomId, ...tenantFilter });
     if (!targetClassroom) throw new Error('Không tìm thấy lớp học đích');
 
     // Kiểm tra trùng lặp
     const existing = await Menu.findOne({
         classroomId: targetClassroomId,
         schoolYear: targetSchoolYear || source.schoolYear,
-        weekNumber: targetWeekNumber
+        weekNumber: targetWeekNumber,
+        ...tenantFilter
     });
     if (existing) {
         throw new Error(`Đã tồn tại thực đơn tuần ${targetWeekNumber} cho lớp ${targetClassroom.name}`);
@@ -335,6 +342,7 @@ const cloneWeeklyMenu = async (sourceMenuId, {
     const allergyWarnings = await checkAllergyAndDiseaseConflicts(targetClassroomId, source.days);
 
     const newMenu = await Menu.create({
+        ...(tenantId ? { tenantId } : {}),
         classroomId: targetClassroomId,
         className: targetClassroom.name,
         schoolYear: targetSchoolYear || source.schoolYear,
@@ -357,12 +365,14 @@ const cloneWeeklyMenu = async (sourceMenuId, {
 /**
  * Lấy danh sách cảnh báo tồn kho và cận hạn sử dụng
  */
-const getInventoryAlerts = async () => {
+const getInventoryAlerts = async (tenantId = null) => {
+    const tenantFilter = tenantId ? { tenantId } : {};
     const now = new Date();
     const threeDaysLater = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
     const todayStart = startOfWorkDate(getWorkDate(now, DEFAULT_SCHOOL_TIMEZONE));
 
     const expiredItems = await Inventory.find({
+        ...tenantFilter,
         quantity: { $gt: 0 },
         status: { $nin: ['disposed', 'depleted'] },
         expiryDate: { $lt: todayStart }
@@ -370,17 +380,19 @@ const getInventoryAlerts = async () => {
 
     // Còn hạn nhưng cận date trong 3 ngày tới
     const expiringItems = await Inventory.find({
+        ...tenantFilter,
         quantity: { $gt: 0 },
         status: { $nin: ['disposed', 'depleted'] },
         expiryDate: { $gte: todayStart, $lte: threeDaysLater }
     }).populate('ingredientId', 'name unit minStockAlert');
 
     // Tồn kho thấp so với minStockAlert
-    const masterIngredients = await IngredientMaster.find({ status: 'active' });
+    const masterIngredients = await IngredientMaster.find({ status: 'active', ...tenantFilter });
     const lowStockAlerts = [];
 
     for (const master of masterIngredients) {
         const inventories = await Inventory.find({
+            ...tenantFilter,
             ingredientId: master._id,
             status: { $in: ['available', 'near_expiry'] }
         });

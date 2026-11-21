@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 
 const FeeScheduleSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant'
+    },
     period: { type: String, required: true },
     classroomId: { type: mongoose.Schema.Types.ObjectId, ref: 'Classroom', default: null },
     classroomName: { type: String, default: '' },

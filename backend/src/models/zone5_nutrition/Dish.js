@@ -1,6 +1,11 @@
 const mongoose = require('mongoose');
 
 const DishSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant',
+        index: true
+    },
     name: {
         type: String,
         required: true,
@@ -70,6 +75,7 @@ const DishSchema = new mongoose.Schema({
     timestamps: true
 });
 
+DishSchema.index({ tenantId: 1, name: 1 });
 DishSchema.index({ name: 1 });
 DishSchema.index({ category: 1 });
 DishSchema.index({ allergens: 1 });

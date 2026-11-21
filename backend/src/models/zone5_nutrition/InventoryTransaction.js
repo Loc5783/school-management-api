@@ -12,6 +12,11 @@ const LotAllocationSchema = new mongoose.Schema({
 }, { _id: false });
 
 const InventoryTransactionSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant',
+        index: true
+    },
     type: {
         type: String,
         enum: ['import', 'export', 'return', 'spoilage', 'adjustment'],
@@ -92,6 +97,7 @@ const InventoryTransactionSchema = new mongoose.Schema({
     timestamps: true
 });
 
+InventoryTransactionSchema.index({ tenantId: 1, createdAt: -1 });
 InventoryTransactionSchema.index({ ingredientId: 1 });
 InventoryTransactionSchema.index({ type: 1 });
 InventoryTransactionSchema.index({ createdAt: -1 });

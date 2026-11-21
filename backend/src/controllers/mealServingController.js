@@ -6,6 +6,7 @@ const Menu = require('../models/zone5_nutrition/Menu');
 const { calculateDailyServingPlan, checkAllergyAndDiseaseConflicts } = require('../services/nutritionService');
 const { getTeacherClassroomIds } = require('../services/schoolDataAccessService');
 const { getWorkDate, isValidWorkDate, startOfWorkDate, addWorkDays } = require('../utils/dateHelpers');
+const { buildTenantFilter } = require('../services/tenantFilterService');
 
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
 const sendError = (res, error) => {
@@ -27,19 +28,22 @@ const checkDate = (date) => {
 const onlyToday = (date) => {
     if (date !== getWorkDate()) throw fail('Chỉ ghi nhận suất của ngày hiện tại', 409);
 };
-const ensureOpenDay = async (date) => {
-    if (await KitchenDayClosing.exists({ dateKey: date })) throw fail('Ngày bếp đã chốt; không thể sửa suất ăn', 409);
+const ensureOpenDay = async (date, req = null) => {
+    const filter = { dateKey: date, ...(req ? buildTenantFilter(req) : {}) };
+    if (await KitchenDayClosing.exists(filter)) throw fail('Ngày bếp đã chốt; không thể sửa suất ăn', 409);
 };
-const ensureClassroom = async (classroomId) => {
+const ensureClassroom = async (classroomId, req = null) => {
     if (!mongoose.isValidObjectId(classroomId)) throw fail('Lớp không hợp lệ');
-    const classroom = await Classroom.findOne({ _id: classroomId, status: 'active' }).select('name').lean();
+    const filter = { _id: classroomId, status: 'active', ...(req ? buildTenantFilter(req) : {}) };
+    const classroom = await Classroom.findOne(filter).select('name').lean();
     if (!classroom) throw fail('Không tìm thấy lớp đang hoạt động', 404);
     return classroom;
 };
-const ensurePublishedSafeMenu = async (classroomId, date) => {
+const ensurePublishedSafeMenu = async (classroomId, date, req = null) => {
     const start = startOfWorkDate(date);
     const end = startOfWorkDate(addWorkDays(date, 1));
-    const menu = await Menu.findOne({ classroomId, status: 'published', startDate: { $lt: end }, endDate: { $gte: start } }).lean();
+    const filter = { classroomId, status: 'published', startDate: { $lt: end }, endDate: { $gte: start }, ...(req ? buildTenantFilter(req) : {}) };
+    const menu = await Menu.findOne(filter).lean();
     const weekday = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][new Date(`${date}T00:00:00.000Z`).getUTCDay()];
     const day = menu?.days?.find((item) => item.dayOfWeek === weekday);
     if (!day) throw fail('Lớp chưa có thực đơn được công bố cho ngày này', 409);
@@ -50,7 +54,7 @@ const ensurePublishedSafeMenu = async (classroomId, date) => {
 const getMealServings = async (req, res) => {
     try {
         const date = checkDate(req.query.date || getWorkDate());
-        const query = { dateKey: date };
+        const query = { dateKey: date, ...buildTenantFilter(req) };
         if (req.user.role === 'teacher') query.classroomId = { $in: await getTeacherClassroomIds(req.user) };
         const data = await MealServing.find(query).sort({ classroomId: 1 }).lean();
         res.json({ success: true, data });
@@ -61,16 +65,16 @@ const recordCooked = async (req, res) => {
     try {
         const date = checkDate(req.body?.date);
         onlyToday(date);
-        await ensureOpenDay(date);
-        const classroom = await ensureClassroom(req.params.classroomId);
+        await ensureOpenDay(date, req);
+        const classroom = await ensureClassroom(req.params.classroomId, req);
         const { count, note } = readServingInput(req.body);
-        const plan = await calculateDailyServingPlan(date);
+        const plan = await calculateDailyServingPlan(date, null, req.tenantId || req.user?.tenantId);
         const planned = plan.classBreakdown.find((item) => String(item.classroomId) === String(classroom._id))?.recommendedServings || 0;
         if (count !== planned && !note) throw fail('Số suất nấu khác điểm danh; cần nhập lý do', 409);
-        await ensurePublishedSafeMenu(classroom._id, date);
-        let record = await MealServing.findOne({ dateKey: date, classroomId: classroom._id });
+        await ensurePublishedSafeMenu(classroom._id, date, req);
+        let record = await MealServing.findOne({ dateKey: date, classroomId: classroom._id, ...buildTenantFilter(req) });
         if (record?.deliveredAt) throw fail('Suất đã giao lớp; không thể sửa số suất nấu', 409);
-        if (!record) record = new MealServing({ dateKey: date, classroomId: classroom._id, plannedAtCook: planned, cookedCount: count, cookedBy: req.user._id });
+        if (!record) record = new MealServing({ tenantId: req.tenantId || req.user?.tenantId, dateKey: date, classroomId: classroom._id, plannedAtCook: planned, cookedCount: count, cookedBy: req.user._id });
         record.plannedAtCook = planned;
         record.cookedCount = count;
         record.cookedBy = req.user._id;
@@ -84,10 +88,10 @@ const recordDelivered = async (req, res) => {
     try {
         const date = checkDate(req.body?.date);
         onlyToday(date);
-        await ensureOpenDay(date);
-        await ensureClassroom(req.params.classroomId);
+        await ensureOpenDay(date, req);
+        await ensureClassroom(req.params.classroomId, req);
         const { count, note } = readServingInput(req.body);
-        const record = await MealServing.findOne({ dateKey: date, classroomId: req.params.classroomId });
+        const record = await MealServing.findOne({ dateKey: date, classroomId: req.params.classroomId, ...buildTenantFilter(req) });
         if (!record) throw fail('Cần ghi nhận số suất thực nấu trước khi giao lớp', 409);
         if (record.receivedAt) throw fail('Lớp đã xác nhận nhận suất; không thể sửa lần giao', 409);
         if (count > record.cookedCount) throw fail('Số suất giao không thể lớn hơn số suất đã nấu', 409);
@@ -105,12 +109,12 @@ const confirmReceived = async (req, res) => {
     try {
         const date = checkDate(req.body?.date);
         onlyToday(date);
-        await ensureOpenDay(date);
-        await ensureClassroom(req.params.classroomId);
+        await ensureOpenDay(date, req);
+        await ensureClassroom(req.params.classroomId, req);
         const allowed = await getTeacherClassroomIds(req.user);
         if (!allowed.includes(String(req.params.classroomId))) throw fail('Bạn không phụ trách lớp này', 403);
         const { count, note } = readServingInput(req.body);
-        const record = await MealServing.findOne({ dateKey: date, classroomId: req.params.classroomId });
+        const record = await MealServing.findOne({ dateKey: date, classroomId: req.params.classroomId, ...buildTenantFilter(req) });
         if (!record?.deliveredAt) throw fail('Bếp chưa ghi nhận giao suất cho lớp', 409);
         if (record.receivedAt) throw fail('Lớp đã xác nhận nhận suất', 409);
         if (count > record.deliveredCount) throw fail('Số suất nhận không thể lớn hơn số suất bếp đã giao', 409);

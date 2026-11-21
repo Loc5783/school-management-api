@@ -7,6 +7,7 @@ const Payment = require('../models/zone4_finance/Payment');
 const { getStaffingSnapshot } = require('../services/staffingService');
 const { canAccessClassroom, getTeacherClassroomIds } = require('../services/schoolDataAccessService');
 const { isValidObjectId } = require('../utils/idValidation');
+const { buildTenantFilter } = require('../services/tenantFilterService');
 const {
     DEFAULT_SCHOOL_TIMEZONE,
     getWorkDate,
@@ -34,21 +35,27 @@ const getDashboardStats = async (req, res) => {
             getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE),
             DEFAULT_SCHOOL_TIMEZONE
         );
+        const tenantFilter = buildTenantFilter(req);
+        const tenantId = req.tenantId || req.user?.tenantId;
         const teacherClassroomIds = req.user.role === 'teacher' ? await getTeacherClassroomIds(req.user) : null;
-        const classroomFilter = teacherClassroomIds ? { _id: { $in: teacherClassroomIds }, status: 'active' } : { status: 'active' };
-        const studentFilter = teacherClassroomIds ? { classroomId: { $in: teacherClassroomIds }, status: 'enrolled' } : { status: 'enrolled' };
+        const classroomFilter = teacherClassroomIds ? { _id: { $in: teacherClassroomIds }, status: 'active', ...tenantFilter } : { status: 'active', ...tenantFilter };
+        const studentFilter = teacherClassroomIds ? { classroomId: { $in: teacherClassroomIds }, status: 'enrolled', ...tenantFilter } : { status: 'enrolled', ...tenantFilter };
         const attendanceFilter = {
             attendDate: { $gte: today, $lt: tomorrow },
-            ...(teacherClassroomIds ? { classroomId: { $in: teacherClassroomIds } } : {})
+            ...(teacherClassroomIds ? { classroomId: { $in: teacherClassroomIds } } : {}),
+            ...tenantFilter
         };
+
+        const paymentMatch = { paidAt: { $gte: today, $lt: tomorrow }, ...tenantFilter };
+        if (tenantId) paymentMatch.tenantId = tenantId;
 
         const User = require('../models/zone1_system/User');
         const [totalStudents, totalClassrooms, totalTeachers, todayRevenue, attendedToday, recentAttendance, totalAttendance, attendanceSummary] = await Promise.all([
             Student.countDocuments(studentFilter),
             Classroom.countDocuments(classroomFilter),
-            req.user.role === 'teacher' ? Promise.resolve(1) : User.countDocuments({ role: 'teacher', status: 'active' }),
+            req.user.role === 'teacher' ? Promise.resolve(1) : User.countDocuments({ role: 'teacher', status: 'active', ...tenantFilter }),
             req.user.role === 'teacher' ? Promise.resolve([]) : Payment.aggregate([
-                { $match: { paidAt: { $gte: today, $lt: tomorrow } } },
+                { $match: paymentMatch },
                 { $group: { _id: null, total: { $sum: '$amount' } } }
             ]),
             StudentAttendance.countDocuments({ ...attendanceFilter, status: 'present' }),
@@ -69,7 +76,7 @@ const getDashboardStats = async (req, res) => {
         let staffing = null;
         let staffingError = false;
         if (['admin', 'principal'].includes(req.user.role)) {
-            try { staffing = await getStaffingSnapshot(getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE)); }
+            try { staffing = await getStaffingSnapshot(getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE), req); }
             catch (error) { staffingError = true; console.error('Không thể tính phân công nhân sự:', error); }
         }
 
@@ -125,14 +132,15 @@ const getClassReport = async (req, res) => {
             return res.status(403).json({ message: 'Bạn không có quyền xem báo cáo lớp này' });
         }
 
+        const tenantFilter = buildTenantFilter(req);
         // Kiểm tra lớp tồn tại
-        const classroom = await Classroom.findById(classroomId);
+        const classroom = await Classroom.findOne({ _id: classroomId, ...tenantFilter });
         if (!classroom) {
             return res.status(404).json({ message: 'Không tìm thấy lớp học' });
         }
 
         // Lấy danh sách học sinh trong lớp
-        const students = await Student.find({ classroomId, status: 'enrolled' });
+        const students = await Student.find({ classroomId, status: 'enrolled', ...tenantFilter });
 
         const workDate = resolveWorkDate(date);
         if (!workDate) {
@@ -142,7 +150,8 @@ const getClassReport = async (req, res) => {
 
         const attendances = await StudentAttendance.find({
             classroomId,
-            attendDate: { $gte: targetDate, $lt: nextDate }
+            attendDate: { $gte: targetDate, $lt: nextDate },
+            ...tenantFilter
         });
 
         // Tạo báo cáo
@@ -186,8 +195,9 @@ const getFinanceReport = async (req, res) => {
             return res.status(400).json({ message: 'Vui lòng cung cấp period (MM-YYYY)' });
         }
 
+        const tenantFilter = buildTenantFilter(req);
         // Tất cả hóa đơn trong kỳ
-        const invoices = await TuitionFee.find({ period, status: { $ne: 'cancelled' } });
+        const invoices = await TuitionFee.find({ period, status: { $ne: 'cancelled' }, ...tenantFilter });
 
         const totalInvoices = invoices.length;
         const totalAmount = invoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
@@ -200,7 +210,7 @@ const getFinanceReport = async (req, res) => {
 
         // Chi tiết theo lớp
         const byClass = await TuitionFee.aggregate([
-            { $match: { period, status: { $ne: 'cancelled' } } },
+            { $match: { period, status: { $ne: 'cancelled' }, ...tenantFilter } },
             {
                 $group: {
                     _id: '$classroomId',
@@ -239,14 +249,16 @@ const getFinanceReport = async (req, res) => {
 const saveReport = async (req, res) => {
     try {
         const { reportType, period, periodValue, data, note } = req.body;
+        const tenantId = req.tenantId || req.user?.tenantId;
 
         const report = new Report({
+            ...(tenantId ? { tenantId } : {}),
             reportType,
             period,
             periodValue,
             data,
             generatedBy: req.user._id,
-            generatedByName: req.user.profile.fullName,
+            generatedByName: req.user.profile?.fullName || req.user.username,
             note
         });
 
@@ -268,7 +280,8 @@ const saveReport = async (req, res) => {
 const getReports = async (req, res) => {
     try {
         const { reportType, period, limit = 20 } = req.query;
-        const filter = {};
+        const tenantFilter = buildTenantFilter(req);
+        const filter = { ...tenantFilter };
         if (reportType) filter.reportType = reportType;
         if (period) filter.period = period;
 
@@ -295,7 +308,8 @@ const getReportById = async (req, res) => {
         if (!isValidObjectId(id)) {
             return res.status(400).json({ message: 'ID báo cáo không hợp lệ' });
         }
-        const report = await Report.findById(id);
+        const tenantFilter = buildTenantFilter(req);
+        const report = await Report.findOne({ _id: id, ...tenantFilter });
         if (!report) {
             return res.status(404).json({ message: 'Không tìm thấy báo cáo' });
         }
@@ -318,8 +332,9 @@ const publishReport = async (req, res) => {
         if (!isValidObjectId(id)) {
             return res.status(400).json({ message: 'ID báo cáo không hợp lệ' });
         }
-        const report = await Report.findByIdAndUpdate(
-            id,
+        const tenantFilter = buildTenantFilter(req);
+        const report = await Report.findOneAndUpdate(
+            { _id: id, ...tenantFilter },
             { status: 'published' },
             { returnDocument: 'after' }
         );

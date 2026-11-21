@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const ClassroomAnnouncementSchema = new mongoose.Schema({
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
     classroomId: { type: mongoose.Schema.Types.ObjectId, ref: 'Classroom', required: true, index: true },
     className: { type: String, required: true, trim: true },
     title: { type: String, required: true, trim: true, maxlength: 160 },
@@ -10,5 +11,6 @@ const ClassroomAnnouncementSchema = new mongoose.Schema({
     publishedAt: { type: Date, default: Date.now }
 }, { timestamps: true });
 
+ClassroomAnnouncementSchema.index({ tenantId: 1, classroomId: 1, publishedAt: -1 });
 ClassroomAnnouncementSchema.index({ classroomId: 1, publishedAt: -1 });
 module.exports = mongoose.model('ClassroomAnnouncement', ClassroomAnnouncementSchema);

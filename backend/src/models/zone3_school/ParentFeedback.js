@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const ParentFeedbackSchema = new mongoose.Schema({
+  tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
   studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true, index: true },
   studentName: { type: String, required: true, trim: true },
   classroomId: { type: mongoose.Schema.Types.ObjectId, ref: 'Classroom', required: true, index: true },
@@ -17,6 +18,8 @@ const ParentFeedbackSchema = new mongoose.Schema({
   respondedAt: { type: Date, default: null }
 }, { timestamps: true });
 
+ParentFeedbackSchema.index({ tenantId: 1, parentId: 1, createdAt: -1 });
+ParentFeedbackSchema.index({ tenantId: 1, status: 1, createdAt: -1 });
 ParentFeedbackSchema.index({ parentId: 1, createdAt: -1 });
 ParentFeedbackSchema.index({ status: 1, createdAt: -1 });
 ParentFeedbackSchema.index({ studentId: 1, createdAt: -1 });

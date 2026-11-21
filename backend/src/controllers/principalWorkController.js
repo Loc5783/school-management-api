@@ -6,18 +6,20 @@ const OperatingExpenseRequest = require('../models/zone4_finance/OperatingExpens
 const StudentProfileChangeRequest = require('../models/zone3_school/StudentProfileChangeRequest');
 const ParentFeedback = require('../models/zone3_school/ParentFeedback');
 const { getWorkDate } = require('../utils/dateHelpers');
+const { buildTenantFilter } = require('../services/tenantFilterService');
 
 const getPrincipalWork = async (req, res) => {
     try {
         const [year, month] = getWorkDate().split('-').map(Number);
+        const tenantFilter = buildTenantFilter(req);
         const [payroll, leave, recruitment, refunds, operatingExpenses, profileChanges, parentFeedback] = await Promise.all([
-            Payroll.countDocuments({ status: 'reviewed', year, month }),
-            LeaveRequest.countDocuments({ status: 'pending' }),
-            JobApplicant.countDocuments({ status: 'recommended' }),
-            TuitionRefundRequest.countDocuments({ status: 'pending' }),
-            OperatingExpenseRequest.countDocuments({ status: 'pending' }),
-            StudentProfileChangeRequest.countDocuments({ status: 'pending' }),
-            ParentFeedback.countDocuments({ status: 'pending' })
+            Payroll.countDocuments({ status: 'reviewed', year, month, ...tenantFilter }),
+            LeaveRequest.countDocuments({ status: 'pending', ...tenantFilter }),
+            JobApplicant.countDocuments({ status: 'recommended', ...tenantFilter }),
+            TuitionRefundRequest.countDocuments({ status: 'pending', ...tenantFilter }),
+            OperatingExpenseRequest.countDocuments({ status: 'pending', ...tenantFilter }),
+            StudentProfileChangeRequest.countDocuments({ status: 'pending', ...tenantFilter }),
+            ParentFeedback.countDocuments({ status: 'pending', ...tenantFilter })
         ]);
         res.json({ data: { payroll, leave, recruitment, refunds, operatingExpenses, profileChanges, parentFeedback } });
     } catch (error) {

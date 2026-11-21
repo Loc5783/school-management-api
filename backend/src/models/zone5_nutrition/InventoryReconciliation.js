@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const InventoryReconciliationSchema = new mongoose.Schema({
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
     inventoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Inventory', required: true },
     ingredientId: { type: mongoose.Schema.Types.ObjectId, ref: 'IngredientMaster', required: true },
     ingredientName: { type: String, required: true },
@@ -14,6 +15,7 @@ const InventoryReconciliationSchema = new mongoose.Schema({
     countedByName: { type: String, default: '' }
 }, { timestamps: true });
 
+InventoryReconciliationSchema.index({ tenantId: 1, createdAt: -1 });
 InventoryReconciliationSchema.index({ inventoryId: 1, createdAt: -1 });
 
 module.exports = mongoose.model('InventoryReconciliation', InventoryReconciliationSchema);

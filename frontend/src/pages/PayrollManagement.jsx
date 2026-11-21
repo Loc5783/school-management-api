@@ -9,9 +9,9 @@ import {
   getPayroll,
   updatePayrollAdjustment,
   reopenConfirmedPayroll,
-  updatePayrollStatus
+  updatePayrollStatus,
+  exportPayroll
 } from '../api/hr';
-import { exportPayroll } from '../api/finance';
 
 const money = (value) => `${new Intl.NumberFormat('vi-VN').format(value || 0)} đ`;
 const currentMonth = new Date().getMonth() + 1;
@@ -64,6 +64,21 @@ export default function PayrollManagement() {
   const canConfirm = ['admin', 'principal'].includes(role);
   const canReview = ['admin', 'accountant'].includes(role);
   const canOperateHr = ['admin', 'hr'].includes(role);
+
+  const allowedTabs = role === 'hr'
+    ? ['sheets', 'requests']
+    : role === 'accountant'
+      ? ['sheets', 'adjustments', 'approvals', 'payment', 'requests']
+      : role === 'principal'
+        ? ['sheets', 'approvals', 'requests']
+        : ['sheets', 'adjustments', 'approvals', 'payment', 'requests'];
+
+  useEffect(() => {
+    if (!allowedTabs.includes(tab)) {
+      setTab('sheets');
+      setSearchParams({ tab: 'sheets' });
+    }
+  }, [tab, allowedTabs, setSearchParams]);
 
   const loadPayroll = useCallback(async () => {
     setLoading(true);
@@ -245,15 +260,21 @@ export default function PayrollManagement() {
             <button className={tab === 'sheets' ? 'active' : ''} onClick={() => changeTab('sheets')}>
               <Icon name="money" size={16} /> Bảng tính lương
             </button>
-            <button className={tab === 'adjustments' ? 'active' : ''} onClick={() => changeTab('adjustments')}>
-              <Icon name="settings" size={16} /> Khoản điều chỉnh & BHXH
-            </button>
-            <button className={tab === 'approvals' ? 'active' : ''} onClick={() => changeTab('approvals')}>
-              <Icon name="check" size={16} /> Trình duyệt & Phê duyệt
-            </button>
-            <button className={tab === 'payment' ? 'active' : ''} onClick={() => changeTab('payment')}>
-              <Icon name="card" size={16} /> Trạng thái chi trả
-            </button>
+            {canReview && (
+              <button className={tab === 'adjustments' ? 'active' : ''} onClick={() => changeTab('adjustments')}>
+                <Icon name="settings" size={16} /> Khoản điều chỉnh & BHXH
+              </button>
+            )}
+            {(canReview || canConfirm) && (
+              <button className={tab === 'approvals' ? 'active' : ''} onClick={() => changeTab('approvals')}>
+                <Icon name="check" size={16} /> Trình duyệt & Phê duyệt
+              </button>
+            )}
+            {canReview && (
+              <button className={tab === 'payment' ? 'active' : ''} onClick={() => changeTab('payment')}>
+                <Icon name="card" size={16} /> Trạng thái chi trả
+              </button>
+            )}
             <button className={tab === 'requests' ? 'active' : ''} onClick={() => changeTab('requests')}>
               <Icon name="chat" size={16} /> Phản hồi phiếu lương
             </button>
@@ -511,7 +532,8 @@ export default function PayrollManagement() {
               </div>
 
               <div className="form-actions">
-                <button type="submit" className="button button-primary">Lưu điều chỉnh</button>
+                <button type="button" className="button button-secondary" onClick={() => setAdjustingPayroll(null)}>Đóng</button>
+                {canReview && <button type="submit" className="button button-primary">Lưu điều chỉnh</button>}
               </div>
             </form>
           </div>

@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const ParentTeacherEvaluationSchema = new mongoose.Schema({
+  tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
   parentId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   parentName: { type: String, required: true, trim: true },
   studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true, index: true },
@@ -24,8 +25,8 @@ const ParentTeacherEvaluationSchema = new mongoose.Schema({
 
 // Prevent duplicate evaluation by the same parent for the same student, teacher, and period
 ParentTeacherEvaluationSchema.index(
-  { studentId: 1, teacherId: 1, period: 1 },
-  { unique: true }
+  { tenantId: 1, studentId: 1, teacherId: 1, period: 1 }, { unique: true, partialFilterExpression: { tenantId: { $type: 'objectId' } } });
+ParentTeacherEvaluationSchema.index({ studentId: 1, teacherId: 1, period: 1 }, { unique: true, partialFilterExpression: { tenantId: null } }
 );
 
 ParentTeacherEvaluationSchema.index({ teacherId: 1, schoolYear: 1, createdAt: -1 });

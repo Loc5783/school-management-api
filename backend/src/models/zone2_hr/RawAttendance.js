@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 
 const RawAttendanceSchema = new mongoose.Schema({
+  tenantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tenant'
+  },
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',

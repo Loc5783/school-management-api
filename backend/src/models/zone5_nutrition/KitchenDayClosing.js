@@ -1,7 +1,8 @@
 const mongoose = require('mongoose');
 
 const kitchenDayClosingSchema = new mongoose.Schema({
-    dateKey: { type: String, required: true, unique: true, match: /^\d{4}-\d{2}-\d{2}$/ },
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
+    dateKey: { type: String, required: true, match: /^\d{4}-\d{2}-\d{2}$/ },
     rows: [{
         classroomId: { type: mongoose.Schema.Types.ObjectId, ref: 'Classroom', required: true },
         className: String,
@@ -38,5 +39,14 @@ const kitchenDayClosingSchema = new mongoose.Schema({
     closedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     closedAt: { type: Date, default: Date.now }
 }, { timestamps: true });
+
+kitchenDayClosingSchema.index(
+    { tenantId: 1, dateKey: 1 },
+    { name: 'tenantId_1_dateKey_1_unique', unique: true, partialFilterExpression: { tenantId: { $type: 'objectId' } } }
+);
+kitchenDayClosingSchema.index(
+    { dateKey: 1 },
+    { name: 'legacy_dateKey_1_unique', unique: true, partialFilterExpression: { tenantId: null } }
+);
 
 module.exports = mongoose.model('KitchenDayClosing', kitchenDayClosingSchema);

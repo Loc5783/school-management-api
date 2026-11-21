@@ -1,6 +1,11 @@
 const mongoose = require('mongoose');
 
 const FoodInspectionSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant',
+        index: true
+    },
     mealDateKey: { type: String, match: /^\d{4}-\d{2}-\d{2}$/ },
     stage: { type: String, enum: ['raw_checked', 'processing_checked', 'ready', 'held'], default: 'held' },
     stageHistory: [{ stage: String, passed: Boolean, note: String, userId: mongoose.Schema.Types.ObjectId, at: { type: Date, default: Date.now } }],
@@ -70,7 +75,14 @@ const FoodInspectionSchema = new mongoose.Schema({
 });
 
 FoodInspectionSchema.index({ mealDate: -1, mealType: 1 });
-FoodInspectionSchema.index({ mealDateKey: 1, mealType: 1 }, { unique: true, partialFilterExpression: { mealDateKey: { $type: 'string' } } });
+FoodInspectionSchema.index(
+    { tenantId: 1, mealDateKey: 1, mealType: 1 },
+    { name: 'tenantId_1_mealDateKey_1_mealType_1_unique', unique: true, partialFilterExpression: { tenantId: { $type: 'objectId' }, mealDateKey: { $type: 'string' } } }
+);
+FoodInspectionSchema.index(
+    { mealDateKey: 1, mealType: 1 },
+    { name: 'legacy_mealDateKey_1_mealType_1_unique', unique: true, partialFilterExpression: { tenantId: null, mealDateKey: { $type: 'string' } } }
+);
 
 module.exports = mongoose.model('FoodInspection', FoodInspectionSchema);
 

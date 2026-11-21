@@ -22,7 +22,7 @@ const assertObjectId = (value, label) => {
 
 const runInTransaction = async (operation) => {
     const topology = await mongoose.connection.db.admin().command({ hello: 1 });
-    if (!topology.setName && topology.msg !== 'isdbgrid') {
+    if (!topology.setName && topology.msg !== 'isdbgrid' && process.env.ALLOW_STANDALONE_MONGODB !== 'true') {
         const error = new Error('MongoDB phải chạy Replica Set hoặc sharded cluster để ghi nhận giao dịch kho an toàn');
         error.statusCode = 503;
         throw error;
@@ -67,7 +67,9 @@ const importInventory = async (payload, user, createBatchNumber) => {
     if (Number.isNaN(parsedExpiryDate.getTime())) {
         const error = new Error('Hạn sử dụng không hợp lệ'); error.statusCode = 400; throw error;
     }
-    const ingredient = await IngredientMaster.findById(ingredientId).lean();
+    const tenantId = user?.tenantId || user?.tenant || payload?.tenantId;
+    const tenantFilter = tenantId ? { tenantId } : {};
+    const ingredient = await IngredientMaster.findOne({ _id: ingredientId, ...tenantFilter }).lean();
     if (!ingredient) {
         const error = new Error('Không tìm thấy nguyên liệu'); error.statusCode = 404; throw error;
     }
@@ -78,7 +80,7 @@ const importInventory = async (payload, user, createBatchNumber) => {
     return runInTransaction(async (session) => {
         const status = calculateLotStatus(importQuantity, parsedExpiryDate);
         const inventory = await Inventory.findOneAndUpdate(
-            { ingredientId, batchNumber: resolvedBatchNumber },
+            { ingredientId, batchNumber: resolvedBatchNumber, ...tenantFilter },
             {
                 $inc: { quantity: importQuantity },
                 $set: {
@@ -89,6 +91,7 @@ const importInventory = async (payload, user, createBatchNumber) => {
                     status
                 },
                 $setOnInsert: {
+                    ...(tenantId ? { tenantId } : {}),
                     ingredientName: ingredient.name,
                     unit: unit || ingredient.unit,
                     expiryDate: parsedExpiryDate
@@ -97,6 +100,7 @@ const importInventory = async (payload, user, createBatchNumber) => {
             { returnDocument: 'after', upsert: true, session, setDefaultsOnInsert: true }
         );
         const transaction = await InventoryTransaction.create([{
+            ...(tenantId ? { tenantId } : {}),
             type: 'import', ingredientId, ingredientName: ingredient.name, batchNumber: resolvedBatchNumber,
             quantity: importQuantity, unit: unit || ingredient.unit, costPerUnit: unitCost,
             totalAmount: importQuantity * unitCost, supplierId, supplierName: resolvedSupplierName,
@@ -118,13 +122,16 @@ const exportInventoryFEFO = async (payload, user) => {
     assertObjectId(ingredientId, 'ID nguyên liệu');
     if (classroomId) assertObjectId(classroomId, 'ID lớp học');
 
+    const tenantId = user?.tenantId || user?.tenant || payload?.tenantId;
+    const tenantFilter = tenantId ? { tenantId } : {};
+
     return runInTransaction(async (session) => {
-        const ingredient = await IngredientMaster.findById(ingredientId).session(session);
+        const ingredient = await IngredientMaster.findOne({ _id: ingredientId, ...tenantFilter }).session(session);
         if (!ingredient) {
             const error = new Error('Không tìm thấy nguyên liệu'); error.statusCode = 404; throw error;
         }
         const lots = await Inventory.find({
-            ingredientId, quantity: { $gt: 0 }, status: { $in: ['available', 'near_expiry'] }, expiryDate: { $gte: getTodayStart() }
+            ingredientId, ...tenantFilter, quantity: { $gt: 0 }, status: { $in: ['available', 'near_expiry'] }, expiryDate: { $gte: getTodayStart() }
         }).sort({ expiryDate: 1, createdAt: 1, _id: 1 }).session(session);
         let remaining = exportQuantity;
         let totalAmount = 0;
@@ -148,6 +155,7 @@ const exportInventoryFEFO = async (payload, user) => {
             throw error;
         }
         const transaction = await InventoryTransaction.create([{
+            ...(tenantId ? { tenantId } : {}),
             type: 'export', ingredientId, ingredientName: ingredient.name, quantity: exportQuantity, unit: ingredient.unit,
             costPerUnit: totalAmount / exportQuantity, totalAmount, classroomId, className: className || '',
             mealDate: mealDate ? new Date(mealDate) : new Date(), mealType: mealType || 'lunch',
@@ -169,13 +177,17 @@ const returnUnusedInventory = async (lotId, payload, user) => {
     assertObjectId(lotId, 'ID lô hàng');
     assertObjectId(sourceExportTransactionId, 'ID phiếu xuất nguồn');
 
+    const tenantId = user?.tenantId || user?.tenant || payload?.tenantId;
+    const tenantFilter = tenantId ? { tenantId } : {};
+
     return runInTransaction(async (session) => {
         // Không chạy truy vấn song song trong một MongoDB transaction: driver cần
         // tuần tự hóa transaction number trên cùng session.
-        const lot = await Inventory.findById(lotId).session(session);
+        const lot = await Inventory.findOne({ _id: lotId, ...tenantFilter }).session(session);
         const sourceExport = await InventoryTransaction.findOne({
             _id: sourceExportTransactionId,
-            type: 'export'
+            type: 'export',
+            ...tenantFilter
         }).session(session);
         if (!lot) { const error = new Error('Không tìm thấy lô hàng'); error.statusCode = 404; throw error; }
         if (!sourceExport) { const error = new Error('Không tìm thấy phiếu xuất nguồn hợp lệ'); error.statusCode = 404; throw error; }
@@ -186,7 +198,7 @@ const returnUnusedInventory = async (lotId, payload, user) => {
             const error = new Error('Lô hàng không thuộc phiếu xuất nguồn đã chọn'); error.statusCode = 422; throw error;
         }
         const priorReturns = await InventoryTransaction.find({
-            type: 'return', sourceExportTransactionId: sourceExport._id, sourceInventoryId: lot._id
+            type: 'return', sourceExportTransactionId: sourceExport._id, sourceInventoryId: lot._id, ...tenantFilter
         }).session(session).select('quantity');
         const returnedBefore = priorReturns.reduce((total, transaction) => total + transaction.quantity, 0);
         const stillReturnable = sourceAllocation.quantity - returnedBefore;
@@ -199,6 +211,7 @@ const returnUnusedInventory = async (lotId, payload, user) => {
         lot.status = calculateLotStatus(lot.quantity, lot.expiryDate);
         await lot.save({ session });
         const transaction = await InventoryTransaction.create([{
+            ...(tenantId ? { tenantId } : {}),
             type: 'return', ingredientId: lot.ingredientId, ingredientName: lot.ingredientName, batchNumber: lot.batchNumber,
             quantity: returnQuantity, unit: lot.unit, costPerUnit: lot.costPerUnit || 0,
             totalAmount: returnQuantity * (lot.costPerUnit || 0), sourceExportTransactionId: sourceExport._id,

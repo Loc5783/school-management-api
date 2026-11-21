@@ -6,7 +6,8 @@
 .chef-toolbar-actions label { display: grid; gap: 6px; color: #536584; font-size: 12px; font-weight: 700; }
 .chef-toolbar-actions input { height: 43px; padding: 0 12px; border: 1px solid #d6e2f5; border-radius: 11px; color: #26416f; background: #fff; }
 .chef-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 13px; }
-.chef-metric { display: grid; gap: 5px; min-width: 0; padding: 20px; border: 1px solid #dce6f6; border-radius: 17px; background: #fff; }
+.chef-metric { display: grid; gap: 5px; min-width: 0; padding: 20px; border: 1px solid #dce6f6; border-radius: 18px; background: #fff; box-shadow: var(--hn-shadow-card, 0 4px 20px -2px rgba(27, 48, 87, 0.05)), var(--hn-rim-light, inset 0 1px 0 rgba(255, 255, 255, 0.85)); transition: transform var(--hn-dur-fast, 150ms) var(--hn-ease-spring, cubic-bezier(0.34, 1.56, 0.64, 1)), box-shadow var(--hn-dur-fast, 150ms) ease, border-color var(--hn-dur-fast, 150ms) ease; will-change: transform; }
+.chef-metric:hover { transform: translateY(-4px); box-shadow: var(--hn-shadow-card-hover, 0 14px 32px -4px rgba(65, 105, 225, 0.15)), var(--hn-rim-light, inset 0 1px 0 rgba(255, 255, 255, 0.85)); border-color: #b7d6f8; }
 .chef-metric small { color: #6e81a3; font-size: 11px; font-weight: 800; }
 .chef-metric strong { color: #264b95; font-size: 35px; line-height: 1.1; }
 .chef-metric span { color: #7183a0; font-size: 12px; }
@@ -26,7 +27,8 @@
 .chef-ingredient-table .is-short { color: #bd4753; font-weight: 800; }
 .chef-ingredient-table .is-enough { color: #17805c; }
 .chef-menu-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 15px; padding: 20px 23px; }
-.chef-menu-list article { min-width: 0; padding: 18px; border: 1px solid #dce7f5; border-radius: 14px; background: #fbfdff; }
+.chef-menu-list article { min-width: 0; padding: 18px; border: 1px solid #dce7f5; border-radius: 16px; background: #fbfdff; box-shadow: var(--hn-shadow-xs, 0 1px 2px rgba(15, 23, 42, 0.04)), var(--hn-rim-light, inset 0 1px 0 rgba(255, 255, 255, 0.85)); transition: transform var(--hn-dur-fast, 150ms) var(--hn-ease-spring, cubic-bezier(0.34, 1.56, 0.64, 1)), box-shadow var(--hn-dur-fast, 150ms) ease; will-change: transform; }
+.chef-menu-list article:hover { transform: translateY(-3px); box-shadow: var(--hn-shadow-md, 0 4px 16px -2px rgba(27, 48, 87, 0.06)), var(--hn-rim-light, inset 0 1px 0 rgba(255, 255, 255, 0.85)); }
 .chef-menu-list article.chef-menu-missing { border-color: #f0d7b6; background: #fffaf2; }
 .chef-menu-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 15px; }
 .chef-menu-head strong { color: #244573; font-size: 16px; }

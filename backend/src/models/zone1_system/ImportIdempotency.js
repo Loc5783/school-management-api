@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 
 const ImportIdempotencySchema = new mongoose.Schema({
+  tenantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tenant'
+  },
   idempotencyKey: {
     type: String,
     required: true,
@@ -49,5 +53,8 @@ const ImportIdempotencySchema = new mongoose.Schema({
 }, {
   timestamps: true
 });
+
+// Index hỗ trợ multi-tenant lookup (SaaS 1C)
+ImportIdempotencySchema.index({ tenantId: 1, createdAt: -1 });
 
 module.exports = mongoose.model('ImportIdempotency', ImportIdempotencySchema);

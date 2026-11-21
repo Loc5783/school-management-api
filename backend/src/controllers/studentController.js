@@ -6,6 +6,7 @@ const User = require('../models/zone1_system/User');
 const Notification = require('../models/zone1_system/Notification');
 const ImportIdempotency = require('../models/zone1_system/ImportIdempotency');
 const { applyStudentListScope, canAccessStudent, isParent, isValidStudentId } = require('../services/studentAccessService');
+const { buildTenantFilter, applyTenantFilter, assertTenantContext } = require('../services/tenantFilterService');
 const { canAccessClassroom, getTeacherClassroomIds, hasSchoolWideReadAccess } = require('../services/schoolDataAccessService');
 const { STUDENT_STATUSES, isClassroomCountedStatus, canTransitionStudentStatus, generateStudentCode, runStudentTransaction, serializeStudent } = require('../services/studentCoreService');
 const { isValidWorkDate, getWorkDate } = require('../utils/dateHelpers');
@@ -71,18 +72,34 @@ const validatePayload = (data, creating = false) => {
         }
     }
 };
-const scopedFilter = async (user, filter, classroomId) => {
-    if (isParent(user)) return applyStudentListScope(user, filter);
-    if (user.role === 'teacher') {
-        const ids = await getTeacherClassroomIds(user);
-        filter.classroomId = classroomId ? (ids.includes(String(classroomId)) ? classroomId : { $in: [] }) : { $in: ids };
-        return filter;
+const scopedFilter = async (user, filter, classroomId, req) => {
+    if (!isParent(user) && user?.role !== 'teacher' && user?.role !== 'hr' && !hasSchoolWideReadAccess(user)) {
+        throw httpError('Bạn không có quyền xem dữ liệu học sinh', 403);
     }
-    if (user.role === 'hr') {
-        if (classroomId) filter.classroomId = classroomId;
-        return filter;
+
+    const tenantFilter = buildTenantFilter(req);
+
+    if (classroomId) {
+        const classroomExists = await Classroom.exists({ _id: classroomId, ...tenantFilter });
+        if (!classroomExists) {
+            filter.classroomId = { $in: [] };
+        }
     }
-    if (!hasSchoolWideReadAccess(user)) throw httpError('Bạn không có quyền xem dữ liệu học sinh', 403);
+
+    if (isParent(user)) {
+        filter = applyStudentListScope(user, filter, req);
+    } else if (user.role === 'teacher') {
+        const ids = await getTeacherClassroomIds(user, req);
+        if (classroomId) {
+            filter.classroomId = ids.includes(String(classroomId)) ? classroomId : { $in: [] };
+        } else {
+            filter.classroomId = { $in: ids };
+        }
+        filter = applyTenantFilter(filter, req);
+    } else {
+        filter = applyTenantFilter(filter, req);
+    }
+
     return filter;
 };
 
@@ -91,15 +108,31 @@ const createStudent = async (req, res) => {
         if (req.user.role === 'teacher') assertTeacherAllowedFields(req.body, true);
         const data = req.user.role === 'teacher' ? { ...pick(req.body, req.user.role, true), classroomId: req.body.classroomId } : pick(req.body, req.user.role); validatePayload(data, true);
         if (!isValidStudentId(data.classroomId)) return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
-        const classroom = await Classroom.findOne({ _id: data.classroomId, status: 'active' });
+        const tenantFilter = buildTenantFilter(req);
+        const tenantId = req.tenantId || req.user?.tenantId;
+        const classroom = await Classroom.findOne({ _id: data.classroomId, status: 'active', ...tenantFilter });
         if (!classroom) return res.status(404).json({ message: 'Không tìm thấy lớp học' });
-        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, classroom._id)) return res.status(403).json({ message: 'Bạn không có quyền thêm học sinh vào lớp này' });
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, classroom._id, req)) return res.status(403).json({ message: 'Bạn không có quyền thêm học sinh vào lớp này' });
         const status = req.user.role === 'teacher' ? 'enrolled' : (req.body.status || 'enrolled');
         if (!STUDENT_STATUSES.includes(status)) return res.status(422).json({ message: 'Trạng thái học sinh không hợp lệ' });
         const admissionDate = data.admissionDate || new Date();
         data.schoolYear = data.schoolYear || deriveSchoolYear(admissionDate);
         const student = await runStudentTransaction(async (session) => {
-            const created = (await Student.create([{ ...data, fullName: data.fullName.trim(), classroomId: classroom._id, className: classroom.name, status, admissionDate, enrollmentDate: admissionDate, studentCode: await generateStudentCode(admissionDate, session), createdBy: req.user._id, updatedBy: req.user._id, statusHistory: [{ toStatus: status, reason: 'Tạo hồ sơ học sinh', effectiveDate: admissionDate, changedBy: req.user._id, changedByName: actorName(req.user) }] }], { session }))[0];
+            const studentPayload = {
+                ...data,
+                fullName: data.fullName.trim(),
+                classroomId: classroom._id,
+                className: classroom.name,
+                status,
+                admissionDate,
+                enrollmentDate: admissionDate,
+                studentCode: await generateStudentCode(admissionDate, session, tenantId),
+                createdBy: req.user._id,
+                updatedBy: req.user._id,
+                statusHistory: [{ toStatus: status, reason: 'Tạo hồ sơ học sinh', effectiveDate: admissionDate, changedBy: req.user._id, changedByName: actorName(req.user) }]
+            };
+            if (tenantId) studentPayload.tenantId = tenantId;
+            const created = (await Student.create([studentPayload], { session }))[0];
             if (isClassroomCountedStatus(status) && !await adjustHeadcount(classroom._id, 1, session)) throw httpError('Không thể cập nhật sĩ số lớp', 409);
             await audit(req, 'STUDENT_CREATED', created, {}, { studentCode: created.studentCode, status }, session);
             return created;
@@ -121,7 +154,7 @@ const getAllStudents = async (req, res) => {
         if (schoolYear?.trim()) filter.schoolYear = schoolYear.trim();
         if (status && status !== 'all') filter.status = status; else if (!status) filter.status = 'enrolled';
         if (search?.trim()) { const keyword = regexEscape(search.trim()); filter.$or = [{ fullName: { $regex: keyword, $options: 'i' } }, { studentCode: { $regex: keyword, $options: 'i' } }]; }
-        filter = await scopedFilter(req.user, filter, classroomId);
+        filter = await scopedFilter(req.user, filter, classroomId, req);
         const [students, total] = await Promise.all([Student.find(filter).sort({ [sortBy]: sortOrder === 'asc' ? 1 : -1, _id: 1 }).skip((page - 1) * limit).limit(limit), Student.countDocuments(filter)]);
         res.json({ success: true, message: 'Lấy danh sách học sinh thành công', data: students.map((student) => serializeStudent(student, req.user.role, 'list')), pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
     } catch (err) { console.error(err); return respondError(res, err); }
@@ -130,21 +163,24 @@ const getAllStudents = async (req, res) => {
 const getStudentById = async (req, res) => {
     try {
         if (!isValidStudentId(req.params.id)) return res.status(400).json({ message: 'ID học sinh không hợp lệ' });
-        const student = await Student.findById(req.params.id); if (!student) return res.status(404).json({ message: 'Không tìm thấy học sinh' });
-        if (isParent(req.user) && !canAccessStudent(req.user, student._id)) return res.status(403).json({ message: 'Bạn không có quyền xem thông tin học sinh này' });
-        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, student.classroomId)) return res.status(403).json({ message: 'Bạn không có quyền xem thông tin học sinh này' });
-        if (!isParent(req.user) && req.user.role !== 'teacher' && req.user.role !== 'hr' && !hasSchoolWideReadAccess(req.user)) return res.status(403).json({ message: 'Bạn không có quyền xem dữ liệu học sinh' });
-        res.json({ success: true, message: 'Lấy chi tiết học sinh thành công', data: serializeStudent(student, req.user.role) });
+        const tenantFilter = buildTenantFilter(req);
+        const student = await Student.findOne({ _id: req.params.id, ...tenantFilter });
+        if (!student) return res.status(404).json({ message: 'Không tìm thấy học sinh' });
+        if (isParent(req.user) && !canAccessStudent(req.user, student, req)) return res.status(403).json({ message: 'Bạn không có quyền xem thông tin học sinh này' });
+        if (req.user?.role === 'teacher' && !await canAccessClassroom(req.user, student.classroomId, req)) return res.status(403).json({ message: 'Bạn không có quyền xem thông tin học sinh này' });
+        if (!isParent(req.user) && req.user?.role !== 'teacher' && req.user?.role !== 'hr' && !hasSchoolWideReadAccess(req.user)) return res.status(403).json({ message: 'Bạn không có quyền xem dữ liệu học sinh' });
+        res.json({ success: true, message: 'Lấy chi tiết học sinh thành công', data: serializeStudent(student, req.user?.role) });
     } catch (err) { console.error(err); return respondError(res, err); }
 };
 
 const updateStudent = async (req, res) => {
     try {
         if (!isValidStudentId(req.params.id)) return res.status(400).json({ message: 'ID học sinh không hợp lệ' });
-        const current = await Student.findById(req.params.id); if (!current) return res.status(404).json({ message: 'Không tìm thấy học sinh' });
-        if (isParent(req.user) && !canAccessStudent(req.user, current._id)) return res.status(403).json({ message: 'Bạn chỉ được cập nhật hồ sơ của con đã liên kết với tài khoản' });
+        const tenantFilter = buildTenantFilter(req);
+        const current = await Student.findOne({ _id: req.params.id, ...tenantFilter }); if (!current) return res.status(404).json({ message: 'Không tìm thấy học sinh' });
+        if (isParent(req.user) && !canAccessStudent(req.user, current._id, req)) return res.status(403).json({ message: 'Bạn chỉ được cập nhật hồ sơ của con đã liên kết với tài khoản' });
         if (isParent(req.user)) return res.status(403).json({ success: false, message: 'Phụ huynh cần gửi yêu cầu cập nhật hồ sơ để nhà trường phê duyệt' });
-        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, current.classroomId)) return res.status(403).json({ message: 'Bạn không có quyền cập nhật học sinh này' });
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, current.classroomId, req)) return res.status(403).json({ message: 'Bạn không có quyền cập nhật học sinh này' });
         if (req.user.role === 'teacher') assertTeacherAllowedFields(req.body);
         const updates = pick(req.body, req.user.role); if (!Object.keys(updates).length) return res.status(400).json({ message: 'Không có trường học sinh hợp lệ để cập nhật' });
         // Parent-facing serialization deliberately hides identity documents. Keep
@@ -159,13 +195,13 @@ const updateStudent = async (req, res) => {
         validatePayload(updates); let target;
         if (Object.hasOwn(updates, 'classroomId')) {
             if (!isValidStudentId(updates.classroomId)) return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
-            target = await Classroom.findOne({ _id: updates.classroomId, status: 'active' }); if (!target) return res.status(404).json({ message: 'Không tìm thấy lớp học' });
-            if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, target._id)) return res.status(403).json({ message: 'Bạn không có quyền chuyển học sinh sang lớp này' });
+            target = await Classroom.findOne({ _id: updates.classroomId, status: 'active', ...tenantFilter }); if (!target) return res.status(404).json({ message: 'Không tìm thấy lớp học' });
+            if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, target._id, req)) return res.status(403).json({ message: 'Bạn không có quyền chuyển học sinh sang lớp này' });
             updates.classroomId = target._id; updates.className = target.name;
         }
         updates.updatedBy = req.user._id;
         const student = await runStudentTransaction(async (session) => {
-            const updated = await Student.findByIdAndUpdate(current._id, { $set: updates }, { returnDocument: 'after', runValidators: true, session });
+            const updated = await Student.findOneAndUpdate({ _id: current._id, ...tenantFilter }, { $set: updates }, { returnDocument: 'after', runValidators: true, session });
             if (target && String(current.classroomId) !== String(target._id) && isClassroomCountedStatus(current.status)) {
                 if (!await adjustHeadcount(current.classroomId, -1, session) || !await adjustHeadcount(target._id, 1, session)) throw httpError('Không thể cập nhật sĩ số lớp', 409);
             }
@@ -182,7 +218,8 @@ const changeStudentStatus = async (req, res) => {
         const { status, reason = '', effectiveDate = new Date() } = req.body;
         if (!STUDENT_STATUSES.includes(status)) return res.status(422).json({ message: 'Trạng thái học sinh không hợp lệ' });
         if (Number.isNaN(new Date(effectiveDate).getTime())) return res.status(422).json({ message: 'Ngày hiệu lực không hợp lệ' });
-        const student = await Student.findById(req.params.id); if (!student) return res.status(404).json({ success: false, message: 'Không tìm thấy học sinh' });
+        const tenantFilter = buildTenantFilter(req);
+        const student = await Student.findOne({ _id: req.params.id, ...tenantFilter }); if (!student) return res.status(404).json({ success: false, message: 'Không tìm thấy học sinh' });
         if (student.admissionDate && new Date(effectiveDate) < new Date(student.admissionDate)) return res.status(422).json({ success: false, message: 'Ngày thôi học không được trước ngày nhập học' });
         if (!canTransitionStudentStatus(student.status, status)) return res.status(409).json({ success: false, message: `Không thể chuyển từ ${student.status} sang ${status}` });
         if (student.status === status) return res.json({ success: true, message: 'Trạng thái học sinh không thay đổi', data: serializeStudent(student, req.user.role) });
@@ -202,18 +239,19 @@ const changeStudentStatus = async (req, res) => {
 
 const deleteStudent = (req, res) => { req.body = { ...req.body, status: 'withdrawn', reason: req.body.reason || 'Hồ sơ ngừng theo học' }; return changeStudentStatus(req, res); };
 
-const canReadStudentCare = async (user, student) => {
-    if (isParent(user)) return canAccessStudent(user, student._id);
-    if (user.role === 'teacher') return canAccessClassroom(user, student.classroomId);
+const canReadStudentCare = async (user, student, context) => {
+    if (isParent(user)) return canAccessStudent(user, student, context);
+    if (user.role === 'teacher') return canAccessClassroom(user, student.classroomId, context);
     return hasSchoolWideReadAccess(user);
 };
 
 const getDailyReports = async (req, res) => {
     try {
         if (!isValidStudentId(req.params.id)) return res.status(400).json({ success: false, message: 'ID học sinh không hợp lệ' });
-        const student = await Student.findById(req.params.id).select('fullName classroomId dailyReports');
+        const tenantFilter = buildTenantFilter(req);
+        const student = await Student.findOne({ _id: req.params.id, ...tenantFilter }).select('fullName classroomId dailyReports tenantId');
         if (!student) return res.status(404).json({ success: false, message: 'Không tìm thấy học sinh' });
-        if (!await canReadStudentCare(req.user, student)) return res.status(403).json({ success: false, message: 'Bạn không có quyền xem sổ chăm sóc của học sinh này' });
+        if (!await canReadStudentCare(req.user, student, req)) return res.status(403).json({ success: false, message: 'Bạn không có quyền xem sổ chăm sóc của học sinh này' });
         const reports = [...(student.dailyReports || [])].sort((a, b) => new Date(b.reportDate) - new Date(a.reportDate)).slice(0, 60);
         return res.json({ success: true, data: reports });
     } catch (err) { console.error(err); return respondError(res, err); }
@@ -222,7 +260,9 @@ const getDailyReports = async (req, res) => {
 const saveDailyReport = async (req, res) => {
     try {
         if (!isValidStudentId(req.params.id)) return res.status(400).json({ success: false, message: 'ID học sinh không hợp lệ' });
-        const student = await Student.findById(req.params.id);
+        const tenantFilter = buildTenantFilter(req);
+        const tenantId = req.tenantId || req.user?.tenantId;
+        const student = await Student.findOne({ _id: req.params.id, ...tenantFilter });
         if (!student) return res.status(404).json({ success: false, message: 'Không tìm thấy học sinh' });
         if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, student.classroomId)) return res.status(403).json({ success: false, message: 'Bạn không được ghi sổ cho học sinh ngoài lớp phụ trách' });
         const reportDate = new Date(req.body.reportDate || new Date());
@@ -239,7 +279,7 @@ const saveDailyReport = async (req, res) => {
         student.updatedBy = req.user._id;
         await student.save();
         const saved = student.dailyReports.find((item) => new Date(item.reportDate).toISOString().slice(0, 10) === dateKey);
-        const parents = await User.find({ role: 'parent', status: 'active', 'parentInfo.studentIds': student._id }).select('_id').lean();
+        const parents = await User.find({ role: 'parent', status: 'active', 'parentInfo.studentIds': student._id, ...tenantFilter }).select('_id').lean();
         await Promise.all(parents.map((parent) => Notification.create({
             recipientId: parent._id, title: `Sổ chăm sóc: ${student.fullName}`,
             message: `Giáo viên đã cập nhật tình hình ăn, ngủ, sức khỏe và hoạt động ngày ${reportDate.toLocaleDateString('vi-VN')}.`,
@@ -274,12 +314,13 @@ const downloadExcelTemplate = async (req, res) => {
 
 const previewExcelImport = async (req, res) => {
     try {
+        const tenantFilter = buildTenantFilter(req);
         const { classroomId } = req.body || {};
         if (!classroomId || !isValidStudentId(classroomId)) {
             return res.status(400).json({ success: false, message: 'Vui lòng chọn lớp học hợp lệ để nhập học sinh.' });
         }
 
-        const classroom = await Classroom.findOne({ _id: classroomId, status: 'active' });
+        const classroom = await Classroom.findOne({ _id: classroomId, status: 'active', ...tenantFilter });
         if (!classroom) {
             return res.status(404).json({ success: false, message: 'Không tìm thấy lớp học hoặc lớp đã bị lưu trữ/khóa.' });
         }
@@ -335,6 +376,8 @@ const confirmExcelImport = async (req, res) => {
     let idempotencyDoc = null;
     const currentLockToken = crypto.randomUUID();
     try {
+        const tenantFilter = buildTenantFilter(req);
+        const tenantId = req.tenantId || req.user?.tenantId;
         const { classroomId, students: rawStudents } = req.body || {};
         const idempotencyKey = String(req.get('Idempotency-Key') || req.body.idempotencyKey || '').trim();
 
@@ -346,7 +389,7 @@ const confirmExcelImport = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Vui lòng chọn lớp học hợp lệ.' });
         }
 
-        const classroom = await Classroom.findOne({ _id: classroomId, status: 'active' });
+        const classroom = await Classroom.findOne({ _id: classroomId, status: 'active', ...tenantFilter });
         if (!classroom) {
             return res.status(404).json({ success: false, message: 'Không tìm thấy lớp học hoặc lớp đã bị lưu trữ.' });
         }
@@ -506,7 +549,7 @@ const confirmExcelImport = async (req, res) => {
         const now = new Date();
         const resultPayload = await runStudentTransaction(async (session) => {
             // Khóa và kiểm tra lại sĩ số lớp trong transaction
-            const lockedClassroom = await Classroom.findById(classroom._id).session(session);
+            const lockedClassroom = await Classroom.findOne({ _id: classroom._id, ...tenantFilter }).session(session);
             if (!lockedClassroom || lockedClassroom.status !== 'active') {
                 throw httpError('Không tìm thấy lớp học hoặc lớp không còn hoạt động.', 404);
             }
@@ -520,7 +563,8 @@ const confirmExcelImport = async (req, res) => {
             // Kiểm tra trùng lặp DB với session
             const candidateNames = validatedStudents.map(s => s.fullName);
             const existing = await Student.find({
-                fullName: { $in: candidateNames }
+                fullName: { $in: candidateNames },
+                ...tenantFilter
             }).select('fullName birthDate gender className studentCode classroomId').session(session).lean();
 
             for (const candidate of validatedStudents) {
@@ -544,8 +588,8 @@ const confirmExcelImport = async (req, res) => {
             // Lưu học sinh hàng loạt
             const createdStudents = [];
             for (const data of validatedStudents) {
-                const studentCode = await generateStudentCode(now, session);
-                const created = (await Student.create([{
+                const studentCode = await generateStudentCode(now, session, tenantId);
+                const studentPayload = {
                     ...data,
                     studentCode,
                     admissionDate: now,
@@ -559,7 +603,9 @@ const confirmExcelImport = async (req, res) => {
                         changedBy: req.user._id,
                         changedByName: actorName(req.user)
                     }]
-                }], { session }))[0];
+                };
+                if (tenantId) studentPayload.tenantId = tenantId;
+                const created = (await Student.create([studentPayload], { session }))[0];
 
                 await audit(req, 'STUDENT_CREATED', created, {}, { studentCode, status: 'enrolled', importSource: 'excel' }, session);
                 createdStudents.push(created);
@@ -616,7 +662,11 @@ const confirmExcelImport = async (req, res) => {
 const transferStudentClassroom = async (req, res) => {
     let idempotencyDoc = null;
     let currentLockToken = null;
+    let internalKey = null;
     try {
+        const tenantContext = assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req);
+
         if (!['admin', 'hr', 'principal'].includes(req.user.role)) {
             return res.status(403).json({ success: false, message: 'Bạn không có quyền chuyển lớp học sinh' });
         }
@@ -627,16 +677,24 @@ const transferStudentClassroom = async (req, res) => {
         if (!cleanReason) return res.status(422).json({ success: false, message: 'Vui lòng nhập lý do chuyển lớp' });
 
         // Require valid Idempotency-Key header (16-128 chars)
-        const idempotencyKey = String(req.get('Idempotency-Key') || '').trim();
-        if (!idempotencyKey || !/^[A-Za-z0-9_-]{16,128}$/.test(idempotencyKey)) {
+        const rawIdempotencyKey = String(req.get('Idempotency-Key') || '').trim();
+        if (!rawIdempotencyKey || !/^[A-Za-z0-9_-]{16,128}$/.test(rawIdempotencyKey)) {
             return res.status(400).json({
                 success: false,
                 message: 'Header Idempotency-Key là bắt buộc để chuyển lớp (chuỗi 16-128 ký tự gồm chữ cái, chữ số, gạch nối hoặc gạch dưới).'
             });
         }
 
+        // Namespaced internal idempotency key for SaaS so global unique index remains safe; legacy raw key behavior unchanged
+        internalKey = tenantContext.isSaaS
+            ? `${tenantContext.tenantId}:${rawIdempotencyKey}`
+            : rawIdempotencyKey;
+
         // Check existing idempotency record first to stabilize contract on retries
-        const existingRecord = await ImportIdempotency.findOne({ idempotencyKey });
+        const existingRecord = await ImportIdempotency.findOne({
+            idempotencyKey: internalKey,
+            ...tenantFilter
+        });
 
         // Canonical payload for stable idempotency fingerprint
         let targetEffectiveDate = '';
@@ -667,6 +725,9 @@ const transferStudentClassroom = async (req, res) => {
             .digest('hex');
 
         if (existingRecord) {
+            if (tenantContext.isSaaS && (!existingRecord.tenantId || !existingRecord.tenantId.equals(tenantContext.tenantId))) {
+                return res.status(409).json({ success: false, message: 'Khóa idempotency này thuộc về một người dùng khác.' });
+            }
             if (String(existingRecord.userId) !== String(req.user._id)) {
                 return res.status(409).json({ success: false, message: 'Khóa idempotency này thuộc về một người dùng khác.' });
             }
@@ -683,7 +744,8 @@ const transferStudentClassroom = async (req, res) => {
             const staleThreshold = new Date(Date.now() - 30000);
             const acquired = await ImportIdempotency.findOneAndUpdate(
                 {
-                    idempotencyKey,
+                    idempotencyKey: internalKey,
+                    ...tenantFilter,
                     userId: req.user._id,
                     fingerprint,
                     $or: [
@@ -712,7 +774,8 @@ const transferStudentClassroom = async (req, res) => {
         } else {
             try {
                 idempotencyDoc = await ImportIdempotency.create({
-                    idempotencyKey,
+                    tenantId: tenantContext.tenantId || null,
+                    idempotencyKey: internalKey,
                     fingerprint,
                     status: 'processing',
                     lockToken: currentLockToken,
@@ -721,8 +784,14 @@ const transferStudentClassroom = async (req, res) => {
                 });
             } catch (dupErr) {
                 if (dupErr.code === 11000) {
-                    const raceRecord = await ImportIdempotency.findOne({ idempotencyKey });
+                    const raceRecord = await ImportIdempotency.findOne({
+                        idempotencyKey: internalKey,
+                        ...tenantFilter
+                    });
                     if (!raceRecord) {
+                        return res.status(409).json({ success: false, message: 'Khóa idempotency bị xung đột dữ liệu.' });
+                    }
+                    if (tenantContext.isSaaS && (!raceRecord.tenantId || !raceRecord.tenantId.equals(tenantContext.tenantId))) {
                         return res.status(409).json({ success: false, message: 'Khóa idempotency bị xung đột dữ liệu.' });
                     }
                     if (String(raceRecord.userId) !== String(req.user._id)) {
@@ -741,7 +810,8 @@ const transferStudentClassroom = async (req, res) => {
                     const staleThreshold = new Date(Date.now() - 30000);
                     const acquired = await ImportIdempotency.findOneAndUpdate(
                         {
-                            idempotencyKey,
+                            idempotencyKey: internalKey,
+                            ...tenantFilter,
                             userId: req.user._id,
                             fingerprint,
                             $or: [
@@ -777,7 +847,12 @@ const transferStudentClassroom = async (req, res) => {
         if (targetEffectiveDate !== todayWorkDate) {
             if (idempotencyDoc) {
                 await ImportIdempotency.updateOne(
-                    { _id: idempotencyDoc._id, lockToken: currentLockToken, status: 'processing' },
+                    {
+                        _id: idempotencyDoc._id,
+                        ...(internalKey ? { idempotencyKey: internalKey } : {}),
+                        lockToken: currentLockToken,
+                        status: 'processing'
+                    },
                     { $set: { status: 'failed' } }
                 ).catch(() => {});
             }
@@ -793,7 +868,7 @@ const transferStudentClassroom = async (req, res) => {
 
         const result = await runStudentTransaction(async (session) => {
             // Read and validate student inside session
-            const studentDoc = await Student.findById(req.params.id).session(session);
+            const studentDoc = await Student.findOne({ _id: req.params.id, ...tenantFilter }).session(session);
             if (!studentDoc) throw httpError('Không tìm thấy học sinh', 404);
             if (!['enrolled', 'temporarily_absent'].includes(studentDoc.status)) {
                 throw httpError('Chỉ được chuyển lớp cho học sinh đang theo học (enrolled hoặc tạm vắng)', 422);
@@ -806,8 +881,8 @@ const transferStudentClassroom = async (req, res) => {
 
             // Read source and target classrooms inside session
             const [fromClassroom, toClassroom] = await Promise.all([
-                Classroom.findById(fromClassroomId).session(session),
-                Classroom.findOne({ _id: toClassroomId, status: 'active' }).session(session)
+                Classroom.findOne({ _id: fromClassroomId, ...tenantFilter }).session(session),
+                Classroom.findOne({ _id: toClassroomId, status: 'active', ...tenantFilter }).session(session)
             ]);
 
             if (!fromClassroom) throw httpError('Không tìm thấy lớp học hiện tại của học sinh', 404);
@@ -824,6 +899,7 @@ const transferStudentClassroom = async (req, res) => {
                 {
                     _id: toClassroomId,
                     status: 'active',
+                    ...tenantFilter,
                     $or: [
                         { 'statistics.currentStudents': { $lt: maxSize } },
                         { 'statistics.currentStudents': { $exists: false } }
@@ -840,6 +916,7 @@ const transferStudentClassroom = async (req, res) => {
             const sourceClassUpdated = await Classroom.findOneAndUpdate(
                 {
                     _id: fromClassroomId,
+                    ...tenantFilter,
                     'statistics.currentStudents': { $gt: 0 }
                 },
                 { $inc: { 'statistics.currentStudents': -1 } },
@@ -853,7 +930,8 @@ const transferStudentClassroom = async (req, res) => {
             const updatedStudent = await Student.findOneAndUpdate(
                 {
                     _id: studentDoc._id,
-                    classroomId: fromClassroomId
+                    classroomId: fromClassroomId,
+                    ...tenantFilter
                 },
                 {
                     $set: {
@@ -870,6 +948,7 @@ const transferStudentClassroom = async (req, res) => {
 
             // Record Transfer History inside session
             const [historyEntry] = await StudentTransferHistory.create([{
+                tenantId: tenantContext.tenantId || null,
                 studentId: studentDoc._id,
                 studentCode: studentDoc.studentCode,
                 studentName: studentDoc.fullName,
@@ -900,7 +979,11 @@ const transferStudentClassroom = async (req, res) => {
             if (fromClassroom.homeroomTeacherId) recipients.add(String(fromClassroom.homeroomTeacherId));
             if (toClassroom.homeroomTeacherId) recipients.add(String(toClassroom.homeroomTeacherId));
 
-            const parentUsers = await User.find({ role: 'parent', 'parentInfo.studentIds': studentDoc._id }).select('_id').session(session);
+            const parentUsers = await User.find({
+                role: 'parent',
+                'parentInfo.studentIds': studentDoc._id,
+                ...tenantFilter
+            }).select('_id').session(session);
             for (const p of parentUsers) recipients.add(String(p._id));
 
             for (const recipientId of recipients) {
@@ -928,6 +1011,7 @@ const transferStudentClassroom = async (req, res) => {
                 const updateRes = await ImportIdempotency.updateOne(
                     {
                         _id: idempotencyDoc._id,
+                        ...(internalKey ? { idempotencyKey: internalKey } : {}),
                         lockToken: currentLockToken,
                         status: 'processing'
                     },
@@ -951,7 +1035,12 @@ const transferStudentClassroom = async (req, res) => {
     } catch (err) {
         if (idempotencyDoc) {
             await ImportIdempotency.updateOne(
-                { _id: idempotencyDoc._id, lockToken: currentLockToken, status: 'processing' },
+                {
+                    _id: idempotencyDoc._id,
+                    ...(internalKey ? { idempotencyKey: internalKey } : {}),
+                    lockToken: currentLockToken,
+                    status: 'processing'
+                },
                 { $set: { status: 'failed' } }
             ).catch(() => {});
         }
@@ -964,19 +1053,24 @@ const getStudentTransferHistory = async (req, res) => {
     try {
         if (!isValidStudentId(req.params.id)) return res.status(400).json({ success: false, message: 'ID học sinh không hợp lệ' });
         const StudentTransferHistory = require('../models/zone3_school/StudentTransferHistory');
+        const tenantContext = assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req);
         
-        const student = await Student.findById(req.params.id).select('classroomId parents fullName studentCode').lean();
+        const student = await Student.findOne({ _id: req.params.id, ...tenantFilter })
+            .select('_id classroomId parents fullName studentCode tenantId')
+            .lean();
         if (!student) return res.status(404).json({ success: false, message: 'Không tìm thấy học sinh' });
 
         // Scoped access control
         if (['admin', 'principal', 'hr'].includes(req.user.role)) {
-            // Full access
+            // Full access within tenant
         } else if (req.user.role === 'teacher') {
-            const teacherClassIds = await getTeacherClassroomIds(req.user);
+            const teacherClassIds = await getTeacherClassroomIds(req.user, req);
             const isCurrentClass = student.classroomId && teacherClassIds.includes(String(student.classroomId));
             if (!isCurrentClass) {
                 const hadPastClass = await StudentTransferHistory.exists({
                     studentId: student._id,
+                    ...tenantFilter,
                     $or: [
                         { fromClassroomId: { $in: teacherClassIds } },
                         { toClassroomId: { $in: teacherClassIds } }
@@ -987,7 +1081,7 @@ const getStudentTransferHistory = async (req, res) => {
                 }
             }
         } else if (isParent(req.user)) {
-            const hasAccess = await canAccessStudent(req.user, student._id);
+            const hasAccess = canAccessStudent(req.user, student, req);
             if (!hasAccess) {
                 return res.status(403).json({ success: false, message: 'Bạn không có quyền xem thông tin học sinh này' });
             }
@@ -995,7 +1089,7 @@ const getStudentTransferHistory = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Bạn không có quyền xem lịch sử chuyển lớp' });
         }
 
-        const history = await StudentTransferHistory.find({ studentId: req.params.id })
+        const history = await StudentTransferHistory.find({ studentId: req.params.id, ...tenantFilter })
             .sort({ effectiveDate: -1, createdAt: -1 })
             .lean();
 

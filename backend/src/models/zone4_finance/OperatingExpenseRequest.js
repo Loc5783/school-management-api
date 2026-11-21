@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 
 const OperatingExpenseRequestSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant'
+    },
     category: { type: String, enum: ['utilities', 'rent', 'maintenance', 'services', 'other'], required: true },
     payee: { type: String, required: true, trim: true, maxlength: 160 },
     description: { type: String, required: true, trim: true, maxlength: 500 },

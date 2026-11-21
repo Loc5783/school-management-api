@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const PickupOtpChallengeSchema = new mongoose.Schema({
+  tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
   studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true, index: true },
   studentName: { type: String, required: true, trim: true },
   classroomId: { type: mongoose.Schema.Types.ObjectId, ref: 'Classroom', required: true },
@@ -27,6 +28,7 @@ const PickupOtpChallengeSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 PickupOtpChallengeSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 24 * 60 * 60 });
+PickupOtpChallengeSchema.index({ tenantId: 1, studentId: 1, pickupDate: 1, status: 1 });
 PickupOtpChallengeSchema.index({ studentId: 1, pickupDate: 1, status: 1 });
 
 module.exports = mongoose.model('PickupOtpChallenge', PickupOtpChallengeSchema);

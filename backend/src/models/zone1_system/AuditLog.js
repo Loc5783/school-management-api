@@ -4,6 +4,7 @@ const { sanitizeAuditValue, safeReason, stampActor } = require('../../services/h
 // Generic security and authorization audit trail. Sensitive values must be
 // reduced before being written here (never passwords, tokens, or API keys).
 const AuditLogSchema = new mongoose.Schema({
+  tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
   actorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   actorUsername: { type: String, required: true },
   actorName: { type: String, default: '' }, actorRole: { type: String, default: '' },

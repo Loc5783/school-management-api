@@ -4,8 +4,12 @@ const UserSchema = new mongoose.Schema({
   username: {
     type: String,
     required: true,
-    unique: true,
     trim: true
+  },
+  tenantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tenant',
+    index: true
   },
   passwordHash: {
     type: String,
@@ -70,11 +74,53 @@ const UserSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  // Incremented during classroom assignment or role changes to coordinate concurrent operations.
+  assignmentVersion: {
+    type: Number,
+    default: 0
+  },
   accessEndsAt: { type: Date, default: null }
 }, {
-  timestamps: true
+  timestamps: true,
+  autoIndex: false,
+  autoCreate: false
 });
 
-UserSchema.index({ 'employeeInfo.employeeId': 1 }, { unique: true, sparse: true });
+// Normalize employeeId: trim and uppercase, if empty string remove/set undefined
+UserSchema.pre('validate', function() {
+  if (this.employeeInfo?.employeeId !== undefined) {
+    if (typeof this.employeeInfo.employeeId === 'string') {
+      const trimmed = this.employeeInfo.employeeId.trim().toUpperCase();
+      if (!trimmed) {
+        this.employeeInfo.employeeId = undefined;
+      } else {
+        this.employeeInfo.employeeId = trimmed;
+      }
+    }
+  }
+});
+
+// Compound unique username for both legacy (tenantId: null) and multi-tenant (tenantId: ObjectId)
+UserSchema.index(
+  { tenantId: 1, username: 1 },
+  {
+    name: 'tenantId_1_username_1',
+    unique: true
+  }
+);
+
+// Multi-tenant partial unique index for employeeId (excludes missing/null/empty):
+UserSchema.index(
+  { tenantId: 1, 'employeeInfo.employeeId': 1 },
+  {
+    name: 'tenantId_1_employeeInfo.employeeId_1',
+    unique: true,
+    partialFilterExpression: {
+      'employeeInfo.employeeId': { $type: 'string', $gt: '' }
+    }
+  }
+);
+
+UserSchema.index({ tenantId: 1, status: 1 });
 
 module.exports = mongoose.model('User', UserSchema);

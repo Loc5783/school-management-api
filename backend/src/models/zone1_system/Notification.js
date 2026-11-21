@@ -1,6 +1,11 @@
 const mongoose = require('mongoose');
 
 const NotificationSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant',
+        index: true
+    },
     recipientId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
@@ -43,8 +48,17 @@ const NotificationSchema = new mongoose.Schema({
     timestamps: true
 });
 
+NotificationSchema.index({ tenantId: 1, recipientId: 1, isRead: 1 });
+NotificationSchema.index({ tenantId: 1, recipientId: 1, createdAt: -1 });
 NotificationSchema.index({ recipientId: 1, isRead: 1 });
 NotificationSchema.index({ recipientId: 1, createdAt: -1 });
-NotificationSchema.index({ deduplicationKey: 1 }, { unique: true, partialFilterExpression: { deduplicationKey: { $type: 'string' } } });
+NotificationSchema.index(
+    { tenantId: 1, deduplicationKey: 1 },
+    { name: 'tenantId_1_deduplicationKey_1_unique', unique: true, partialFilterExpression: { tenantId: { $type: 'objectId' }, deduplicationKey: { $type: 'string' } } }
+);
+NotificationSchema.index(
+    { deduplicationKey: 1 },
+    { name: 'legacy_deduplicationKey_1_unique', unique: true, partialFilterExpression: { tenantId: null, deduplicationKey: { $type: 'string' } } }
+);
 
 module.exports = mongoose.model('Notification', NotificationSchema);

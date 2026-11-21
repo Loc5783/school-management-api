@@ -6,32 +6,49 @@ const PurchaseExpense = require('../models/zone4_finance/PurchaseExpense');
 const OperatingExpense = require('../models/zone4_finance/OperatingExpense');
 const Payroll = require('../models/zone2_hr/Payroll');
 const DailyCashReconciliation = require('../models/zone4_finance/DailyCashReconciliation');
+const User = require('../models/zone1_system/User');
 const { addWorkDays, getWorkDate, isValidWorkDate, startOfWorkDate } = require('../utils/dateHelpers');
 const { runStudentTransaction } = require('../services/studentCoreService');
 const { lockOpenPeriod } = require('../services/accountingPeriodService');
+const { buildTenantFilter, resolveTenantContext, assertTenantContext } = require('../services/tenantFilterService');
 
 const keys = ['cashIn', 'cashOut', 'bankIn', 'bankOut', 'walletIn', 'walletOut'];
 const emptyTotals = () => Object.fromEntries(keys.map((key) => [key, 0]));
 const moneyValue = (value) => Number(value) || 0;
 const bad = (message, statusCode = 422) => { const error = new Error(message); error.statusCode = statusCode; throw error; };
 
+const getTenantFilter = (context) => {
+    if (context === null || context === undefined) {
+        return { tenantId: null };
+    }
+    const resolved = resolveTenantContext(context);
+    if (!resolved.isValid) {
+        throw Object.assign(new Error('Ngữ cảnh tenant không hợp lệ hoặc bị thiếu'), {
+            statusCode: 403,
+            code: 'INVALID_TENANT_CONTEXT'
+        });
+    }
+    return resolved.isSaaS ? { tenantId: resolved.tenantId } : { tenantId: null };
+};
+
 const validRange = (from, to) => isValidWorkDate(from) && isValidWorkDate(to) && from <= to
     && (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000 <= 30;
 
-const loadEntries = async (from, to, session = null) => {
+const loadEntries = async (from, to, session = null, context = null) => {
     const range = { $gte: startOfWorkDate(from), $lt: startOfWorkDate(addWorkDays(to, 1)) };
+    const tenantFilter = getTenantFilter(context);
     const sources = [
-        () => Payment.find({ paidAt: range }).select('_id invoiceId amount paidAt method txnRef receiptNumber').session(session).lean(),
-        () => InvoiceAdjustment.find({ type: 'refund', paidAt: range }).select('_id invoiceId amount paidAt method transactionRef documentNumber').session(session).lean(),
-        () => PurchaseExpense.find({ paidAt: range }).select('_id orderCode supplierName amount paidAt method transactionRef documentNumber').session(session).lean(),
-        () => OperatingExpense.find({ paidAt: range }).select('_id category payee description amount paidAt method transactionRef documentNumber approvalReference').session(session).lean(),
-        () => Payroll.find({ status: 'paid', paidAt: range }).select('_id employeeName month year netSalary paidAt paymentMethod paymentReference').session(session).lean()
+        () => Payment.find({ ...tenantFilter, paidAt: range }).select('_id invoiceId amount paidAt method txnRef receiptNumber').session(session).lean(),
+        () => InvoiceAdjustment.find({ ...tenantFilter, type: 'refund', paidAt: range }).select('_id invoiceId amount paidAt method transactionRef documentNumber').session(session).lean(),
+        () => PurchaseExpense.find({ ...tenantFilter, paidAt: range }).select('_id orderCode supplierName amount paidAt method transactionRef documentNumber').session(session).lean(),
+        () => OperatingExpense.find({ ...tenantFilter, paidAt: range }).select('_id category payee description amount paidAt method transactionRef documentNumber approvalReference').session(session).lean(),
+        () => Payroll.find({ ...tenantFilter, status: 'paid', paidAt: range }).select('_id employeeName month year netSalary paidAt paymentMethod paymentReference').session(session).lean()
     ];
     const [payments, refunds, expenses, operatingExpenses, payrolls] = session
         ? await sources.reduce(async (previous, source) => [...await previous, await source()], Promise.resolve([]))
         : await Promise.all(sources.map((source) => source()));
     const invoiceIds = [...new Set([...payments, ...refunds].map((item) => String(item.invoiceId)))];
-    const invoices = invoiceIds.length ? await TuitionFee.find({ _id: { $in: invoiceIds } }).select('_id studentName className period').session(session).lean() : [];
+    const invoices = invoiceIds.length ? await TuitionFee.find({ ...tenantFilter, _id: { $in: invoiceIds } }).select('_id studentName className period').session(session).lean() : [];
     const invoiceById = new Map(invoices.map((item) => [String(item._id), item]));
     const rows = [
         ...payments.map((item) => {
@@ -89,15 +106,16 @@ const statusOf = (record, todayBook) => {
     return keys.every((key) => moneyValue(record.actual?.[key]) === moneyValue(todayBook[key])) ? 'matched' : 'difference';
 };
 
-const getCashbookData = async ({ from, to }) => {
+const getCashbookData = async ({ from, to, context = null, session = null }) => {
     const validFrom = String(from || getWorkDate());
     const validTo = String(to || validFrom);
     if (!validRange(validFrom, validTo)) {
         bad('Chọn khoảng ngày hợp lệ, tối đa 31 ngày', 422);
     }
+    const tenantFilter = getTenantFilter(context);
     const [{ rows, daily, overall }, records] = await Promise.all([
-        loadEntries(validFrom, validTo),
-        DailyCashReconciliation.find({ workDate: { $gte: validFrom, $lte: validTo } }).lean()
+        loadEntries(validFrom, validTo, session, context),
+        DailyCashReconciliation.find({ ...tenantFilter, workDate: { $gte: validFrom, $lte: validTo } }).session(session).lean()
     ]);
     const byDate = new Map(records.map((item) => [item.workDate, item]));
     const dates = [];
@@ -127,13 +145,14 @@ const getCashbookData = async ({ from, to }) => {
 };
 
 const getCashbook = async (req, res) => {
-    const from = String(req.query.from || getWorkDate());
-    const to = String(req.query.to || from);
-    const page = Number(req.query.page || 1);
-    if (!validRange(from, to)) return res.status(422).json({ message: 'Chọn khoảng ngày hợp lệ, tối đa 31 ngày' });
-    if (!Number.isInteger(page) || page < 1) return res.status(422).json({ message: 'Trang không hợp lệ' });
     try {
-        const { rows, daily, overall } = await getCashbookData({ from, to });
+        assertTenantContext(req);
+        const from = String(req.query.from || getWorkDate());
+        const to = String(req.query.to || from);
+        const page = Number(req.query.page || 1);
+        if (!validRange(from, to)) return res.status(422).json({ message: 'Chọn khoảng ngày hợp lệ, tối đa 31 ngày' });
+        if (!Number.isInteger(page) || page < 1) return res.status(422).json({ message: 'Trang không hợp lệ' });
+        const { rows, daily, overall } = await getCashbookData({ from, to, context: req });
         return res.json({ success: true, data: rows.slice((page - 1) * 20, page * 20), daily, overall,
             pagination: { page, total: rows.length, totalPages: Math.max(1, Math.ceil(rows.length / 20)) } });
     } catch (error) { return res.status(error.statusCode || 500).json({ message: error.message || 'Không thể tải sổ đối soát' }); }
@@ -141,6 +160,11 @@ const getCashbook = async (req, res) => {
 
 const saveDailyReconciliation = async (req, res) => {
     try {
+        assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+        const resolvedTenant = resolveTenantContext(req);
+        const tenantId = resolvedTenant.isValid && resolvedTenant.isSaaS ? resolvedTenant.tenantId : null;
+
         const workDate = String(req.body.workDate || '');
         if (!isValidWorkDate(workDate) || workDate > getWorkDate()) bad('Ngày đối soát không hợp lệ hoặc ở tương lai');
         const evidenceReference = String(req.body.evidenceReference || '').trim();
@@ -157,23 +181,30 @@ const saveDailyReconciliation = async (req, res) => {
         const expectedRevision = Number(req.body.expectedRevision || 0);
         if (!Number.isInteger(expectedRevision) || expectedRevision < 0) bad('Phiên bản đối soát không hợp lệ');
         if (expectedRevision > 0 && (changeReason.length < 5 || changeReason.length > 500)) bad('Sửa đối soát cần ghi lý do từ 5 đến 500 ký tự');
+
         const result = await runStudentTransaction(async (session) => {
-            await lockOpenPeriod(workDate.slice(0, 7), session);
-            const { daily } = await loadEntries(workDate, workDate, session);
+            const actor = await User.findOne({ _id: req.user._id, status: 'active', ...tenantFilter }).session(session);
+            if (!actor || !['admin', 'accountant', 'principal'].includes(actor.role)) {
+                bad('Người dùng không có quyền đối soát sổ quỹ hoặc tài khoản đã bị khóa', 403);
+            }
+            await lockOpenPeriod(workDate.slice(0, 7), session, req);
+            const { daily } = await loadEntries(workDate, workDate, session, req);
             const book = daily[0] || { ...emptyTotals(), unknownAmount: 0, issues: 0,
                 sourceSignature: createHash('sha256').update('').digest('hex') };
             const bookSnapshot = Object.fromEntries(keys.map((key) => [key, book[key]]));
-            const actorName = req.user.profile?.fullName || req.user.username;
+            const actorName = actor.profile?.fullName || actor.username;
             const historyEntry = { revision: expectedRevision + 1, actual, bookSnapshot, sourceSignature: book.sourceSignature, evidenceReference, note,
-                changedBy: req.user._id, changedByName: actorName, changedAt: new Date(), changeReason };
+                changedBy: actor._id, changedByName: actorName, changedAt: new Date(), changeReason };
             let record;
             if (expectedRevision === 0) {
-                [record] = await DailyCashReconciliation.create([{ workDate, actual, bookSnapshot, sourceSignature: book.sourceSignature, evidenceReference, note,
-                    revision: 1, recordedBy: req.user._id, recordedByName: actorName, history: [historyEntry] }], { session });
+                [record] = await DailyCashReconciliation.create([{
+                    ...(tenantId ? { tenantId } : { tenantId: null }),
+                    workDate, actual, bookSnapshot, sourceSignature: book.sourceSignature, evidenceReference, note,
+                    revision: 1, recordedBy: actor._id, recordedByName: actorName, history: [historyEntry] }], { session });
             } else {
-                record = await DailyCashReconciliation.findOneAndUpdate({ workDate, revision: expectedRevision }, {
+                record = await DailyCashReconciliation.findOneAndUpdate({ ...tenantFilter, workDate, revision: expectedRevision }, {
                     $set: { actual, bookSnapshot, sourceSignature: book.sourceSignature, evidenceReference, note, revision: expectedRevision + 1,
-                        recordedBy: req.user._id, recordedByName: actorName }, $push: { history: historyEntry }
+                        recordedBy: actor._id, recordedByName: actorName }, $push: { history: historyEntry }
                 }, { returnDocument: 'after', runValidators: true, session });
                 if (!record) bad('Bản đối soát đã thay đổi. Hãy tải lại trước khi sửa.', 409);
             }
@@ -182,7 +213,7 @@ const saveDailyReconciliation = async (req, res) => {
         return res.json({ success: true, data: result,
             message: 'Đã lưu số đối chiếu thủ công. Chưa xác minh tự động với ngân hàng.' });
     } catch (error) {
-        if (error.code === 11000) return res.status(409).json({ message: 'Ngày này đã có bản đối soát. Hãy tải lại.' });
+        if (error.code === 11000) return res.status(409).json({ message: 'Ngày này đã có bản đối soát hoặc xung đột hệ thống. Hãy tải lại.' });
         return res.status(error.statusCode || 500).json({ message: error.statusCode ? error.message : 'Không thể lưu đối soát' });
     }
 };

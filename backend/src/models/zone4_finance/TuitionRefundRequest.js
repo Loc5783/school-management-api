@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 
 const TuitionRefundRequestSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant'
+    },
     invoiceId: { type: mongoose.Schema.Types.ObjectId, ref: 'TuitionFee', required: true },
     amount: { type: Number, required: true, min: 1 },
     reason: { type: String, required: true, trim: true, minlength: 5, maxlength: 1000 },

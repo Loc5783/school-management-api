@@ -1,10 +1,14 @@
 const mongoose = require('mongoose');
 
 const FoodSampleSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant',
+        index: true
+    },
     sampleCode: {
         type: String,
         required: true,
-        unique: true,
         uppercase: true,
         trim: true
     },
@@ -79,5 +83,13 @@ const FoodSampleSchema = new mongoose.Schema({
 
 FoodSampleSchema.index({ mealDate: -1 });
 FoodSampleSchema.index({ status: 1 });
+FoodSampleSchema.index(
+    { tenantId: 1, sampleCode: 1 },
+    { name: 'tenantId_1_sampleCode_1_unique', unique: true, partialFilterExpression: { tenantId: { $type: 'objectId' } } }
+);
+FoodSampleSchema.index(
+    { sampleCode: 1 },
+    { name: 'legacy_sampleCode_1_unique', unique: true, partialFilterExpression: { tenantId: null } }
+);
 
 module.exports = mongoose.model('FoodSample', FoodSampleSchema);

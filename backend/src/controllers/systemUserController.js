@@ -5,6 +5,11 @@ const User = require('../models/zone1_system/User');
 const Employee = require('../models/zone2_hr/Employee');
 const Classroom = require('../models/zone3_school/Classroom');
 const { hashPassword } = require('../utils/passwordHash');
+const {
+  buildTenantFilter,
+  assertTenantContext,
+  InvalidTenantContextError
+} = require('../services/tenantFilterService');
 
 const manageableStatuses = ['active', 'inactive', 'suspended'];
 const assignableStaffRoles = ['principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'];
@@ -105,12 +110,12 @@ const runLinkedAccountTransaction = async (operation) => {
 
 const findParent = async (id) => {
   if (!mongoose.isValidObjectId(id)) return null;
-  return User.findOne({ _id: id, role: 'parent' });
+  return User.findOne({ _id: id, role: 'parent', tenantId: { $in: [null, undefined] } });
 };
 
 const listParents = async (req, res) => {
   try {
-    const filter = { role: 'parent' };
+    const filter = { role: 'parent', tenantId: { $in: [null, undefined] } };
     if (req.query.status) {
       if (!manageableStatuses.includes(req.query.status)) {
         return res.status(400).json({ message: 'Trạng thái lọc không hợp lệ' });
@@ -185,9 +190,38 @@ const updateParentStatus = async (req, res) => {
 
 const listInternalAccounts = async (req, res) => {
   try {
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+
     const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
     const limit = Math.min(50, Math.max(1, Number.parseInt(req.query.limit, 10) || 10));
-    const filter = { role: { $in: internalRoles } };
+
+    const filter = {
+      role: { $in: internalRoles },
+      ...tenantFilter
+    };
+
+    if (req.query.status) {
+      if (!manageableStatuses.includes(req.query.status)) {
+        return res.status(400).json({ success: false, message: 'Trạng thái lọc không hợp lệ' });
+      }
+      filter.status = req.query.status;
+    }
+
+    if (req.query.role) {
+      if (!internalRoles.includes(req.query.role)) {
+        return res.status(400).json({ success: false, message: 'Vai trò lọc không hợp lệ' });
+      }
+      filter.role = req.query.role;
+    }
+
+    if (req.query.search && typeof req.query.search === 'string' && req.query.search.trim()) {
+      const escaped = req.query.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      filter.$or = [
+        { username: { $regex: escaped, $options: 'i' } },
+        { 'profile.fullName': { $regex: escaped, $options: 'i' } }
+      ];
+    }
+
     const [accounts, total] = await Promise.all([
       User.find(filter)
         .select('username role status profile employeeInfo createdAt lastLogin')
@@ -196,11 +230,31 @@ const listInternalAccounts = async (req, res) => {
         .limit(limit),
       User.countDocuments(filter)
     ]);
-    const employees = await Employee.find({ userId: { $in: accounts.map((account) => account._id) } })
-      .select('userId employeeCode').lean();
+
+    const accountIds = accounts.map((account) => account._id);
+    const employees = await Employee.find({
+      userId: { $in: accountIds },
+      ...tenantFilter
+    })
+      .select('userId employeeCode')
+      .lean();
+
     const employeeByUserId = new Map(employees.map((employee) => [String(employee.userId), employee]));
-    return res.json({ success: true, data: accounts.map((account) => serializeInternalAccount(account, employeeByUserId.get(String(account._id)))), pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+
+    return res.json({
+      success: true,
+      data: accounts.map((account) => serializeInternalAccount(account, employeeByUserId.get(String(account._id)))),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit)
+      }
+    });
   } catch (error) {
+    if (error instanceof InvalidTenantContextError || error?.name === 'InvalidTenantContextError') {
+      return res.status(error.statusCode || 403).json({ success: false, message: error.message });
+    }
     console.error('List internal accounts failed:', error.message);
     return res.status(500).json({ success: false, message: 'Không thể tải danh sách tài khoản nội bộ' });
   }
@@ -208,14 +262,19 @@ const listInternalAccounts = async (req, res) => {
 
 const createInternalAccount = async (req, res) => {
   try {
+    const tenantContext = assertTenantContext(req);
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+    const targetTenantId = tenantContext.isSaaS ? tenantContext.tenantId : null;
+
     const { username, password, profile = {}, role } = req.body;
     const validationError = validateInternalAccount({ username, password, profile, role }, req.user);
     if (validationError) return res.status(422).json({ success: false, message: validationError });
 
     const normalizedUsername = username.trim();
-    if (await User.exists({ username: normalizedUsername })) {
+    if (await User.exists({ username: normalizedUsername, ...tenantFilter })) {
       return res.status(409).json({ success: false, message: 'Tên đăng nhập đã tồn tại' });
     }
+
     const passwordHash = await hashPassword(password);
     const { account, employee } = await runLinkedAccountTransaction(async (session) => {
       const [createdAccount] = await User.create([{
@@ -224,6 +283,7 @@ const createInternalAccount = async (req, res) => {
         role,
         status: 'active',
         permissions: [],
+        tenantId: targetTenantId,
         profile: {
           fullName: profile.fullName.trim(),
           phone: String(profile.phone || '').trim(),
@@ -231,26 +291,71 @@ const createInternalAccount = async (req, res) => {
           address: String(profile.address || '').trim()
         }
       }], { session });
-      const employeeCode = `${{ principal: 'HT', teacher: 'GV', accountant: 'KT', chef: 'BEP', guard: 'BV', hr: 'NS' }[role]}-${new Date().getFullYear()}-${String(createdAccount._id).slice(-6).toUpperCase()}`;
+
+      const prefix = { principal: 'HT', teacher: 'GV', accountant: 'KT', chef: 'BEP', guard: 'BV', hr: 'NS' }[role] || 'NV';
+      const employeeCode = `${prefix}-${new Date().getFullYear()}-${String(createdAccount._id).slice(-6).toUpperCase()}`;
+
       const [createdEmployee] = await Employee.create([{
-        userId: createdAccount._id, employeeCode, fullName: createdAccount.profile.fullName,
-        phone: createdAccount.profile.phone, email: createdAccount.profile.email,
-        gender: null, contractType: null, startDate: null, qualification: { degree: '', major: '' },
-        position: positionByRole[role], payrollRole: role, status: 'active',
+        tenantId: targetTenantId,
+        userId: createdAccount._id,
+        employeeCode,
+        fullName: createdAccount.profile.fullName,
+        phone: createdAccount.profile.phone,
+        email: createdAccount.profile.email,
+        gender: null,
+        contractType: null,
+        startDate: null,
+        qualification: { degree: '', major: '' },
+        position: positionByRole[role] || 'teacher',
+        payrollRole: role,
+        status: 'active',
         salaryConfig: { baseSalary: 0, positionAllowance: 0, lunchAllowance: 0 }
       }], { session });
-      createdAccount.employeeInfo = { employeeId: employeeCode, position: positionByRole[role], baseSalary: 0 };
+
+      createdAccount.employeeInfo = {
+        employeeId: employeeCode,
+        position: positionByRole[role] || 'teacher',
+        baseSalary: 0
+      };
       await createdAccount.save({ session });
+
       await writeAudit(req, 'INTERNAL_ACCOUNT_CREATED', createdAccount, {}, {
-        username: createdAccount.username, role: createdAccount.role, status: createdAccount.status, employeeCode
+        username: createdAccount.username,
+        role: createdAccount.role,
+        status: createdAccount.status,
+        employeeCode
       }, '', session);
+
       return { account: createdAccount, employee: createdEmployee };
     });
-    return res.status(201).json({ success: true, message: 'Đã tạo tài khoản và liên kết hồ sơ nhân sự', data: serializeInternalAccount(account, employee) });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Đã tạo tài khoản và liên kết hồ sơ nhân sự',
+      data: serializeInternalAccount(account, employee)
+    });
   } catch (error) {
-    if (error?.code === 11000) return res.status(409).json({ success: false, message: 'Tên đăng nhập đã tồn tại' });
+    if (error instanceof InvalidTenantContextError || error?.name === 'InvalidTenantContextError') {
+      return res.status(error.statusCode || 403).json({ success: false, message: error.message });
+    }
+    if (error?.code === 11000) {
+      const keyPattern = error?.keyPattern || {};
+      if (keyPattern.username) {
+        return res.status(409).json({ success: false, message: 'Tên đăng nhập đã tồn tại' });
+      }
+      if (keyPattern.employeeCode) {
+        return res.status(409).json({ success: false, message: 'Mã nhân viên đã tồn tại trên hệ thống' });
+      }
+      if (keyPattern.userId) {
+        return res.status(409).json({ success: false, message: 'Hồ sơ nhân sự cho người dùng này đã tồn tại' });
+      }
+      return res.status(409).json({ success: false, message: 'Dữ liệu tài khoản hoặc nhân sự bị trùng lặp' });
+    }
     console.error('Create internal account failed:', error.message);
-    return res.status(error.statusCode || 500).json({ success: false, message: error.statusCode ? error.message : 'Không thể tạo tài khoản nội bộ' });
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.statusCode ? error.message : 'Không thể tạo tài khoản nội bộ'
+    });
   }
 };
 
@@ -264,44 +369,230 @@ const updateInternalAccountRole = async (req, res) => {
 
 const updateInternalAccount = async (req, res) => {
   try {
-    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ success: false, message: 'ID tài khoản không hợp lệ' });
-    const account = await User.findOne({ _id: req.params.id, role: { $in: internalRoles } });
-    if (!account) return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản nội bộ' });
+    const tenantContext = assertTenantContext(req);
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'ID tài khoản không hợp lệ' });
+    }
+
+    const account = await User.findOne({
+      _id: req.params.id,
+      role: { $in: internalRoles },
+      ...tenantFilter
+    });
+    if (!account) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản nội bộ' });
+    }
+
     const targetError = canManageInternalTarget(req.user, account);
     if (targetError) return res.status(409).json({ success: false, message: targetError });
+
     const { username, password, profile = {}, role, status } = req.body;
-    if (username !== undefined && (typeof username !== 'string' || !usernamePattern.test(username.trim()))) return res.status(422).json({ success: false, message: 'Tên đăng nhập không hợp lệ' });
-    if (password !== undefined && (typeof password !== 'string' || password.length < 8 || password.length > 72)) return res.status(422).json({ success: false, message: 'Mật khẩu phải có từ 8 đến 72 ký tự' });
-    if (!profile || typeof profile !== 'object' || Array.isArray(profile)) return res.status(422).json({ success: false, message: 'Hồ sơ tài khoản không hợp lệ' });
-    if (profile.fullName !== undefined && (typeof profile.fullName !== 'string' || !profile.fullName.trim() || profile.fullName.length > 120)) return res.status(422).json({ success: false, message: 'Họ và tên phải có từ 1 đến 120 ký tự' });
-    if (profile.phone !== undefined && (typeof profile.phone !== 'string' || (profile.phone && !phonePattern.test(profile.phone.trim())))) return res.status(422).json({ success: false, message: 'Số điện thoại không hợp lệ' });
-    if (profile.email !== undefined && (typeof profile.email !== 'string' || (profile.email && (profile.email.length > 254 || !emailPattern.test(profile.email.trim()))))) return res.status(422).json({ success: false, message: 'Email không hợp lệ' });
-    if (role !== undefined && (!assignableStaffRoles.includes(role) || !canAssignStaffRole(req.user, role))) return res.status(422).json({ success: false, message: 'Bạn không có quyền gán vai trò này' });
-    if (status !== undefined && !manageableStatuses.includes(status)) return res.status(422).json({ success: false, message: 'Trạng thái tài khoản không hợp lệ' });
+    if (username !== undefined && (typeof username !== 'string' || !usernamePattern.test(username.trim()))) {
+      return res.status(422).json({ success: false, message: 'Tên đăng nhập không hợp lệ' });
+    }
+    if (password !== undefined && (typeof password !== 'string' || password.length < 8 || password.length > 72)) {
+      return res.status(422).json({ success: false, message: 'Mật khẩu phải có từ 8 đến 72 ký tự' });
+    }
+    if (!profile || typeof profile !== 'object' || Array.isArray(profile)) {
+      return res.status(422).json({ success: false, message: 'Hồ sơ tài khoản không hợp lệ' });
+    }
+    if (profile.fullName !== undefined && (typeof profile.fullName !== 'string' || !profile.fullName.trim() || profile.fullName.length > 120)) {
+      return res.status(422).json({ success: false, message: 'Họ và tên phải có từ 1 đến 120 ký tự' });
+    }
+    if (profile.phone !== undefined && (typeof profile.phone !== 'string' || (profile.phone && !phonePattern.test(profile.phone.trim())))) {
+      return res.status(422).json({ success: false, message: 'Số điện thoại không hợp lệ' });
+    }
+    if (profile.email !== undefined && (typeof profile.email !== 'string' || (profile.email && (profile.email.length > 254 || !emailPattern.test(profile.email.trim()))))) {
+      return res.status(422).json({ success: false, message: 'Email không hợp lệ' });
+    }
+    if (role !== undefined && (!assignableStaffRoles.includes(role) || !canAssignStaffRole(req.user, role))) {
+      return res.status(422).json({ success: false, message: 'Bạn không có quyền gán vai trò này' });
+    }
+    if (status !== undefined && !manageableStatuses.includes(status)) {
+      return res.status(422).json({ success: false, message: 'Trạng thái tài khoản không hợp lệ' });
+    }
 
     const nextUsername = username === undefined ? account.username : String(username).trim();
-    if (nextUsername !== account.username && await User.exists({ username: nextUsername, _id: { $ne: account._id } })) {
+    if (nextUsername !== account.username && await User.exists({
+      username: nextUsername,
+      _id: { $ne: account._id },
+      ...tenantFilter
+    })) {
       return res.status(409).json({ success: false, message: 'Tên đăng nhập đã tồn tại' });
     }
-    const linkedEmployee = await Employee.findOne({ userId: account._id });
-    if (linkedEmployee?.status === 'resigned' && status === 'active') {
-      return res.status(409).json({ success: false, message: 'Nhân viên đã nghỉ việc. Cần xử lý hồ sơ tái tuyển dụng trước khi mở lại tài khoản.' });
+
+    // 1. Initial minimal metadata check to detect alien linkage across the collection (only _id and tenantId)
+    const unscopedEmployeeMeta = await Employee.findOne({ userId: account._id }).select('_id tenantId');
+    let hasLinkedEmployee = false;
+
+    if (unscopedEmployeeMeta) {
+      let isSameTenant = false;
+      if (tenantContext.isSaaS) {
+        isSameTenant = Boolean(unscopedEmployeeMeta.tenantId && unscopedEmployeeMeta.tenantId.toString() === tenantContext.tenantId.toString());
+      } else if (tenantContext.isLegacy) {
+        isSameTenant = unscopedEmployeeMeta.tenantId === null || unscopedEmployeeMeta.tenantId === undefined;
+      }
+
+      if (!isSameTenant) {
+        // Alien/corrupted linkage detected
+        return res.status(409).json({
+          success: false,
+          code: 'CORRUPTED_EMPLOYEE_LINK',
+          message: 'Phát hiện liên kết hồ sơ nhân sự ngoại lai không hợp lệ. Vui lòng liên hệ quản trị viên.'
+        });
+      }
+
+      hasLinkedEmployee = true;
     }
-    if (account.role === 'teacher' && role && role !== 'teacher'
-      && await Classroom.exists({ status: 'active', 'teachers.teacherId': account._id })) {
-      return res.status(409).json({ success: false, message: 'Giáo viên đang được phân công lớp. Hãy chuyển phân công lớp trước khi đổi vai trò.' });
+
+    // 2. If valid linked employee exists, fetch business record scoped to tenant to verify status
+    if (hasLinkedEmployee) {
+      const linkedEmployee = await Employee.findOne({ userId: account._id, ...tenantFilter }).select('status');
+      if (linkedEmployee?.status === 'resigned' && status === 'active') {
+        return res.status(409).json({
+          success: false,
+          message: 'Nhân viên đã nghỉ việc. Cần xử lý hồ sơ tái tuyển dụng trước khi mở lại tài khoản.'
+        });
+      }
+    }
+
+    // 3. Check classroom assignment for teacher: homeroomTeacherId OR teachers.teacherId
+    if (account.role === 'teacher' && role && role !== 'teacher') {
+      const isAssigned = await Classroom.exists({
+        status: 'active',
+        ...tenantFilter,
+        $or: [
+          { homeroomTeacherId: account._id },
+          { 'teachers.teacherId': account._id }
+        ]
+      });
+      if (isAssigned) {
+        return res.status(409).json({
+          success: false,
+          message: 'Giáo viên đang được phân công lớp. Hãy chuyển phân công lớp trước khi đổi vai trò.'
+        });
+      }
     }
 
     const applyUpdate = async (session) => {
-      const target = session ? await User.findById(account._id).session(session) : account;
-      const employee = session ? await Employee.findOne({ userId: account._id }).session(session) : null;
-      if (!target || (session && !employee)) {
+      // 1. Re-verify actor inside session: actor must remain in ['admin', 'hr'], active, and within tenant scope
+      const currentActor = await User.findOne({
+        _id: req.user._id,
+        role: { $in: ['admin', 'hr'] },
+        status: 'active',
+        ...tenantFilter
+      }).session(session);
+      if (!currentActor) {
+        const error = new Error('Tài khoản thực hiện thao tác không còn quyền quản lý tài khoản nội bộ hoặc đã bị khóa/hạ quyền');
+        error.statusCode = 403;
+        throw error;
+      }
+
+      // Re-verify actor's authority to assign role if role is requested
+      if (role !== undefined && (!assignableStaffRoles.includes(role) || !canAssignStaffRole(currentActor, role))) {
+        const error = new Error('Bạn không có quyền gán vai trò này');
+        error.statusCode = 422;
+        throw error;
+      }
+
+      // 2. Re-read target User with tenant scope and internalRoles constraint inside transaction
+      const target = await User.findOne({
+        _id: account._id,
+        role: { $in: internalRoles },
+        ...tenantFilter
+      }).session(session);
+      if (!target) {
+        const error = new Error('Không tìm thấy tài khoản nội bộ');
+        error.statusCode = 404;
+        throw error;
+      }
+
+      // 3. Re-check canManageInternalTarget on fresh target and actor (prevent targeting principal, other admins, or self)
+      const targetErrorInTx = canManageInternalTarget(currentActor, target);
+      if (targetErrorInTx) {
+        const error = new Error(targetErrorInTx);
+        error.statusCode = 409;
+        throw error;
+      }
+
+      // 4. Re-check username uniqueness within tenant if username is changed
+      const effectiveNextUsername = username === undefined ? target.username : String(username).trim();
+      if (effectiveNextUsername !== target.username && await User.exists({
+        username: effectiveNextUsername,
+        _id: { $ne: target._id },
+        ...tenantFilter
+      }).session(session)) {
+        const error = new Error('Tên đăng nhập đã tồn tại');
+        error.statusCode = 409;
+        throw error;
+      }
+
+      // 5. Re-verify that no alien employee was concurrently attached (minimal metadata read)
+      const unscopedMetaInTx = await Employee.findOne({ userId: target._id }).select('_id tenantId').session(session);
+      if (unscopedMetaInTx) {
+        let same = false;
+        if (tenantContext.isSaaS) {
+          same = Boolean(unscopedMetaInTx.tenantId && unscopedMetaInTx.tenantId.toString() === tenantContext.tenantId.toString());
+        } else if (tenantContext.isLegacy) {
+          same = unscopedMetaInTx.tenantId === null || unscopedMetaInTx.tenantId === undefined;
+        }
+        if (!same) {
+          const error = new Error('Phát hiện liên kết hồ sơ nhân sự ngoại lai không hợp lệ.');
+          error.statusCode = 409;
+          error.code = 'CORRUPTED_EMPLOYEE_LINK';
+          throw error;
+        }
+      }
+
+      // 6. Re-read linked Employee with tenant scope
+      const employee = unscopedMetaInTx
+        ? await Employee.findOne({ userId: target._id, ...tenantFilter }).session(session)
+        : null;
+
+      // Ensure linkage state has not changed concurrently
+      if (Boolean(hasLinkedEmployee) !== Boolean(employee)) {
         const error = new Error('Liên kết hồ sơ nhân sự đã thay đổi. Vui lòng tải lại danh sách.');
         error.statusCode = 409;
         throw error;
       }
-      const before = { username: target.username, role: target.role, status: target.status, profile: target.profile?.toObject?.() || target.profile, authVersion: target.authVersion || 0 };
-      target.username = nextUsername;
+
+      // 7. Re-check Employee resigned status in transaction on fresh employee snapshot
+      const requestedStatus = status !== undefined ? status : target.status;
+      if (employee?.status === 'resigned' && requestedStatus === 'active') {
+        const error = new Error('Nhân viên đã nghỉ việc. Cần xử lý hồ sơ tái tuyển dụng trước khi mở lại tài khoản.');
+        error.statusCode = 409;
+        throw error;
+      }
+
+      // 8. Re-check Classroom assignment for teacher in transaction with same session on fresh target
+      const requestedRole = role !== undefined ? role : target.role;
+      if (target.role === 'teacher' && requestedRole && requestedRole !== 'teacher') {
+        const isAssigned = await Classroom.exists({
+          status: 'active',
+          ...tenantFilter,
+          $or: [
+            { homeroomTeacherId: target._id },
+            { 'teachers.teacherId': target._id }
+          ]
+        }).session(session);
+        if (isAssigned) {
+          const error = new Error('Giáo viên đang được phân công lớp. Hãy chuyển phân công lớp trước khi đổi vai trò.');
+          error.statusCode = 409;
+          throw error;
+        }
+      }
+
+      const before = {
+        username: target.username,
+        role: target.role,
+        status: target.status,
+        profile: target.profile?.toObject?.() || target.profile,
+        authVersion: target.authVersion || 0
+      };
+
+      target.username = effectiveNextUsername;
       if (profile.fullName !== undefined) target.profile.fullName = profile.fullName.trim();
       if (profile.phone !== undefined) target.profile.phone = String(profile.phone || '').trim();
       if (profile.email !== undefined) target.profile.email = String(profile.email || '').trim().toLowerCase();
@@ -309,6 +600,7 @@ const updateInternalAccount = async (req, res) => {
       if (status !== undefined) target.status = status;
       if (password !== undefined) target.passwordHash = await hashPassword(password);
       target.authVersion = (target.authVersion || 0) + 1;
+      target.assignmentVersion = (target.assignmentVersion || 0) + 1;
 
       if (employee) {
         employee.fullName = target.profile.fullName;
@@ -321,36 +613,106 @@ const updateInternalAccount = async (req, res) => {
         target.set('employeeInfo.position', employee.position);
         await employee.save({ session });
       }
-      await target.save(session ? { session } : {});
-      await writeAudit(req, 'INTERNAL_ACCOUNT_UPDATED', target, before,
-        { username: target.username, role: target.role, status: target.status, profile: target.profile, authVersion: target.authVersion }, '', session);
+
+      await target.save({ session });
+
+      await writeAudit(req, 'INTERNAL_ACCOUNT_UPDATED', target, before, {
+        username: target.username,
+        role: target.role,
+        status: target.status,
+        profile: target.profile,
+        authVersion: target.authVersion
+      }, '', session);
+
       return { target, employee };
     };
-    const updated = linkedEmployee ? await runLinkedAccountTransaction(applyUpdate) : await applyUpdate(null);
-    return res.json({ success: true, message: 'Đã cập nhật tài khoản', data: serializeInternalAccount(updated.target, updated.employee) });
+
+    // Both with Employee and without Employee are executed in the transaction session
+    const updated = await runLinkedAccountTransaction(applyUpdate);
+
+    return res.json({
+      success: true,
+      message: 'Đã cập nhật tài khoản',
+      data: serializeInternalAccount(updated.target, updated.employee)
+    });
   } catch (error) {
-    if (error?.code === 11000) return res.status(409).json({ success: false, message: 'Tên đăng nhập đã tồn tại' });
+    if (error instanceof InvalidTenantContextError || error?.name === 'InvalidTenantContextError') {
+      return res.status(error.statusCode || 403).json({ success: false, message: error.message });
+    }
+    if (error?.code === 'CORRUPTED_EMPLOYEE_LINK') {
+      return res.status(409).json({
+        success: false,
+        code: 'CORRUPTED_EMPLOYEE_LINK',
+        message: error.message || 'Phát hiện liên kết hồ sơ nhân sự ngoại lai không hợp lệ. Vui lòng liên hệ quản trị viên.'
+      });
+    }
+    if (error?.code === 11000) {
+      const keyPattern = error?.keyPattern || {};
+      if (keyPattern.username) {
+        return res.status(409).json({ success: false, message: 'Tên đăng nhập đã tồn tại' });
+      }
+      if (keyPattern.employeeCode) {
+        return res.status(409).json({ success: false, message: 'Mã nhân viên đã tồn tại trên hệ thống' });
+      }
+      return res.status(409).json({ success: false, message: 'Dữ liệu tài khoản hoặc nhân sự bị trùng lặp' });
+    }
     console.error('Update internal account failed:', error.message);
-    return res.status(error.statusCode || 500).json({ success: false, message: error.statusCode ? error.message : 'Không thể cập nhật tài khoản' });
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.statusCode ? error.message : 'Không thể cập nhật tài khoản'
+    });
   }
 };
 
 const deactivateInternalAccount = async (req, res) => {
   try {
-    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ success: false, message: 'ID tài khoản không hợp lệ' });
-    const account = await User.findOne({ _id: req.params.id, role: { $in: internalRoles } });
-    if (!account) return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản nội bộ' });
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'ID tài khoản không hợp lệ' });
+    }
+
+    const account = await User.findOne({
+      _id: req.params.id,
+      role: { $in: internalRoles },
+      ...tenantFilter
+    });
+    if (!account) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản nội bộ' });
+    }
+
     const targetError = canManageInternalTarget(req.user, account);
     if (targetError) return res.status(409).json({ success: false, message: targetError });
+
     const before = { status: account.status, authVersion: account.authVersion || 0 };
     if (account.status !== 'inactive') {
       account.status = 'inactive';
       account.authVersion = (account.authVersion || 0) + 1;
       await account.save();
-      await writeAudit(req, 'INTERNAL_ACCOUNT_DEACTIVATED', account, before, { status: account.status, authVersion: account.authVersion }, req.body?.reason || 'Thu hồi quyền truy cập');
+      await writeAudit(
+        req,
+        'INTERNAL_ACCOUNT_DEACTIVATED',
+        account,
+        before,
+        { status: account.status, authVersion: account.authVersion },
+        req.body?.reason || 'Thu hồi quyền truy cập'
+      );
     }
-    return res.json({ success: true, message: 'Đã thu hồi quyền truy cập tài khoản', data: serializeInternalAccount(account) });
+
+    const linkedEmployee = await Employee.findOne({
+      userId: account._id,
+      ...tenantFilter
+    }).select('employeeCode');
+
+    return res.json({
+      success: true,
+      message: 'Đã thu hồi quyền truy cập tài khoản',
+      data: serializeInternalAccount(account, linkedEmployee)
+    });
   } catch (error) {
+    if (error instanceof InvalidTenantContextError || error?.name === 'InvalidTenantContextError') {
+      return res.status(error.statusCode || 403).json({ success: false, message: error.message });
+    }
     console.error('Deactivate internal account failed:', error.message);
     return res.status(500).json({ success: false, message: 'Không thể thu hồi tài khoản' });
   }

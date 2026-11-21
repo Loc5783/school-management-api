@@ -3,7 +3,9 @@ const cron = require('node-cron');
 const AttendanceAuditLog = require('../models/zone2_hr/AttendanceAuditLog');
 const AttendanceCalculationRun = require('../models/zone2_hr/AttendanceCalculationRun');
 const AttendanceJobLock = require('../models/zone2_hr/AttendanceJobLock');
+const Tenant = require('../models/zone1_system/Tenant');
 const { enqueueUsersForWorkDate, processQueuedRecalculations } = require('./attendanceCalculationService');
+const { createTrustedTenantContext } = require('./tenantFilterService');
 const { DEFAULT_SCHOOL_TIMEZONE, addWorkDays, getWorkDate, startOfWorkDate } = require('../utils/dateHelpers');
 
 const workerId = `${process.env.HOSTNAME || 'timekeeping'}-${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
@@ -46,8 +48,31 @@ const runDailyTimekeepingSync = async () => {
       reason: 'Scheduled daily attendance calculation',
       timestamp: new Date()
     });
-    await enqueueUsersForWorkDate(targetWorkDate, 'DAILY_SCHEDULED_CALCULATION');
-    const records = await processQueuedRecalculations({ workerId, maxItems: 500 });
+
+    // 1. Enqueue for each active SaaS tenant with explicit trusted context
+    const activeTenants = await Tenant.find({ status: 'active' }).select('_id');
+    for (const tenant of activeTenants) {
+      await enqueueUsersForWorkDate(
+        targetWorkDate,
+        'DAILY_SCHEDULED_CALCULATION',
+        createTrustedTenantContext({ tenantId: tenant._id })
+      );
+    }
+
+    // 2. Enqueue for legacy with explicit legacy context
+    await enqueueUsersForWorkDate(
+      targetWorkDate,
+      'DAILY_SCHEDULED_CALCULATION',
+      createTrustedTenantContext({ isLegacy: true })
+    );
+
+    // 3. Process queued recalculations as global background worker
+    const records = await processQueuedRecalculations({
+      workerId,
+      maxItems: 500,
+      isGlobalWorker: true
+    });
+
     run.status = 'COMPLETED';
     run.recordsProcessed = records.length;
     run.finishedAt = new Date();
@@ -72,7 +97,11 @@ const runDailyTimekeepingSync = async () => {
   }
 };
 
-const runQueuedRecalculations = async () => processQueuedRecalculations({ workerId, maxItems: 100 });
+const runQueuedRecalculations = async () => processQueuedRecalculations({
+  workerId,
+  maxItems: 100,
+  isGlobalWorker: true
+});
 
 function startTimekeepingSync() {
   if (schedulerStarted) {

@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 
 const PurchaseExpenseSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant'
+    },
     orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'PurchaseOrder', required: true, index: true },
     orderCode: { type: String, required: true },
     supplierName: { type: String, required: true },

@@ -31,6 +31,7 @@ const {
     exportInventoryFEFO,
     returnUnusedInventory
 } = require('../services/inventoryTransactionService');
+const { buildTenantFilter } = require('../services/tenantFilterService');
 
 const MENU_DAY_OFFSETS = {
     monday: 0,
@@ -285,7 +286,7 @@ const prepareMenuDays = async (days, startDate) => {
 const getMenus = async (req, res) => {
     try {
         const { classroomId, weekNumber, schoolYear, status, startDate } = req.query;
-        const query = {};
+        const query = { ...buildTenantFilter(req) };
         if (classroomId) assertValidObjectId(classroomId, 'ID lớp học');
         const readableClassroomIds = await getReadableClassroomIds(req.user);
         if (classroomId && readableClassroomIds && !readableClassroomIds.includes(String(classroomId))) {
@@ -316,7 +317,7 @@ const getMenus = async (req, res) => {
 const getMenuById = async (req, res) => {
     try {
         assertValidObjectId(req.params.id, 'ID thực đơn');
-        const menu = await Menu.findById(req.params.id);
+        const menu = await Menu.findOne({ _id: req.params.id, ...buildTenantFilter(req) });
         if (!menu) return res.status(404).json({ message: 'Không tìm thấy thực đơn' });
         await assertReadableMenu(req.user, menu);
         res.json({ success: true, data: req.user.role === 'parent' ? serializeMenuForParent(menu) : menu });
@@ -333,11 +334,12 @@ const getClassroomDietaryAlerts = async (req, res) => {
         if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, req.params.id)) {
             return res.status(403).json({ message: 'Bạn không có quyền xem cảnh báo dinh dưỡng của lớp này' });
         }
-        const classroom = await Classroom.findById(req.params.id).select('name');
+        const classroom = await Classroom.findOne({ _id: req.params.id, ...buildTenantFilter(req) }).select('name');
         if (!classroom) return res.status(404).json({ message: 'Không tìm thấy lớp học' });
 
         const students = await Student.find({
             classroomId: classroom._id,
+            ...buildTenantFilter(req),
             status: 'enrolled',
             $or: [
                 { 'allergies.0': { $exists: true } },
@@ -379,14 +381,14 @@ const createMenu = async (req, res) => {
         }
 
         assertValidObjectId(classroomId, 'ID lớp học');
-        const classroom = await Classroom.findById(classroomId);
+        const classroom = await Classroom.findOne({ _id: classroomId, ...buildTenantFilter(req) });
         if (!classroom) return res.status(404).json({ message: 'Không tìm thấy lớp học' });
 
         const schoolYear = getSchoolYearForDate(startDate);
         const weekNumber = getIsoWeekNumber(startDate);
         const preparedDays = await prepareMenuDays(days, startDate);
 
-        const existing = await Menu.findOne({ classroomId, schoolYear, weekNumber });
+        const existing = await Menu.findOne({ classroomId, schoolYear, weekNumber, ...buildTenantFilter(req) });
         if (existing) {
             return res.status(409).json({ message: `Lớp ${classroom.name} đã có thực đơn cho tuần ${weekNumber}` });
         }
@@ -394,6 +396,7 @@ const createMenu = async (req, res) => {
         await assertClassroomMenuIsAllergenSafe(classroomId, preparedDays);
 
         const menu = await Menu.create({
+            tenantId: req.tenantId || req.user?.tenantId,
             classroomId,
             className: classroom.name,
             schoolYear,
@@ -436,7 +439,7 @@ const updateMenu = async (req, res) => {
     try {
         const { days, dietaryType, medicalNotes, allergensExcluded, status } = req.body;
         assertValidObjectId(req.params.id, 'ID thực đơn');
-        const menu = await Menu.findById(req.params.id);
+        const menu = await Menu.findOne({ _id: req.params.id, ...buildTenantFilter(req) });
         if (!menu) return res.status(404).json({ message: 'Không tìm thấy thực đơn' });
         if (menu.status === 'published') {
             return res.status(409).json({ message: 'Thực đơn đã công bố là bản ghi bất biến. Hãy tạo thực đơn mới hoặc lưu trữ thực đơn này.' });
@@ -482,9 +485,10 @@ const updateMenu = async (req, res) => {
     }
 };
 
-const getMenuForWorkflow = async (id) => {
+const getMenuForWorkflow = async (id, req = null) => {
     assertValidObjectId(id, 'ID thực đơn');
-    const menu = await Menu.findById(id);
+    const filter = { _id: id, ...(req ? buildTenantFilter(req) : {}) };
+    const menu = await Menu.findOne(filter);
     if (!menu) {
         const error = new Error('Không tìm thấy thực đơn');
         error.statusCode = 404;
@@ -495,7 +499,7 @@ const getMenuForWorkflow = async (id) => {
 
 const submitMenuForApproval = async (req, res) => {
     try {
-        const menu = await getMenuForWorkflow(req.params.id);
+        const menu = await getMenuForWorkflow(req.params.id, req);
         if (menu.status !== 'draft') return res.status(409).json({ message: 'Chỉ bản nháp mới có thể gửi duyệt' });
         validatePublishReadiness(menu);
         menu.status = 'pending_approval';
@@ -510,7 +514,7 @@ const submitMenuForApproval = async (req, res) => {
 
 const approveMenu = async (req, res) => {
     try {
-        const menu = await getMenuForWorkflow(req.params.id);
+        const menu = await getMenuForWorkflow(req.params.id, req);
         if (menu.status !== 'pending_approval') return res.status(409).json({ message: 'Chỉ thực đơn đang chờ duyệt mới có thể được công bố' });
         if (String(menu.createdBy) === String(req.user._id)) {
             return res.status(403).json({ message: 'Người lập thực đơn không thể tự phê duyệt thực đơn của mình' });
@@ -532,7 +536,7 @@ const returnMenuForRevision = async (req, res) => {
     try {
         const reason = String(req.body.reason || '').trim();
         if (!reason) return res.status(400).json({ message: 'Vui lòng nêu lý do trả thực đơn để chỉnh sửa' });
-        const menu = await getMenuForWorkflow(req.params.id);
+        const menu = await getMenuForWorkflow(req.params.id, req);
         if (menu.status !== 'pending_approval') return res.status(409).json({ message: 'Chỉ thực đơn đang chờ duyệt mới có thể trả lại' });
         menu.status = 'draft';
         menu.approvalNote = reason;
@@ -546,7 +550,7 @@ const returnMenuForRevision = async (req, res) => {
 
 const archiveMenu = async (req, res) => {
     try {
-        const menu = await getMenuForWorkflow(req.params.id);
+        const menu = await getMenuForWorkflow(req.params.id, req);
         if (menu.status === 'archived') return res.status(409).json({ message: 'Thực đơn này đã được lưu trữ' });
         const fromStatus = menu.status;
         menu.status = 'archived';
@@ -572,7 +576,8 @@ const cloneMenu = async (req, res) => {
             targetStartDate,
             targetEndDate,
             userId: req.user._id,
-            userName: req.user.profile?.fullName || req.user.username
+            userName: req.user.profile?.fullName || req.user.username,
+            tenantId: req.tenantId || req.user?.tenantId
         });
 
         res.status(201).json({
@@ -607,7 +612,7 @@ const checkAllergiesDryRun = async (req, res) => {
 const getDishes = async (req, res) => {
     try {
         const { category, search } = req.query;
-        const query = { status: 'active' };
+        const query = { status: 'active', ...buildTenantFilter(req) };
         if (category) query.category = category;
         if (search) query.name = { $regex: search, $options: 'i' };
 
@@ -618,13 +623,26 @@ const getDishes = async (req, res) => {
     }
 };
 
-const validateDishIngredients = async (items) => {
+const getDishById = async (req, res) => {
+    try {
+        if (!isValidObjectId(req.params.id)) {
+            return res.status(400).json({ message: 'ID món ăn không hợp lệ' });
+        }
+        const dish = await Dish.findOne({ _id: req.params.id, ...buildTenantFilter(req) });
+        if (!dish) return res.status(404).json({ message: 'Không tìm thấy món ăn' });
+        res.json({ success: true, data: dish });
+    } catch (err) {
+        res.status(500).json({ message: 'Lỗi server' });
+    }
+};
+
+const validateDishIngredients = async (items, req = null) => {
     if (!Array.isArray(items)) throw new Error('Danh sách nguyên liệu không hợp lệ');
     const ids = items.map((item) => String(item?.ingredientId || ''));
     if (ids.some((value) => !isValidObjectId(value)) || new Set(ids).size !== ids.length) {
         throw new Error('Nguyên liệu phải thuộc danh mục và không được lặp lại');
     }
-    const masters = await IngredientMaster.find({ _id: { $in: ids }, status: 'active' }).select('name unit').lean();
+    const masters = await IngredientMaster.find({ _id: { $in: ids }, status: 'active', ...(req ? buildTenantFilter(req) : {}) }).select('name unit').lean();
     const byId = new Map(masters.map((item) => [String(item._id), item]));
     return items.map((item, index) => {
         const master = byId.get(ids[index]);
@@ -642,8 +660,13 @@ const createDish = async (req, res) => {
         if (invalidAllergens.length) {
             return res.status(400).json({ message: `Dị nguyên không hợp lệ: ${invalidAllergens.join(', ')}` });
         }
-        const ingredients = await validateDishIngredients(req.body.ingredients || []);
-        const dish = await Dish.create({ ...req.body, allergens: allergens.filter(Boolean), ingredients });
+        const ingredients = await validateDishIngredients(req.body.ingredients || [], req);
+        const dish = await Dish.create({
+            ...req.body,
+            tenantId: req.tenantId || req.user?.tenantId,
+            allergens: allergens.filter(Boolean),
+            ingredients
+        });
         res.status(201).json({ success: true, message: 'Đã thêm món ăn mới', data: dish });
     } catch (err) {
         res.status(400).json({ message: err.message || 'Không thể tạo món ăn' });
@@ -664,8 +687,12 @@ const updateDish = async (req, res) => {
             }
             updates.allergens = allergens;
         }
-        if (updates.ingredients !== undefined) updates.ingredients = await validateDishIngredients(updates.ingredients);
-        const dish = await Dish.findByIdAndUpdate(req.params.id, updates, { returnDocument: 'after', runValidators: true });
+        if (updates.ingredients !== undefined) updates.ingredients = await validateDishIngredients(updates.ingredients, req);
+        const dish = await Dish.findOneAndUpdate(
+            { _id: req.params.id, ...buildTenantFilter(req) },
+            updates,
+            { returnDocument: 'after', runValidators: true }
+        );
         if (!dish) return res.status(404).json({ message: 'Không tìm thấy món ăn' });
         res.json({ success: true, message: 'Cập nhật món ăn thành công', data: dish });
     } catch (err) {
@@ -675,11 +702,12 @@ const updateDish = async (req, res) => {
 
 const deleteDish = async (req, res) => {
     try {
-        const dish = await Dish.findById(req.params.id);
+        const dish = await Dish.findOne({ _id: req.params.id, ...buildTenantFilter(req) });
         if (!dish) return res.status(404).json({ message: 'Không tìm thấy món ăn' });
 
         const id = dish._id;
         const hasMenuUsage = await Menu.exists({
+            ...buildTenantFilter(req),
             $or: [
                 { 'days.breakfast.dishId': id }, { 'days.morningSnack.dishId': id }, { 'days.afternoonSnack.dishId': id },
                 { 'days.breakfast.items.dishId': id }, { 'days.morningSnack.items.dishId': id }, { 'days.afternoonSnack.items.dishId': id },
@@ -708,7 +736,7 @@ const deleteDish = async (req, res) => {
 const getIngredients = async (req, res) => {
     try {
         const { category } = req.query;
-        const query = { status: 'active' };
+        const query = { status: 'active', ...buildTenantFilter(req) };
         if (category) query.category = category;
         const ingredients = await IngredientMaster.find(query).sort({ category: 1, name: 1 });
         res.json({ success: true, count: ingredients.length, data: ingredients });
@@ -717,7 +745,7 @@ const getIngredients = async (req, res) => {
     }
 };
 
-const createIngredientCode = async (name) => {
+const createIngredientCode = async (name, req = null) => {
     const normalizedName = String(name || 'NGUYEN_LIEU')
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '')
@@ -729,8 +757,9 @@ const createIngredientCode = async (name) => {
     const prefix = `NL_${normalizedName}`;
     let code = prefix;
     let sequence = 2;
+    const filter = req ? buildTenantFilter(req) : {};
 
-    while (await IngredientMaster.exists({ code })) {
+    while (await IngredientMaster.exists({ code, ...filter })) {
         code = `${prefix}_${sequence}`;
         sequence += 1;
     }
@@ -749,8 +778,9 @@ const createIngredient = async (req, res) => {
             return res.status(400).json({ message: 'Vui lòng nhập tên, nhóm và đơn vị nguyên liệu' });
         }
         const ingredient = await IngredientMaster.create({
+            tenantId: req.tenantId || req.user?.tenantId,
             name,
-            code: req.body.code?.trim().toUpperCase() || await createIngredientCode(name),
+            code: req.body.code?.trim().toUpperCase() || await createIngredientCode(name, req),
             category,
             unit,
             minStockAlert: Number(minStockAlert) || 0,
@@ -775,8 +805,8 @@ const updateIngredient = async (req, res) => {
             return res.status(400).json({ message: 'Ngưỡng cảnh báo tồn không được âm' });
         }
 
-        const ingredient = await IngredientMaster.findByIdAndUpdate(
-            req.params.id,
+        const ingredient = await IngredientMaster.findOneAndUpdate(
+            { _id: req.params.id, ...buildTenantFilter(req) },
             updates,
             { returnDocument: 'after', runValidators: true }
         );
@@ -789,11 +819,11 @@ const updateIngredient = async (req, res) => {
 
 const deleteIngredient = async (req, res) => {
     try {
-        const ingredient = await IngredientMaster.findById(req.params.id);
+        const ingredient = await IngredientMaster.findOne({ _id: req.params.id, ...buildTenantFilter(req) });
         if (!ingredient) return res.status(404).json({ message: 'Không tìm thấy nguyên liệu' });
 
-        const hasInventoryHistory = await Inventory.exists({ ingredientId: ingredient._id })
-            || await InventoryTransaction.exists({ ingredientId: ingredient._id });
+        const hasInventoryHistory = await Inventory.exists({ ingredientId: ingredient._id, ...buildTenantFilter(req) })
+            || await InventoryTransaction.exists({ ingredientId: ingredient._id, ...buildTenantFilter(req) });
 
         if (hasInventoryHistory) {
             ingredient.status = 'inactive';
@@ -818,25 +848,26 @@ const deleteIngredient = async (req, res) => {
 
 const getInventoryList = async (req, res) => {
     try {
+        const tenantFilter = buildTenantFilter(req);
         const todayStart = startOfWorkDate(getWorkDate(new Date()));
         const threeDaysLater = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
         await Inventory.updateMany(
-            { quantity: { $lte: 0 }, status: { $nin: ['disposed', 'depleted'] } },
+            { quantity: { $lte: 0 }, status: { $nin: ['disposed', 'depleted'] }, ...tenantFilter },
             { $set: { status: 'depleted' } }
         );
         await Inventory.updateMany(
-            { quantity: { $gt: 0 }, expiryDate: { $lt: todayStart }, status: { $nin: ['disposed', 'depleted'] } },
+            { quantity: { $gt: 0 }, expiryDate: { $lt: todayStart }, status: { $nin: ['disposed', 'depleted'] }, ...tenantFilter },
             { $set: { status: 'expired' } }
         );
         await Inventory.updateMany(
-            { quantity: { $gt: 0 }, expiryDate: { $gte: todayStart, $lte: threeDaysLater }, status: 'available' },
+            { quantity: { $gt: 0 }, expiryDate: { $gte: todayStart, $lte: threeDaysLater }, status: 'available', ...tenantFilter },
             { $set: { status: 'near_expiry' } }
         );
         await Inventory.updateMany(
-            { quantity: { $gt: 0 }, expiryDate: { $gt: threeDaysLater }, status: 'near_expiry' },
+            { quantity: { $gt: 0 }, expiryDate: { $gt: threeDaysLater }, status: 'near_expiry', ...tenantFilter },
             { $set: { status: 'available' } }
         );
-        const inventories = await Inventory.find()
+        const inventories = await Inventory.find(tenantFilter)
             .populate('ingredientId', 'category minStockAlert standardPrice')
             .sort({ createdAt: -1, _id: -1 });
         res.json({ success: true, count: inventories.length, data: inventories });
@@ -851,7 +882,7 @@ const disposeInventoryLot = async (req, res) => {
     try {
         const { reason } = req.body;
         if (!String(reason || '').trim()) return res.status(400).json({ message: 'Vui lòng ghi lý do xử lý hàng hết hạn/hư hỏng' });
-        const lot = await Inventory.findById(req.params.id);
+        const lot = await Inventory.findOne({ _id: req.params.id, ...buildTenantFilter(req) });
         if (!lot) return res.status(404).json({ message: 'Không tìm thấy lô hàng' });
         if (lot.quantity <= 0 || ['depleted', 'disposed'].includes(lot.status)) {
             return res.status(409).json({ message: 'Lô hàng này đã được xử lý hoặc không còn số lượng tồn' });
@@ -862,6 +893,7 @@ const disposeInventoryLot = async (req, res) => {
         lot.status = 'disposed';
         await lot.save();
         await InventoryTransaction.create({
+            tenantId: req.tenantId || req.user?.tenantId,
             type: 'spoilage',
             ingredientId: lot.ingredientId,
             ingredientName: lot.ingredientName,
@@ -898,7 +930,7 @@ const reconcileInventoryLot = async (req, res) => {
         if (!Number.isFinite(actualQuantity) || actualQuantity < 0) {
             return res.status(400).json({ message: 'Số lượng kiểm kê thực tế phải là số không âm' });
         }
-        const lot = await Inventory.findById(req.params.id);
+        const lot = await Inventory.findOne({ _id: req.params.id, ...buildTenantFilter(req) });
         if (!lot) return res.status(404).json({ message: 'Không tìm thấy lô hàng' });
         if (lot.status === 'disposed') return res.status(422).json({ message: 'Lô hàng đã xử lý hủy, không thể kiểm kê lại' });
         if (actualQuantity > 0 && lot.expiryDate < getTodayStart()) {
@@ -911,6 +943,7 @@ const reconcileInventoryLot = async (req, res) => {
         lot.status = actualQuantity === 0 ? 'depleted' : 'available';
         await lot.save();
         const reconciliation = await InventoryReconciliation.create({
+            tenantId: req.tenantId || req.user?.tenantId,
             inventoryId: lot._id,
             ingredientId: lot.ingredientId,
             ingredientName: lot.ingredientName,
@@ -925,6 +958,7 @@ const reconcileInventoryLot = async (req, res) => {
         });
         if (difference !== 0) {
             await InventoryTransaction.create({
+                tenantId: req.tenantId || req.user?.tenantId,
                 type: 'adjustment', ingredientId: lot.ingredientId, ingredientName: lot.ingredientName,
                 batchNumber: lot.batchNumber, quantity: difference, unit: lot.unit,
                 costPerUnit: lot.costPerUnit || 0, totalAmount: difference * (lot.costPerUnit || 0),
@@ -940,7 +974,7 @@ const reconcileInventoryLot = async (req, res) => {
 
 const getInventoryReconciliations = async (req, res) => {
     try {
-        const records = await InventoryReconciliation.find().sort({ createdAt: -1 }).limit(100);
+        const records = await InventoryReconciliation.find(buildTenantFilter(req)).sort({ createdAt: -1 }).limit(100);
         res.json({ success: true, count: records.length, data: records });
     } catch (err) {
         res.status(500).json({ message: 'Không thể tải lịch sử kiểm kê' });
@@ -972,7 +1006,7 @@ const exportStock = async (req, res) => {
 
 const getInventoryAlertsController = async (req, res) => {
     try {
-        const alerts = await fetchInventoryAlerts();
+        const alerts = await fetchInventoryAlerts(req.tenantId || req.user?.tenantId);
         res.json({ success: true, data: alerts });
     } catch (err) {
         res.status(500).json({ message: 'Lỗi tải cảnh báo tồn kho' });
@@ -982,7 +1016,7 @@ const getInventoryAlertsController = async (req, res) => {
 const getTransactions = async (req, res) => {
     try {
         const { type, startDate, endDate } = req.query;
-        const query = {};
+        const query = { ...buildTenantFilter(req) };
         if (type) query.type = type;
         if (startDate || endDate) {
             const rangeStart = startDate || endDate;
@@ -1008,7 +1042,7 @@ const getTransactions = async (req, res) => {
 
 const getSuppliers = async (req, res) => {
     try {
-        const suppliers = await Supplier.find().sort({ name: 1 });
+        const suppliers = await Supplier.find(buildTenantFilter(req)).sort({ name: 1 });
         res.json({ success: true, count: suppliers.length, data: suppliers });
     } catch (err) {
         res.status(500).json({ message: 'Không thể lấy danh sách nhà cung cấp' });
@@ -1017,7 +1051,10 @@ const getSuppliers = async (req, res) => {
 
 const createSupplier = async (req, res) => {
     try {
-        const supplier = await Supplier.create(req.body);
+        const supplier = await Supplier.create({
+            ...req.body,
+            tenantId: req.tenantId || req.user?.tenantId
+        });
         res.status(201).json({ success: true, message: 'Đã thêm nhà cung cấp mới', data: supplier });
     } catch (err) {
         res.status(400).json({ message: err.message || 'Không thể tạo nhà cung cấp' });
@@ -1026,7 +1063,7 @@ const createSupplier = async (req, res) => {
 
 const updateSupplier = async (req, res) => {
     try {
-        const supplier = await Supplier.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        const supplier = await Supplier.findOneAndUpdate({ _id: req.params.id, ...buildTenantFilter(req) }, req.body, { new: true });
         if (!supplier) return res.status(404).json({ message: 'Không tìm thấy nhà cung cấp' });
         res.json({ success: true, message: 'Cập nhật nhà cung cấp thành công', data: supplier });
     } catch (err) {
@@ -1040,7 +1077,7 @@ const updateSupplier = async (req, res) => {
 
 const getEquipments = async (req, res) => {
     try {
-        const equipments = await KitchenEquipment.find().sort({ condition: 1, name: 1 });
+        const equipments = await KitchenEquipment.find(buildTenantFilter(req)).sort({ condition: 1, name: 1 });
         res.json({ success: true, count: equipments.length, data: equipments });
     } catch (err) {
         res.status(500).json({ message: 'Không thể lấy danh sách thiết bị bếp' });
@@ -1049,7 +1086,10 @@ const getEquipments = async (req, res) => {
 
 const createEquipment = async (req, res) => {
     try {
-        const eq = await KitchenEquipment.create(req.body);
+        const eq = await KitchenEquipment.create({
+            ...req.body,
+            tenantId: req.tenantId || req.user?.tenantId
+        });
         res.status(201).json({ success: true, message: 'Đã thêm thiết bị nhà bếp mới', data: eq });
     } catch (err) {
         res.status(400).json({ message: err.message || 'Không thể tạo thiết bị bếp' });
@@ -1059,7 +1099,7 @@ const createEquipment = async (req, res) => {
 const logEquipmentMaintenance = async (req, res) => {
     try {
         const { description, cost, technician, notes, newCondition } = req.body;
-        const eq = await KitchenEquipment.findById(req.params.id);
+        const eq = await KitchenEquipment.findOne({ _id: req.params.id, ...buildTenantFilter(req) });
         if (!eq) return res.status(404).json({ message: 'Không tìm thấy thiết bị' });
 
         eq.maintenanceLogs.push({
@@ -1085,7 +1125,7 @@ const logEquipmentMaintenance = async (req, res) => {
 
 const getKitchenStaffList = async (req, res) => {
     try {
-        const staffList = await KitchenStaff.find().sort({ position: 1, fullName: 1 });
+        const staffList = await KitchenStaff.find(buildTenantFilter(req)).sort({ position: 1, fullName: 1 });
         res.json({ success: true, count: staffList.length, data: staffList });
     } catch (err) {
         res.status(500).json({ message: 'Không thể lấy danh sách nhân viên bếp' });
@@ -1094,7 +1134,10 @@ const getKitchenStaffList = async (req, res) => {
 
 const createKitchenStaff = async (req, res) => {
     try {
-        const staff = await KitchenStaff.create(req.body);
+        const staff = await KitchenStaff.create({
+            ...req.body,
+            tenantId: req.tenantId || req.user?.tenantId
+        });
         res.status(201).json({ success: true, message: 'Đã thêm nhân viên bếp mới', data: staff });
     } catch (err) {
         res.status(400).json({ message: err.message || 'Không thể tạo nhân viên bếp' });
@@ -1103,7 +1146,7 @@ const createKitchenStaff = async (req, res) => {
 
 const updateKitchenStaff = async (req, res) => {
     try {
-        const staff = await KitchenStaff.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        const staff = await KitchenStaff.findOneAndUpdate({ _id: req.params.id, ...buildTenantFilter(req) }, req.body, { new: true });
         if (!staff) return res.status(404).json({ message: 'Không tìm thấy nhân viên bếp' });
         res.json({ success: true, message: 'Cập nhật nhân viên bếp thành công', data: staff });
     } catch (err) {
@@ -1117,7 +1160,7 @@ const updateKitchenStaff = async (req, res) => {
 
 const getFoodSamples = async (req, res) => {
     try {
-        const samples = await FoodSample.find().sort({ mealDate: -1, createdAt: -1 }).limit(100);
+        const samples = await FoodSample.find(buildTenantFilter(req)).sort({ mealDate: -1, createdAt: -1 }).limit(100);
         res.json({ success: true, count: samples.length, data: samples });
     } catch (err) {
         res.status(500).json({ message: 'Không thể lấy sổ lưu mẫu thức ăn' });
@@ -1142,14 +1185,15 @@ const createFoodSample = async (req, res) => {
             || !Number.isFinite(temperature) || temperature < 2 || temperature > 8) {
             return res.status(400).json({ message: 'Mẫu đặc tối thiểu 100 g, mẫu lỏng tối thiểu 150 ml; nhiệt độ bảo quản 2–8°C' });
         }
-        const dishes = await expectedDishes(mealDate);
+        const dishes = await expectedDishes(mealDate, req);
         if (!dishes.expected[mealType].some((name) => name.toLocaleLowerCase('vi') === dishName.trim().toLocaleLowerCase('vi'))) {
             return res.status(409).json({ message: 'Món này không còn trong thực đơn đã công bố của bữa ăn. Hãy tải lại trang bếp.' });
         }
-        const existing = await FoodSample.exists({ mealDate: { $gte: startOfWorkDate(mealDate), $lt: startOfWorkDate(addWorkDays(mealDate, 1)) }, mealType, dishName: String(dishName).trim() });
+        const existing = await FoodSample.exists({ mealDate: { $gte: startOfWorkDate(mealDate), $lt: startOfWorkDate(addWorkDays(mealDate, 1)) }, mealType, dishName: String(dishName).trim(), ...buildTenantFilter(req) });
         if (existing) return res.status(409).json({ message: 'Món này đã có mẫu lưu trong bữa hôm nay' });
 
         const sample = await FoodSample.create({
+            tenantId: req.tenantId || req.user?.tenantId,
             sampleCode: String(sampleCode).trim().toUpperCase(),
             mealDate: new Date(mealDate),
             mealType,
@@ -1174,7 +1218,7 @@ const createFoodSample = async (req, res) => {
 const disposeFoodSample = async (req, res) => {
     try {
         const { status, notes } = req.body;
-        const sample = await FoodSample.findById(req.params.id);
+        const sample = await FoodSample.findOne({ _id: req.params.id, ...buildTenantFilter(req) });
         if (!sample) return res.status(404).json({ message: 'Không tìm thấy mẫu lưu' });
 
         if (sample.status !== 'stored') return res.status(409).json({ message: 'Mẫu này không còn ở trạng thái đang lưu' });
@@ -1197,7 +1241,7 @@ const disposeFoodSample = async (req, res) => {
 
 const getFoodInspections = async (req, res) => {
     try {
-        const inspections = await FoodInspection.find().sort({ mealDate: -1, createdAt: -1 }).limit(50);
+        const inspections = await FoodInspection.find(buildTenantFilter(req)).sort({ mealDate: -1, createdAt: -1 }).limit(50);
         res.json({ success: true, count: inspections.length, data: inspections });
     } catch (err) {
         res.status(500).json({ message: 'Không thể lấy sổ kiểm thực 3 bước' });
@@ -1215,7 +1259,7 @@ const createFoodInspection = async (req, res) => {
 const getDailyFinancialReport = async (req, res) => {
     try {
         const { date } = req.query;
-        const report = await calculateDailyMealReport(date);
+        const report = await calculateDailyMealReport(date, req.tenantId || req.user?.tenantId);
         res.json({ success: true, data: report });
     } catch (err) {
         console.error('Lỗi tính toán báo cáo tài chính nhà ăn:', err);
@@ -1229,7 +1273,7 @@ const getDailyServingPlan = async (req, res) => {
         const classroomIds = req.user.role === 'teacher'
             ? await getTeacherClassroomIds(req.user)
             : null;
-        const report = await calculateDailyServingPlan(date, classroomIds);
+        const report = await calculateDailyServingPlan(date, classroomIds, req.tenantId || req.user?.tenantId);
         res.json({ success: true, data: report });
     } catch (err) {
         console.error('Lỗi getDailyServingPlan:', err);
@@ -1240,7 +1284,7 @@ const getDailyServingPlan = async (req, res) => {
 const getKitchenRequests = async (req, res) => {
     try {
         const { status } = req.query;
-        const query = {};
+        const query = { ...buildTenantFilter(req) };
         if (status) query.status = status;
         const requests = await KitchenRequest.find(query).sort({ createdAt: -1 });
         res.json({ success: true, count: requests.length, data: requests });
@@ -1259,6 +1303,7 @@ const createKitchenRequest = async (req, res) => {
         const totalEstimatedCost = items.reduce((sum, it) => sum + (Number(it.estimatedCost) || 0), 0);
 
         const request = await KitchenRequest.create({
+            tenantId: req.tenantId || req.user?.tenantId,
             requestCode: String(requestCode).trim().toUpperCase(),
             requestType: requestType || 'ingredient_purchase',
             title,
@@ -1284,7 +1329,7 @@ const approveKitchenRequest = async (req, res) => {
             return res.status(400).json({ message: 'Trạng thái chỉ có thể là approved hoặc rejected' });
         }
 
-        const request = await KitchenRequest.findById(req.params.id);
+        const request = await KitchenRequest.findOne({ _id: req.params.id, ...buildTenantFilter(req) });
         if (!request) return res.status(404).json({ message: 'Không tìm thấy phiếu đề xuất' });
 
         request.status = status;
@@ -1299,11 +1344,29 @@ const approveKitchenRequest = async (req, res) => {
     }
 };
 
+const getKitchenClassrooms = async (req, res) => {
+    try {
+        const tenantFilter = buildTenantFilter(req);
+        const filter = { status: 'active', ...tenantFilter };
+        if (req.query.schoolYear?.trim()) {
+            filter.schoolYear = req.query.schoolYear.trim();
+        }
+        const classrooms = await Classroom.find(filter)
+            .select('_id name ageGroup schoolYear status')
+            .sort({ schoolYear: -1, name: 1 })
+            .lean();
+        return res.json({ success: true, data: classrooms, count: classrooms.length });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message || 'Lỗi lấy danh sách lớp cho nhà bếp' });
+    }
+};
+
 module.exports = {
     // Menu
     getMenus,
     getMenuById,
     getClassroomDietaryAlerts,
+    getKitchenClassrooms,
     createMenu,
     updateMenu,
     submitMenuForApproval,
@@ -1314,6 +1377,7 @@ module.exports = {
     checkAllergiesDryRun,
     // Dishes & Ingredients
     getDishes,
+    getDishById,
     createDish,
     updateDish,
     deleteDish,

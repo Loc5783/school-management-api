@@ -6,9 +6,15 @@ const Student = require('../models/zone3_school/Student');
 const Classroom = require('../models/zone3_school/Classroom');
 const {
     canAccessStudent,
+    canAccessStudentAsync,
     isParent,
     isValidStudentId
 } = require('../services/studentAccessService');
+const {
+    assertTenantContext,
+    buildTenantFilter,
+    resolveTenantContext
+} = require('../services/tenantFilterService');
 const {
     canAccessClassroom,
     getTeacherClassroomIds,
@@ -52,16 +58,18 @@ const getWeekdayDateKeys = (startDate, endDate) => {
     return dates;
 };
 
-const canReadLeaveRequests = async (user, classroomId) => (
+const canReadLeaveRequests = async (user, classroomId, context) => (
     SCHOOL_WIDE_ATTENDANCE_ROLES.has(user?.role)
-    || (user?.role === 'teacher' && await canAccessClassroom(user, classroomId))
+    || (user?.role === 'teacher' && await canAccessClassroom(user, classroomId, context))
 );
 
 const attendanceStatusText = { present: 'có mặt', late: 'đi muộn', absent: 'vắng mặt', absent_permission: 'nghỉ có phép' };
-const notifyParentsOfAttendance = async (attendance, actorId) => {
+const notifyParentsOfAttendance = async (attendance, actorId, context) => {
     if (!attendance?._id || !attendance?.studentId) return;
+    const tenantFilter = buildTenantFilter(context || { user: { _id: actorId } });
     const parents = await User.find({
-        role: 'parent', status: 'active', 'parentInfo.studentIds': attendance.studentId
+        role: 'parent', status: 'active', 'parentInfo.studentIds': attendance.studentId,
+        ...tenantFilter
     }).select('_id').lean();
     if (!parents.length) return;
     const statusText = attendanceStatusText[attendance.status] || attendance.status;
@@ -82,6 +90,9 @@ const notifyParentsOfAttendance = async (attendance, actorId) => {
 // Check-in tự động bằng mã thẻ hoặc mã hồ sơ khuôn mặt từ thiết bị/dịch vụ nhận diện.
 const automaticCheckIn = async (req, res) => {
     try {
+        const tenantContext = assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req);
+
         const { identifier, method } = req.body;
         if (!identifier || !['card', 'face'].includes(method)) {
             return res.status(400).json({ message: 'Cần gửi identifier và method là card hoặc face' });
@@ -89,16 +100,21 @@ const automaticCheckIn = async (req, res) => {
 
         const field = method === 'card' ? 'attendanceCardId' : 'faceProfileId';
         const value = method === 'card' ? String(identifier).trim().toUpperCase() : String(identifier).trim();
-        const student = await Student.findOne({ [field]: value, status: 'enrolled' });
+        const student = await Student.findOne({ [field]: value, status: 'enrolled', ...tenantFilter });
         if (!student) {
             return res.status(404).json({ message: 'Không tìm thấy học sinh đã đăng ký thông tin điểm danh này' });
+        }
+
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, student.classroomId, req)) {
+            return res.status(403).json({ message: 'Bạn không có quyền điểm danh học sinh ngoài lớp được phân công' });
         }
 
         const workDate = getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE);
         const { start, end } = getWorkDateRange(workDate, DEFAULT_SCHOOL_TIMEZONE);
         const existing = await StudentAttendance.findOne({
             studentId: student._id,
-            attendDate: { $gte: start, $lt: end }
+            attendDate: { $gte: start, $lt: end },
+            ...tenantFilter
         });
         if (existing) {
             return res.status(200).json({
@@ -108,12 +124,13 @@ const automaticCheckIn = async (req, res) => {
             });
         }
 
-        const classroom = await Classroom.findById(student.classroomId);
+        const classroom = await Classroom.findOne({ _id: student.classroomId, ...tenantFilter });
         if (!classroom) {
             return res.status(404).json({ message: 'Không tìm thấy lớp học của học sinh' });
         }
 
         const attendance = await StudentAttendance.create({
+            tenantId: tenantContext.tenantId || null,
             studentId: student._id,
             studentName: student.fullName,
             classroomId: student.classroomId,
@@ -124,9 +141,9 @@ const automaticCheckIn = async (req, res) => {
             checkInTime: new Date(),
             attendanceMethod: method,
             recordedBy: req.user._id,
-            recordedByName: req.user.profile.fullName
+            recordedByName: req.user.profile?.fullName || req.user.username
         });
-        await notifyParentsOfAttendance(attendance, req.user._id);
+        await notifyParentsOfAttendance(attendance, req.user._id, req);
 
         return res.status(201).json({
             message: `Đã điểm danh ${student.fullName}`,
@@ -137,6 +154,9 @@ const automaticCheckIn = async (req, res) => {
         if (isDuplicateKeyError(err)) {
             return res.status(409).json({ message: 'Học sinh đã có bản ghi điểm danh trong ngày' });
         }
+        if (err.statusCode) {
+            return res.status(err.statusCode).json({ message: err.message, success: false });
+        }
         console.error(err);
         return res.status(500).json({ message: 'Không thể xử lý điểm danh tự động' });
     }
@@ -145,24 +165,27 @@ const automaticCheckIn = async (req, res) => {
 // Điểm danh một học sinh
 const createAttendance = async (req, res) => {
     try {
+        const tenantContext = assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req);
+
         const { studentId, status, checkInTime, checkOutTime, pickerName, note } = req.body;
 
         if (!isValidStudentId(studentId)) {
             return res.status(400).json({ message: 'ID học sinh không hợp lệ' });
         }
 
-        // Kiểm tra học sinh tồn tại
-        const student = await Student.findById(studentId);
+        // Kiểm tra học sinh tồn tại trong đúng tenant
+        const student = await Student.findOne({ _id: studentId, ...tenantFilter });
         if (!student) {
             return res.status(404).json({ message: 'Không tìm thấy học sinh' });
         }
 
-        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, student.classroomId)) {
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, student.classroomId, req)) {
             return res.status(403).json({ message: 'Bạn không có quyền điểm danh học sinh ngoài lớp được phân công' });
         }
 
-        // Lấy classroom
-        const classroom = await Classroom.findById(student.classroomId);
+        // Lấy classroom trong đúng tenant
+        const classroom = await Classroom.findOne({ _id: student.classroomId, ...tenantFilter });
         if (!classroom) {
             return res.status(404).json({ message: 'Không tìm thấy lớp học' });
         }
@@ -171,7 +194,8 @@ const createAttendance = async (req, res) => {
         const { start, end } = getWorkDateRange(workDate, DEFAULT_SCHOOL_TIMEZONE);
         const existing = await StudentAttendance.findOne({
             studentId: student._id,
-            attendDate: { $gte: start, $lt: end }
+            attendDate: { $gte: start, $lt: end },
+            ...tenantFilter
         });
         if (existing) {
             return res.status(409).json({ message: 'Học sinh đã có bản ghi điểm danh hôm nay', data: existing });
@@ -179,6 +203,7 @@ const createAttendance = async (req, res) => {
 
         // Tạo bản ghi điểm danh
         const attendance = new StudentAttendance({
+            tenantId: tenantContext.tenantId || null,
             studentId,
             studentName: student.fullName,
             classroomId: student.classroomId,
@@ -192,11 +217,11 @@ const createAttendance = async (req, res) => {
             pickerName,
             note,
             recordedBy: req.user._id,
-            recordedByName: req.user.profile.fullName
+            recordedByName: req.user.profile?.fullName || req.user.username
         });
 
         await attendance.save();
-        await notifyParentsOfAttendance(attendance, req.user._id);
+        await notifyParentsOfAttendance(attendance, req.user._id, req);
 
         res.status(201).json({
             message: 'Điểm danh thành công',
@@ -206,6 +231,9 @@ const createAttendance = async (req, res) => {
         if (isDuplicateKeyError(err)) {
             return res.status(409).json({ message: 'Học sinh đã có bản ghi điểm danh trong ngày' });
         }
+        if (err.statusCode) {
+            return res.status(err.statusCode).json({ message: err.message, success: false });
+        }
         console.error(err);
         res.status(500).json({ message: 'Lỗi server' });
     }
@@ -214,6 +242,9 @@ const createAttendance = async (req, res) => {
 // Điểm danh nhiều học sinh cùng lúc (theo lớp)
 const createBulkAttendance = async (req, res) => {
     try {
+        const tenantContext = assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req);
+
         const { classroomId, attendDate, records } = req.body;
         // records: [{ studentId, status, checkInTime, note }]
 
@@ -232,13 +263,13 @@ const createBulkAttendance = async (req, res) => {
             return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
         }
 
-        // Kiểm tra lớp
-        const classroom = await Classroom.findById(classroomId);
+        // Kiểm tra lớp thuộc tenant
+        const classroom = await Classroom.findOne({ _id: classroomId, ...tenantFilter });
         if (!classroom) {
             return res.status(404).json({ message: 'Không tìm thấy lớp học' });
         }
 
-        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, classroomId)) {
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, classroomId, req)) {
             return res.status(403).json({ message: 'Bạn không có quyền điểm danh lớp này' });
         }
 
@@ -255,7 +286,8 @@ const createBulkAttendance = async (req, res) => {
         const students = await Student.find({
             _id: { $in: uniqueStudentIds },
             classroomId,
-            status: 'enrolled'
+            status: 'enrolled',
+            ...tenantFilter
         }).select('fullName classroomId');
 
         if (students.length !== uniqueStudentIds.length) {
@@ -265,7 +297,8 @@ const createBulkAttendance = async (req, res) => {
         const { start: workDateStart, end: workDateEnd } = getWorkDateRange(workDate, DEFAULT_SCHOOL_TIMEZONE);
         const existingRecords = await StudentAttendance.find({
             studentId: { $in: uniqueStudentIds },
-            attendDate: { $gte: workDateStart, $lt: workDateEnd }
+            attendDate: { $gte: workDateStart, $lt: workDateEnd },
+            ...tenantFilter
         }).select('studentId');
         const existingStudentIds = new Set(existingRecords.map((record) => record.studentId.toString()));
         const studentsById = new Map(students.map((student) => [student._id.toString(), student]));
@@ -274,6 +307,7 @@ const createBulkAttendance = async (req, res) => {
             .map((record) => {
                 const student = studentsById.get(record.studentId.toString());
                 return {
+                    tenantId: tenantContext.tenantId || null,
                     studentId: student._id,
                     studentName: student.fullName,
                     classroomId: student.classroomId,
@@ -284,7 +318,7 @@ const createBulkAttendance = async (req, res) => {
                     checkInTime: record.checkInTime,
                     note: record.note,
                     recordedBy: req.user._id,
-                    recordedByName: req.user.profile.fullName
+                    recordedByName: req.user.profile?.fullName || req.user.username
                 };
             });
 
@@ -293,7 +327,7 @@ const createBulkAttendance = async (req, res) => {
         }
 
         const result = await StudentAttendance.insertMany(attendanceRecords);
-        await Promise.all(result.map((attendance) => notifyParentsOfAttendance(attendance, req.user._id)));
+        await Promise.all(result.map((attendance) => notifyParentsOfAttendance(attendance, req.user._id, req)));
 
         res.status(201).json({
             message: `Điểm danh thành công ${result.length} học sinh`,
@@ -303,6 +337,9 @@ const createBulkAttendance = async (req, res) => {
         if (isDuplicateKeyError(err)) {
             return res.status(409).json({ message: 'Bản ghi điểm danh đã được tạo bởi một yêu cầu khác' });
         }
+        if (err.statusCode) {
+            return res.status(err.statusCode).json({ message: err.message, success: false });
+        }
         console.error(err);
         res.status(500).json({ message: 'Lỗi server' });
     }
@@ -311,6 +348,9 @@ const createBulkAttendance = async (req, res) => {
 // Lấy danh sách điểm danh theo học sinh
 const getAttendanceByStudent = async (req, res) => {
     try {
+        const tenantContext = assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req);
+
         const { studentId } = req.params;
         const { startDate, endDate } = req.query;
 
@@ -318,17 +358,21 @@ const getAttendanceByStudent = async (req, res) => {
             return res.status(400).json({ message: 'ID học sinh không hợp lệ' });
         }
 
-        // This check intentionally happens before querying StudentAttendance.
-        if (isParent(req.user) && !canAccessStudent(req.user, studentId)) {
-            return res.status(403).json({ message: 'Bạn không có quyền xem dữ liệu điểm danh của học sinh này' });
+        // Kiểm tra học sinh trong đúng tenant
+        const student = await Student.findOne({ _id: studentId, ...tenantFilter }).select('classroomId tenantId fullName');
+        if (!student) {
+            return res.status(404).json({ message: 'Không tìm thấy học sinh' });
         }
 
-        if (req.user.role === 'teacher') {
-            const student = await Student.findById(studentId).select('classroomId');
-            if (!student || !await canAccessClassroom(req.user, student.classroomId)) {
+        if (isParent(req.user)) {
+            if (!canAccessStudent(req.user, student, req)) {
                 return res.status(403).json({ message: 'Bạn không có quyền xem dữ liệu điểm danh của học sinh này' });
             }
-        } else if (!isParent(req.user) && !hasSchoolWideReadAccess(req.user)) {
+        } else if (req.user.role === 'teacher') {
+            if (!await canAccessClassroom(req.user, student.classroomId, req)) {
+                return res.status(403).json({ message: 'Bạn không có quyền xem dữ liệu điểm danh của học sinh này' });
+            }
+        } else if (!hasSchoolWideReadAccess(req.user)) {
             return res.status(403).json({ message: 'Bạn không có quyền xem dữ liệu điểm danh' });
         }
 
@@ -338,7 +382,7 @@ const getAttendanceByStudent = async (req, res) => {
             return res.status(400).json({ message: 'startDate và endDate phải là ngày hợp lệ' });
         }
 
-        const filter = { studentId };
+        const filter = { studentId: student._id, ...tenantFilter };
         if (startWorkDate || endWorkDate) {
             filter.attendDate = {};
             if (startWorkDate) filter.attendDate.$gte = getWorkDateRange(startWorkDate, DEFAULT_SCHOOL_TIMEZONE).start;
@@ -354,6 +398,9 @@ const getAttendanceByStudent = async (req, res) => {
             data: records
         });
     } catch (err) {
+        if (err.statusCode) {
+            return res.status(err.statusCode).json({ message: err.message, success: false });
+        }
         console.error(err);
         res.status(500).json({ message: 'Lỗi server' });
     }
@@ -362,6 +409,9 @@ const getAttendanceByStudent = async (req, res) => {
 // Lấy danh sách điểm danh theo lớp (theo ngày)
 const getAttendanceByClass = async (req, res) => {
     try {
+        const tenantContext = assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req);
+
         if (isParent(req.user)) {
             return res.status(403).json({ message: 'Phụ huynh không có quyền xem điểm danh theo lớp' });
         }
@@ -373,7 +423,12 @@ const getAttendanceByClass = async (req, res) => {
             return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
         }
 
-        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, classroomId)) {
+        const classroom = await Classroom.findOne({ _id: classroomId, ...tenantFilter });
+        if (!classroom) {
+            return res.status(404).json({ message: 'Không tìm thấy lớp học' });
+        }
+
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, classroomId, req)) {
             return res.status(403).json({ message: 'Bạn không có quyền xem điểm danh lớp này' });
         }
 
@@ -381,7 +436,7 @@ const getAttendanceByClass = async (req, res) => {
             return res.status(403).json({ message: 'Bạn không có quyền xem dữ liệu điểm danh' });
         }
 
-        const filter = { classroomId };
+        const filter = { classroomId: classroom._id, ...tenantFilter };
         if (date) {
             const workDate = parseWorkDate(date);
             if (!workDate) {
@@ -402,6 +457,9 @@ const getAttendanceByClass = async (req, res) => {
             data: records
         });
     } catch (err) {
+        if (err.statusCode) {
+            return res.status(err.statusCode).json({ message: err.message, success: false });
+        }
         console.error(err);
         res.status(500).json({ message: 'Lỗi server' });
     }
@@ -410,16 +468,19 @@ const getAttendanceByClass = async (req, res) => {
 // Cập nhật bản ghi điểm danh
 const updateAttendance = async (req, res) => {
     try {
+        const tenantContext = assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req);
+
         const { id } = req.params;
         if (!isValidObjectId(id)) {
             return res.status(400).json({ message: 'ID không hợp lệ' });
         }
-        const record = await StudentAttendance.findById(id);
+        const record = await StudentAttendance.findOne({ _id: id, ...tenantFilter });
         if (!record) {
             return res.status(404).json({ message: 'Không tìm thấy bản ghi điểm danh' });
         }
 
-        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, record.classroomId)) {
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, record.classroomId, req)) {
             return res.status(403).json({ message: 'Bạn không có quyền cập nhật điểm danh lớp này' });
         }
 
@@ -434,18 +495,27 @@ const updateAttendance = async (req, res) => {
             return res.status(400).json({ message: 'Không có trường điểm danh hợp lệ để cập nhật' });
         }
 
-        const updatedRecord = await StudentAttendance.findByIdAndUpdate(
-            id,
+        const updatedRecord = await StudentAttendance.findOneAndUpdate(
+            { _id: id, ...tenantFilter },
             { $set: updates },
             { returnDocument: 'after', runValidators: true }
         );
-        if (updates.status && updates.status !== record.status) await notifyParentsOfAttendance(updatedRecord, req.user._id);
+        if (!updatedRecord) {
+            return res.status(404).json({ message: 'Không tìm thấy bản ghi điểm danh' });
+        }
+
+        if (updates.status && updates.status !== record.status) {
+            await notifyParentsOfAttendance(updatedRecord, req.user._id, req);
+        }
 
         res.json({
             message: 'Cập nhật điểm danh thành công',
             data: updatedRecord
         });
     } catch (err) {
+        if (err.statusCode) {
+            return res.status(err.statusCode).json({ message: err.message, success: false });
+        }
         console.error(err);
         res.status(500).json({ message: 'Lỗi server' });
     }
@@ -454,16 +524,22 @@ const updateAttendance = async (req, res) => {
 // Xóa bản ghi điểm danh
 const deleteAttendance = async (req, res) => {
     try {
+        const tenantContext = assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req);
+
         const { id } = req.params;
         if (!isValidObjectId(id)) {
             return res.status(400).json({ message: 'ID không hợp lệ' });
         }
-        const record = await StudentAttendance.findByIdAndDelete(id);
+        const record = await StudentAttendance.findOneAndDelete({ _id: id, ...tenantFilter });
         if (!record) {
             return res.status(404).json({ message: 'Không tìm thấy bản ghi điểm danh' });
         }
         res.json({ message: 'Xóa điểm danh thành công' });
     } catch (err) {
+        if (err.statusCode) {
+            return res.status(err.statusCode).json({ message: err.message, success: false });
+        }
         console.error(err);
         res.status(500).json({ message: 'Lỗi server' });
     }
@@ -472,6 +548,9 @@ const deleteAttendance = async (req, res) => {
 // Phụ huynh chỉ được tạo đơn cho học sinh đã liên kết với tài khoản của mình.
 const createLeaveRequest = async (req, res) => {
     try {
+        const tenantContext = assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req);
+
         const { studentId, startDate, endDate, reason } = req.body;
         if (!isParent(req.user)) {
             return res.status(403).json({ success: false, message: 'Chỉ phụ huynh có thể gửi đơn xin nghỉ trên cổng này' });
@@ -493,23 +572,36 @@ const createLeaveRequest = async (req, res) => {
         if (typeof reason !== 'string' || reason.trim().length < 5 || reason.trim().length > 1000) {
             return res.status(400).json({ success: false, message: 'Lý do xin nghỉ cần từ 5 đến 1000 ký tự' });
         }
-        if (!canAccessStudent(req.user, studentId)) {
+
+        // Kiểm tra học sinh trong đúng tenant
+        const student = await Student.findOne({ _id: studentId, ...tenantFilter })
+            .select('fullName classroomId className status tenantId');
+        if (!student) {
+            return res.status(404).json({ success: false, message: 'Không tìm thấy học sinh' });
+        }
+
+        // Kiểm tra liên kết phụ huynh trong tenant
+        if (!canAccessStudent(req.user, student, req)) {
             return res.status(403).json({ success: false, message: 'Bạn không có quyền gửi đơn cho học sinh này' });
         }
-        const student = await Student.findById(studentId).select('fullName classroomId className status');
-        if (!student || student.status !== 'enrolled') {
+
+        if (student.status !== 'enrolled') {
             return res.status(422).json({ success: false, message: 'Chỉ học sinh đang theo học mới có thể gửi đơn xin nghỉ' });
         }
+
         const overlap = await StudentLeaveRequest.exists({
-            studentId,
+            studentId: student._id,
             status: { $in: ['pending', 'approved'] },
             startDate: { $lte: end },
-            endDate: { $gte: start }
+            endDate: { $gte: start },
+            ...tenantFilter
         });
         if (overlap) {
             return res.status(409).json({ success: false, message: 'Đã có đơn chờ duyệt hoặc được duyệt trong khoảng ngày này' });
         }
+
         const request = await StudentLeaveRequest.create({
+            tenantId: tenantContext.tenantId || null,
             studentId: student._id,
             studentName: student.fullName,
             classroomId: student.classroomId,
@@ -522,6 +614,9 @@ const createLeaveRequest = async (req, res) => {
         });
         return res.status(201).json({ success: true, message: 'Đã gửi đơn xin nghỉ đến nhà trường', data: request });
     } catch (err) {
+        if (err.statusCode) {
+            return res.status(err.statusCode).json({ success: false, message: err.message });
+        }
         console.error(err);
         return res.status(500).json({ success: false, message: 'Không thể gửi đơn xin nghỉ' });
     }
@@ -529,18 +624,21 @@ const createLeaveRequest = async (req, res) => {
 
 const getLeaveRequests = async (req, res) => {
     try {
+        const tenantContext = assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req);
+
         const status = req.query.status;
         if (status && !['pending', 'approved', 'rejected', 'cancelled'].includes(status)) {
             return res.status(400).json({ success: false, message: 'Trạng thái đơn không hợp lệ' });
         }
-        let filter;
+        let filter = { ...tenantFilter };
         if (isParent(req.user)) {
-            filter = { requesterId: req.user._id };
+            filter.requesterId = req.user._id;
         } else if (SCHOOL_WIDE_ATTENDANCE_ROLES.has(req.user.role)) {
-            filter = {};
+            // school-wide within tenant
         } else if (req.user.role === 'teacher') {
-            const classroomIds = await getTeacherClassroomIds(req.user);
-            filter = { classroomId: { $in: classroomIds } };
+            const classroomIds = await getTeacherClassroomIds(req.user, req);
+            filter.classroomId = { $in: classroomIds };
         } else {
             return res.status(403).json({ success: false, message: 'Bạn không có quyền xem đơn xin nghỉ' });
         }
@@ -548,6 +646,9 @@ const getLeaveRequests = async (req, res) => {
         const data = await StudentLeaveRequest.find(filter).sort({ createdAt: -1 }).limit(100);
         return res.json({ success: true, data });
     } catch (err) {
+        if (err.statusCode) {
+            return res.status(err.statusCode).json({ success: false, message: err.message });
+        }
         console.error(err);
         return res.status(500).json({ success: false, message: 'Không thể lấy danh sách đơn xin nghỉ' });
     }
@@ -555,6 +656,9 @@ const getLeaveRequests = async (req, res) => {
 
 const reviewLeaveRequest = async (req, res) => {
     try {
+        const tenantContext = assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req);
+
         const { id } = req.params;
         const { decision, reviewNote = '' } = req.body;
         if (!SCHOOL_WIDE_ATTENDANCE_ROLES.has(req.user.role)) {
@@ -567,7 +671,7 @@ const reviewLeaveRequest = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Ghi chú phản hồi tối đa 500 ký tự' });
         }
         const reviewed = await runStudentTransaction(async (session) => {
-            const request = await StudentLeaveRequest.findById(id).session(session);
+            const request = await StudentLeaveRequest.findOne({ _id: id, ...tenantFilter }).session(session);
             if (!request) {
                 const error = new Error('Không tìm thấy đơn xin nghỉ'); error.statusCode = 404; throw error;
             }
@@ -578,7 +682,8 @@ const reviewLeaveRequest = async (req, res) => {
                 const dates = getWeekdayDateKeys(request.startDate, request.endDate);
                 const existing = dates.length ? await StudentAttendance.find({
                     studentId: request.studentId,
-                    attendanceDateKey: { $in: dates }
+                    attendanceDateKey: { $in: dates },
+                    ...tenantFilter
                 }).session(session).select('attendanceDateKey') : [];
                 if (existing.length) {
                     const error = new Error(`Không thể duyệt vì đã có điểm danh vào ngày ${existing[0].attendanceDateKey}`);
@@ -587,6 +692,7 @@ const reviewLeaveRequest = async (req, res) => {
                 }
                 if (dates.length) {
                     await StudentAttendance.insertMany(dates.map((dateKey) => ({
+                        tenantId: tenantContext.tenantId || null,
                         studentId: request.studentId,
                         studentName: request.studentName,
                         classroomId: request.classroomId,
@@ -625,6 +731,9 @@ const reviewLeaveRequest = async (req, res) => {
 
 const getAbsenceReport = async (req, res) => {
     try {
+        const tenantContext = assertTenantContext(req);
+        const tenantFilter = buildTenantFilter(req);
+
         if (isParent(req.user) || !['teacher', 'admin', 'principal'].includes(req.user.role)) {
             return res.status(403).json({ success: false, message: 'Bạn không có quyền xem báo cáo vắng mặt' });
         }
@@ -635,14 +744,22 @@ const getAbsenceReport = async (req, res) => {
         }
         const filter = {
             attendDate: { $gte: getWorkDateRange(startDate, DEFAULT_SCHOOL_TIMEZONE).start, $lt: getWorkDateRange(endDate, DEFAULT_SCHOOL_TIMEZONE).end },
-            status: { $in: ['absent', 'absent_permission', 'late'] }
+            status: { $in: ['absent', 'absent_permission', 'late'] },
+            ...tenantFilter
         };
         if (req.query.classroomId) {
             if (!isValidObjectId(req.query.classroomId)) return res.status(400).json({ success: false, message: 'ID lớp học không hợp lệ' });
-            if (!await canReadLeaveRequests(req.user, req.query.classroomId)) return res.status(403).json({ success: false, message: 'Bạn không có quyền xem lớp này' });
-            filter.classroomId = req.query.classroomId;
+            const classroom = await Classroom.findOne({ _id: req.query.classroomId, ...tenantFilter });
+            if (!classroom) {
+                return res.status(404).json({ success: false, message: 'Không tìm thấy lớp học' });
+            }
+            if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, classroom._id, req)) {
+                return res.status(403).json({ success: false, message: 'Bạn không có quyền xem lớp này' });
+            }
+            filter.classroomId = classroom._id;
         } else if (req.user.role === 'teacher') {
-            filter.classroomId = { $in: await getTeacherClassroomIds(req.user) };
+            const teacherClassroomIds = await getTeacherClassroomIds(req.user, req);
+            filter.classroomId = { $in: teacherClassroomIds };
         }
         const records = await StudentAttendance.find(filter).sort({ attendDate: -1, studentName: 1 }).lean();
         const summary = new Map();
@@ -656,6 +773,9 @@ const getAbsenceReport = async (req, res) => {
         });
         return res.json({ success: true, data: { startDate, endDate, totals: { absent: records.filter((r) => r.status === 'absent').length, permitted: records.filter((r) => r.status === 'absent_permission').length, late: records.filter((r) => r.status === 'late').length }, students: [...summary.values()].sort((a, b) => b.total - a.total || a.studentName.localeCompare(b.studentName, 'vi')), records } });
     } catch (err) {
+        if (err.statusCode) {
+            return res.status(err.statusCode).json({ success: false, message: err.message });
+        }
         console.error(err);
         return res.status(500).json({ success: false, message: 'Không thể lập báo cáo vắng mặt' });
     }
