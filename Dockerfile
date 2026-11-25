@@ -24,6 +24,7 @@ FROM node:22-alpine AS production
 RUN apk add --no-cache tzdata
 ENV TZ=Asia/Ho_Chi_Minh \
     NODE_ENV=production \
+    RUNNING_IN_DOCKER=true \
     PORT=5000 \
     HOST=0.0.0.0 \
     FRONTEND_DIST_PATH=/app/public
@@ -31,7 +32,7 @@ ENV TZ=Asia/Ho_Chi_Minh \
 WORKDIR /app
 
 COPY --chown=node:node --from=backend-deps /build/backend/node_modules ./node_modules
-COPY --chown=node:node backend/package*.json backend/server.js backend/app.js ./
+COPY --chown=node:node backend/package*.json backend/.env.example backend/server.js backend/app.js ./
 COPY --chown=node:node backend/src ./src
 COPY --chown=node:node backend/docker-entrypoint.sh ./docker-entrypoint.sh
 

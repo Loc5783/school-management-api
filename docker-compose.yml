@@ -33,7 +33,7 @@ services:
       - school-net
 
   # ============================================================================
-  # 2. BACKEND HỢP NHẤT (Đọc biến trực tiếp từ `backend/.env` & `frontend/.env`)
+  # 2. BACKEND HỢP NHẤT (Tự nạp `backend/.env` hoặc fallback `backend/.env.example`)
   # ============================================================================
   backend:
     build:
@@ -48,11 +48,13 @@ services:
       mongodb:
         condition: service_healthy
     env_file:
+      - path: ./backend/.env.example
+        required: false
       - path: ./backend/.env
         required: false
     environment:
-      # Chỉ định các thông số mạng nội bộ Container (mọi cấu hình nghiệp vụ khác đọc từ backend/.env)
       NODE_ENV: production
+      RUNNING_IN_DOCKER: "true"
       PORT: 5000
       HOST: 0.0.0.0
       FRONTEND_DIST_PATH: /app/public

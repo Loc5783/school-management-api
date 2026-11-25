@@ -12,7 +12,7 @@
  *    Nếu đã có dữ liệu (từ lần chạy trước hoặc bản sao lưu), tuyệt đối giữ nguyên không ghi đè.
  */
 
-require('dotenv').config();
+require('../config/loadEnv');
 
 const path = require('path');
 const { execFileSync } = require('child_process');

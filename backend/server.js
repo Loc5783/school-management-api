@@ -6,7 +6,7 @@
  * hỗ trợ đăng nhập theo mã trường (`HOANANG-A`, `HOANANG-B`) cũng như nhận Webhook máy chấm công Hikvision.
  */
 
-require('dotenv').config();
+require('./src/config/loadEnv');
 
 const os = require('os');
 const mongoose = require('mongoose');

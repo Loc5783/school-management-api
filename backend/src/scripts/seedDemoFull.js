@@ -15,7 +15,7 @@
  *    Thực đơn - Kho bếp, Mua sắm - Tài sản.
  */
 
-require('dotenv').config();
+require('../config/loadEnv');
 const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
 const connectDB = require('../config/database');
