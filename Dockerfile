@@ -37,7 +37,6 @@ WORKDIR /app
 COPY --from=backend-deps /build/backend/node_modules ./node_modules
 COPY backend/package*.json backend/server.js backend/app.js ./
 COPY backend/src ./src
-COPY backend/scripts ./scripts
 COPY backend/docker-entrypoint.sh ./docker-entrypoint.sh
 
 # Nhúng toàn bộ bản build Production của Frontend vào /app/public để Express phục vụ trực tiếp

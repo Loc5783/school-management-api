@@ -65,17 +65,7 @@ docker compose logs -f backend
 
 ---
 
-## 4. Chế độ Phát triển (Hot-Reload khi sửa code)
-
-Nếu bạn muốn vừa sửa mã nguồn ở `backend/src` hoặc `frontend/src` vừa tự động nạp lại ngay trong container mà không cần build lại image:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
-```
-
----
-
-## 5. Các Lệnh Quản trị Thường dùng
+## 4. Các Lệnh Quản trị Thường dùng
 
 - **Xem trạng thái các container:**
   ```bash

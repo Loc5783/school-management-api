@@ -19,9 +19,14 @@ dist/
 build/
 coverage/
 
-# IDE
+# IDE & Agent/Tool scratch folders
 .vscode/
 .idea/
+.codex/
+.kabrino/
+.postman/
+postman/
+scratch/
 
 # OS
 .DS_Store

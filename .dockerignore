@@ -2,8 +2,8 @@
 .codex
 .kabrino
 .postman
-docs
 postman
+docs
 scratch
 **/node_modules
 **/dist
@@ -11,6 +11,8 @@ scratch
 **/.env
 **/.env.*
 !**/.env.example
+backend/scripts
+backend/docs
 backend/tests
 backend/uploads/*
 *.log
