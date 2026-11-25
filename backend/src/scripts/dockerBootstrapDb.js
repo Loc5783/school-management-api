@@ -6,10 +6,9 @@
  * Nhiệm vụ chính:
  * 1. Đảm bảo các index cốt lõi của hệ thống SaaS Multi-Tenant (`Tenant`, `Permission`, `User` và 23 nhóm
  *    compound unique index `{ tenantId: 1, <field>: 1 }`) luôn tồn tại đầy đủ trên MongoDB mới,
- *    bù đắp cho việc `server.js` tắt `mongoose.set('autoIndex', false)` nhằm bảo vệ index đa trường.
- * 2. Nếu bật `AUTO_SEED_ON_EMPTY_DB=true` và cơ sở dữ liệu chưa có bất kỳ trường học (`Tenant`) nào,
- *    tự động kích hoạt `seedDemoFull.js` để tạo sẵn 2 cơ sở `HOANANG-A` và `HOANANG-B` phục vụ đăng nhập ngay.
- *    Nếu đã có dữ liệu (từ lần chạy trước hoặc bản sao lưu), tuyệt đối giữ nguyên không ghi đè.
+ *    đồng thời tương thích an toàn với DB cũ đã có sẵn index cùng cặp khóa (không văng lỗi `IndexOptionsConflict`).
+ * 2. Tự động tạo tài khoản `admin` (`123456`) nếu kiểm tra thấy DB chưa có tài khoản admin nào;
+ *    hoặc chạy `seedDemoFull.js` nếu bật `AUTO_SEED_ON_EMPTY_DB=true` trên DB trắng.
  */
 
 require('../config/loadEnv');
@@ -214,26 +213,60 @@ const MULTI_TENANT_INDEX_GROUPS = [
 ];
 
 /**
- * Đảm bảo toàn bộ compound unique index đa trường đã tồn tại an toàn trên DB.
+ * So sánh 2 object khóa index (VD: `{ tenantId: 1, code: 1 }`) có trùng khớp thứ tự và chiều sắp xếp hay không.
+ *
+ * @param {Record<string, unknown>} keyA
+ * @param {Record<string, unknown>} keyB
+ * @returns {boolean}
+ */
+const isSameIndexKeys = (keyA, keyB) => {
+  const entriesA = Object.entries(keyA || {});
+  const entriesB = Object.entries(keyB || {});
+  if (entriesA.length !== entriesB.length) return false;
+  return entriesA.every(([k, v], idx) => entriesB[idx][0] === k && entriesB[idx][1] === v);
+};
+
+/**
+ * Đảm bảo toàn bộ compound unique index đa trường đã tồn tại an toàn trên cả DB mới lẫn DB đã có dữ liệu.
  *
  * @param {import('mongoose').mongo.Db} db
  */
 const ensureMultiTenantIndexes = async (db) => {
-  // Bước 1: Tạo các index hệ thống nền tảng (Zone 1)
+  // Bước 1: Tạo các index hệ thống nền tảng (bỏ qua nếu đã có index tương đương khác tên)
   await Promise.all([
-    Tenant.createIndexes(),
-    Permission.createIndexes(),
-    User.createIndexes()
+    Tenant.createIndexes().catch(() => {}),
+    Permission.createIndexes().catch(() => {}),
+    User.createIndexes().catch(() => {})
   ]);
 
   // Bước 2: Đảm bảo 23 nhóm compound unique index phân tách dữ liệu giữa các trường
   for (const group of MULTI_TENANT_INDEX_GROUPS) {
     const collection = db.collection(group.col);
+    const existingIndexes = await collection.indexes().catch(() => []);
+
     for (const spec of group.specs) {
-      await collection.createIndex(spec.keys, { name: spec.name, ...spec.options });
+      const alreadyCovered = existingIndexes.some(
+        (idx) => idx.name === spec.name || (Boolean(idx.unique) === Boolean(spec.options?.unique) && isSameIndexKeys(idx.key, spec.keys))
+      );
+      if (alreadyCovered) {
+        continue;
+      }
+
+      try {
+        await collection.createIndex(spec.keys, { name: spec.name, ...spec.options });
+      } catch (err) {
+        // Bỏ qua an toàn nếu DB có sẵn đã tạo index tương đương dưới tên/options khác (code 85, 86)
+        if (err && (err.code === 85 || err.code === 86)) {
+          continue;
+        }
+        console.warn(`⚠️ [Docker Bootstrap] Bỏ qua tạo index ${spec.name} trên ${group.col}: ${err.message}`);
+      }
     }
+
     // Gỡ index unique toàn cục cũ nếu vô tình tồn tại để không chặn trường thứ 2 tạo cùng mã
-    await collection.dropIndex(group.legacyGlobalIndex).catch(() => {});
+    if (existingIndexes.some((idx) => idx.name === group.legacyGlobalIndex)) {
+      await collection.dropIndex(group.legacyGlobalIndex).catch(() => {});
+    }
   }
 };
 
@@ -267,7 +300,7 @@ const runBootstrap = async () => {
     await mongoose.disconnect();
   }
 
-  // Bước 3: Chạy seedDemoFull ở tiến trình con độc lập nếu DB hoàn toàn trống
+  // Bước 3: Chạy seedDemoFull ở tiến trình con độc lập nếu DB hoàn toàn trống và bật cờ AUTO_SEED_ON_EMPTY_DB
   if (shouldRunDemoSeed) {
     console.log('🌱 [Docker Bootstrap] Phát hiện DB mới chưa có dữ liệu — đang khởi tạo dữ liệu mẫu (HOANANG-A & HOANANG-B)...');
     const seedScriptPath = path.join(__dirname, 'seedDemoFull.js');

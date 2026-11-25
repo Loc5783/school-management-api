@@ -6,6 +6,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     host: '0.0.0.0',
+    allowedHosts: true,
     port: Number(process.env.VITE_PORT || 5173),
     strictPort: false,
     proxy: {
