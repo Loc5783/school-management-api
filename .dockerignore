@@ -8,9 +8,13 @@ scratch
 **/node_modules
 **/dist
 **/coverage
-**/.env
-**/.env.*
-!**/.env.example
+/.env
+/.env.*
+backend/.env
+backend/.env.*
+!backend/.env.example
+!frontend/.env
+!frontend/.env.example
 backend/scripts
 backend/docs
 backend/tests

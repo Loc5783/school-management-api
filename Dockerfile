@@ -1,6 +1,6 @@
 # ==============================================================================
 # Dockerfile Hợp Nhất (Full-Stack Production) — Frontend + Backend trong 1 Image
-# Chỉ cần chạy duy nhất container này (+ MongoDB) là hoạt động cả Web UI & API!
+# Tự động đọc biến build từ `frontend/.env` và nạp biến runtime từ `backend/.env`
 # ==============================================================================
 
 # --- Tầng 1: Build bản Production tĩnh cho Frontend (React 19 + Vite 8) ---
@@ -9,11 +9,7 @@ WORKDIR /build/frontend
 COPY frontend/package*.json ./
 RUN npm ci
 
-ARG VITE_API_URL=/api
-ARG VITE_DEFAULT_SCHOOL_CODE=HOANANG-A
-ENV VITE_API_URL=${VITE_API_URL} \
-    VITE_DEFAULT_SCHOOL_CODE=${VITE_DEFAULT_SCHOOL_CODE}
-
+# Sao chép mã nguồn Frontend (bao gồm `frontend/.env` nếu có) để Vite đọc trực tiếp khi build
 COPY frontend/ ./
 RUN npm run build
 
@@ -34,19 +30,19 @@ ENV TZ=Asia/Ho_Chi_Minh \
 
 WORKDIR /app
 
-COPY --from=backend-deps /build/backend/node_modules ./node_modules
-COPY backend/package*.json backend/server.js backend/app.js ./
-COPY backend/src ./src
-COPY backend/docker-entrypoint.sh ./docker-entrypoint.sh
+COPY --chown=node:node --from=backend-deps /build/backend/node_modules ./node_modules
+COPY --chown=node:node backend/package*.json backend/server.js backend/app.js ./
+COPY --chown=node:node backend/src ./src
+COPY --chown=node:node backend/docker-entrypoint.sh ./docker-entrypoint.sh
 
 # Nhúng toàn bộ bản build Production của Frontend vào /app/public để Express phục vụ trực tiếp
-COPY --from=frontend-build /build/frontend/dist ./public
+COPY --chown=node:node --from=frontend-build /build/frontend/dist ./public
 
-# Chuẩn hóa LF tránh lỗi CRLF từ Windows và cấp quyền thư mục uploads cho user non-root
+# Chuẩn hóa LF tránh lỗi CRLF từ Windows và tạo thư mục uploads thuộc quyền user node
 RUN sed -i 's/\r$//' /app/docker-entrypoint.sh \
     && chmod +x /app/docker-entrypoint.sh \
     && mkdir -p /app/uploads/credentials \
-    && chown -R node:node /app
+    && chown -R node:node /app/uploads /app/docker-entrypoint.sh
 
 USER node
 EXPOSE 5000
@@ -56,4 +52,3 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["node", "server.js"]
-

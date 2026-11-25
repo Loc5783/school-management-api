@@ -11,7 +11,7 @@ Hệ thống đã được đóng gói theo mô hình **Unified Full-Stack Produ
 | Dịch vụ | Container | Image / Công nghệ | Cổng mặc định | Vai trò |
 | :--- | :--- | :--- | :--- | :--- |
 | **`backend`** | `school-backend` | `node:22-alpine` (nhúng sẵn React 19 Production + Express 5) | `http://localhost:5000` | **Chạy cả Giao diện Web SPA lẫn toàn bộ API `/api/*`** trên duy nhất 1 cổng |
-| **`mongodb`** | `school-mongodb` | `mongo:7.0` (Replica Set `rs0`) | `127.0.0.1:27017` | Lưu trữ dữ liệu bền vững và hỗ trợ ACID Transaction đa bảng |
+| **`mongodb`** | `school-mongodb` | `mongo:7.0` (Replica Set `rs0`) | `127.0.0.1:27019` | Lưu trữ dữ liệu bền vững và hỗ trợ ACID Transaction đa bảng (tránh đụng cổng `27017` trên Windows) |
 
 ### Dữ liệu bền vững (Named Volumes)
 - `mongo_data`: Lưu toàn bộ dữ liệu MongoDB qua các lần khởi động lại container.
@@ -21,9 +21,11 @@ Hệ thống đã được đóng gói theo mô hình **Unified Full-Stack Produ
 
 ## 2. Khởi chạy Nhanh (Chế độ Chuẩn / Production)
 
-1. **Mở Docker Desktop** trên máy tính và đợi Engine sẵn sàng.
-2. Tại thư mục gốc của dự án, kiểm tra tệp `.env` (đã được tạo sẵn từ `.env.docker.example`; nếu triển khai máy chủ thật, hãy đổi `JWT_SECRET`).
-3. Build và khởi chạy toàn bộ hệ thống chạy ngầm:
+1. **Cấu hình môi trường:** Tập trung gọn gàng theo đúng phân hệ (không để file `.env` ở ngoài thư mục gốc):
+   - Backend: `backend/.env` *(mẫu tại `backend/.env.example`)*
+   - Frontend: `frontend/.env` *(mẫu tại `frontend/.env.example`)*
+2. **Mở Docker Desktop** trên máy tính (hoặc chạy `docker desktop start`).
+3. Tại thư mục gốc của dự án, build và khởi chạy toàn bộ hệ thống chạy ngầm:
 
 ```bash
 docker compose up -d --build
@@ -61,7 +63,7 @@ docker compose logs -f backend
 - **Tài khoản:** `admin`
 - **Mật khẩu:** `123456`
 
-*(Tùy chọn: Nếu muốn nạp thêm bộ dữ liệu mẫu đầy đủ gồm 2 cơ sở `HOANANG-A`, `HOANANG-B` và đầy đủ 8 vai trò nhân sự/phụ huynh/học sinh để thử nghiệm, chạy lệnh `docker compose exec backend npm run seed:demo` hoặc đặt `AUTO_SEED_ON_EMPTY_DB=true` trong `.env`.)*
+*(Tùy chọn: Nếu muốn nạp thêm bộ dữ liệu mẫu đầy đủ gồm 2 cơ sở `HOANANG-A`, `HOANANG-B` và đầy đủ 8 vai trò nhân sự/phụ huynh/học sinh để thử nghiệm, chạy lệnh `docker compose exec backend npm run seed:demo` hoặc đặt `AUTO_SEED_ON_EMPTY_DB=true` trong `backend/.env`.)*
 
 ---
 
@@ -82,14 +84,14 @@ docker compose logs -f backend
 - **Kết nối MongoDB Compass từ máy Windows:**
   Dùng chuỗi kết nối:
   ```text
-  mongodb://127.0.0.1:27017/school_management?directConnection=true
+  mongodb://127.0.0.1:27019/school_management?directConnection=true
   ```
 - **Sao lưu (Backup) Database ra máy ngoài:**
   ```bash
   docker compose exec mongodb mongodump --db school_management --archive > backup_school_management.archive
   ```
 - **Khôi phục (Restore) Database từ file archive:**
-  *(Mẹo: Đặt `AUTO_SEED_ON_EMPTY_DB=false` trong `.env` nếu muốn khôi phục vào DB trắng)*
+  *(Mẹo: Đặt `AUTO_SEED_ON_EMPTY_DB=false` trong `backend/.env` nếu muốn khôi phục vào DB trắng)*
   ```bash
   docker compose exec -T mongodb mongorestore --archive --drop < backup_school_management.archive
   ```

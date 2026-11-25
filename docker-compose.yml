@@ -10,9 +10,9 @@ services:
     restart: unless-stopped
     command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
     environment:
-      TZ: ${SCHOOL_TIMEZONE:-Asia/Ho_Chi_Minh}
+      TZ: Asia/Ho_Chi_Minh
     ports:
-      - "${MONGO_BIND_IP:-127.0.0.1}:${MONGO_PORT:-27017}:27017"
+      - "127.0.0.1:27019:27017"
     volumes:
       - mongo_data:/data/db
       - mongo_config:/data/configdb
@@ -33,16 +33,13 @@ services:
       - school-net
 
   # ============================================================================
-  # 2. BACKEND HỢP NHẤT (Build sẵn Frontend Production bên trong, chạy 1 cổng duy nhất!)
+  # 2. BACKEND HỢP NHẤT (Đọc biến trực tiếp từ `backend/.env` & `frontend/.env`)
   # ============================================================================
   backend:
     build:
       context: .
       dockerfile: Dockerfile
       target: production
-      args:
-        VITE_API_URL: /api
-        VITE_DEFAULT_SCHOOL_CODE: ${DEFAULT_SCHOOL_CODE:-HOANANG-A}
     image: school-management-fullstack:latest
     container_name: school-backend
     init: true
@@ -50,45 +47,18 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
+    env_file:
+      - path: ./backend/.env
+        required: false
     environment:
+      # Chỉ định các thông số mạng nội bộ Container (mọi cấu hình nghiệp vụ khác đọc từ backend/.env)
       NODE_ENV: production
       PORT: 5000
       HOST: 0.0.0.0
       FRONTEND_DIST_PATH: /app/public
       MONGODB_URI: mongodb://mongodb:27017/school_management?replicaSet=rs0
-      ALLOW_STANDALONE_MONGODB: ${ALLOW_STANDALONE_MONGODB:-true}
-      TRUST_PROXY: ${TRUST_PROXY:-1}
-      SAAS_MODE: ${SAAS_MODE:-phase1e}
-      SCHOOL_TIMEZONE: ${SCHOOL_TIMEZONE:-Asia/Ho_Chi_Minh}
-      RUN_DB_BOOTSTRAP: ${RUN_DB_BOOTSTRAP:-true}
-      ENSURE_SAAS_INDEXES: ${ENSURE_SAAS_INDEXES:-true}
-      AUTO_CREATE_DEFAULT_ADMIN: ${AUTO_CREATE_DEFAULT_ADMIN:-true}
-      DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
-      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-123456}
-      DEFAULT_SCHOOL_CODE: ${DEFAULT_SCHOOL_CODE:-HOANANG-A}
-      DEFAULT_SCHOOL_NAME: ${DEFAULT_SCHOOL_NAME:-Trường Mầm non Hoa Nắng - Cơ sở A}
-      AUTO_SEED_ON_EMPTY_DB: ${AUTO_SEED_ON_EMPTY_DB:-false}
-      DEMO_SEED_PASSWORD: ${DEMO_SEED_PASSWORD:-123456}
-      JWT_SECRET: ${JWT_SECRET:-school_mgmt_docker_jwt_secret_9f8e7d6c5b4a3928172635445566778899aa}
-      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
-      JWT_ISSUER: ${JWT_ISSUER:-school-management-api}
-      JWT_AUDIENCE: ${JWT_AUDIENCE:-school-management-web}
-      PLATFORM_MFA_ENCRYPTION_KEY: ${PLATFORM_MFA_ENCRYPTION_KEY:-}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5000,http://localhost:5173,http://localhost}
-      ATTENDANCE_DUPLICATE_TOLERANCE_MS: ${ATTENDANCE_DUPLICATE_TOLERANCE_MS:-120000}
-      DEVICE_INGEST_API_KEY: ${DEVICE_INGEST_API_KEY:-replace-with-a-long-device-secret}
-      BACKGROUND_REMINDERS_ENABLED: ${BACKGROUND_REMINDERS_ENABLED:-false}
-      TIMEKEEPING_SCHEDULER_ENABLED: ${TIMEKEEPING_SCHEDULER_ENABLED:-false}
-      HIKVISION_SYNC_ENABLED: ${HIKVISION_SYNC_ENABLED:-false}
-      HIKVISION_HOANANG_A_BASE_URL: ${HIKVISION_HOANANG_A_BASE_URL:-https://192.168.1.8}
-      HIKVISION_HOANANG_A_USERNAME: ${HIKVISION_HOANANG_A_USERNAME:-admin}
-      HIKVISION_HOANANG_A_PASSWORD: ${HIKVISION_HOANANG_A_PASSWORD:-}
-      HIKVISION_HOANANG_A_ALLOW_SELF_SIGNED: ${HIKVISION_HOANANG_A_ALLOW_SELF_SIGNED:-true}
-      HIKVISION_TIMEOUT_MS: ${HIKVISION_TIMEOUT_MS:-5000}
-      HIKVISION_RETRY_COUNT: ${HIKVISION_RETRY_COUNT:-1}
-      TIMEKEEPING_WEBHOOK_TOKEN: ${TIMEKEEPING_WEBHOOK_TOKEN:-}
     ports:
-      - "${BACKEND_PORT:-5000}:5000"
+      - "5000:5000"
     volumes:
       - backend_uploads:/app/uploads
     networks:
