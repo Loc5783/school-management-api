@@ -1,0 +1,41 @@
+# ==============================================================================
+# Chế độ Phát triển (Hot-Reload) với Docker Compose
+# Cách chạy:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+# ==============================================================================
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: dev
+    environment:
+      NODE_ENV: development
+      TRUST_PROXY: 0
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/scripts:/app/scripts
+      - ./backend/server.js:/app/server.js
+      - ./backend/app.js:/app/app.js
+      - backend_uploads:/app/uploads
+    command: ["npm", "run", "dev"]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: dev
+    environment:
+      VITE_PORT: 5173
+      VITE_BACKEND_URL: http://backend:5000
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - ./frontend/index.html:/app/index.html
+      - ./frontend/vite.config.js:/app/vite.config.js
+    healthcheck:
+      disable: true
+

@@ -1,0 +1,5 @@
+# Bảo đảm các script shell và cấu hình Docker luôn giữ chuẩn xuống dòng LF trên Windows
+*.sh text eol=lf
+Dockerfile* text eol=lf
+nginx.conf text eol=lf
+

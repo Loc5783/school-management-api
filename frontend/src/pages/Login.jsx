@@ -3,8 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import api from '../api/axiosConfig';
 import Icon from '../components/Icon';
 
+const DEFAULT_SCHOOL_CODE = import.meta.env.VITE_DEFAULT_SCHOOL_CODE ?? 'HOANANG-A';
+
 export default function Login() {
-  const [schoolCode, setSchoolCode] = useState(() => localStorage.getItem('last_school_code') || '');
+  const [schoolCode, setSchoolCode] = useState(() => localStorage.getItem('last_school_code') ?? DEFAULT_SCHOOL_CODE);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);

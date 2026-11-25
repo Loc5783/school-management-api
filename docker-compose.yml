@@ -1,0 +1,122 @@
+name: school-management
+
+services:
+  # ============================================================================
+  # 1. MONGODB 7.0 (Chế độ Replica Set 1-node `rs0` hỗ trợ ACID Transactions)
+  # ============================================================================
+  mongodb:
+    image: mongo:7.0
+    container_name: school-mongodb
+    restart: unless-stopped
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    environment:
+      TZ: ${SCHOOL_TIMEZONE:-Asia/Ho_Chi_Minh}
+    ports:
+      - "${MONGO_BIND_IP:-127.0.0.1}:${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongo_data:/data/db
+      - mongo_config:/data/configdb
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mongosh",
+          "--quiet",
+          "--eval",
+          "try { const s = rs.status(); if (s.ok === 1 && s.members.some(m => m.stateStr === 'PRIMARY')) quit(0); quit(1); } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongodb:27017' }] }); quit(1); }"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+    networks:
+      - school-net
+
+  # ============================================================================
+  # 2. BACKEND API (SaaS Multi-Tenant Express 5 + Mongoose 9)
+  # ============================================================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: production
+    image: school-management-backend:latest
+    container_name: school-backend
+    init: true
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      HOST: 0.0.0.0
+      MONGODB_URI: mongodb://mongodb:27017/school_management?replicaSet=rs0
+      ALLOW_STANDALONE_MONGODB: ${ALLOW_STANDALONE_MONGODB:-true}
+      TRUST_PROXY: ${TRUST_PROXY:-1}
+      SAAS_MODE: ${SAAS_MODE:-phase1e}
+      SCHOOL_TIMEZONE: ${SCHOOL_TIMEZONE:-Asia/Ho_Chi_Minh}
+      RUN_DB_BOOTSTRAP: ${RUN_DB_BOOTSTRAP:-true}
+      ENSURE_SAAS_INDEXES: ${ENSURE_SAAS_INDEXES:-true}
+      AUTO_CREATE_DEFAULT_ADMIN: ${AUTO_CREATE_DEFAULT_ADMIN:-true}
+      DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-123456}
+      DEFAULT_SCHOOL_CODE: ${DEFAULT_SCHOOL_CODE:-HOANANG-A}
+      DEFAULT_SCHOOL_NAME: ${DEFAULT_SCHOOL_NAME:-Trường Mầm non Hoa Nắng - Cơ sở A}
+      AUTO_SEED_ON_EMPTY_DB: ${AUTO_SEED_ON_EMPTY_DB:-false}
+      DEMO_SEED_PASSWORD: ${DEMO_SEED_PASSWORD:-123456}
+      JWT_SECRET: ${JWT_SECRET:-school_mgmt_docker_jwt_secret_9f8e7d6c5b4a3928172635445566778899aa}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
+      JWT_ISSUER: ${JWT_ISSUER:-school-management-api}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-school-management-web}
+      PLATFORM_MFA_ENCRYPTION_KEY: ${PLATFORM_MFA_ENCRYPTION_KEY:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost}
+      ATTENDANCE_DUPLICATE_TOLERANCE_MS: ${ATTENDANCE_DUPLICATE_TOLERANCE_MS:-120000}
+      DEVICE_INGEST_API_KEY: ${DEVICE_INGEST_API_KEY:-replace-with-a-long-device-secret}
+      BACKGROUND_REMINDERS_ENABLED: ${BACKGROUND_REMINDERS_ENABLED:-false}
+      TIMEKEEPING_SCHEDULER_ENABLED: ${TIMEKEEPING_SCHEDULER_ENABLED:-false}
+      HIKVISION_SYNC_ENABLED: ${HIKVISION_SYNC_ENABLED:-false}
+      HIKVISION_HOANANG_A_BASE_URL: ${HIKVISION_HOANANG_A_BASE_URL:-https://192.168.1.8}
+      HIKVISION_HOANANG_A_USERNAME: ${HIKVISION_HOANANG_A_USERNAME:-admin}
+      HIKVISION_HOANANG_A_PASSWORD: ${HIKVISION_HOANANG_A_PASSWORD:-}
+      HIKVISION_HOANANG_A_ALLOW_SELF_SIGNED: ${HIKVISION_HOANANG_A_ALLOW_SELF_SIGNED:-true}
+      HIKVISION_TIMEOUT_MS: ${HIKVISION_TIMEOUT_MS:-5000}
+      HIKVISION_RETRY_COUNT: ${HIKVISION_RETRY_COUNT:-1}
+      TIMEKEEPING_WEBHOOK_TOKEN: ${TIMEKEEPING_WEBHOOK_TOKEN:-}
+    ports:
+      - "${BACKEND_PORT:-5000}:5000"
+    volumes:
+      - backend_uploads:/app/uploads
+    networks:
+      - school-net
+
+  # ============================================================================
+  # 3. FRONTEND WEB (React 19 SPA + Nginx Reverse Proxy)
+  # ============================================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+      args:
+        VITE_API_URL: /api
+        VITE_DEFAULT_SCHOOL_CODE: ${DEFAULT_SCHOOL_CODE:-HOANANG-A}
+    image: school-management-frontend:latest
+    container_name: school-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    networks:
+      - school-net
+
+volumes:
+  mongo_data:
+  mongo_config:
+  backend_uploads:
+
+networks:
+  school-net:
+    driver: bridge

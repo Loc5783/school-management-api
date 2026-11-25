@@ -1,0 +1,11 @@
+.git
+.codex
+.kabrino
+.postman
+docs
+postman
+scratch
+**/node_modules
+**/dist
+**/.env
+

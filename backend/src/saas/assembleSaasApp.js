@@ -43,6 +43,15 @@ const {
 const assembleSaasApp = (options = {}) => {
   const app = express();
 
+  // Tin cậy Reverse Proxy (Nginx trong Docker) khi biến TRUST_PROXY được cấu hình để express-rate-limit v8 không báo lỗi X-Forwarded-For
+  if (process.env.TRUST_PROXY) {
+    const rawTrustProxy = process.env.TRUST_PROXY.trim();
+    const parsedTrustProxy = rawTrustProxy === 'true'
+      ? 1
+      : (/^\d+$/.test(rawTrustProxy) ? Number(rawTrustProxy) : rawTrustProxy);
+    app.set('trust proxy', parsedTrustProxy);
+  }
+
   const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173')
     .split(',')
     .map((origin) => origin.trim())

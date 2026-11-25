@@ -13,6 +13,7 @@ const mongoose = require('mongoose');
 const connectDB = require('./src/config/database');
 const createLegacyApp = require('./app');
 const assembleSaasApp = require('./src/saas/assembleSaasApp');
+const { ensureDefaultAdminAccount } = require('./src/services/defaultAdminBootstrapService');
 const { startTimekeepingSync } = require('./src/services/timekeepingSyncService');
 const { startGuardAlertReminders } = require('./src/services/guardAlertReminderService');
 const { startCredentialReminders } = require('./src/services/credentialReminderService');
@@ -45,6 +46,7 @@ const resolveLanIp = () => {
 
 const startServer = async () => {
   await connectDB();
+  await ensureDefaultAdminAccount({ useLegacyApp });
 
   const app = useLegacyApp
     ? createLegacyApp()
@@ -52,7 +54,7 @@ const startServer = async () => {
 
   const lanIp = resolveLanIp();
 
-  app.listen(PORT, HOST, () => {
+  const httpServer = app.listen(PORT, HOST, () => {
     console.log(`🚀 Server (${useLegacyApp ? 'Legacy' : 'SaaS Multi-Tenant'}) đang chạy:`);
     console.log(`   ➜ Local  : http://localhost:${PORT}`);
     if (lanIp) {
@@ -72,6 +74,34 @@ const startServer = async () => {
       startStaffHandoverScheduler();
     }
   });
+
+  // NOTE: Đóng kết nối HTTP và MongoDB an toàn khi nhận tín hiệu dừng từ Docker (SIGTERM/SIGINT)
+  let isShuttingDown = false;
+  const gracefulShutdown = (signal) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    console.log(`\n🛑 Nhận tín hiệu ${signal}, đang đóng máy chủ và kết nối MongoDB an toàn...`);
+
+    httpServer.close(async () => {
+      try {
+        await mongoose.connection.close(false);
+        console.log('✅ Đã đóng kết nối hoàn tất.');
+        process.exit(0);
+      } catch (err) {
+        console.error('❌ Lỗi khi đóng kết nối MongoDB:', err.message);
+        process.exit(1);
+      }
+    });
+
+    // Bảo vệ tránh treo tiến trình nếu có kết nối keep-alive chưa giải phóng kịp
+    setTimeout(() => {
+      console.warn('⚠️ Quá thời gian chờ đóng kết nối, buộc thoát tiến trình.');
+      process.exit(1);
+    }, 8000).unref();
+  };
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 };
 
 startServer();
