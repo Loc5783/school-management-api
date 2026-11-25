@@ -109,5 +109,38 @@ describe('Default Admin Bootstrap Service (Auto-create admin/123456)', () => {
     expect(loginRes.body.token).toBeTruthy();
     expect(loginRes.body.user.role).toBe('admin');
   });
+
+  test('Chạy một mình Backend phục vụ trọn vẹn cả Frontend Production SPA, Assets và API trên cùng cổng', async () => {
+    await ensureDefaultAdminAccount({ useLegacyApp: false });
+    const saasApp = assembleSaasApp({ saasMode: 'phase1e' });
+
+    // 1. Trang gốc `/` và đường dẫn con `/login`, `/dashboard` (SPA Fallback) trả về giao diện React index.html
+    const rootRes = await request(saasApp).get('/');
+    expect(rootRes.status).toBe(200);
+    expect(rootRes.headers['content-type']).toMatch(/text\/html/);
+    expect(rootRes.text).toContain('<div id="root">');
+
+    const spaRouteRes = await request(saasApp).get('/dashboard');
+    expect(spaRouteRes.status).toBe(200);
+    expect(spaRouteRes.headers['content-type']).toMatch(/text\/html/);
+    expect(spaRouteRes.text).toContain('<div id="root">');
+
+    // 2. Đường dẫn /api không tồn tại vẫn trả JSON (không bị rơi nhầm vào index.html)
+    const missingApiRes = await request(saasApp).get('/api/duong-dan-khong-ton-tai');
+    expect(missingApiRes.headers['content-type']).toMatch(/application\/json/);
+
+    // 3. Gửi POST đăng nhập cùng Origin với tên miền Production bất kỳ (không cần khai báo trước trong CORS_ORIGINS)
+    const sameOriginLoginRes = await request(saasApp)
+      .post('/api/auth/login')
+      .set('Host', 'mamnonhoanang.edu.vn')
+      .set('Origin', 'https://mamnonhoanang.edu.vn')
+      .send({
+        schoolCode: 'HOANANG-A',
+        username: 'admin',
+        password: '123456'
+      });
+    expect(sameOriginLoginRes.status).toBe(200);
+    expect(sameOriginLoginRes.body.success).toBe(true);
+  });
 });
 

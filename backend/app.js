@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const { attachFrontendStatic, isSameHostOrigin } = require('./src/utils/staticFrontendMiddleware');
 
 const authRoutes = require('./src/routes/authRoutes');
 const classroomRoutes = require('./src/routes/classroomRoutes');
@@ -43,15 +44,22 @@ const createApp = () => {
         .map((origin) => origin.trim())
         .filter(Boolean);
 
-    app.use(cors({
-        origin(origin, callback) {
-            if (!origin || allowedOrigins.includes(origin) || LAN_OR_LOCAL_ORIGIN_REGEX.test(origin)) {
-                return callback(null, true);
-            }
-            return callback(new Error('Origin không được phép truy cập API'));
-        },
-        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-        allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key', 'X-Device-Api-Key', 'X-Webhook-Token', 'X-School-Code']
+    app.use(cors((req, callback) => {
+        const origin = req.header('Origin');
+        const isAllowed = !origin
+            || allowedOrigins.includes(origin)
+            || allowedOrigins.includes('*')
+            || LAN_OR_LOCAL_ORIGIN_REGEX.test(origin)
+            || isSameHostOrigin(origin, req);
+
+        if (isAllowed) {
+            return callback(null, {
+                origin: true,
+                methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+                allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key', 'X-Device-Api-Key', 'X-Webhook-Token', 'X-School-Code']
+            });
+        }
+        return callback(new Error('Origin không được phép truy cập API'));
     }));
 
     // Tăng giới hạn JSON/urlencoded lên 15MB (giống JussStudio/BE); multipart/form-data từ máy chấm công sẽ đi thẳng vào express.raw() của route /webhook
@@ -83,6 +91,14 @@ const createApp = () => {
     app.get('/api/health', (req, res) => {
         res.status(200).json({ status: 'OK', message: 'Server đang chạy!' });
     });
+
+    // Đảm bảo đường dẫn /api/* không tồn tại luôn trả JSON 404 thay vì rơi vào SPA Fallback
+    app.use('/api', (req, res) => {
+        res.status(404).json({ success: false, message: 'Không tìm thấy đường dẫn API' });
+    });
+
+    // Phục vụ trực tiếp giao diện Frontend Production (nếu đã có bản build dist) trên cùng máy chủ Backend
+    attachFrontendStatic(app);
 
     return app;
 };

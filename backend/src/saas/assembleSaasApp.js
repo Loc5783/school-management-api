@@ -2,6 +2,7 @@
 
 const express = require('express');
 const cors = require('cors');
+const { attachFrontendStatic, isSameHostOrigin } = require('../utils/staticFrontendMiddleware');
 const { tenantFeatureGate } = require('./middlewares/tenantFeatureGate');
 const schoolAuthRoutes = require('./routes/schoolAuthRoutes');
 const platformAuthRoutes = require('./routes/platformAuthRoutes');
@@ -59,15 +60,22 @@ const assembleSaasApp = (options = {}) => {
 
   const LAN_OR_LOCAL_ORIGIN_REGEX = /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$/;
 
-  app.use(cors({
-    origin(origin, callback) {
-      if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*') || LAN_OR_LOCAL_ORIGIN_REGEX.test(origin)) {
-        return callback(null, true);
-      }
-      return callback(new Error('Origin không được phép truy cập API'));
-    },
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key', 'X-Tenant-Id', 'X-Device-Api-Key', 'X-Webhook-Token', 'X-School-Code']
+  app.use(cors((req, callback) => {
+    const origin = req.header('Origin');
+    const isAllowed = !origin
+      || allowedOrigins.includes(origin)
+      || allowedOrigins.includes('*')
+      || LAN_OR_LOCAL_ORIGIN_REGEX.test(origin)
+      || isSameHostOrigin(origin, req);
+
+    if (isAllowed) {
+      return callback(null, {
+        origin: true,
+        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+        allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key', 'X-Tenant-Id', 'X-Device-Api-Key', 'X-Webhook-Token', 'X-School-Code']
+      });
+    }
+    return callback(new Error('Origin không được phép truy cập API'));
   }));
 
   // Tăng giới hạn JSON/urlencoded lên 15MB (đồng bộ JussStudio/BE); gói multipart/form-data từ máy chấm công sẽ do express.raw() tại route /webhook nhận trực tiếp
@@ -184,6 +192,9 @@ const assembleSaasApp = (options = {}) => {
   // Catch-all for any other /api or /api/v1 business route
   app.use('/api/v1', tenantFeatureGate);
   app.use('/api', tenantFeatureGate);
+
+  // Phục vụ trực tiếp giao diện Frontend Production (nếu đã có bản build dist) trên cùng máy chủ Backend
+  attachFrontendStatic(app);
 
   return app;
 };

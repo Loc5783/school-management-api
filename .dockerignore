@@ -7,5 +7,10 @@ postman
 scratch
 **/node_modules
 **/dist
+**/coverage
 **/.env
-
+**/.env.*
+!**/.env.example
+backend/tests
+backend/uploads/*
+*.log

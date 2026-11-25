@@ -14,6 +14,7 @@ const connectDB = require('./src/config/database');
 const createLegacyApp = require('./app');
 const assembleSaasApp = require('./src/saas/assembleSaasApp');
 const { ensureDefaultAdminAccount } = require('./src/services/defaultAdminBootstrapService');
+const { resolveFrontendDistPath } = require('./src/utils/staticFrontendMiddleware');
 const { startTimekeepingSync } = require('./src/services/timekeepingSyncService');
 const { startGuardAlertReminders } = require('./src/services/guardAlertReminderService');
 const { startCredentialReminders } = require('./src/services/credentialReminderService');
@@ -53,6 +54,7 @@ const startServer = async () => {
     : assembleSaasApp({ saasMode: process.env.SAAS_MODE || 'phase1e' });
 
   const lanIp = resolveLanIp();
+  const activeFrontendDist = resolveFrontendDistPath();
 
   const httpServer = app.listen(PORT, HOST, () => {
     console.log(`🚀 Server (${useLegacyApp ? 'Legacy' : 'SaaS Multi-Tenant'}) đang chạy:`);
@@ -60,6 +62,11 @@ const startServer = async () => {
     if (lanIp) {
       console.log(`   ➜ LAN    : http://${lanIp}:${PORT}`);
       console.log(`   ➜ Webhook: http://${lanIp}:${PORT}/api/attendance/webhook`);
+    }
+    if (activeFrontendDist) {
+      console.log(`   ➜ Web UI : Đang phục vụ trực tiếp bản Production Frontend tại http://localhost:${PORT}`);
+    } else {
+      console.log('   ℹ️  Chưa có bản build Frontend (chạy "npm run build:frontend" nếu muốn chạy gộp cả Web trên Backend)');
     }
 
     if (schedulerEnabled) {

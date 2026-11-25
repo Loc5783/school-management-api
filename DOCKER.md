@@ -4,12 +4,13 @@ Tài liệu hướng dẫn khởi chạy trọn bộ hệ thống **Quản lý T
 
 ---
 
-## 1. Kiến trúc các Container
+## 1. Kiến trúc Hợp nhất (Chạy Backend là chạy luôn cả Frontend!)
+
+Hệ thống đã được đóng gói theo mô hình **Unified Full-Stack Production**: bản build tĩnh của Frontend (`frontend/dist`) được nhúng trực tiếp và phục vụ ngay bên trong máy chủ Express của `backend`.
 
 | Dịch vụ | Container | Image / Công nghệ | Cổng mặc định | Vai trò |
 | :--- | :--- | :--- | :--- | :--- |
-| **`frontend`** | `school-frontend` | `nginx:1.27-alpine` + React 19 / Vite 8 | `http://localhost:5173` | Phục vụ giao diện SPA và chuyển tiếp (Reverse Proxy) `/api/*` sang Backend |
-| **`backend`** | `school-backend` | `node:22-alpine` + Express 5 / Mongoose 9 | `http://localhost:5000` | Xử lý API nghiệp vụ đa trường (`phase1e`) & nhận Webhook máy chấm công LAN |
+| **`backend`** | `school-backend` | `node:22-alpine` (nhúng sẵn React 19 Production + Express 5) | `http://localhost:5000` | **Chạy cả Giao diện Web SPA lẫn toàn bộ API `/api/*`** trên duy nhất 1 cổng |
 | **`mongodb`** | `school-mongodb` | `mongo:7.0` (Replica Set `rs0`) | `127.0.0.1:27017` | Lưu trữ dữ liệu bền vững và hỗ trợ ACID Transaction đa bảng |
 
 ### Dữ liệu bền vững (Named Volumes)
@@ -44,8 +45,16 @@ docker compose logs -f backend
 
 ## 3. Truy cập & Đăng nhập Mặc định
 
-- **Giao diện Web:** Mở trình duyệt tại `http://localhost:5173`
-- **Kiểm tra sức khỏe API:** `http://localhost:5000/api/health` (hoặc `http://localhost:5173/api/health`)
+- **Giao diện Web & API hợp nhất:** Mở trình duyệt tại **`http://localhost:5000`**
+- **Kiểm tra sức khỏe API:** `http://localhost:5000/api/health`
+
+> **Mẹo chạy không cần Docker (trực tiếp trên máy / VPS):**
+> Tại thư mục `backend` (hoặc thư mục gốc), chỉ cần chạy:
+> ```bash
+> cd backend
+> npm run start:prod
+> ```
+> Lệnh này sẽ tự build Frontend ra Production (`frontend/dist`) rồi chạy `node server.js` — mở `http://localhost:5000` là dùng được ngay cả Frontend lẫn Backend!
 
 ### Tài khoản Admin được tạo tự động khi DB trống
 - **Mã trường (School Code):** `HOANANG-A` *(đã được điền sẵn trên màn hình đăng nhập)*
