@@ -61,7 +61,7 @@ services:
       HOST: 0.0.0.0
       FRONTEND_DIST_PATH: /app/public
     ports:
-      - "5000:5000"
+      - "5001:5000"
     volumes:
       - backend_uploads:/app/uploads
     networks:

@@ -10,7 +10,7 @@ Hệ thống đã được đóng gói theo mô hình **Unified Full-Stack Produ
 
 | Dịch vụ | Container | Image / Công nghệ | Cổng mặc định | Vai trò |
 | :--- | :--- | :--- | :--- | :--- |
-| **`backend`** | `school-backend` | `node:22-alpine` (nhúng sẵn React 19 Production + Express 5) | `http://localhost:5000` | **Chạy cả Giao diện Web SPA lẫn toàn bộ API `/api/*`** trên duy nhất 1 cổng |
+| **`backend`** | `school-backend` | `node:22-alpine` (nhúng sẵn React 19 Production + Express 5) | `http://localhost:5001` | **Chạy cả Giao diện Web SPA lẫn toàn bộ API `/api/*`** trên duy nhất 1 cổng (host 5001 → container 5000) |
 | **`mongodb`** | `school-mongodb` | `mongo:7.0` (Replica Set `rs0`) | `127.0.0.1:27019` | Lưu trữ dữ liệu bền vững và hỗ trợ ACID Transaction đa bảng (tránh đụng cổng `27017` trên Windows) |
 
 ### Dữ liệu bền vững (Named Volumes)
@@ -47,8 +47,8 @@ docker compose logs -f backend
 
 ## 3. Truy cập & Đăng nhập Mặc định
 
-- **Giao diện Web & API hợp nhất:** Mở trình duyệt tại **`http://localhost:5000`**
-- **Kiểm tra sức khỏe API:** `http://localhost:5000/api/health`
+- **Giao diện Web & API hợp nhất:** Mở trình duyệt tại **`http://localhost:5001`**
+- **Kiểm tra sức khỏe API:** `http://localhost:5001/api/health`
 
 > **Mẹo chạy không cần Docker (trực tiếp trên máy / VPS):**
 > Tại thư mục `backend` (hoặc thư mục gốc), chỉ cần chạy:
