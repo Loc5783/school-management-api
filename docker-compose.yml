@@ -47,6 +47,8 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file:
       - path: ./backend/.env.example
         required: false
@@ -58,7 +60,6 @@ services:
       PORT: 5000
       HOST: 0.0.0.0
       FRONTEND_DIST_PATH: /app/public
-      MONGODB_URI: mongodb://mongodb:27017/school_management?replicaSet=rs0
     ports:
       - "5000:5000"
     volumes:
