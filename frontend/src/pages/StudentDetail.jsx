@@ -3,7 +3,17 @@ import { createPortal } from 'react-dom';
 import { Link, useParams } from 'react-router-dom';
 import AppShell from '../components/AppShell';
 import QRCodeImage from '../components/QRCodeImage';
-import { changeStudentStatus, deleteStudent, getStudent, transferStudentClassroom, getStudentTransferHistory } from '../api/students';
+import {
+  changeStudentStatus,
+  deleteStudent,
+  getStudent,
+  transferStudentClassroom,
+  getStudentTransferHistory,
+  saveGrowthRecord,
+  deleteGrowthRecord,
+  addVaccinationRecord,
+  deleteVaccinationRecord
+} from '../api/students';
 import { getVietnamToday } from '../utils/dateHelpers';
 import api from '../api/axiosConfig';
 
@@ -72,6 +82,13 @@ export default function StudentDetail() {
   const role = JSON.parse(localStorage.getItem('user') || '{}').role;
   const manager = role === 'admin';
   const canTransfer = ['admin', 'hr', 'principal'].includes(role);
+  const canUpdateHealth = ['admin', 'principal', 'teacher'].includes(role);
+
+  const currentYearMonth = getVietnamToday().slice(0, 7);
+  const [growthForm, setGrowthForm] = useState({ month: currentYearMonth, weightKg: '', heightCm: '', note: '' });
+  const [savingGrowth, setSavingGrowth] = useState(false);
+  const [vaxForm, setVaxForm] = useState({ vaccineName: '', doseNumber: 1, vaccinatedDate: getVietnamToday(), status: 'completed', facility: '', note: '' });
+  const [savingVax, setSavingVax] = useState(false);
 
   // Synchronize route generation and active route id
   useEffect(() => {
@@ -343,6 +360,74 @@ export default function StudentDetail() {
     }
   };
 
+  const handleSaveGrowth = async (e) => {
+    e.preventDefault();
+    if (savingGrowth) return;
+    setSavingGrowth(true);
+    setError('');
+    try {
+      const res = await saveGrowthRecord(id, {
+        month: growthForm.month,
+        weightKg: Number(growthForm.weightKg),
+        heightCm: Number(growthForm.heightCm),
+        note: growthForm.note
+      });
+      setStudent(res.data?.data || student);
+      setNotice(res.data?.message || 'Đã cập nhật cân nặng – chiều cao theo tháng.');
+      setGrowthForm((prev) => ({ ...prev, weightKg: '', heightCm: '', note: '' }));
+    } catch (err) {
+      setError(err.response?.data?.message || 'Không thể lưu chỉ số cân nặng – chiều cao.');
+    } finally {
+      setSavingGrowth(false);
+    }
+  };
+
+  const handleDeleteGrowth = async (recordId) => {
+    if (!window.confirm('Xóa bản ghi cân nặng – chiều cao tháng này?')) return;
+    try {
+      const res = await deleteGrowthRecord(id, recordId);
+      setStudent(res.data?.data || student);
+      setNotice('Đã xóa bản ghi cân đo tháng.');
+    } catch (err) {
+      setError(err.response?.data?.message || 'Không thể xóa bản ghi cân đo.');
+    }
+  };
+
+  const handleAddVaccination = async (e) => {
+    e.preventDefault();
+    if (savingVax) return;
+    setSavingVax(true);
+    setError('');
+    try {
+      const res = await addVaccinationRecord(id, {
+        vaccineName: vaxForm.vaccineName,
+        doseNumber: Number(vaxForm.doseNumber || 1),
+        vaccinatedDate: vaxForm.vaccinatedDate || undefined,
+        status: vaxForm.status,
+        facility: vaxForm.facility,
+        note: vaxForm.note
+      });
+      setStudent(res.data?.data || student);
+      setNotice(res.data?.message || 'Đã lưu thông tin mũi tiêm chủng.');
+      setVaxForm({ vaccineName: '', doseNumber: 1, vaccinatedDate: getVietnamToday(), status: 'completed', facility: '', note: '' });
+    } catch (err) {
+      setError(err.response?.data?.message || 'Không thể thêm mũi tiêm chủng.');
+    } finally {
+      setSavingVax(false);
+    }
+  };
+
+  const handleDeleteVaccination = async (vaxId) => {
+    if (!window.confirm('Xóa mũi tiêm chủng này khỏi hồ sơ?')) return;
+    try {
+      const res = await deleteVaccinationRecord(id, vaxId);
+      setStudent(res.data?.data || student);
+      setNotice('Đã xóa thông tin mũi tiêm.');
+    } catch (err) {
+      setError(err.response?.data?.message || 'Không thể xóa mũi tiêm.');
+    }
+  };
+
   const nextStatuses = transitions[student?.status] || [];
 
   // Filter eligible target classrooms (same schoolYear, active, not current classroom)
@@ -400,6 +485,8 @@ export default function StudentDetail() {
                 <dl>
                   <dt>Mã ID học sinh</dt><dd><strong>{student.studentCode || '—'}</strong></dd>
                   <dt>Mã định danh</dt><dd>{student.identityCode || '—'}</dd>
+                  <dt>Số thẻ BHYT</dt><dd><strong>{student.healthInsuranceCode || 'Chưa cập nhật'}</strong></dd>
+                  <dt>Nhóm máu</dt><dd>{student.bloodType ? `Nhóm ${student.bloodType}` : 'Chưa xác định'}</dd>
                   <dt>Lớp học</dt><dd><strong>{student.currentClassName || '—'}</strong></dd>
                   <dt>Năm học</dt><dd>{student.schoolYear || '—'}</dd>
                   <dt>Ngày sinh</dt><dd>{new Date(student.birthDate).toLocaleDateString('vi-VN')}</dd>
@@ -410,7 +497,8 @@ export default function StudentDetail() {
               </article>
 
               <article>
-                <h3>Ghi chú chuyên môn</h3>
+                <h3>Y tế & Ghi chú chuyên môn</h3>
+                <p><b>Bảo hiểm y tế:</b> {student.healthInsuranceCode || 'Chưa cập nhật'} · <b>Nhóm máu:</b> {student.bloodType || 'Chưa rõ'}</p>
                 <p><b>Dị ứng:</b> {student.allergies?.map((item) => item.allergen).join(', ') || 'Không có dữ liệu'}</p>
                 <p><b>Bệnh lý:</b> {student.disease?.name || 'Không có dữ liệu'}</p>
                 <p><b>Ghi chú:</b> {student.notes || '—'}</p>
@@ -474,6 +562,277 @@ export default function StudentDetail() {
                   <button type="button" className="button button-danger" onClick={remove}>Xóa hồ sơ</button>
                 </article>
               )}
+            </div>
+
+            {/* Khu vực theo dõi Thể chất theo tháng & Sổ tiêm chủng */}
+            <div style={{ marginTop: '24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '18px' }}>
+              <section style={{ border: '1px solid #dbe6f7', borderRadius: '16px', padding: '18px', background: '#fbfdff' }}>
+                <div style={{ marginBottom: '12px' }}>
+                  <p className="card-kicker">PHÁT TRIỂN THỂ CHẤT</p>
+                  <h3 style={{ margin: '4px 0', color: '#1e3a8a', fontSize: '17px' }}>Cân nặng & Chiều cao theo tháng</h3>
+                  <p style={{ margin: 0, fontSize: '12.5px', color: '#64748b' }}>
+                    Ghi nhận số đo định kỳ hàng tháng để theo dõi tốc độ tăng trưởng và thể trạng dinh dưỡng của trẻ.
+                  </p>
+                </div>
+
+                {canUpdateHealth && (
+                  <form onSubmit={handleSaveGrowth} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '10px', marginBottom: '14px', padding: '12px', borderRadius: '12px', background: '#f1f6ff', border: '1px solid #dce7fb' }}>
+                    <label style={{ fontSize: '11.5px', fontWeight: 700, color: '#334155' }}>
+                      Tháng đo *
+                      <input
+                        type="month"
+                        required
+                        value={growthForm.month}
+                        onChange={(e) => setGrowthForm({ ...growthForm, month: e.target.value })}
+                        style={{ width: '100%', marginTop: '4px' }}
+                      />
+                    </label>
+                    <label style={{ fontSize: '11.5px', fontWeight: 700, color: '#334155' }}>
+                      Cân nặng (kg) *
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="1"
+                        max="120"
+                        required
+                        placeholder="VD: 14.5"
+                        value={growthForm.weightKg}
+                        onChange={(e) => setGrowthForm({ ...growthForm, weightKg: e.target.value })}
+                        style={{ width: '100%', marginTop: '4px' }}
+                      />
+                    </label>
+                    <label style={{ fontSize: '11.5px', fontWeight: 700, color: '#334155' }}>
+                      Chiều cao (cm) *
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="30"
+                        max="200"
+                        required
+                        placeholder="VD: 96.5"
+                        value={growthForm.heightCm}
+                        onChange={(e) => setGrowthForm({ ...growthForm, heightCm: e.target.value })}
+                        style={{ width: '100%', marginTop: '4px' }}
+                      />
+                    </label>
+                    <label style={{ fontSize: '11.5px', fontWeight: 700, color: '#334155', gridColumn: '1 / -1' }}>
+                      Nhận xét / Ghi chú tháng
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                        <input
+                          placeholder="VD: Bé ăn ngon miệng, tăng 0.4kg"
+                          value={growthForm.note}
+                          onChange={(e) => setGrowthForm({ ...growthForm, note: e.target.value })}
+                          style={{ flex: 1 }}
+                        />
+                        <button type="submit" className="button button-primary" disabled={savingGrowth}>
+                          {savingGrowth ? 'Đang lưu...' : 'Lưu chỉ số'}
+                        </button>
+                      </div>
+                    </label>
+                  </form>
+                )}
+
+                {student.growthRecords?.length ? (
+                  <div className="table-wrap">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Tháng</th>
+                          <th>Cân nặng</th>
+                          <th>Chiều cao</th>
+                          <th>BMI & Thể trạng</th>
+                          {canUpdateHealth && <th></th>}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {student.growthRecords.map((rec, idx) => {
+                          const prev = student.growthRecords[idx + 1];
+                          const diffW = prev ? Number((rec.weightKg - prev.weightKg).toFixed(1)) : null;
+                          const diffH = prev ? Number((rec.heightCm - prev.heightCm).toFixed(1)) : null;
+                          return (
+                            <tr key={rec._id || rec.month}>
+                              <td><strong>{rec.month ? rec.month.split('-').reverse().join('/') : '—'}</strong></td>
+                              <td>
+                                <strong>{rec.weightKg} kg</strong>
+                                {diffW !== null && (
+                                  <small style={{ display: 'block', color: diffW >= 0 ? '#15803d' : '#b45309' }}>
+                                    {diffW >= 0 ? `+${diffW}` : diffW} kg
+                                  </small>
+                                )}
+                              </td>
+                              <td>
+                                <strong>{rec.heightCm} cm</strong>
+                                {diffH !== null && (
+                                  <small style={{ display: 'block', color: diffH >= 0 ? '#15803d' : '#64748b' }}>
+                                    {diffH >= 0 ? `+${diffH}` : diffH} cm
+                                  </small>
+                                )}
+                              </td>
+                              <td>
+                                <div>BMI: <b>{rec.bmi || '—'}</b> · {rec.nutritionStatus || 'Bình thường'}</div>
+                                {rec.note && <small style={{ color: '#64748b' }}>{rec.note}</small>}
+                              </td>
+                              {canUpdateHealth && (
+                                <td>
+                                  {rec._id && (
+                                    <button
+                                      type="button"
+                                      className="button button-secondary"
+                                      style={{ minHeight: '28px', padding: '0 8px', fontSize: '11px' }}
+                                      onClick={() => handleDeleteGrowth(rec._id)}
+                                    >
+                                      Xóa
+                                    </button>
+                                  )}
+                                </td>
+                              )}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p style={{ margin: 0, fontSize: '13px', color: '#64748b' }}>Chưa có bản ghi cân nặng – chiều cao theo tháng.</p>
+                )}
+              </section>
+
+              <section style={{ border: '1px solid #dbe6f7', borderRadius: '16px', padding: '18px', background: '#fbfdff' }}>
+                <div style={{ marginBottom: '12px' }}>
+                  <p className="card-kicker">Y TẾ HỌC ĐƯỜNG</p>
+                  <h3 style={{ margin: '4px 0', color: '#1e3a8a', fontSize: '17px' }}>Sổ theo dõi tiêm chủng</h3>
+                  <p style={{ margin: 0, fontSize: '12.5px', color: '#64748b' }}>
+                    Lưu trữ các mũi vắc-xin đã tiêm hoặc lịch hẹn tiêm nhắc lại của bé.
+                  </p>
+                </div>
+
+                {canUpdateHealth && (
+                  <form onSubmit={handleAddVaccination} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '10px', marginBottom: '14px', padding: '12px', borderRadius: '12px', background: '#f1f6ff', border: '1px solid #dce7fb' }}>
+                    <label style={{ fontSize: '11.5px', fontWeight: 700, color: '#334155', gridColumn: 'span 2' }}>
+                      Tên vắc-xin *
+                      <input
+                        list="preschool-vaccine-presets"
+                        required
+                        placeholder="VD: Sởi - Rubella, Viêm não Nhật Bản..."
+                        value={vaxForm.vaccineName}
+                        onChange={(e) => setVaxForm({ ...vaxForm, vaccineName: e.target.value })}
+                        style={{ width: '100%', marginTop: '4px' }}
+                      />
+                      <datalist id="preschool-vaccine-presets">
+                        <option value="Lao (BCG)" />
+                        <option value="Viêm gan B" />
+                        <option value="6 trong 1 (Bạch hầu - Ho gà - Uốn ván - Bại liệt - Hib - VGB)" />
+                        <option value="Sởi - Quai bị - Rubella (MMR)" />
+                        <option value="Viêm não Nhật Bản" />
+                        <option value="Thủy đậu" />
+                        <option value="Phế cầu" />
+                        <option value="Tiêu chảy cấp Rota" />
+                        <option value="Cúm mùa" />
+                      </datalist>
+                    </label>
+                    <label style={{ fontSize: '11.5px', fontWeight: 700, color: '#334155' }}>
+                      Mũi số *
+                      <input
+                        type="number"
+                        min="1"
+                        max="20"
+                        required
+                        value={vaxForm.doseNumber}
+                        onChange={(e) => setVaxForm({ ...vaxForm, doseNumber: e.target.value })}
+                        style={{ width: '100%', marginTop: '4px' }}
+                      />
+                    </label>
+                    <label style={{ fontSize: '11.5px', fontWeight: 700, color: '#334155' }}>
+                      Ngày tiêm
+                      <input
+                        type="date"
+                        value={vaxForm.vaccinatedDate}
+                        onChange={(e) => setVaxForm({ ...vaxForm, vaccinatedDate: e.target.value })}
+                        style={{ width: '100%', marginTop: '4px' }}
+                      />
+                    </label>
+                    <label style={{ fontSize: '11.5px', fontWeight: 700, color: '#334155' }}>
+                      Trạng thái
+                      <select
+                        value={vaxForm.status}
+                        onChange={(e) => setVaxForm({ ...vaxForm, status: e.target.value })}
+                        style={{ width: '100%', marginTop: '4px' }}
+                      >
+                        <option value="completed">Đã tiêm</option>
+                        <option value="scheduled">Lịch hẹn</option>
+                        <option value="missed">Tạm hoãn / Chưa tiêm</option>
+                      </select>
+                    </label>
+                    <label style={{ fontSize: '11.5px', fontWeight: 700, color: '#334155', gridColumn: '1 / -1' }}>
+                      Cơ sở tiêm / Ghi chú
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                        <input
+                          placeholder="VD: Trạm y tế phường / VNVC"
+                          value={vaxForm.facility}
+                          onChange={(e) => setVaxForm({ ...vaxForm, facility: e.target.value })}
+                          style={{ flex: 1 }}
+                        />
+                        <button type="submit" className="button button-primary" disabled={savingVax}>
+                          {savingVax ? 'Đang lưu...' : 'Thêm mũi tiêm'}
+                        </button>
+                      </div>
+                    </label>
+                  </form>
+                )}
+
+                {student.vaccinations?.length ? (
+                  <div className="table-wrap">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Vắc-xin</th>
+                          <th>Mũi</th>
+                          <th>Ngày tiêm</th>
+                          <th>Trạng thái</th>
+                          {canUpdateHealth && <th></th>}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {student.vaccinations.map((v, idx) => (
+                          <tr key={v._id || idx}>
+                            <td>
+                              <strong>{v.vaccineName}</strong>
+                              {(v.facility || v.note) && (
+                                <small style={{ display: 'block', color: '#64748b' }}>
+                                  {[v.facility, v.note].filter(Boolean).join(' · ')}
+                                </small>
+                              )}
+                            </td>
+                            <td>Mũi {v.doseNumber || 1}</td>
+                            <td>{v.vaccinatedDate ? new Date(v.vaccinatedDate).toLocaleDateString('vi-VN') : '—'}</td>
+                            <td>
+                              <span className={`student-status ${v.status === 'completed' ? 'enrolled' : 'temporarily_absent'}`}>
+                                {v.status === 'completed' ? 'Đã tiêm' : v.status === 'scheduled' ? 'Lịch hẹn' : 'Chưa tiêm'}
+                              </span>
+                            </td>
+                            {canUpdateHealth && (
+                              <td>
+                                {v._id && (
+                                  <button
+                                    type="button"
+                                    className="button button-secondary"
+                                    style={{ minHeight: '28px', padding: '0 8px', fontSize: '11px' }}
+                                    onClick={() => handleDeleteVaccination(v._id)}
+                                  >
+                                    Xóa
+                                  </button>
+                                )}
+                              </td>
+                            )}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p style={{ margin: 0, fontSize: '13px', color: '#64748b' }}>Chưa có dữ liệu mũi tiêm chủng nào được khai báo.</p>
+                )}
+              </section>
             </div>
 
             {/* Transfer History Section */}

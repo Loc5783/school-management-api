@@ -30,9 +30,12 @@ const ALLERGEN_ALIASES = {
   tree_nut: ["hạt cây", "hạnh nhân", "hạt điều", "óc chó"],
   mollusc: ["nhuyễn thể", "nghêu", "sò", "ốc", "mực"],
 };
+const BLOOD_TYPE_OPTIONS = ["", "A", "B", "AB", "O", "A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
 const empty = {
   studentCode: "",
   identityCode: "",
+  healthInsuranceCode: "",
+  bloodType: "",
   fullName: "",
   birthDate: "",
   gender: "male",
@@ -116,6 +119,8 @@ export default function StudentForm() {
           ...old,
           ...data,
           identityCode: data.identityCode || "",
+          healthInsuranceCode: data.healthInsuranceCode || "",
+          bloodType: data.bloodType || "",
           birthDate: toDate(data.birthDate),
           admissionDate: toDate(data.admissionDate),
           allergens: standardCodes,
@@ -153,6 +158,8 @@ export default function StudentForm() {
       const teacherCreateFields = [
         "studentCode",
         "identityCode",
+        "healthInsuranceCode",
+        "bloodType",
         "fullName",
         "birthDate",
         "gender",
@@ -164,7 +171,7 @@ export default function StudentForm() {
         "notes",
         "classroomId",
       ];
-      const teacherUpdateFields = ["avatar", "notes"];
+      const teacherUpdateFields = ["avatar", "notes", "healthInsuranceCode", "bloodType"];
       const managerFields = [
         ...teacherCreateFields,
         "admissionDate",
@@ -274,6 +281,28 @@ export default function StudentForm() {
               value={form.identityCode || ""}
               onChange={(e) => set("identityCode", e.target.value)}
             />
+          </label>
+          <label>
+            Số thẻ Bảo hiểm Y tế (BHYT)
+            <input
+              maxLength="30"
+              placeholder="VD: TE1012600012345"
+              value={form.healthInsuranceCode || ""}
+              onChange={(e) => set("healthInsuranceCode", e.target.value.toUpperCase())}
+            />
+          </label>
+          <label>
+            Nhóm máu
+            <select
+              value={form.bloodType || ""}
+              onChange={(e) => set("bloodType", e.target.value)}
+            >
+              {BLOOD_TYPE_OPTIONS.map((bt) => (
+                <option key={bt || "unknown"} value={bt}>
+                  {bt ? `Nhóm máu ${bt}` : "Chưa xác định"}
+                </option>
+              ))}
+            </select>
           </label>
           <label>
             Họ và tên

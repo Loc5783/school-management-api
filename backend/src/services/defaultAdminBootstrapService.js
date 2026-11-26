@@ -16,9 +16,13 @@ const bcrypt = require('bcryptjs');
 const Tenant = require('../models/zone1_system/Tenant');
 const Permission = require('../models/zone1_system/Permission');
 const User = require('../models/zone1_system/User');
+const PlatformAdmin = require('../models/zone1_system/PlatformAdmin');
+const { generateTotpSecret, encryptTotpSecret } = require('../saas/utils/totpHelper');
 
 const DEFAULT_ADMIN_USERNAME = 'admin';
 const DEFAULT_ADMIN_PASSWORD = '123456';
+const DEFAULT_SUPERADMIN_USERNAME = 'superadmin';
+const DEFAULT_SUPERADMIN_PASSWORD = '123456';
 const DEFAULT_SCHOOL_CODE = 'HOANANG-A';
 const DEFAULT_SCHOOL_NAME = 'Trường Mầm non Hoa Nắng - Cơ sở A';
 const BCRYPT_SALT_ROUNDS = 10;
@@ -129,12 +133,52 @@ const resolveOrCreateTargetTenant = async (defaultSchoolCode, defaultSchoolName)
  * @param {boolean} [options.useLegacyApp=false] - Chạy ở chế độ Legacy đơn trường (`tenantId: null`) hay SaaS Multi-Tenant
  * @returns {Promise<{ created: boolean, skipped?: boolean, schoolCode?: string | null, username?: string }>}
  */
+/**
+ * Đảm bảo có ít nhất 1 tài khoản Quản trị Tổng Hệ thống Đa Trường (`PlatformAdmin`, mặc định `superadmin` / `123456`)
+ * để chủ chuỗi trường đăng nhập quản lý chung toàn bộ các trường và tạo account riêng cho từng trường.
+ */
+const ensureDefaultSuperAdminAccount = async () => {
+  if (process.env.AUTO_CREATE_DEFAULT_ADMIN === 'false') return;
+  const count = await PlatformAdmin.countDocuments({});
+  if (count > 0) return;
+
+  await PlatformAdmin.createIndexes().catch(() => {});
+  const username = String(process.env.DEFAULT_SUPERADMIN_USERNAME || DEFAULT_SUPERADMIN_USERNAME).trim();
+  const password = String(process.env.DEFAULT_SUPERADMIN_PASSWORD || DEFAULT_SUPERADMIN_PASSWORD);
+  const passwordHash = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
+  const fallbackMfaKey = process.env.PLATFORM_MFA_ENCRYPTION_KEY || process.env.JWT_SECRET || 'default_superadmin_totp_encryption_key_32chars';
+  const encryptedTotp = encryptTotpSecret(generateTotpSecret(), fallbackMfaKey);
+
+  await PlatformAdmin.findOneAndUpdate(
+    { username },
+    {
+      $setOnInsert: {
+        username,
+        passwordHash,
+        role: 'platform_lead',
+        totpSecret: encryptedTotp.ciphertext,
+        totpSecretIv: encryptedTotp.iv,
+        totpSecretTag: encryptedTotp.tag,
+        status: 'active',
+        authVersion: 0
+      }
+    },
+    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
+  );
+  console.log(`✅ [Bootstrap SuperAdmin] Đã sẵn sàng tài khoản Quản trị Tổng Đa Trường (TK: ${username}).`);
+};
+
 const ensureDefaultAdminAccount = async (options = {}) => {
   if (process.env.AUTO_CREATE_DEFAULT_ADMIN === 'false') {
     return { created: false, skipped: true };
   }
 
   const useLegacyApp = Boolean(options.useLegacyApp ?? (process.env.USE_LEGACY_APP === 'true'));
+  if (!useLegacyApp) {
+    await ensureDefaultSuperAdminAccount().catch((err) => {
+      console.warn('⚠️ [Bootstrap SuperAdmin] Không thể khởi tạo superadmin mặc định:', err.message);
+    });
+  }
   const adminUsername = String(process.env.DEFAULT_ADMIN_USERNAME || DEFAULT_ADMIN_USERNAME).trim();
   const adminPassword = String(process.env.DEFAULT_ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD);
   const defaultSchoolCode = String(process.env.DEFAULT_SCHOOL_CODE || DEFAULT_SCHOOL_CODE).trim().toUpperCase();
@@ -245,6 +289,7 @@ const ensureDefaultAdminAccount = async (options = {}) => {
 };
 
 module.exports = {
-  ensureDefaultAdminAccount
+  ensureDefaultAdminAccount,
+  ensureAllPermissions
 };
 

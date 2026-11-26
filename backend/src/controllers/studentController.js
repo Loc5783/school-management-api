@@ -12,10 +12,11 @@ const { STUDENT_STATUSES, isClassroomCountedStatus, canTransitionStudentStatus, 
 const { assertPersonCodeAvailable } = require('../services/personCodeService');
 const { isValidWorkDate, getWorkDate } = require('../utils/dateHelpers');
 
-const ADMIN_MUTABLE = ['studentCode', 'identityCode', 'fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'notes', 'classroomId', 'schoolYear', 'parents', 'authorizedPickers', 'allergies', 'disease', 'emergencyContact', 'admissionDate'];
-const TEACHER_CREATE_FIELDS = ['studentCode', 'identityCode', 'fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'notes', 'parents'];
-const TEACHER_MUTABLE = ['avatar', 'notes'];
-const PARENT_MUTABLE = ['identityCode', 'fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'allergies', 'disease', 'emergencyContact', 'authorizedPickers'];
+const ADMIN_MUTABLE = ['studentCode', 'identityCode', 'healthInsuranceCode', 'bloodType', 'vaccinations', 'growthRecords', 'fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'notes', 'classroomId', 'schoolYear', 'parents', 'authorizedPickers', 'allergies', 'disease', 'emergencyContact', 'admissionDate'];
+const TEACHER_CREATE_FIELDS = ['studentCode', 'identityCode', 'healthInsuranceCode', 'bloodType', 'fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'notes', 'parents'];
+const TEACHER_MUTABLE = ['avatar', 'notes', 'healthInsuranceCode', 'bloodType'];
+const PARENT_MUTABLE = ['identityCode', 'healthInsuranceCode', 'bloodType', 'fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'allergies', 'disease', 'emergencyContact', 'authorizedPickers'];
+const VALID_BLOOD_TYPES = new Set(['', 'A', 'B', 'AB', 'O', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']);
 const SORTS = new Set(['fullName', 'studentCode', 'birthDate', 'admissionDate', 'createdAt', 'updatedAt']);
 const mutableFieldsFor = (role, creating = false) => role === 'teacher'
     ? (creating ? TEACHER_CREATE_FIELDS : TEACHER_MUTABLE)
@@ -55,7 +56,8 @@ const validatePayload = (data, creating = false) => {
         if (!match || Number(match[2]) !== Number(match[1]) + 1) throw httpError('Năm học phải có dạng YYYY-YYYY liên tiếp, ví dụ 2026-2027', 422);
     }
     if (data.gender && !['male', 'female'].includes(data.gender)) throw httpError('Giới tính không hợp lệ', 422);
-    for (const [field, value, max] of [['fullName', data.fullName, 120], ['identityCode', data.identityCode, 40], ['address', data.address, 500], ['nationality', data.nationality, 80], ['ethnicity', data.ethnicity, 80], ['birthPlace', data.birthPlace, 120], ['notes', data.notes, 2000]]) {
+    if (data.bloodType != null && !VALID_BLOOD_TYPES.has(String(data.bloodType).trim().toUpperCase())) throw httpError('Nhóm máu không hợp lệ', 422);
+    for (const [field, value, max] of [['fullName', data.fullName, 120], ['identityCode', data.identityCode, 40], ['healthInsuranceCode', data.healthInsuranceCode, 30], ['address', data.address, 500], ['nationality', data.nationality, 80], ['ethnicity', data.ethnicity, 80], ['birthPlace', data.birthPlace, 120], ['notes', data.notes, 2000]]) {
         if (value != null && String(value).trim().length > max) throw httpError(`${field} vượt quá ${max} ký tự`, 422);
     }
     for (const contact of [...(data.parents || []), data.emergencyContact || {}]) {
@@ -615,6 +617,8 @@ const confirmExcelImport = async (req, res) => {
             validatedStudents.push({
                 studentCode: parsedData.studentCode || '',
                 identityCode: parsedData.identityCode || '',
+                healthInsuranceCode: parsedData.healthInsuranceCode || '',
+                bloodType: parsedData.bloodType || '',
                 fullName: parsedData.fullName,
                 birthDate: parsedData.birthDateObj || new Date(parsedData.birthDate),
                 birthDateStr: parsedData.birthDateStr || parsedData.birthDate,
@@ -823,6 +827,8 @@ const confirmExcelImport = async (req, res) => {
                 const doc = {
                     studentCode: resolvedCode,
                     identityCode: data.identityCode || '',
+                    healthInsuranceCode: data.healthInsuranceCode || '',
+                    bloodType: data.bloodType || '',
                     fullName: data.fullName,
                     birthDate: data.birthDate,
                     gender: data.gender,
@@ -1394,6 +1400,214 @@ const getStudentTransferHistory = async (req, res) => {
     }
 };
 
+/**
+ * Đánh giá nhanh thể trạng mầm non theo BMI tham khảo để giáo viên & phụ huynh theo dõi xu hướng hàng tháng.
+ */
+const evaluatePreschoolNutritionStatus = (bmi) => {
+    if (!Number.isFinite(bmi)) return 'Bình thường';
+    if (bmi < 13.5) return 'Nhẹ cân / Cần tăng cường dinh dưỡng';
+    if (bmi > 18.5) return 'Thừa cân / Cần cân đối khẩu phần';
+    return 'Phát triển bình thường';
+};
+
+/**
+ * Thêm hoặc cập nhật chỉ số Cân nặng & Chiều cao theo tháng (YYYY-MM) của học sinh.
+ */
+const saveGrowthRecord = async (req, res) => {
+    try {
+        if (!isValidStudentId(req.params.id)) return res.status(400).json({ success: false, message: 'ID học sinh không hợp lệ' });
+        const tenantFilter = buildTenantFilter(req);
+        const student = await Student.findOne({ _id: req.params.id, ...tenantFilter });
+        if (!student) return res.status(404).json({ success: false, message: 'Không tìm thấy học sinh' });
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, student.classroomId, req)) {
+            return res.status(403).json({ success: false, message: 'Bạn không có quyền cập nhật sức khỏe học sinh ngoài lớp phụ trách' });
+        }
+
+        const month = String(req.body?.month || '').trim();
+        const weightKg = Number(req.body?.weightKg);
+        const heightCm = Number(req.body?.heightCm);
+        const note = String(req.body?.note || '').trim().slice(0, 500);
+
+        if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+            return res.status(422).json({ success: false, message: 'Tháng đo phải có định dạng YYYY-MM (ví dụ: 2026-11)' });
+        }
+        if (!Number.isFinite(weightKg) || weightKg < 1 || weightKg > 120) {
+            return res.status(422).json({ success: false, message: 'Cân nặng phải nằm trong khoảng 1 – 120 kg' });
+        }
+        if (!Number.isFinite(heightCm) || heightCm < 30 || heightCm > 200) {
+            return res.status(422).json({ success: false, message: 'Chiều cao phải nằm trong khoảng 30 – 200 cm' });
+        }
+
+        const bmi = Number((weightKg / ((heightCm / 100) ** 2)).toFixed(1));
+        const nutritionStatus = String(req.body?.nutritionStatus || '').trim() || evaluatePreschoolNutritionStatus(bmi);
+
+        student.growthRecords = student.growthRecords || [];
+        const existing = student.growthRecords.find((item) => item.month === month);
+        if (existing) {
+            existing.weightKg = Number(weightKg.toFixed(1));
+            existing.heightCm = Number(heightCm.toFixed(1));
+            existing.bmi = bmi;
+            existing.nutritionStatus = nutritionStatus;
+            existing.note = note;
+            existing.measuredAt = new Date();
+            existing.recordedBy = req.user._id;
+            existing.recordedByName = actorName(req.user);
+        } else {
+            student.growthRecords.push({
+                month,
+                measuredAt: new Date(),
+                weightKg: Number(weightKg.toFixed(1)),
+                heightCm: Number(heightCm.toFixed(1)),
+                bmi,
+                nutritionStatus,
+                note,
+                recordedBy: req.user._id,
+                recordedByName: actorName(req.user)
+            });
+        }
+
+        student.growthRecords.sort((a, b) => String(b.month).localeCompare(String(a.month)));
+        student.updatedBy = req.user._id;
+        await student.save();
+
+        return res.json({
+            success: true,
+            message: `Đã lưu chỉ số cân nặng – chiều cao tháng ${month.split('-').reverse().join('/')}`,
+            data: serializeStudent(student, req.user.role)
+        });
+    } catch (err) {
+        console.error(err);
+        return respondError(res, err, 'Không thể lưu chỉ số cân nặng – chiều cao');
+    }
+};
+
+const deleteGrowthRecord = async (req, res) => {
+    try {
+        if (!isValidStudentId(req.params.id) || !isValidStudentId(req.params.recordId)) {
+            return res.status(400).json({ success: false, message: 'ID không hợp lệ' });
+        }
+        const tenantFilter = buildTenantFilter(req);
+        const student = await Student.findOne({ _id: req.params.id, ...tenantFilter });
+        if (!student) return res.status(404).json({ success: false, message: 'Không tìm thấy học sinh' });
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, student.classroomId, req)) {
+            return res.status(403).json({ success: false, message: 'Bạn không có quyền xóa chỉ số sức khỏe của học sinh ngoài lớp phụ trách' });
+        }
+
+        const beforeLen = (student.growthRecords || []).length;
+        student.growthRecords = (student.growthRecords || []).filter((item) => String(item._id) !== String(req.params.recordId));
+        if (student.growthRecords.length === beforeLen) {
+            return res.status(404).json({ success: false, message: 'Không tìm thấy bản ghi cân đo' });
+        }
+        student.updatedBy = req.user._id;
+        await student.save();
+
+        return res.json({
+            success: true,
+            message: 'Đã xóa bản ghi cân đo tháng',
+            data: serializeStudent(student, req.user.role)
+        });
+    } catch (err) {
+        console.error(err);
+        return respondError(res, err);
+    }
+};
+
+/**
+ * Thêm mũi tiêm chủng vào Sổ tiêm chủng của học sinh.
+ */
+const addVaccinationRecord = async (req, res) => {
+    try {
+        if (!isValidStudentId(req.params.id)) return res.status(400).json({ success: false, message: 'ID học sinh không hợp lệ' });
+        const tenantFilter = buildTenantFilter(req);
+        const student = await Student.findOne({ _id: req.params.id, ...tenantFilter });
+        if (!student) return res.status(404).json({ success: false, message: 'Không tìm thấy học sinh' });
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, student.classroomId, req)) {
+            return res.status(403).json({ success: false, message: 'Bạn không có quyền cập nhật sổ tiêm chủng ngoài lớp phụ trách' });
+        }
+
+        const vaccineName = String(req.body?.vaccineName || '').trim();
+        const doseNumber = Number(req.body?.doseNumber || 1);
+        const status = String(req.body?.status || 'completed').trim();
+        const facility = String(req.body?.facility || '').trim().slice(0, 150);
+        const note = String(req.body?.note || '').trim().slice(0, 500);
+        const rawDate = req.body?.vaccinatedDate;
+
+        if (!vaccineName || vaccineName.length > 150) {
+            return res.status(422).json({ success: false, message: 'Vui lòng nhập tên vắc-xin hợp lệ (tối đa 150 ký tự)' });
+        }
+        if (!Number.isInteger(doseNumber) || doseNumber < 1 || doseNumber > 20) {
+            return res.status(422).json({ success: false, message: 'Mũi tiêm số phải là số nguyên từ 1 đến 20' });
+        }
+        if (!['completed', 'scheduled', 'missed'].includes(status)) {
+            return res.status(422).json({ success: false, message: 'Trạng thái mũi tiêm không hợp lệ' });
+        }
+
+        let vaccinatedDate = null;
+        if (rawDate) {
+            vaccinatedDate = new Date(rawDate);
+            if (Number.isNaN(vaccinatedDate.getTime())) {
+                return res.status(422).json({ success: false, message: 'Ngày tiêm chủng không hợp lệ' });
+            }
+        }
+
+        student.vaccinations = student.vaccinations || [];
+        student.vaccinations.push({
+            vaccineName,
+            doseNumber,
+            ...(vaccinatedDate ? { vaccinatedDate } : {}),
+            status,
+            facility,
+            note,
+            recordedBy: req.user._id,
+            recordedByName: actorName(req.user),
+            recordedAt: new Date()
+        });
+        student.vaccinations.sort((a, b) => new Date(b.vaccinatedDate || b.recordedAt || 0) - new Date(a.vaccinatedDate || a.recordedAt || 0));
+        student.updatedBy = req.user._id;
+        await student.save();
+
+        return res.status(201).json({
+            success: true,
+            message: 'Đã thêm mũi tiêm vào hồ sơ tiêm chủng',
+            data: serializeStudent(student, req.user.role)
+        });
+    } catch (err) {
+        console.error(err);
+        return respondError(res, err, 'Không thể lưu thông tin tiêm chủng');
+    }
+};
+
+const deleteVaccinationRecord = async (req, res) => {
+    try {
+        if (!isValidStudentId(req.params.id) || !isValidStudentId(req.params.vaxId)) {
+            return res.status(400).json({ success: false, message: 'ID không hợp lệ' });
+        }
+        const tenantFilter = buildTenantFilter(req);
+        const student = await Student.findOne({ _id: req.params.id, ...tenantFilter });
+        if (!student) return res.status(404).json({ success: false, message: 'Không tìm thấy học sinh' });
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, student.classroomId, req)) {
+            return res.status(403).json({ success: false, message: 'Bạn không có quyền xóa mũi tiêm của học sinh ngoài lớp phụ trách' });
+        }
+
+        const beforeLen = (student.vaccinations || []).length;
+        student.vaccinations = (student.vaccinations || []).filter((item) => String(item._id) !== String(req.params.vaxId));
+        if (student.vaccinations.length === beforeLen) {
+            return res.status(404).json({ success: false, message: 'Không tìm thấy mũi tiêm cần xóa' });
+        }
+        student.updatedBy = req.user._id;
+        await student.save();
+
+        return res.json({
+            success: true,
+            message: 'Đã xóa thông tin mũi tiêm',
+            data: serializeStudent(student, req.user.role)
+        });
+    } catch (err) {
+        console.error(err);
+        return respondError(res, err);
+    }
+};
+
 module.exports = {
     createStudent,
     getAllStudents,
@@ -1403,6 +1617,10 @@ module.exports = {
     deleteStudent,
     getDailyReports,
     saveDailyReport,
+    saveGrowthRecord,
+    deleteGrowthRecord,
+    addVaccinationRecord,
+    deleteVaccinationRecord,
     downloadExcelTemplate,
     previewExcelImport,
     confirmExcelImport,

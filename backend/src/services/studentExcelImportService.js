@@ -39,8 +39,12 @@ const EXCEL_COLUMNS = [
   { header: 'Quốc tịch', key: 'nationality', width: 16, required: false },
   { header: 'Dân tộc', key: 'ethnicity', width: 15, required: false },
   { header: 'Nơi sinh', key: 'birthPlace', width: 20, required: false },
-  { header: 'Ghi chú', key: 'notes', width: 28, required: false }
+  { header: 'Ghi chú', key: 'notes', width: 28, required: false },
+  { header: 'Mã thẻ BHYT', key: 'healthInsuranceCode', width: 20, required: false },
+  { header: 'Nhóm máu', key: 'bloodType', width: 12, required: false }
 ];
+
+const VALID_BLOOD_TYPES = new Set(['', 'A', 'B', 'AB', 'O', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']);
 
 const GENDER_MAP = {
   nam: 'male',
@@ -128,7 +132,7 @@ const generateTemplateWorkbook = async (classrooms = []) => {
   });
 
   // Định dạng text (@) cho các cột Mã, Ngày và Số điện thoại để Excel không tự cắt số 0 đầu
-  ['studentCode', 'identityCode', 'birthDate', 'admissionDate', 'parent1Phone', 'parent2Phone'].forEach((colKey) => {
+  ['studentCode', 'identityCode', 'healthInsuranceCode', 'birthDate', 'admissionDate', 'parent1Phone', 'parent2Phone'].forEach((colKey) => {
     const col = dataSheet.getColumn(colKey);
     if (col) col.numFmt = '@';
   });
@@ -350,7 +354,9 @@ const computeBatchFingerprint = (classroomId, rows) => {
       nationality: String(r.nationality || '').trim(),
       ethnicity: String(r.ethnicity || '').trim(),
       birthPlace: String(r.birthPlace || '').trim(),
-      notes: String(r.notes || '').trim()
+      notes: String(r.notes || '').trim(),
+      healthInsuranceCode: String(r.healthInsuranceCode || '').trim().toUpperCase(),
+      bloodType: String(r.bloodType || '').trim().toUpperCase()
     }))
   };
   return crypto.createHash('sha256').update(JSON.stringify(canonicalData), 'utf8').digest('hex');
@@ -377,6 +383,8 @@ const validateStudentRowStrict = (item, rowNumber, _now = new Date(), is1904 = f
   const ethnicity = pickString(item, 'ethnicity', 'rawEthnicity');
   const birthPlace = pickString(item, 'birthPlace', 'rawBirthPlace');
   const notes = pickString(item, 'notes', 'rawNotes');
+  const healthInsuranceCode = pickString(item, 'healthInsuranceCode', 'rawHealthInsuranceCode').replace(/\s+/g, '').toUpperCase();
+  const rawBloodType = pickString(item, 'bloodType', 'rawBloodType').replace(/^nh[oó]m\s*(m[aá]u)?\s*/i, '').trim().toUpperCase();
   const allergiesText = pickString(item, 'allergiesText', 'rawAllergiesText');
   const diseaseText = pickString(item, 'diseaseText', 'rawDiseaseText');
 
@@ -435,6 +443,10 @@ const validateStudentRowStrict = (item, rowNumber, _now = new Date(), is1904 = f
   if (ethnicity.length > 80) errors.push(`Dân tộc vượt quá độ dài tối đa 80 ký tự (hiện tại: ${ethnicity.length} ký tự)`);
   if (birthPlace.length > 120) errors.push(`Nơi sinh vượt quá độ dài tối đa 120 ký tự (hiện tại: ${birthPlace.length} ký tự)`);
   if (notes.length > 2000) errors.push(`Ghi chú vượt quá độ dài tối đa 2000 ký tự (hiện tại: ${notes.length} ký tự)`);
+  if (healthInsuranceCode.length > 30) errors.push(`Mã thẻ BHYT vượt quá 30 ký tự (hiện tại: ${healthInsuranceCode.length} ký tự)`);
+  if (rawBloodType && !VALID_BLOOD_TYPES.has(rawBloodType)) {
+    errors.push(`Nhóm máu "${rawBloodType}" không hợp lệ (chấp nhận A, B, AB, O hoặc kèm Rh +/-)`);
+  }
 
   // 6. Ngày nhập học
   let admissionDateFormatted = '';
@@ -553,7 +565,9 @@ const validateStudentRowStrict = (item, rowNumber, _now = new Date(), is1904 = f
     nationality: nationality || 'Việt Nam',
     ethnicity,
     birthPlace,
-    notes
+    notes,
+    healthInsuranceCode,
+    bloodType: rawBloodType
   };
 
   return {
@@ -686,6 +700,8 @@ const resolveHeaderField = (rawHeader) => {
   if (['dantoc', 'ethnicity'].includes(key)) return 'ethnicity';
   if (['noisinh', 'birthplace'].includes(key)) return 'birthPlace';
   if (['ghichu', 'notes', 'note'].includes(key)) return 'notes';
+  if (['mathebhyt', 'mabhyt', 'sobhyt', 'bhyt', 'baohiemyte', 'healthinsurancecode'].includes(key)) return 'healthInsuranceCode';
+  if (['nhommau', 'bloodtype'].includes(key)) return 'bloodType';
 
   return null;
 };
@@ -874,13 +890,16 @@ const parseAndValidateExcelBuffer = async (buffer, classroomId, user, options = 
     const rawEthnicity = readTextCol(row, 'ethnicity', 'Dân tộc', rowErrors);
     const rawBirthPlace = readTextCol(row, 'birthPlace', 'Nơi sinh', rowErrors);
     const rawNotes = readTextCol(row, 'notes', 'Ghi chú', rowErrors);
+    const rawHealthInsuranceCode = readTextCol(row, 'healthInsuranceCode', 'Mã thẻ BHYT', rowErrors);
+    const rawBloodType = readTextCol(row, 'bloodType', 'Nhóm máu', rowErrors);
 
     const allEmpty = !rawClassNameInput && !rawStudentCode && !rawIdentityCode &&
       !rawFullName && !rawBirthDate && !rawGender && !rawAdmissionDate &&
       !rawParent1Name && !rawParent1Phone && !rawParent1Email &&
       !rawParent2Name && !rawParent2Phone && !rawParent2Email &&
       !rawAllergiesText && !rawDiseaseText && !rawAddress &&
-      !rawNationality && !rawEthnicity && !rawBirthPlace && !rawNotes;
+      !rawNationality && !rawEthnicity && !rawBirthPlace && !rawNotes &&
+      !rawHealthInsuranceCode && !rawBloodType;
     if (allEmpty) return;
 
     parsedRows.push({
@@ -907,6 +926,8 @@ const parseAndValidateExcelBuffer = async (buffer, classroomId, user, options = 
       rawEthnicity,
       rawBirthPlace,
       rawNotes,
+      rawHealthInsuranceCode,
+      rawBloodType,
       formulaErrors: rowErrors
     });
   });
@@ -1088,6 +1109,8 @@ const parseAndValidateExcelBuffer = async (buffer, classroomId, user, options = 
       ethnicity: r.ethnicity,
       birthPlace: r.birthPlace,
       notes: r.notes,
+      healthInsuranceCode: r.healthInsuranceCode || '',
+      bloodType: r.bloodType || '',
       isValid: r.isValid,
       errors: r.errors,
       duplicateInfo: r.duplicateInfo || null

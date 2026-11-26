@@ -8,6 +8,7 @@ const { tenantFeatureGate } = require('./middlewares/tenantFeatureGate');
 const schoolAuthRoutes = require('./routes/schoolAuthRoutes');
 const platformAuthRoutes = require('./routes/platformAuthRoutes');
 const platformTenantRoutes = require('./routes/platformTenantRoutes');
+const multiSchoolAdminRoutes = require('./routes/multiSchoolAdminRoutes');
 const schoolClassroomRoutes = require('./routes/schoolClassroomRoutes');
 const schoolStudentRoutes = require('./routes/schoolStudentRoutes');
 const schoolAttendanceRoutes = require('./routes/schoolAttendanceRoutes');
@@ -131,6 +132,8 @@ const assembleSaasApp = (options = {}) => {
 
   // SaaS Approved Finance and Accounting Report Endpoints
   if (isFinanceAllowed(saasMode)) {
+    app.use('/api/v1/multi-school', multiSchoolAdminRoutes);
+    app.use('/api/multi-school', multiSchoolAdminRoutes);
     app.use('/api/v1/finance', schoolFinanceRoutes);
     app.use('/api/finance', schoolFinanceRoutes);
     app.use('/api/v1/reports', schoolReportRoutes);

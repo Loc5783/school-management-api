@@ -1,5 +1,6 @@
 /* eslint-disable react-hooks/set-state-in-effect */
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
@@ -30,22 +31,120 @@ const LOW_MONTHLY_SALARY = 1000000;
 const salaryInMonth = (form) => Number(form.baseSalary || 0) * (form.salaryUnit === 'daily' ? Number(form.standardWorkDays || 26) : 1);
 
 const positionText = {
-  principal: 'Hiệu trưởng', vice_principal: 'Phó hiệu trưởng', teacher: 'Giáo viên',
-  head_teacher: 'Tổ trưởng chuyên môn', assistant_teacher: 'Trợ giảng',
-  accountant: 'Kế toán', chef: 'Nhân viên bếp', hr: 'Nhân sự (HR)', security: 'Bảo vệ'
+  principal: 'Hiệu trưởng',
+  vice_principal: 'Phó hiệu trưởng',
+  teacher: 'Giáo viên',
+  head_teacher: 'Tổ trưởng chuyên môn',
+  assistant_teacher: 'Trợ giảng',
+  accountant: 'Kế toán',
+  chef: 'Nhân viên bếp',
+  hr: 'Nhân sự (HR)',
+  security: 'Bảo vệ'
 };
-const roleText = { admin: 'Quản trị hệ thống', principal: 'Hiệu trưởng', teacher: 'Giáo viên', accountant: 'Kế toán', chef: 'Nhân viên bếp', guard: 'Bảo vệ', hr: 'Nhân sự (HR)' };
-const payrollRoleText = { principal: 'Hiệu trưởng', teacher: 'Giáo viên', accountant: 'Kế toán', chef: 'Nhân viên bếp', guard: 'Bảo vệ', hr: 'Nhân sự (HR)' };
+
+const roleText = {
+  admin: 'Quản trị trường',
+  principal: 'Hiệu trưởng',
+  teacher: 'Giáo viên',
+  accountant: 'Kế toán',
+  chef: 'Nhân viên bếp',
+  guard: 'Bảo vệ',
+  hr: 'Nhân sự (HR)'
+};
+
+const payrollRoleText = {
+  principal: 'Ban giám hiệu',
+  teacher: 'Giáo viên',
+  accountant: 'Kế toán',
+  chef: 'Nhân viên bếp',
+  guard: 'Bảo vệ',
+  hr: 'Nhân sự (HR)'
+};
+
+const statusText = {
+  active: 'Đang làm việc',
+  on_leave: 'Đang nghỉ phép',
+  resigned: 'Đã nghỉ việc'
+};
+
 const payrollRoleFromAccountRole = (role) => ({
-  admin: 'principal', principal: 'principal', teacher: 'teacher', accountant: 'accountant', chef: 'chef', guard: 'guard', hr: 'hr'
+  admin: 'principal',
+  principal: 'principal',
+  teacher: 'teacher',
+  accountant: 'accountant',
+  chef: 'chef',
+  guard: 'guard',
+  hr: 'hr'
 }[role] || 'teacher');
+
 const emptyEmployeeForm = {
-  userId: '', employeeCode: '', fullName: '', phone: '', email: '', address: '', position: 'teacher', payrollRole: 'teacher', baseSalary: '', salaryUnit: 'monthly', standardWorkDays: 26, lowMonthlySalaryConfirmed: false,
-  startDate: '', contractType: '', contractNumber: '', contractSignedDate: '', contractStartDate: '', endDate: ''
+  userId: '',
+  employeeCode: '',
+  fullName: '',
+  phone: '',
+  email: '',
+  address: '',
+  position: 'teacher',
+  payrollRole: 'teacher',
+  baseSalary: '',
+  salaryUnit: 'monthly',
+  standardWorkDays: 26,
+  lowMonthlySalaryConfirmed: false,
+  startDate: '',
+  contractType: '',
+  contractNumber: '',
+  contractSignedDate: '',
+  contractStartDate: '',
+  endDate: ''
 };
-const profileDate = (value) => value ? new Date(value).toISOString().slice(0, 10) : '';
-const contractTypeText = { probation: 'Thử việc', fixed_1_year: 'Xác định 1 năm', fixed_3_year: 'Xác định 3 năm', indefinite: 'Không xác định thời hạn' };
-const profileFieldText = { employeeCode: 'Mã nhân viên', fullName: 'Họ và tên', phone: 'Số điện thoại', email: 'Email', address: 'Địa chỉ', position: 'Chức danh', payrollRole: 'Vai trò tính lương', startDate: 'Ngày vào làm', contractType: 'Loại hợp đồng', contractNumber: 'Số hợp đồng', contractSignedDate: 'Ngày ký', contractStartDate: 'Ngày hiệu lực', endDate: 'Ngày hết hạn', status: 'Tình trạng', userId: 'Tài khoản liên kết', baseSalary: 'Lương cơ bản theo tháng', standardWorkDays: 'Số ngày công chuẩn', lowMonthlySalaryConfirmed: 'Đã xác minh lương tháng thấp' };
+
+const profileDate = (value) => (value ? new Date(value).toISOString().slice(0, 10) : '');
+const contractTypeText = {
+  probation: 'Thử việc',
+  fixed_1_year: 'Xác định 1 năm',
+  fixed_3_year: 'Xác định 3 năm',
+  indefinite: 'Không xác định thời hạn'
+};
+
+const profileFieldText = {
+  employeeCode: 'Mã nhân viên',
+  fullName: 'Họ và tên',
+  phone: 'Số điện thoại',
+  email: 'Email',
+  address: 'Địa chỉ',
+  position: 'Chức danh',
+  payrollRole: 'Nhóm tính lương',
+  startDate: 'Ngày vào làm',
+  contractType: 'Loại hợp đồng',
+  contractNumber: 'Số hợp đồng',
+  contractSignedDate: 'Ngày ký hợp đồng',
+  contractStartDate: 'Ngày hiệu lực',
+  endDate: 'Ngày hết hạn',
+  status: 'Tình trạng làm việc',
+  userId: 'Tài khoản liên kết',
+  baseSalary: 'Lương cơ bản / tháng',
+  standardWorkDays: 'Số ngày công chuẩn',
+  lowMonthlySalaryConfirmed: 'Xác nhận lương tháng thấp'
+};
+
+/**
+ * Việt hóa giá trị trong lịch sử thay đổi hồ sơ nhân sự để người dùng không nhìn thấy mã kỹ thuật thô.
+ */
+const formatHistoryFieldValue = (key, rawVal) => {
+  if (rawVal === null || rawVal === undefined || rawVal === '') return 'Chưa thiết lập';
+  if (key === 'position') return positionText[rawVal] || String(rawVal);
+  if (key === 'payrollRole') return payrollRoleText[rawVal] || String(rawVal);
+  if (key === 'contractType') return contractTypeText[rawVal] || String(rawVal);
+  if (key === 'status') return statusText[rawVal] || String(rawVal);
+  if (key === 'baseSalary') return money(Number(rawVal) || 0);
+  if (key === 'lowMonthlySalaryConfirmed') return rawVal ? 'Đã xác nhận' : 'Chưa xác nhận';
+  if (key === 'userId') return rawVal ? 'Đã gắn tài khoản' : 'Chưa gắn tài khoản';
+  if (['startDate', 'contractSignedDate', 'contractStartDate', 'endDate'].includes(key)) {
+    const parsed = new Date(rawVal);
+    return Number.isNaN(parsed.getTime()) ? String(rawVal) : parsed.toLocaleDateString('vi-VN');
+  }
+  return String(rawVal);
+};
 
 export default function EmployeeManagement() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -67,13 +166,19 @@ export default function EmployeeManagement() {
   const [staffAccounts, setStaffAccounts] = useState([]);
   const [pendingCorrections, setPendingCorrections] = useState([]);
   const [selectedRecalcDate, setSelectedRecalcDate] = useState('');
-  const [notice, setNotice] = useState('');
+  const [notice, setNotice] = useState(null); // { type: 'success' | 'error', text: '' }
   const [formError, setFormError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState(null);
   const [profileHistory, setProfileHistory] = useState(null);
   const [form, setForm] = useState(emptyEmployeeForm);
+
+  // Bộ lọc tìm kiếm nhanh ngay trên bảng Nhân sự
+  const [searchQuery, setSearchQuery] = useState('');
+  const [roleFilter, setRoleFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
 
   const role = JSON.parse(localStorage.getItem('user') || '{}').role;
   const canOperateHr = ['admin', 'hr'].includes(role);
@@ -92,10 +197,9 @@ export default function EmployeeManagement() {
       setEmployees(employeeRes.data.data || []);
       setPendingCorrections(correctionRes.data.data || []);
       setStaffAccounts(staffAccountRes.data.data || []);
-      setNotice('');
       return true;
     } catch (err) {
-      setNotice(err.response?.data?.message || 'Không thể tải dữ liệu nhân sự.');
+      setNotice({ type: 'error', text: err.response?.data?.message || 'Không thể tải dữ liệu nhân sự.' });
       return false;
     } finally {
       setLoading(false);
@@ -103,8 +207,16 @@ export default function EmployeeManagement() {
   }, [canManageHr, canApproveTimekeeping]);
 
   useEffect(() => { load(); }, [load]);
+
   useEffect(() => {
-    const allowed = ['employees', 'timekeeping', 'devices', ...(role === 'admin' ? ['audit'] : []), ...(canManageHr ? ['staffing', 'transfers', 'internal'] : []), ...(canReviewHr ? ['leave'] : [])];
+    const allowed = [
+      'employees',
+      'timekeeping',
+      'devices',
+      ...(role === 'admin' ? ['audit'] : []),
+      ...(canManageHr ? ['staffing', 'transfers', 'internal'] : []),
+      ...(canReviewHr ? ['leave'] : [])
+    ];
     setTab(allowed.includes(initialTab) ? initialTab : 'employees');
   }, [initialTab, canManageHr, canReviewHr, role]);
 
@@ -115,14 +227,27 @@ export default function EmployeeManagement() {
 
   const submitEmployee = async (event) => {
     event.preventDefault();
+    if (saving) return;
+    setSaving(true);
     try {
       const monthlySalary = salaryInMonth(form);
-      if (!Number.isSafeInteger(monthlySalary) || monthlySalary < 0) { setFormError('Mức lương phải là số nguyên VND hợp lệ.'); return; }
-      if (monthlySalary > 0 && monthlySalary < LOW_MONTHLY_SALARY && !form.lowMonthlySalaryConfirmed) { setFormError('Hãy xác nhận rõ đây là lương theo tháng, hoặc đổi sang nhập tiền một công.'); return; }
+      if (!Number.isSafeInteger(monthlySalary) || monthlySalary < 0) {
+        setFormError('Mức lương phải là số nguyên VND hợp lệ.');
+        return;
+      }
+      if (monthlySalary > 0 && monthlySalary < LOW_MONTHLY_SALARY && !form.lowMonthlySalaryConfirmed) {
+        setFormError('Hãy xác nhận rõ đây là lương theo tháng, hoặc đổi sang nhập tiền một công.');
+        return;
+      }
       const payload = {
         ...form,
         userId: form.userId || '',
-        salaryConfig: { ...(editingEmployee?.salaryConfig || {}), baseSalary: monthlySalary, standardWorkDays: Number(form.standardWorkDays), lowMonthlySalaryConfirmed: monthlySalary > 0 && monthlySalary < LOW_MONTHLY_SALARY ? form.lowMonthlySalaryConfirmed : false }
+        salaryConfig: {
+          ...(editingEmployee?.salaryConfig || {}),
+          baseSalary: monthlySalary,
+          standardWorkDays: Number(form.standardWorkDays),
+          lowMonthlySalaryConfirmed: monthlySalary > 0 && monthlySalary < LOW_MONTHLY_SALARY ? form.lowMonthlySalaryConfirmed : false
+        }
       };
       if (editingEmployee) await updateEmployee(editingEmployee._id, payload);
       else await createEmployee(payload);
@@ -131,9 +256,14 @@ export default function EmployeeManagement() {
       setEditingEmployee(null);
       setForm(emptyEmployeeForm);
       await load();
-      setNotice(editingEmployee ? 'Đã cập nhật hồ sơ và liên kết tài khoản nhân sự.' : 'Đã tạo hồ sơ nhân sự.');
+      setNotice({
+        type: 'success',
+        text: editingEmployee ? 'Đã cập nhật hồ sơ và liên kết tài khoản nhân sự.' : 'Đã tạo hồ sơ nhân sự mới thành công.'
+      });
     } catch (err) {
       setFormError(err.response?.data?.message || 'Không thể lưu hồ sơ nhân viên.');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -160,7 +290,8 @@ export default function EmployeeManagement() {
         ? payrollRoleFromAccountRole(linkedAccount.role)
         : (employee?.payrollRole || linkedAccount?.suggestedPayrollRole || 'teacher'),
       baseSalary: employee?.salaryConfig?.baseSalary ?? linkedAccount?.employeeInfo?.baseSalary ?? '',
-      salaryUnit: 'monthly', standardWorkDays: employee?.salaryConfig?.standardWorkDays || 26,
+      salaryUnit: 'monthly',
+      standardWorkDays: employee?.salaryConfig?.standardWorkDays || 26,
       lowMonthlySalaryConfirmed: employee?.salaryConfig?.lowMonthlySalaryConfirmed === true
     });
     setShowForm(true);
@@ -177,7 +308,8 @@ export default function EmployeeManagement() {
       email: account?.profile?.email || current.email,
       position: account?.employeeInfo?.position || account?.suggestedPosition || current.position,
       payrollRole: account?.suggestedPayrollRole || payrollRoleFromAccountRole(account?.role),
-      baseSalary: current.baseSalary || account?.employeeInfo?.baseSalary || '', lowMonthlySalaryConfirmed: false
+      baseSalary: current.baseSalary || account?.employeeInfo?.baseSalary || '',
+      lowMonthlySalaryConfirmed: false
     }));
   };
 
@@ -190,9 +322,12 @@ export default function EmployeeManagement() {
       const response = await syncStaffAccounts();
       await load();
       const needsSalary = (response.data.data?.created || []).filter((item) => !item.salaryConfigured).length;
-      setNotice(`${response.data.message}.${needsSalary ? ` ${needsSalary} hồ sơ cần thiết lập mức lương trước khi tính lương.` : ''}`);
+      setNotice({
+        type: 'success',
+        text: `${response.data.message}.${needsSalary ? ` Có ${needsSalary} hồ sơ cần thiết lập mức lương trước khi tính lương.` : ''}`
+      });
     } catch (err) {
-      setNotice(err.response?.data?.message || 'Không thể đồng bộ tài khoản nội bộ.');
+      setNotice({ type: 'error', text: err.response?.data?.message || 'Không thể đồng bộ tài khoản nội bộ.' });
     }
   };
 
@@ -202,9 +337,9 @@ export default function EmployeeManagement() {
       const request = pendingCorrections.find((item) => item._id === id);
       await approveCorrection(id, request?.version);
       await load();
-      setNotice('Đã duyệt đơn chấm công bù thành công.');
+      setNotice({ type: 'success', text: 'Đã duyệt đơn chấm công bù thành công.' });
     } catch (err) {
-      setNotice(err.response?.data?.message || 'Lỗi khi duyệt đơn chấm công.');
+      setNotice({ type: 'error', text: err.response?.data?.message || 'Lỗi khi duyệt đơn chấm công.' });
     }
   };
 
@@ -215,9 +350,9 @@ export default function EmployeeManagement() {
       const request = pendingCorrections.find((item) => item._id === id);
       await rejectCorrection(id, request?.version, reason);
       await load();
-      setNotice('Đã từ chối đơn chấm công.');
+      setNotice({ type: 'success', text: 'Đã từ chối đơn chấm công bù.' });
     } catch (err) {
-      setNotice(err.response?.data?.message || 'Lỗi khi từ chối đơn chấm công.');
+      setNotice({ type: 'error', text: err.response?.data?.message || 'Lỗi khi từ chối đơn chấm công.' });
     }
   };
 
@@ -230,17 +365,45 @@ export default function EmployeeManagement() {
     try {
       await recalculateAttendance(selectedRecalcDate);
       await load();
-      setNotice(`Đã tính lại công ngày ${selectedRecalcDate} thành công.`);
+      setNotice({ type: 'success', text: `Đã tính lại công ngày ${selectedRecalcDate} thành công.` });
     } catch (err) {
-      setNotice(err.response?.data?.message || 'Lỗi khi tính lại chấm công.');
+      setNotice({ type: 'error', text: err.response?.data?.message || 'Lỗi khi tính lại chấm công.' });
     }
   };
 
   const openProfileHistory = async (employee) => {
     try {
       const response = await getEmployeeHistory(employee._id);
-      setProfileHistory({ employee, records: response.data.data, createdAt: response.data.createdAt });
-    } catch (error) { setNotice(error.response?.data?.message || 'Không thể tải lịch sử hồ sơ.'); }
+      setProfileHistory({ employee, records: response.data.data || [], createdAt: response.data.createdAt });
+    } catch (error) {
+      setNotice({ type: 'error', text: error.response?.data?.message || 'Không thể tải lịch sử hồ sơ.' });
+    }
+  };
+
+  const filteredEmployees = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return employees.filter((item) => {
+      const effectiveRole = item.userId?.role ? payrollRoleFromAccountRole(item.userId.role) : item.payrollRole;
+      if (roleFilter !== 'all' && effectiveRole !== roleFilter) return false;
+      if (statusFilter !== 'all' && item.status !== statusFilter) return false;
+      if (!q) return true;
+      return (
+        String(item.fullName || '').toLowerCase().includes(q) ||
+        String(item.employeeCode || '').toLowerCase().includes(q) ||
+        String(item.phone || '').toLowerCase().includes(q) ||
+        String(item.email || '').toLowerCase().includes(q) ||
+        String(item.userId?.username || '').toLowerCase().includes(q)
+      );
+    });
+  }, [employees, searchQuery, roleFilter, statusFilter]);
+
+  const activeCount = employees.filter((item) => item.status === 'active').length;
+
+  const resolveDisplayPosition = (item) => {
+    if (item.userId?.role === 'admin') {
+      return item.position === 'vice_principal' ? 'Phó hiệu trưởng (QT)' : 'Quản trị trường';
+    }
+    return positionText[item.position] || item.position || 'Nhân viên';
   };
 
   return (
@@ -261,12 +424,39 @@ export default function EmployeeManagement() {
       )}
     >
       <section className="hr-workspace">
-        {notice && <div className="form-error">{notice}</div>}
+        {notice && (
+          <div className={notice.type === 'error' ? 'form-error' : 'timekeeping-notice success'} role={notice.type === 'error' ? 'alert' : 'status'}>
+            <Icon name={notice.type === 'error' ? 'alertCircle' : 'check'} size={16} />
+            <span>{notice.text}</span>
+          </div>
+        )}
 
         <div className="hr-summary">
-          <article><span><Icon name="users" size={19} /></span><div><small>NHÂN SỰ ĐANG QUẢN LÝ</small><strong>{employees.length} hồ sơ</strong></div></article>
-          <article><span><Icon name="clock" size={19} /></span><div><small>ĐƠN CÔNG BÙ CHỜ DUYỆT</small><strong>{pendingCorrections.length} đơn</strong></div></article>
-          <article><span><Icon name="shield" size={19} /></span><div><small>CHƯA LIÊN KẾT HỒ SƠ</small><strong>{staffAccounts.filter((acc) => !acc.employeeProfile).length} tài khoản</strong></div></article>
+          <article>
+            <span><Icon name="users" size={19} /></span>
+            <div>
+              <small>NHÂN SỰ ĐANG LÀM VIỆC</small>
+              <strong>{activeCount} / {employees.length} hồ sơ</strong>
+            </div>
+          </article>
+          <article>
+            <span><Icon name="clock" size={19} /></span>
+            <div>
+              <small>ĐƠN CÔNG BÙ CHỜ DUYỆT</small>
+              <strong>{pendingCorrections.length} đơn</strong>
+            </div>
+          </article>
+          <article>
+            <span><Icon name="shield" size={19} /></span>
+            <div>
+              <small>{canManageHr ? 'CHƯA LIÊN KẾT HỒ SƠ' : 'ĐÃ LIÊN KẾT TÀI KHOẢN'}</small>
+              <strong>
+                {canManageHr
+                  ? `${unlinkedAccounts.length} tài khoản`
+                  : `${employees.filter((e) => Boolean(e.userId)).length} nhân sự`}
+              </strong>
+            </div>
+          </article>
         </div>
 
         <section className="content-card timekeeping-hub">
@@ -281,7 +471,7 @@ export default function EmployeeManagement() {
               ...(canManageHr ? [['internal', 'Thông báo nội bộ', 'calendar']] : []),
               ...(role === 'admin' ? [['audit', 'Nhật ký & Quyền dữ liệu', 'clock']] : [])
             ].map(([key, label, icon]) => (
-              <button key={key} className={tab === key ? 'active' : ''} onClick={() => changeTab(key)}>
+              <button type="button" key={key} className={tab === key ? 'active' : ''} onClick={() => changeTab(key)}>
                 <Icon name={icon} size={16} />{label}
               </button>
             ))}
@@ -291,15 +481,173 @@ export default function EmployeeManagement() {
         {tab === 'employees' && (
           <section className="content-card student-list-card">
             <div className="list-toolbar">
-              <div><p className="card-kicker">DANH SÁCH NHÂN SỰ</p><h2>Hồ sơ nhân viên theo vai trò</h2><p>Vai trò là căn cứ phân loại và tổng hợp lương; tổ/bộ phận không tác động đến lương.</p></div>
-              <span className="history-count">{employees.length} hồ sơ</span>
+              <div>
+                <p className="card-kicker">DANH SÁCH NHÂN SỰ</p>
+                <h2>Hồ sơ nhân viên & liên kết tài khoản</h2>
+                <p>Hiển thị đầy đủ mã nhân sự, thông tin liên hệ, tài khoản đăng nhập, hợp đồng và mức lương cơ bản.</p>
+              </div>
+              <span className="history-count">{filteredEmployees.length} / {employees.length} hồ sơ</span>
             </div>
-            {loading ? <div className="inline-loader">Đang tải danh sách nhân sự...</div> : (
-              <div className="table-wrap"><table className="data-table"><thead><tr><th>MÃ</th><th>NHÂN VIÊN</th><th>TÀI KHOẢN</th><th>VAI TRÒ TÍNH LƯƠNG</th><th>CHỨC DANH</th><th>TRẠNG THÁI</th>{canOperateHr && <th>THAO TÁC</th>}</tr></thead>
-                <tbody>{employees.length ? employees.map((item) => { const effectiveRole = item.userId?.role ? payrollRoleFromAccountRole(item.userId.role) : item.payrollRole; return <tr key={item._id}><td><strong>{item.employeeCode}</strong></td><td><strong>{item.fullName}</strong><small>{item.phone || 'Chưa có số điện thoại'}</small></td><td>{item.userId ? <><strong>@{item.userId.username}</strong><small>{roleText[item.userId.role] || item.userId.role}</small></> : <span className="account-unlinked">Chưa liên kết</span>}</td><td><span className="account-role-badge">{payrollRoleText[effectiveRole] || payrollRoleText.teacher}</span></td><td>{positionText[item.position] || item.position}</td><td><span className={`student-status ${item.status === 'active' ? 'enrolled' : 'temporarily_absent'}`}>{item.status === 'active' ? 'Đang làm việc' : item.status === 'resigned' ? 'Đã nghỉ việc' : 'Đang nghỉ phép'}</span></td>{canOperateHr && <td><div className="classroom-actions"><button className="button button-secondary" onClick={() => openProfileHistory(item)}>Hồ sơ / Lịch sử</button>{item.status !== 'resigned' && <button className="button button-secondary department-edit" onClick={() => openEmployeeForm(item)}>Sửa / Gán TK</button>}</div></td>}</tr>; }) : <tr><td colSpan={canOperateHr ? '7' : '6'} className="history-empty">Chưa có hồ sơ nhân viên.</td></tr>}</tbody>
-              </table></div>
+
+            <div className="student-filters" style={{ padding: '0 22px 16px' }}>
+              <label className="search-box">
+                <Icon name="search" size={16} />
+                <input
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Tìm theo họ tên, mã nhân viên, SĐT, email hoặc tài khoản..."
+                />
+              </label>
+              <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
+                <option value="all">Tất cả nhóm vai trò</option>
+                <option value="principal">Ban giám hiệu / Quản trị</option>
+                <option value="teacher">Giáo viên</option>
+                <option value="accountant">Kế toán</option>
+                <option value="chef">Nhân viên bếp</option>
+                <option value="guard">Bảo vệ</option>
+                <option value="hr">Nhân sự (HR)</option>
+              </select>
+              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                <option value="all">Tất cả trạng thái</option>
+                <option value="active">Đang làm việc</option>
+                <option value="on_leave">Đang nghỉ phép</option>
+                <option value="resigned">Đã nghỉ việc</option>
+              </select>
+            </div>
+
+            {loading ? (
+              <div className="inline-loader">Đang tải danh sách nhân sự...</div>
+            ) : (
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>MÃ NV</th>
+                      <th>HỌ TÊN & LIÊN HỆ</th>
+                      <th>TÀI KHOẢN</th>
+                      <th>CHỨC DANH / NHÓM LƯƠNG</th>
+                      <th>HỢP ĐỒNG</th>
+                      <th>LƯƠNG CƠ BẢN</th>
+                      <th>TRẠNG THÁI</th>
+                      {canOperateHr && <th>THAO TÁC</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredEmployees.length ? filteredEmployees.map((item) => {
+                      const effectiveRole = item.userId?.role ? payrollRoleFromAccountRole(item.userId.role) : item.payrollRole;
+                      const baseSalary = Number(item.salaryConfig?.baseSalary || 0);
+                      return (
+                        <tr key={item._id}>
+                          <td><strong>{item.employeeCode || '—'}</strong></td>
+                          <td>
+                            <strong>{item.fullName || 'Chưa cập nhật tên'}</strong>
+                            <small style={{ display: 'block', color: '#475569' }}>
+                              {item.phone || 'Chưa có SĐT'}{item.email ? ` · ${item.email}` : ''}
+                            </small>
+                          </td>
+                          <td>
+                            {item.userId ? (
+                              <>
+                                <strong>@{item.userId.username}</strong>
+                                <small style={{ display: 'block' }}>{roleText[item.userId.role] || item.userId.role}</small>
+                              </>
+                            ) : (
+                              <span className="account-unlinked">Chưa liên kết</span>
+                            )}
+                          </td>
+                          <td>
+                            <strong>{resolveDisplayPosition(item)}</strong>
+                            <small style={{ display: 'block', color: '#64748b' }}>
+                              Nhóm lương: {payrollRoleText[effectiveRole] || payrollRoleText.teacher}
+                            </small>
+                          </td>
+                          <td>
+                            <div>{contractTypeText[item.contractType] || 'Chưa cập nhật'}</div>
+                            {item.startDate && (
+                              <small style={{ color: '#64748b' }}>
+                                Vào làm: {new Date(item.startDate).toLocaleDateString('vi-VN')}
+                              </small>
+                            )}
+                          </td>
+                          <td>
+                            {baseSalary > 0 ? (
+                              <strong>{money(baseSalary)}</strong>
+                            ) : (
+                              <span style={{ color: '#b45309', fontSize: '12px', fontWeight: 600 }}>Chưa thiết lập</span>
+                            )}
+                          </td>
+                          <td>
+                            <span className={`student-status ${item.status === 'active' ? 'enrolled' : item.status === 'resigned' ? 'withdrawn' : 'temporarily_absent'}`}>
+                              {statusText[item.status] || 'Đang làm việc'}
+                            </span>
+                          </td>
+                          {canOperateHr && (
+                            <td>
+                              <div className="classroom-actions">
+                                <button type="button" className="button button-secondary" onClick={() => openProfileHistory(item)}>
+                                  Chi tiết
+                                </button>
+                                {item.status !== 'resigned' && (
+                                  <button type="button" className="button button-secondary department-edit" onClick={() => openEmployeeForm(item)}>
+                                    Sửa / Gán TK
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    }) : (
+                      <tr>
+                        <td colSpan={canOperateHr ? '8' : '7'} className="history-empty">
+                          Không tìm thấy hồ sơ nhân sự phù hợp.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             )}
-            {canOperateHr && <section className="staff-account-panel"><div><p className="card-kicker">TÀI KHOẢN NỘI BỘ & BẢNG LƯƠNG</p><h3>{unlinkedAccounts.length ? `${unlinkedAccounts.length} tài khoản chưa có hồ sơ nhân sự` : 'Tất cả tài khoản nội bộ đã được liên kết'}</h3><p>Lương được tổng hợp theo vai trò: Hiệu trưởng, Giáo viên, Kế toán, Bếp, Bảo vệ và Nhân sự. Phụ huynh luôn bị loại trừ.</p>{unlinkedAccounts.length > 0 && <button className="button button-primary staff-sync-button" onClick={synchronizeStaffAccounts}><Icon name="users" size={15} /> Đồng bộ {unlinkedAccounts.length} tài khoản</button>}</div>{unlinkedAccounts.length > 0 && <div className="staff-account-list">{unlinkedAccounts.map((account) => <article key={account._id}><span className="staff-account-avatar">{(account.profile?.fullName || account.username).slice(0, 1).toUpperCase()}</span><div><strong>{account.profile?.fullName || account.username}</strong><small>@{account.username} · {roleText[account.role] || account.role}{account.employeeInfo?.baseSalary > 0 ? ' · Đã có mức lương' : ' · Chưa đặt lương'}</small></div><button className="button button-secondary" onClick={() => openEmployeeForm(null, account)}>Thiết lập riêng</button></article>)}</div>}</section>}
+
+            {canOperateHr && (
+              <section className="staff-account-panel">
+                <div>
+                  <p className="card-kicker">TÀI KHOẢN NỘI BỘ & BẢNG LƯƠNG</p>
+                  <h3>
+                    {unlinkedAccounts.length
+                      ? `${unlinkedAccounts.length} tài khoản chưa có hồ sơ nhân sự`
+                      : 'Tất cả tài khoản nội bộ đã được liên kết'}
+                  </h3>
+                  <p>
+                    Lương được tổng hợp theo nhóm vai trò: Ban giám hiệu, Giáo viên, Kế toán, Bếp, Bảo vệ và Nhân sự. Phụ huynh luôn được tách biệt.
+                  </p>
+                  {unlinkedAccounts.length > 0 && (
+                    <button type="button" className="button button-primary staff-sync-button" onClick={synchronizeStaffAccounts}>
+                      <Icon name="users" size={15} /> Đồng bộ {unlinkedAccounts.length} tài khoản
+                    </button>
+                  )}
+                </div>
+                {unlinkedAccounts.length > 0 && (
+                  <div className="staff-account-list">
+                    {unlinkedAccounts.map((account) => (
+                      <article key={account._id}>
+                        <span className="staff-account-avatar">{(account.profile?.fullName || account.username).slice(0, 1).toUpperCase()}</span>
+                        <div>
+                          <strong>{account.profile?.fullName || account.username}</strong>
+                          <small>
+                            @{account.username} · {roleText[account.role] || account.role}
+                            {account.employeeInfo?.baseSalary > 0 ? ' · Đã có mức lương' : ' · Chưa đặt lương'}
+                          </small>
+                        </div>
+                        <button type="button" className="button button-secondary" onClick={() => openEmployeeForm(null, account)}>
+                          Thiết lập riêng
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
           </section>
         )}
 
@@ -307,7 +655,12 @@ export default function EmployeeManagement() {
         {tab === 'transfers' && canManageHr && <StudentTransferManagement />}
         {tab === 'internal' && canManageHr && <InternalCommunicationManagement />}
         {tab === 'audit' && role === 'admin' && <HrAuditJournal />}
-        {tab === 'leave' && canReviewHr && <EmployeeLeaveManagement canApprove={canApproveTimekeeping} onOpenStaffing={(date) => { setStaffingDate(date); changeTab('staffing'); }} />}
+        {tab === 'leave' && canReviewHr && (
+          <EmployeeLeaveManagement
+            canApprove={canApproveTimekeeping}
+            onOpenStaffing={(date) => { setStaffingDate(date); changeTab('staffing'); }}
+          />
+        )}
 
         {tab === 'timekeeping' && (
           <div className="timekeeping-management-container">
@@ -317,7 +670,11 @@ export default function EmployeeManagement() {
                 <div>
                   <p className="card-kicker">PHÊ DUYỆT CHẤM CÔNG</p>
                   <h2>Đơn chấm công bù chờ duyệt ({pendingCorrections.length})</h2>
-                  <p>{canApproveTimekeeping ? 'Phê duyệt đơn giải trình / quên chấm công trước khi chốt dữ liệu tính lương.' : 'Theo dõi đơn giải trình đang chờ Ban giám hiệu xử lý.'}</p>
+                  <p>
+                    {canApproveTimekeeping
+                      ? 'Phê duyệt đơn giải trình / quên chấm công trước khi chốt dữ liệu tính lương.'
+                      : 'Theo dõi đơn giải trình đang chờ Ban giám hiệu xử lý.'}
+                  </p>
                 </div>
               </div>
               {pendingCorrections.length === 0 ? (
@@ -341,22 +698,18 @@ export default function EmployeeManagement() {
                           <td>{new Date(req.workDate).toLocaleDateString('vi-VN')}</td>
                           <td><span className="badge-time">{req.requestedCheckInTime}</span></td>
                           <td>{req.reason}</td>
-                          {canApproveTimekeeping && <td>
-                            <div className="leave-actions">
-                              <button
-                                className="button button-primary"
-                                onClick={() => handleApproveCorrection(req._id)}
-                              >
-                                <Icon name="check" size={16} /> Duyệt
-                              </button>
-                              <button
-                                className="button button-secondary"
-                                onClick={() => handleRejectCorrection(req._id)}
-                              >
-                                <Icon name="x" size={16} /> Từ chối
-                              </button>
-                            </div>
-                          </td>}
+                          {canApproveTimekeeping && (
+                            <td>
+                              <div className="leave-actions">
+                                <button type="button" className="button button-primary" onClick={() => handleApproveCorrection(req._id)}>
+                                  <Icon name="check" size={16} /> Duyệt
+                                </button>
+                                <button type="button" className="button button-secondary" onClick={() => handleRejectCorrection(req._id)}>
+                                  <Icon name="x" size={16} /> Từ chối
+                                </button>
+                              </div>
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
@@ -365,26 +718,28 @@ export default function EmployeeManagement() {
               )}
             </section>
 
-            {canApproveTimekeeping && <section className="content-card" style={{ marginTop: 20 }}>
-              <div className="card-heading">
-                <div>
-                  <p className="card-kicker">CÔNG CỤ ĐỒNG BỘ CÔNG</p>
-                  <h2>Tính lại ngày chấm công đã chốt</h2>
-                  <p>Hệ thống sẽ quét lại các sự kiện quẹt thẻ / điểm danh sinh trắc học để cập nhật lại ngày công chính xác.</p>
+            {canApproveTimekeeping && (
+              <section className="content-card" style={{ marginTop: 20 }}>
+                <div className="card-heading">
+                  <div>
+                    <p className="card-kicker">CÔNG CỤ ĐỒNG BỘ CÔNG</p>
+                    <h2>Tính lại ngày chấm công đã chốt</h2>
+                    <p>Hệ thống sẽ quét lại các sự kiện quẹt thẻ / chấm công bằng mã để cập nhật lại ngày công chính xác.</p>
+                  </div>
                 </div>
-              </div>
-              <div style={{ padding: '0 23px 23px', display: 'flex', gap: 12, alignItems: 'center' }}>
-                <input
-                  type="date"
-                  value={selectedRecalcDate}
-                  onChange={(e) => setSelectedRecalcDate(e.target.value)}
-                  style={{ padding: '8px 12px', border: '1px solid #ddd', borderRadius: 6 }}
-                />
-                <button className="button button-primary" onClick={handleRecalculateAttendance}>
-                  <Icon name="refresh" size={16} /> Tính lại công
-                </button>
-              </div>
-            </section>}
+                <div style={{ padding: '0 23px 23px', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <input
+                    type="date"
+                    value={selectedRecalcDate}
+                    onChange={(e) => setSelectedRecalcDate(e.target.value)}
+                    style={{ padding: '8px 12px', border: '1px solid #ddd', borderRadius: 6 }}
+                  />
+                  <button type="button" className="button button-primary" onClick={handleRecalculateAttendance}>
+                    <Icon name="refresh" size={16} /> Tính lại công
+                  </button>
+                </div>
+              </section>
+            )}
           </div>
         )}
 
@@ -395,8 +750,324 @@ export default function EmployeeManagement() {
         )}
       </section>
 
-      {showForm && <div className="modal-backdrop"><form className="content-card student-form hr-modal" onSubmit={submitEmployee}><div className="card-heading"><div><p className="card-kicker">HỒ SƠ NHÂN SỰ</p><h2>{editingEmployee ? 'Cập nhật nhân viên' : 'Thêm nhân viên'}</h2></div><button type="button" className="button button-secondary" onClick={() => { setShowForm(false); setEditingEmployee(null); setForm(emptyEmployeeForm); }}>Đóng</button></div><p className="department-form-note">Vai trò tính lương là trường bắt buộc để tổng hợp bảng lương. Khi liên kết tài khoản, vai trò này phải trùng với quyền đăng nhập của nhân viên.</p><div className="student-form-grid"><label className="form-wide">Tài khoản đăng nhập<select value={form.userId} onChange={(e) => chooseStaffAccount(e.target.value)}><option value="">Chưa liên kết tài khoản</option>{staffAccounts.map((account) => { const unavailable = Boolean(account.employeeProfile && String(account.employeeProfile._id) !== String(editingEmployee?._id)); return <option key={account._id} value={account._id} disabled={unavailable}>{account.profile?.fullName || account.username} · @{account.username} · {roleText[account.role] || account.role}{unavailable ? ' (đã gán)' : ''}</option>; })}</select><small>Liên kết đúng tài khoản để ngăn lệch vai trò, chấm công và bảng lương. Một tài khoản chỉ thuộc một hồ sơ.</small></label><label>Mã nhân viên / Mã chấm công<input value={form.employeeCode} onChange={(e) => setForm({ ...form, employeeCode: e.target.value })} placeholder="Để trống tự đánh số (1, 2, 3...) hoặc nhập số trên máy" /></label><label>Họ và tên<input value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} placeholder="Nhập họ và tên đầy đủ" required /></label><label>Số điện thoại<input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="VD: 0901 234 567" required /></label><label>Email<input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="email@truong.edu.vn" /></label><label>Vai trò tính lương<select value={form.payrollRole} onChange={(e) => setForm({ ...form, payrollRole: e.target.value })} disabled={Boolean(form.userId)}><option value="principal">Hiệu trưởng</option><option value="teacher">Giáo viên</option><option value="accountant">Kế toán</option><option value="chef">Nhân viên bếp</option><option value="guard">Bảo vệ</option><option value="hr">Nhân sự (HR)</option></select><small>{form.userId ? 'Được lấy theo vai trò của tài khoản đã liên kết.' : 'Chọn nhóm để tổng hợp lương.'}</small></label><label>Chức danh chi tiết<select value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })}><option value="principal">Hiệu trưởng</option><option value="vice_principal">Phó hiệu trưởng</option><option value="teacher">Giáo viên</option><option value="head_teacher">Tổ trưởng chuyên môn</option><option value="assistant_teacher">Trợ giảng</option><option value="accountant">Kế toán</option><option value="chef">Nhân viên bếp</option><option value="hr">Nhân sự (HR)</option><option value="security">Bảo vệ</option></select></label><label className="form-wide">Địa chỉ liên hệ<input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} placeholder="Địa chỉ hiện tại" /></label><label>Ngày vào làm<input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} /></label><label>Tình trạng làm việc<input value={editingEmployee?.status === 'resigned' ? 'Đã nghỉ việc' : editingEmployee?.status === 'on_leave' ? 'Đang nghỉ phép' : 'Đang làm việc'} readOnly /><small>Thay đổi qua quy trình nghỉ phép, không sửa trực tiếp.</small></label><label>Loại hợp đồng<select value={form.contractType} onChange={(e) => setForm({ ...form, contractType: e.target.value })}><option value="">Chưa cập nhật</option><option value="probation">Thử việc</option><option value="fixed_1_year">Xác định 1 năm</option><option value="fixed_3_year">Xác định 3 năm</option><option value="indefinite">Không xác định thời hạn</option></select></label><label>Số hợp đồng<input value={form.contractNumber} onChange={(e) => setForm({ ...form, contractNumber: e.target.value })} placeholder="Số/ký hiệu hợp đồng" /></label><label>Ngày ký hợp đồng<input type="date" value={form.contractSignedDate} onChange={(e) => setForm({ ...form, contractSignedDate: e.target.value })} /></label><label>Ngày hiệu lực<input type="date" value={form.contractStartDate} onChange={(e) => setForm({ ...form, contractStartDate: e.target.value })} /></label><label>Ngày hết hạn<input type="date" value={form.endDate} disabled={form.contractType === 'indefinite'} onChange={(e) => setForm({ ...form, endDate: e.target.value })} /></label><label className="form-wide">Đơn vị nhập lương<select value={form.salaryUnit} onChange={(e) => setForm({ ...form, salaryUnit: e.target.value, baseSalary: '', lowMonthlySalaryConfirmed: false })}><option value="monthly">Lương theo tháng</option><option value="daily">Tiền một công</option></select></label><label className="form-wide">{form.salaryUnit === 'daily' ? 'Tiền một công (VNĐ)' : 'Lương cơ bản theo tháng (VNĐ)'}<input type="number" min="0" step="1" value={form.baseSalary} onChange={(e) => setForm({ ...form, baseSalary: e.target.value, lowMonthlySalaryConfirmed: false })} required /><small>{form.salaryUnit === 'daily' ? `Hệ thống lưu ${money(salaryInMonth(form))}/tháng = ${money(form.baseSalary)} × ${form.standardWorkDays} công.` : `${money(form.baseSalary)} cho cả tháng; khoảng ${money(Number(form.baseSalary || 0) / Number(form.standardWorkDays || 26))} mỗi công.`}</small></label><label className="form-wide">Số công chuẩn mỗi tháng<input type="number" min="1" max="31" step="1" value={form.standardWorkDays} onChange={(e) => setForm({ ...form, standardWorkDays: e.target.value, lowMonthlySalaryConfirmed: false })} required /></label>{salaryInMonth(form) > 0 && salaryInMonth(form) < LOW_MONTHLY_SALARY && <div className="form-wide salary-unit-warning"><strong>Kiểm tra đơn vị lương</strong><p>{money(salaryInMonth(form))}/tháng tương đương khoảng {money(salaryInMonth(form) / Number(form.standardWorkDays || 26))}/công. Nếu đây là tiền một công, hãy chọn “Tiền một công” ở trên.</p><label><input type="checkbox" checked={form.lowMonthlySalaryConfirmed} onChange={(e) => setForm({ ...form, lowMonthlySalaryConfirmed: e.target.checked })} />Tôi xác nhận đây thực sự là lương cả tháng.</label></div>}{formError && <p className="form-error form-wide" role="alert">{formError}</p>}</div><div className="form-actions"><button type="button" className="button button-secondary" onClick={() => { setShowForm(false); setEditingEmployee(null); setForm(emptyEmployeeForm); }}>Hủy</button><button className="button button-primary">{editingEmployee ? 'Lưu thay đổi' : 'Lưu hồ sơ'}</button></div></form></div>}
-      {profileHistory && <div className="modal-backdrop"><section className="content-card student-form hr-modal hr-profile-history"><div className="card-heading"><div><p className="card-kicker">HỒ SƠ & LỊCH SỬ THAY ĐỔI</p><h2>{profileHistory.employee.fullName}</h2><p>{profileHistory.employee.employeeCode} · {profileHistory.employee.userId?.username ? `@${profileHistory.employee.userId.username}` : 'Chưa liên kết tài khoản'}</p></div><button type="button" className="button button-secondary" onClick={() => setProfileHistory(null)}>Đóng</button></div><div className="hr-profile-facts"><span>Liên hệ: {profileHistory.employee.phone || 'Chưa cập nhật'} · {profileHistory.employee.email || 'Chưa cập nhật'}</span><span>Địa chỉ: {profileHistory.employee.address || 'Chưa cập nhật'}</span><span>Vị trí: {positionText[profileHistory.employee.position] || profileHistory.employee.position}</span><span>Ngày vào làm: {profileHistory.employee.startDate ? new Date(profileHistory.employee.startDate).toLocaleDateString('vi-VN') : 'Chưa cập nhật'}</span><span>Tình trạng: {profileHistory.employee.status === 'resigned' ? 'Đã nghỉ việc' : profileHistory.employee.status === 'on_leave' ? 'Đang nghỉ phép' : 'Đang làm việc'}</span><span>Hợp đồng: {contractTypeText[profileHistory.employee.contractType] || 'Chưa cập nhật'} · {profileHistory.employee.contractNumber || 'Chưa có số hợp đồng'}</span><span>Ngày ký: {profileHistory.employee.contractSignedDate ? new Date(profileHistory.employee.contractSignedDate).toLocaleDateString('vi-VN') : '—'} · Hiệu lực: {profileHistory.employee.contractStartDate ? new Date(profileHistory.employee.contractStartDate).toLocaleDateString('vi-VN') : '—'} · Hết hạn: {profileHistory.employee.endDate ? new Date(profileHistory.employee.endDate).toLocaleDateString('vi-VN') : '—'}</span></div><h3>Lịch sử thay đổi</h3>{profileHistory.records.length ? <div className="hr-profile-events">{profileHistory.records.map((record) => <article key={record._id}><strong>{record.action === 'EMPLOYEE_CREATED' ? 'Tạo hồ sơ' : record.action === 'EMPLOYEE_RESIGNED' ? 'Nghỉ việc / khóa tài khoản' : 'Cập nhật hồ sơ'}</strong><small>{record.actorUsername} · {new Date(record.occurredAt).toLocaleString('vi-VN')}</small>{record.reason && <p>Lý do: {record.reason}</p>}{Object.entries(record.after || {}).map(([key, value]) => <p key={key}>{profileFieldText[key] || key}: {String(record.before?.[key] ?? '—')} → {String(value ?? '—')}</p>)}</article>)}</div> : <p>Hồ sơ có từ {new Date(profileHistory.createdAt).toLocaleDateString('vi-VN')}; chưa có lịch sử chỉnh sửa được ghi nhận kể từ khi bật tính năng này.</p>}</section></div>}
+      {showForm && createPortal(
+        <div
+          className="account-modal-backdrop"
+          role="presentation"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !saving) {
+              setShowForm(false);
+              setEditingEmployee(null);
+              setForm(emptyEmployeeForm);
+            }
+          }}
+        >
+          <form className="account-modal-card student-form hr-modal" style={{ width: 'min(740px, 100%)' }} onSubmit={submitEmployee}>
+            <div className="account-modal-header">
+              <div>
+                <p className="card-kicker">HỒ SƠ NHÂN SỰ</p>
+                <h2>{editingEmployee ? 'Cập nhật hồ sơ nhân viên' : 'Thêm nhân viên mới'}</h2>
+              </div>
+              <button
+                type="button"
+                className="button button-secondary"
+                disabled={saving}
+                onClick={() => { setShowForm(false); setEditingEmployee(null); setForm(emptyEmployeeForm); }}
+              >
+                Đóng
+              </button>
+            </div>
+            <p className="department-form-note">
+              Nhóm tính lương là trường bắt buộc để tổng hợp bảng lương. Khi liên kết tài khoản, vai trò lương tự động đồng bộ theo quyền đăng nhập của nhân viên.
+            </p>
+            <div className="student-form-grid">
+              <label className="form-wide">
+                Tài khoản đăng nhập
+                <select value={form.userId} onChange={(e) => chooseStaffAccount(e.target.value)}>
+                  <option value="">Chưa liên kết tài khoản</option>
+                  {staffAccounts.map((account) => {
+                    const unavailable = Boolean(account.employeeProfile && String(account.employeeProfile._id) !== String(editingEmployee?._id));
+                    return (
+                      <option key={account._id} value={account._id} disabled={unavailable}>
+                        {account.profile?.fullName || account.username} · @{account.username} · {roleText[account.role] || account.role}
+                        {unavailable ? ' (đã gán)' : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+                <small>Liên kết đúng tài khoản để đồng bộ chấm công và bảng lương. Mỗi tài khoản chỉ thuộc 1 hồ sơ.</small>
+              </label>
+              <label>
+                Mã nhân viên / Mã chấm công
+                <input
+                  value={form.employeeCode}
+                  onChange={(e) => setForm({ ...form, employeeCode: e.target.value })}
+                  placeholder="Để trống tự đánh số (1, 2, 3...) hoặc nhập mã riêng"
+                />
+              </label>
+              <label>
+                Họ và tên *
+                <input
+                  value={form.fullName}
+                  onChange={(e) => setForm({ ...form, fullName: e.target.value })}
+                  placeholder="Nhập họ và tên đầy đủ"
+                  required
+                />
+              </label>
+              <label>
+                Số điện thoại *
+                <input
+                  value={form.phone}
+                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  placeholder="VD: 0901 234 567"
+                  required
+                />
+              </label>
+              <label>
+                Email
+                <input
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  placeholder="email@truong.edu.vn"
+                />
+              </label>
+              <label>
+                Nhóm tính lương
+                <select
+                  value={form.payrollRole}
+                  onChange={(e) => setForm({ ...form, payrollRole: e.target.value })}
+                  disabled={Boolean(form.userId)}
+                >
+                  <option value="principal">Ban giám hiệu</option>
+                  <option value="teacher">Giáo viên</option>
+                  <option value="accountant">Kế toán</option>
+                  <option value="chef">Nhân viên bếp</option>
+                  <option value="guard">Bảo vệ</option>
+                  <option value="hr">Nhân sự (HR)</option>
+                </select>
+                <small>{form.userId ? 'Lấy tự động theo vai trò tài khoản liên kết.' : 'Chọn nhóm để tổng hợp lương.'}</small>
+              </label>
+              <label>
+                Chức danh chi tiết
+                <select value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })}>
+                  <option value="principal">Hiệu trưởng / Quản lý</option>
+                  <option value="vice_principal">Phó hiệu trưởng</option>
+                  <option value="teacher">Giáo viên</option>
+                  <option value="head_teacher">Tổ trưởng chuyên môn</option>
+                  <option value="assistant_teacher">Trợ giảng</option>
+                  <option value="accountant">Kế toán</option>
+                  <option value="chef">Nhân viên bếp</option>
+                  <option value="hr">Nhân sự (HR)</option>
+                  <option value="security">Bảo vệ</option>
+                </select>
+              </label>
+              <label className="form-wide">
+                Địa chỉ liên hệ
+                <input
+                  value={form.address}
+                  onChange={(e) => setForm({ ...form, address: e.target.value })}
+                  placeholder="Địa chỉ hiện tại"
+                />
+              </label>
+              <label>
+                Ngày vào làm
+                <input
+                  type="date"
+                  value={form.startDate}
+                  onChange={(e) => setForm({ ...form, startDate: e.target.value })}
+                />
+              </label>
+              <label>
+                Tình trạng làm việc
+                <input
+                  value={statusText[editingEmployee?.status] || 'Đang làm việc'}
+                  readOnly
+                />
+                <small>Thay đổi tự động theo quy trình nghỉ phép / thôi việc.</small>
+              </label>
+              <label>
+                Loại hợp đồng
+                <select value={form.contractType} onChange={(e) => setForm({ ...form, contractType: e.target.value })}>
+                  <option value="">Chưa cập nhật</option>
+                  <option value="probation">Thử việc</option>
+                  <option value="fixed_1_year">Xác định 1 năm</option>
+                  <option value="fixed_3_year">Xác định 3 năm</option>
+                  <option value="indefinite">Không xác định thời hạn</option>
+                </select>
+              </label>
+              <label>
+                Số hợp đồng
+                <input
+                  value={form.contractNumber}
+                  onChange={(e) => setForm({ ...form, contractNumber: e.target.value })}
+                  placeholder="Số / ký hiệu hợp đồng"
+                />
+              </label>
+              <label>
+                Ngày ký hợp đồng
+                <input
+                  type="date"
+                  value={form.contractSignedDate}
+                  onChange={(e) => setForm({ ...form, contractSignedDate: e.target.value })}
+                />
+              </label>
+              <label>
+                Ngày hiệu lực
+                <input
+                  type="date"
+                  value={form.contractStartDate}
+                  onChange={(e) => setForm({ ...form, contractStartDate: e.target.value })}
+                />
+              </label>
+              <label>
+                Ngày hết hạn
+                <input
+                  type="date"
+                  value={form.endDate}
+                  disabled={form.contractType === 'indefinite'}
+                  onChange={(e) => setForm({ ...form, endDate: e.target.value })}
+                />
+              </label>
+              <label>
+                Đơn vị nhập lương
+                <select
+                  value={form.salaryUnit}
+                  onChange={(e) => setForm({ ...form, salaryUnit: e.target.value, baseSalary: '', lowMonthlySalaryConfirmed: false })}
+                >
+                  <option value="monthly">Lương theo tháng</option>
+                  <option value="daily">Tiền một công</option>
+                </select>
+              </label>
+              <label>
+                {form.salaryUnit === 'daily' ? 'Tiền một công (VNĐ) *' : 'Lương cơ bản / tháng (VNĐ) *'}
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={form.baseSalary}
+                  onChange={(e) => setForm({ ...form, baseSalary: e.target.value, lowMonthlySalaryConfirmed: false })}
+                  required
+                />
+                <small>
+                  {form.salaryUnit === 'daily'
+                    ? `Quy đổi: ${money(salaryInMonth(form))}/tháng = ${money(form.baseSalary)} × ${form.standardWorkDays} công.`
+                    : `${money(form.baseSalary)}/tháng (~${money(Number(form.baseSalary || 0) / Number(form.standardWorkDays || 26))}/công).`}
+                </small>
+              </label>
+              <label>
+                Số công chuẩn mỗi tháng *
+                <input
+                  type="number"
+                  min="1"
+                  max="31"
+                  step="1"
+                  value={form.standardWorkDays}
+                  onChange={(e) => setForm({ ...form, standardWorkDays: e.target.value, lowMonthlySalaryConfirmed: false })}
+                  required
+                />
+              </label>
+              {salaryInMonth(form) > 0 && salaryInMonth(form) < LOW_MONTHLY_SALARY && (
+                <div className="form-wide salary-unit-warning">
+                  <strong>Kiểm tra đơn vị lương</strong>
+                  <p>
+                    {money(salaryInMonth(form))}/tháng tương đương khoảng {money(salaryInMonth(form) / Number(form.standardWorkDays || 26))}/công. Nếu đây là tiền một công, hãy chọn “Tiền một công” ở trên.
+                  </p>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={form.lowMonthlySalaryConfirmed}
+                      onChange={(e) => setForm({ ...form, lowMonthlySalaryConfirmed: e.target.checked })}
+                    />
+                    Tôi xác nhận đây thực sự là lương cả tháng.
+                  </label>
+                </div>
+              )}
+              {formError && <p className="form-error form-wide" role="alert">{formError}</p>}
+            </div>
+            <div className="form-actions">
+              <button
+                type="button"
+                className="button button-secondary"
+                disabled={saving}
+                onClick={() => { setShowForm(false); setEditingEmployee(null); setForm(emptyEmployeeForm); }}
+              >
+                Hủy
+              </button>
+              <button type="submit" className="button button-primary" disabled={saving}>
+                {saving ? 'Đang lưu...' : (editingEmployee ? 'Lưu thay đổi' : 'Lưu hồ sơ')}
+              </button>
+            </div>
+          </form>
+        </div>,
+        document.body
+      )}
+
+      {profileHistory && createPortal(
+        <div
+          className="account-modal-backdrop"
+          role="presentation"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setProfileHistory(null);
+          }}
+        >
+          <section className="account-modal-card student-form hr-modal hr-profile-history" style={{ width: 'min(700px, 100%)' }}>
+            <div className="account-modal-header">
+              <div>
+                <p className="card-kicker">HỒ SƠ CHI TIẾT & LỊCH SỬ</p>
+                <h2>{profileHistory.employee.fullName}</h2>
+                <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: '13px' }}>
+                  Mã NV: <strong>{profileHistory.employee.employeeCode}</strong> ·{' '}
+                  {profileHistory.employee.userId?.username ? `@${profileHistory.employee.userId.username}` : 'Chưa liên kết tài khoản'}
+                </p>
+              </div>
+              <button type="button" className="button button-secondary" onClick={() => setProfileHistory(null)}>
+                Đóng
+              </button>
+            </div>
+            <div className="hr-profile-facts">
+              <span><b>Liên hệ:</b> {profileHistory.employee.phone || 'Chưa cập nhật'} · {profileHistory.employee.email || 'Chưa có email'}</span>
+              <span><b>Địa chỉ:</b> {profileHistory.employee.address || 'Chưa cập nhật'}</span>
+              <span><b>Chức danh:</b> {resolveDisplayPosition(profileHistory.employee)}</span>
+              <span><b>Mức lương cơ bản:</b> {money(profileHistory.employee.salaryConfig?.baseSalary || 0)} / tháng ({profileHistory.employee.salaryConfig?.standardWorkDays || 26} công chuẩn)</span>
+              <span><b>Ngày vào làm:</b> {profileHistory.employee.startDate ? new Date(profileHistory.employee.startDate).toLocaleDateString('vi-VN') : 'Chưa cập nhật'}</span>
+              <span><b>Tình trạng:</b> {statusText[profileHistory.employee.status] || 'Đang làm việc'}</span>
+              <span><b>Hợp đồng:</b> {contractTypeText[profileHistory.employee.contractType] || 'Chưa cập nhật'} {profileHistory.employee.contractNumber ? `(#${profileHistory.employee.contractNumber})` : ''}</span>
+              <span>
+                <b>Thời hạn HĐ:</b> Ký {profileHistory.employee.contractSignedDate ? new Date(profileHistory.employee.contractSignedDate).toLocaleDateString('vi-VN') : '—'} · Hiệu lực {profileHistory.employee.contractStartDate ? new Date(profileHistory.employee.contractStartDate).toLocaleDateString('vi-VN') : '—'} · Hết hạn {profileHistory.employee.endDate ? new Date(profileHistory.employee.endDate).toLocaleDateString('vi-VN') : 'Không xác định'}
+              </span>
+            </div>
+            <h3 style={{ marginTop: '18px' }}>Lịch sử cập nhật hồ sơ</h3>
+            {profileHistory.records.length ? (
+              <div className="hr-profile-events">
+                {profileHistory.records.map((record) => (
+                  <article key={record._id}>
+                    <strong>
+                      {record.action === 'EMPLOYEE_CREATED'
+                        ? 'Khởi tạo hồ sơ nhân sự'
+                        : record.action === 'EMPLOYEE_RESIGNED'
+                          ? 'Nghỉ việc / Thu hồi tài khoản'
+                          : 'Cập nhật thông tin hồ sơ'}
+                    </strong>
+                    <small>{record.actorUsername} · {new Date(record.occurredAt).toLocaleString('vi-VN')}</small>
+                    {record.reason && <p>Lý do: {record.reason}</p>}
+                    {Object.entries(record.after || {}).map(([key, value]) => (
+                      <p key={key}>
+                        <b>{profileFieldText[key] || key}:</b> {formatHistoryFieldValue(key, record.before?.[key])} → {formatHistoryFieldValue(key, value)}
+                      </p>
+                    ))}
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p style={{ color: '#64748b', fontSize: '13px' }}>
+                Hồ sơ được tạo ngày {profileHistory.createdAt ? new Date(profileHistory.createdAt).toLocaleDateString('vi-VN') : '—'}; chưa có chỉnh sửa phát sinh.
+              </p>
+            )}
+          </section>
+        </div>,
+        document.body
+      )}
     </AppShell>
   );
 }

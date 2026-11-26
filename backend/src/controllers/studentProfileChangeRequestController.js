@@ -6,7 +6,7 @@ const { canAccessStudent, isParent } = require('../services/studentAccessService
 const { buildTenantFilter, resolveTenantContext } = require('../services/tenantFilterService');
 const { isValidObjectId } = require('../utils/idValidation');
 
-const PARENT_CHANGE_FIELDS = new Set(['fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'allergies', 'disease', 'emergencyContact', 'authorizedPickers']);
+const PARENT_CHANGE_FIELDS = new Set(['fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'healthInsuranceCode', 'bloodType', 'allergies', 'disease', 'emergencyContact', 'authorizedPickers']);
 const actorName = (user) => user?.profile?.fullName || user?.username || 'Người dùng';
 const error = (message, status = 400) => Object.assign(new Error(message), { status });
 

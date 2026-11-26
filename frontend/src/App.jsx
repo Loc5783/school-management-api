@@ -20,6 +20,8 @@ import StudentList from './pages/StudentList';
 import StudentDetail from './pages/StudentDetail';
 import StudentForm from './pages/StudentForm';
 import ClassroomManagement from './pages/ClassroomManagement';
+import SchoolCampusManagement from './pages/SchoolCampusManagement';
+import MultiSchoolManagement from './pages/MultiSchoolManagement';
 import ParentPortal from './pages/ParentPortal';
 import FinanceManagement from './pages/FinanceManagement';
 import Reports from './pages/Reports';
@@ -50,9 +52,20 @@ function ParentRoute({ children }) {
   return user.role === 'parent' ? children : <Navigate to="/dashboard" replace />;
 }
 
+function SuperAdminRoute({ children }) {
+  const superToken = localStorage.getItem('superadmin_token') || localStorage.getItem('token');
+  const user = JSON.parse(localStorage.getItem('superadmin_user') || localStorage.getItem('user') || '{}');
+  if (!superToken) return <Navigate to="/login" replace />;
+  if (user.role !== 'superadmin' && !localStorage.getItem('superadmin_token')) {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return children;
+}
+
 function DashboardRoute({ children }) {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
+  if (user.role === 'superadmin') return <Navigate to="/multi-school" replace />;
   if (user.role === 'guard') return <Navigate to="/guard" replace />;
   if (user.role === 'parent') return <Navigate to="/parent-dashboard" replace />;
   return children;
@@ -141,6 +154,7 @@ function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Navigate to="/login" replace />} />
+        <Route path="/multi-school" element={<SuperAdminRoute><MultiSchoolManagement /></SuperAdminRoute>} />
         <Route element={<PersistentAppShell />}>
           <Route path="/parent-accounts" element={<RoleRoute roles={['admin']}><Navigate to="/accounts?tab=parents" replace /></RoleRoute>} />
           <Route path="/accounts" element={<RoleRoute roles={['admin', 'hr']}><AccountManagement /></RoleRoute>} />
@@ -201,6 +215,7 @@ function App() {
           <Route path="/students/:id" element={<StudentManagementRoute><StudentDetail /></StudentManagementRoute>} />
           <Route path="/students/:id/edit" element={<RoleRoute roles={['admin', 'teacher']}><StudentForm /></RoleRoute>} />
           <Route path="/classrooms" element={<ClassroomRoute><ClassroomManagement /></ClassroomRoute>} />
+          <Route path="/campuses" element={<ClassroomRoute><SchoolCampusManagement /></ClassroomRoute>} />
           <Route path="/finance" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><FinanceManagement /></RoleRoute>} />
           <Route path="/reports" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><Reports /></RoleRoute>} />
           <Route path="/assets" element={<RoleRoute roles={['admin', 'principal', 'teacher']}><AssetManagement /></RoleRoute>} />

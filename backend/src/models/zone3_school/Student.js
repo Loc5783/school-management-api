@@ -35,6 +35,21 @@ const StudentSchema = new mongoose.Schema({
         maxlength: 40,
         default: ''
     },
+    // Mã số thẻ Bảo hiểm Y tế (BHYT) của trẻ
+    healthInsuranceCode: {
+        type: String,
+        trim: true,
+        uppercase: true,
+        maxlength: 30,
+        default: ''
+    },
+    // Nhóm máu phục vụ sơ cấp cứu và hồ sơ y tế học đường
+    bloodType: {
+        type: String,
+        trim: true,
+        enum: ['', 'A', 'B', 'AB', 'O', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'],
+        default: ''
+    },
     fullName: {
         type: String,
         required: true,
@@ -125,6 +140,45 @@ const StudentSchema = new mongoose.Schema({
         description: String,
         medication: String,
         note: String
+    },
+    // Sổ theo dõi tiêm chủng của học sinh
+    vaccinations: {
+        type: [{
+            vaccineName: { type: String, required: true, trim: true, maxlength: 150 },
+            doseNumber: { type: Number, min: 1, max: 20, default: 1 },
+            vaccinatedDate: { type: Date },
+            status: {
+                type: String,
+                enum: ['completed', 'scheduled', 'missed'],
+                default: 'completed'
+            },
+            facility: { type: String, trim: true, maxlength: 150, default: '' },
+            note: { type: String, trim: true, maxlength: 500, default: '' },
+            recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+            recordedByName: { type: String, default: '' },
+            recordedAt: { type: Date, default: Date.now }
+        }],
+        default: []
+    },
+    // Biểu đồ / Sổ theo dõi cân nặng & chiều cao định kỳ theo tháng (YYYY-MM)
+    growthRecords: {
+        type: [{
+            month: {
+                type: String,
+                required: true,
+                trim: true,
+                match: /^\d{4}-(0[1-9]|1[0-2])$/
+            },
+            measuredAt: { type: Date, default: Date.now },
+            weightKg: { type: Number, required: true, min: 1, max: 120 },
+            heightCm: { type: Number, required: true, min: 30, max: 200 },
+            bmi: { type: Number, min: 5, max: 60 },
+            nutritionStatus: { type: String, trim: true, maxlength: 80, default: 'Bình thường' },
+            note: { type: String, trim: true, maxlength: 500, default: '' },
+            recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+            recordedByName: { type: String, default: '' }
+        }],
+        default: []
     },
     emergencyContact: {
         name: String,

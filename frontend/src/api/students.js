@@ -8,6 +8,10 @@ export const changeStudentStatus = (id, data) => api.patch(`/students/${id}/stat
 export const deleteStudent = (id, reason) => api.delete(`/students/${id}`, { data: { reason } });
 export const getDailyReports = (id) => api.get(`/students/${id}/daily-reports`);
 export const saveDailyReport = (id, data) => api.put(`/students/${id}/daily-reports`, data);
+export const saveGrowthRecord = (id, data) => api.post(`/students/${id}/growth-records`, data);
+export const deleteGrowthRecord = (id, recordId) => api.delete(`/students/${id}/growth-records/${recordId}`);
+export const addVaccinationRecord = (id, data) => api.post(`/students/${id}/vaccinations`, data);
+export const deleteVaccinationRecord = (id, vaxId) => api.delete(`/students/${id}/vaccinations/${vaxId}`);
 export const downloadExcelTemplate = () => api.get('/students/excel/template', { responseType: 'blob' });
 export const previewExcelImport = (formData) => api.post('/students/excel/preview', formData, {
   headers: { 'Content-Type': 'multipart/form-data' }

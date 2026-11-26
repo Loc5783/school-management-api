@@ -19,59 +19,72 @@ const readStoredJson = (key) => {
 };
 
 const allNavItems = [
-  { to: '/dashboard', label: 'Tổng quan', icon: 'grid', roles: ['admin', 'principal', 'teacher'] },
-  { to: '/principal', label: 'Sổ điều hành', icon: 'chart', roles: ['admin', 'principal'] },
-  { to: '/accounts', label: 'Tài khoản & vai trò', icon: 'shield', roles: ['admin', 'hr'] },
-  { to: '/students', label: 'Học sinh', icon: 'students', roles: ['admin', 'principal', 'teacher', 'hr'] },
-  { to: '/classrooms', label: 'Lớp học', icon: 'classes', roles: ['admin', 'principal'] },
-  { to: '/attendance', label: 'Điểm danh', icon: 'attendance', roles: ['admin', 'teacher'] },
-  { to: '/attendance/reports', label: 'Báo cáo điểm danh', icon: 'attendance', roles: ['principal'] },
-  { to: '/timekeeping', label: 'Chấm công nhân sự', icon: 'clock', roles: ['admin', 'principal', 'guard'] },
-  { to: '/hr', label: 'Nhân sự', icon: 'users', roles: ['admin', 'principal', 'hr'] },
-  { to: '/payroll', label: 'Lương & Chi trả', icon: 'money', roles: ['admin', 'principal', 'accountant', 'hr'] },
-  { to: '/finance', label: 'Tài chính', icon: 'money', roles: ['admin', 'principal', 'accountant'] },
-  { to: '/accounting', label: 'Tổng quan kế toán', icon: 'grid', roles: ['accountant'] },
-  { to: '/accounting/expenses', label: 'Sổ chi mua sắm', icon: 'money', roles: ['accountant', 'admin'] },
-  { to: '/accounting/operating-expenses', label: 'Chi vận hành', icon: 'money', roles: ['admin', 'principal', 'accountant'] },
-  { to: '/accounting/cashbook', label: 'Đối soát thu – chi', icon: 'chart', roles: ['accountant', 'admin'] },
-  { to: '/accounting/report', label: 'Báo cáo kế toán', icon: 'chart', roles: ['accountant', 'admin'] },
-  { to: '/kitchen', label: 'Bếp hôm nay', icon: 'grid', roles: ['chef', 'admin'] },
-  { to: '/nutrition', label: 'Bếp ăn & Bán trú', icon: 'utensils', roles: ['admin', 'principal', 'chef', 'teacher'] },
-  { to: '/guard', label: 'Tổng quan trực cổng', icon: 'grid', roles: ['guard', 'admin'] },
-  { to: '/pickups', label: 'Đón trẻ', icon: 'users', roles: ['parent', 'admin', 'principal'] },
-  { to: '/assets', label: 'Đề xuất mua sắm', icon: 'settings', roles: ['teacher'] },
-  { to: '/assets', label: 'Cơ sở vật chất', icon: 'settings', roles: ['admin', 'principal'] },
-  { to: '/reports', label: 'Báo cáo', icon: 'chart', roles: ['admin', 'principal', 'accountant'] },
-  { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar', roles: ['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard'] },
-  { to: '/my-staffing', label: 'Lịch phân công của tôi', icon: 'calendar', roles: ['teacher', 'chef', 'guard'] },
-  { to: '/my-payroll', label: 'Lương của tôi', icon: 'money', roles: ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'] },
-  { to: '/student-profile-change-requests', label: 'Duyệt cập nhật hồ sơ', icon: 'card', roles: ['principal'] },
-  { to: '/parent-feedback', label: 'Phản hồi phụ huynh', icon: 'chat', roles: ['principal'] },
-  { to: '/parent-dashboard', label: 'Tổng quan', icon: 'grid', roles: ['parent'] },
-  { to: '/parent-portal', label: 'Thông tin của con', icon: 'students', roles: ['parent'] },
-  { to: '/parent-care', label: 'Sổ chăm sóc của con', icon: 'attendance', roles: ['parent'] },
-  { to: '/messages', label: 'Tin nhắn', icon: 'chat', roles: ['parent', 'teacher'] },
-  { to: '/daily-care', label: 'Sổ chăm sóc lớp', icon: 'attendance', roles: ['teacher'] },
+  { to: '/dashboard', label: 'Tổng quan', icon: 'grid', roles: ['admin', 'principal', 'teacher'], theme: 'system' },
+  { to: '/principal', label: 'Sổ điều hành', icon: 'chart', roles: ['admin', 'principal'], theme: 'system' },
+  { to: '/campuses', label: 'Trường & Phân hiệu', icon: 'classes', roles: ['admin', 'principal'], theme: 'system' },
+  { to: '/accounts', label: 'Tài khoản & vai trò', icon: 'shield', roles: ['admin', 'hr'], theme: 'hr' },
+  { to: '/students', label: 'Học sinh', icon: 'students', roles: ['admin', 'principal', 'teacher', 'hr'], theme: 'student' },
+  { to: '/classrooms', label: 'Lớp học', icon: 'classes', roles: ['admin', 'principal'], theme: 'student' },
+  { to: '/attendance', label: 'Điểm danh', icon: 'attendance', roles: ['admin', 'teacher'], theme: 'student' },
+  { to: '/attendance/reports', label: 'Báo cáo điểm danh', icon: 'attendance', roles: ['principal'], theme: 'student' },
+  { to: '/timekeeping', label: 'Chấm công nhân sự', icon: 'clock', roles: ['admin', 'principal', 'guard', 'chef', 'hr'], theme: 'hr' },
+  { to: '/hr', label: 'Nhân sự', icon: 'users', roles: ['admin', 'principal', 'hr'], theme: 'hr' },
+  { to: '/payroll', label: 'Lương & Chi trả', icon: 'money', roles: ['admin', 'principal', 'accountant', 'hr'], theme: 'hr' },
+  { to: '/finance', label: 'Tài chính', icon: 'money', roles: ['admin', 'principal', 'accountant'], theme: 'finance' },
+  { to: '/accounting', label: 'Tổng quan kế toán', icon: 'grid', roles: ['accountant'], theme: 'system' },
+  { to: '/accounting/expenses', label: 'Sổ chi mua sắm', icon: 'money', roles: ['accountant', 'admin'], theme: 'finance' },
+  { to: '/accounting/operating-expenses', label: 'Chi vận hành', icon: 'money', roles: ['admin', 'principal', 'accountant'], theme: 'finance' },
+  { to: '/accounting/cashbook', label: 'Đối soát thu – chi', icon: 'chart', roles: ['accountant', 'admin'], theme: 'finance' },
+  { to: '/accounting/report', label: 'Báo cáo kế toán', icon: 'chart', roles: ['accountant', 'admin'], theme: 'finance' },
+  { to: '/kitchen', label: 'Bếp hôm nay', icon: 'grid', roles: ['chef', 'admin'], theme: 'ops' },
+  { to: '/nutrition', label: 'Bếp ăn & Bán trú', icon: 'utensils', roles: ['admin', 'principal', 'chef', 'teacher'], theme: 'ops' },
+  { to: '/guard', label: 'Tổng quan trực cổng', icon: 'grid', roles: ['guard', 'admin'], theme: 'ops' },
+  { to: '/pickups', label: 'Đón trẻ', icon: 'users', roles: ['parent', 'admin', 'principal'], theme: 'student' },
+  { to: '/assets', label: 'Đề xuất mua sắm', icon: 'settings', roles: ['teacher'], theme: 'ops' },
+  { to: '/assets', label: 'Cơ sở vật chất', icon: 'settings', roles: ['admin', 'principal'], theme: 'ops' },
+  { to: '/reports', label: 'Báo cáo', icon: 'chart', roles: ['admin', 'principal', 'accountant'], theme: 'system' },
+  { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar', roles: ['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard'], theme: 'hr' },
+  { to: '/my-staffing', label: 'Lịch phân công của tôi', icon: 'calendar', roles: ['teacher', 'chef', 'guard'], theme: 'personal' },
+  { to: '/my-payroll', label: 'Lương của tôi', icon: 'money', roles: ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'], theme: 'personal' },
+  { to: '/student-profile-change-requests', label: 'Duyệt cập nhật hồ sơ', icon: 'card', roles: ['principal'], theme: 'student' },
+  { to: '/parent-feedback', label: 'Phản hồi phụ huynh', icon: 'chat', roles: ['principal'], theme: 'student' },
+  { to: '/parent-dashboard', label: 'Tổng quan', icon: 'grid', roles: ['parent'], theme: 'system' },
+  { to: '/parent-portal', label: 'Thông tin của con', icon: 'students', roles: ['parent'], theme: 'student' },
+  { to: '/parent-care', label: 'Sổ chăm sóc của con', icon: 'attendance', roles: ['parent'], theme: 'student' },
+  { to: '/messages', label: 'Tin nhắn', icon: 'chat', roles: ['parent', 'teacher'], theme: 'student' },
+  { to: '/daily-care', label: 'Sổ chăm sóc lớp', icon: 'attendance', roles: ['teacher'], theme: 'student' },
 ];
 
 const ADMIN_SIDEBAR_STORAGE_KEY = 'admin_sidebar_open_groups';
 
+/**
+ * Bảng phân chia nhóm Menu theo màu chủ đề trực quan:
+ * - student (Xanh): Toàn bộ tính năng liên quan Học sinh & Lớp học
+ * - hr (Cam): Toàn bộ tính năng liên quan Giáo viên & Nhân sự
+ * - personal (Vàng): Thông tin & Tác vụ Cá nhân
+ * - finance (Lục): Tài chính & Kế toán
+ * - ops (Tím): Bếp ăn, Tài sản & An ninh
+ * - system (Xanh biển): Tổng quan, Điều hành & Trường / Phân hiệu
+ */
 const adminNavSections = [
   {
     id: 'admin-overview',
-    label: 'TỔNG QUAN & ĐIỀU HÀNH',
+    label: 'ĐIỀU HÀNH & PHÂN TRƯỜNG',
     icon: 'grid',
+    theme: 'system',
     items: [
       { to: '/dashboard', label: 'Tổng quan', icon: 'grid' },
       { to: '/principal', label: 'Sổ điều hành', icon: 'chart' },
+      { to: '/campuses', label: 'Trường & Phân hiệu', icon: 'classes' },
       { to: '/accounts', label: 'Tài khoản & vai trò', icon: 'shield' },
-      { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar' },
+      { to: '/reports', label: 'Báo cáo tổng hợp', icon: 'chart' },
     ],
   },
   {
     id: 'admin-students',
     label: 'HỌC SINH & LỚP HỌC',
     icon: 'students',
+    theme: 'student',
     items: [
       { to: '/students', label: 'Học sinh', icon: 'students' },
       { to: '/classrooms', label: 'Lớp học', icon: 'classes' },
@@ -81,18 +94,21 @@ const adminNavSections = [
   },
   {
     id: 'admin-hr',
-    label: 'NHÂN SỰ & TIỀN LƯƠNG',
+    label: 'GIÁO VIÊN & NHÂN SỰ',
     icon: 'users',
+    theme: 'hr',
     items: [
       { to: '/hr', label: 'Nhân sự', icon: 'users' },
       { to: '/timekeeping', label: 'Chấm công nhân sự', icon: 'clock' },
       { to: '/payroll', label: 'Lương & Chi trả', icon: 'money' },
+      { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar' },
     ],
   },
   {
     id: 'admin-finance',
     label: 'TÀI CHÍNH & KẾ TOÁN',
     icon: 'money',
+    theme: 'finance',
     items: [
       { to: '/finance', label: 'Tài chính học phí', icon: 'money' },
       { to: '/accounting/expenses', label: 'Sổ chi mua sắm', icon: 'money' },
@@ -105,6 +121,7 @@ const adminNavSections = [
     id: 'admin-operations',
     label: 'BẾP ĂN, TÀI SẢN & AN NINH',
     icon: 'utensils',
+    theme: 'ops',
     items: [
       { to: '/kitchen', label: 'Bếp hôm nay', icon: 'grid' },
       { to: '/nutrition', label: 'Bếp ăn & Bán trú', icon: 'utensils' },
@@ -113,12 +130,13 @@ const adminNavSections = [
     ],
   },
   {
-    id: 'admin-reports',
-    label: 'BÁO CÁO & CÁ NHÂN',
-    icon: 'chart',
+    id: 'admin-personal',
+    label: 'THÔNG TIN CÁ NHÂN',
+    icon: 'users',
+    theme: 'personal',
     items: [
-      { to: '/reports', label: 'Báo cáo tổng hợp', icon: 'chart' },
       { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
+      { to: '/staff-settings', label: 'Cài đặt tài khoản', icon: 'settings' },
     ],
   },
 ];
@@ -128,61 +146,62 @@ const PRINCIPAL_SIDEBAR_STORAGE_KEY = 'principal_sidebar_open_groups';
 const principalNavSections = [
   {
     id: 'overview-ops',
-    label: 'TỔNG QUAN & ĐIỀU HÀNH',
+    label: 'TỔNG QUAN & PHÂN TRƯỜNG',
     icon: 'grid',
+    theme: 'system',
     items: [
       { to: '/principal', label: 'Sổ điều hành', icon: 'chart' },
       { to: '/dashboard', label: 'Tổng quan hôm nay', icon: 'grid' },
-      { to: '/internal-notices', label: 'Thông báo chỉ đạo', icon: 'calendar' },
-    ],
-  },
-  {
-    id: 'approvals',
-    label: 'PHÊ DUYỆT',
-    icon: 'check',
-    items: [
-      { to: '/student-profile-change-requests', label: 'Duyệt hồ sơ học sinh', icon: 'card' },
-      { to: '/accounting/operating-expenses', label: 'Duyệt chi vận hành', icon: 'money' },
-      { to: '/finance?tab=refunds', label: 'Duyệt hoàn học phí', icon: 'money' },
-      { to: '/hr?tab=leave', label: 'Duyệt nghỉ phép', icon: 'calendar' },
-      { to: '/payroll', label: 'Duyệt bảng lương', icon: 'money' },
+      { to: '/campuses', label: 'Trường & Phân hiệu', icon: 'classes' },
+      { to: '/reports', label: 'Báo cáo nhà trường', icon: 'chart' },
     ],
   },
   {
     id: 'supervision',
-    label: 'GIÁM SÁT NHÀ TRƯỜNG',
-    icon: 'classes',
+    label: 'HỌC SINH & LỚP HỌC',
+    icon: 'students',
+    theme: 'student',
     items: [
+      { to: '/students', label: 'Hồ sơ học sinh', icon: 'students' },
       { to: '/classrooms', label: 'Lớp học', icon: 'classes' },
-      { to: '/pickups', label: 'Giám sát đón trẻ', icon: 'users' },
-      { to: '/hr', label: 'Nhân sự', icon: 'users' },
-      { to: '/finance', label: 'Tài chính học phí', icon: 'money' },
-    ],
-  },
-  {
-    id: 'reports',
-    label: 'BÁO CÁO & ĐÁNH GIÁ',
-    icon: 'chart',
-    items: [
       { to: '/attendance/reports', label: 'Báo cáo chuyên cần', icon: 'attendance' },
-      { to: '/reports', label: 'Báo cáo nhà trường', icon: 'chart' },
-      { to: '/accounting/report', label: 'Báo cáo kế toán', icon: 'chart' },
-    ],
-  },
-  {
-    id: 'feedback',
-    label: 'PHẢN HỒI PHỤ HUYNH',
-    icon: 'chat',
-    items: [
+      { to: '/pickups', label: 'Giám sát đón trẻ', icon: 'users' },
+      { to: '/student-profile-change-requests', label: 'Duyệt hồ sơ học sinh', icon: 'card' },
       { to: '/parent-feedback', label: 'Phản hồi phụ huynh', icon: 'chat' },
     ],
   },
   {
-    id: 'personal',
-    label: 'CÁ NHÂN',
+    id: 'approvals',
+    label: 'GIÁO VIÊN & NHÂN SỰ',
     icon: 'users',
+    theme: 'hr',
+    items: [
+      { to: '/hr', label: 'Nhân sự', icon: 'users' },
+      { to: '/hr?tab=leave', label: 'Duyệt nghỉ phép', icon: 'calendar' },
+      { to: '/payroll', label: 'Duyệt bảng lương', icon: 'money' },
+      { to: '/internal-notices', label: 'Thông báo chỉ đạo', icon: 'calendar' },
+    ],
+  },
+  {
+    id: 'reports',
+    label: 'TÀI CHÍNH & DUYỆT CHI',
+    icon: 'money',
+    theme: 'finance',
+    items: [
+      { to: '/finance', label: 'Tài chính học phí', icon: 'money' },
+      { to: '/finance?tab=refunds', label: 'Duyệt hoàn học phí', icon: 'money' },
+      { to: '/accounting/operating-expenses', label: 'Duyệt chi vận hành', icon: 'money' },
+      { to: '/accounting/report', label: 'Báo cáo kế toán', icon: 'chart' },
+    ],
+  },
+  {
+    id: 'personal',
+    label: 'THÔNG TIN CÁ NHÂN',
+    icon: 'users',
+    theme: 'personal',
     items: [
       { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
+      { to: '/staff-settings', label: 'Cài đặt tài khoản', icon: 'settings' },
     ],
   },
 ];
@@ -194,46 +213,45 @@ const teacherNavSections = [
     id: 'teacher-overview',
     label: 'TỔNG QUAN',
     icon: 'grid',
+    theme: 'system',
     items: [
       { to: '/dashboard', label: 'Tổng quan', icon: 'grid' },
     ],
   },
   {
     id: 'teacher-classroom-care',
-    label: 'LỚP HỌC & CHĂM SÓC',
+    label: 'HỌC SINH & LỚP HỌC',
     icon: 'classes',
+    theme: 'student',
     items: [
       { to: '/students', label: 'Học sinh', icon: 'students' },
       { to: '/attendance', label: 'Điểm danh', icon: 'attendance' },
       { to: '/daily-care', label: 'Sổ chăm sóc lớp', icon: 'attendance' },
+      { to: '/messages', label: 'Tin nhắn phụ huynh', icon: 'chat' },
       { to: '/nutrition', label: 'Bếp ăn & Bán trú', icon: 'utensils' },
     ],
   },
   {
-    id: 'teacher-communication',
-    label: 'TRAO ĐỔI',
-    icon: 'chat',
-    items: [
-      { to: '/messages', label: 'Tin nhắn', icon: 'chat' },
-      { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar' },
-    ],
-  },
-  {
     id: 'teacher-work',
-    label: 'CÔNG VIỆC',
+    label: 'CÔNG VIỆC GIÁO VIÊN',
     icon: 'calendar',
+    theme: 'hr',
     items: [
       { to: '/my-staffing', label: 'Lịch phân công của tôi', icon: 'calendar' },
+      { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar' },
       { to: '/assets', label: 'Đề xuất mua sắm', icon: 'settings' },
     ],
   },
   {
     id: 'teacher-personal',
-    label: 'CÁ NHÂN',
+    label: 'THÔNG TIN CÁ NHÂN',
     icon: 'users',
+    theme: 'personal',
     items: [
+      { to: '/timekeeping?tab=corrections', label: 'Đơn chấm công bù', icon: 'clock' },
       { to: '/my-leave-requests', label: 'Nghỉ phép cá nhân', icon: 'calendar' },
       { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
+      { to: '/staff-settings', label: 'Cài đặt tài khoản', icon: 'settings' },
     ],
   },
 ];
@@ -245,14 +263,16 @@ const accountantNavSections = [
     id: 'accountant-overview',
     label: 'TỔNG QUAN',
     icon: 'grid',
+    theme: 'system',
     items: [
       { to: '/accounting', label: 'Tổng quan kế toán', icon: 'grid' },
     ],
   },
   {
     id: 'accountant-tuition',
-    label: 'HỌC PHÍ & CÔNG NỢ',
+    label: 'HỌC PHÍ HỌC SINH',
     icon: 'money',
+    theme: 'student',
     items: [
       { to: '/finance?tab=invoices', label: 'Hóa đơn học phí', icon: 'card' },
       { to: '/finance?tab=schedules', label: 'Thiết lập mức thu', icon: 'settings' },
@@ -263,27 +283,22 @@ const accountantNavSections = [
   },
   {
     id: 'accountant-expenses',
-    label: 'CHI PHÍ & THANH TOÁN',
+    label: 'LƯƠNG & CHI PHÍ',
     icon: 'money',
+    theme: 'hr',
     items: [
+      { to: '/payroll', label: 'Thanh toán lương NS', icon: 'users' },
       { to: '/accounting/expenses', label: 'Sổ chi mua sắm', icon: 'money' },
       { to: '/accounting/operating-expenses', label: 'Chi vận hành', icon: 'money' },
-      { to: '/payroll', label: 'Thanh toán lương', icon: 'users' },
     ],
   },
   {
     id: 'accountant-cashbook',
-    label: 'SỔ QUỸ & ĐỐI SOÁT',
+    label: 'SỔ QUỸ & BÁO CÁO',
     icon: 'chart',
+    theme: 'finance',
     items: [
       { to: '/accounting/cashbook', label: 'Sổ thu – chi / Đối soát', icon: 'chart' },
-    ],
-  },
-  {
-    id: 'accountant-reports',
-    label: 'BÁO CÁO',
-    icon: 'chart',
-    items: [
       { to: '/accounting/report', label: 'Báo cáo kế toán', icon: 'chart' },
       { to: '/finance?tab=report', label: 'Báo cáo kỳ thu', icon: 'chart' },
       { to: '/reports', label: 'Báo cáo tổng hợp', icon: 'chart' },
@@ -291,11 +306,13 @@ const accountantNavSections = [
   },
   {
     id: 'accountant-personal',
-    label: 'CÔNG VIỆC & CÁ NHÂN',
+    label: 'THÔNG TIN CÁ NHÂN',
     icon: 'users',
+    theme: 'personal',
     items: [
       { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar' },
       { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
+      { to: '/staff-settings', label: 'Cài đặt tài khoản', icon: 'settings' },
     ],
   },
 ];
@@ -305,18 +322,22 @@ const GUARD_SIDEBAR_STORAGE_KEY = 'guard_sidebar_open_groups';
 const guardNavSections = [
   {
     id: 'guard-overview',
-    label: 'TỔNG QUAN & CA TRỰC',
+    label: 'CA TRỰC & CHẤM CÔNG',
     icon: 'grid',
+    theme: 'hr',
     items: [
       { to: '/guard?tab=overview', label: 'Tổng quan ca trực', icon: 'grid' },
       { to: '/timekeeping', label: 'Chấm công vào/ra ca', icon: 'clock' },
       { to: '/my-staffing', label: 'Lịch phân công của tôi', icon: 'calendar' },
+      { to: '/guard?tab=handover', label: 'Bàn giao ca trực', icon: 'clock' },
+      { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar' },
     ],
   },
   {
     id: 'guard-security',
     label: 'AN NINH & TRỰC CỔNG',
     icon: 'shield',
+    theme: 'ops',
     items: [
       { to: '/guard?tab=visitors', label: 'Khách ra/vào', icon: 'users' },
       { to: '/guard?tab=incidents', label: 'Sự cố an ninh', icon: 'alertCircle' },
@@ -324,21 +345,14 @@ const guardNavSections = [
     ],
   },
   {
-    id: 'guard-handover',
-    label: 'BÀN GIAO & THÔNG BÁO',
-    icon: 'clock',
-    items: [
-      { to: '/guard?tab=handover', label: 'Bàn giao ca trực', icon: 'clock' },
-      { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar' },
-    ],
-  },
-  {
     id: 'guard-personal',
-    label: 'CÁ NHÂN',
+    label: 'THÔNG TIN CÁ NHÂN',
     icon: 'users',
+    theme: 'personal',
     items: [
       { to: '/my-leave-requests', label: 'Nghỉ phép cá nhân', icon: 'calendar' },
       { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
+      { to: '/staff-settings', label: 'Cài đặt tài khoản', icon: 'settings' },
     ],
   },
 ];
@@ -832,312 +846,147 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
     return true;
   });
 
+  const renderAccordionSections = (sections, openIds, onToggle, ariaLabel, extraClass = '', mobile = false) => {
+    const prefix = mobile ? 'mobile' : 'desktop';
+    return (
+      <div
+        className={`principal-nav-accordion ${extraClass}`.trim()}
+        role="region"
+        aria-label={ariaLabel}
+      >
+        {sections.map((section) => {
+          const visibleItems = section.items.filter(
+            (item) => !item.positions || item.positions.includes(user?.employeeInfo?.position)
+          );
+          if (!visibleItems.length) return null;
+
+          const isOpen = openIds.includes(section.id);
+          const contentId = `${prefix}-nav-section-${section.id}`;
+          const themeClass = `nav-theme-${section.theme || 'system'}`;
+
+          return (
+            <div key={section.id} className={`nav-accordion-section ${themeClass}`}>
+              <button
+                type="button"
+                className={`nav-accordion-header ${isOpen ? 'is-open' : ''}`}
+                aria-expanded={isOpen}
+                aria-controls={contentId}
+                onClick={() => onToggle(section.id)}
+              >
+                <span className="nav-accordion-header-title">
+                  <span className="nav-theme-dot" aria-hidden="true" />
+                  {section.icon && <Icon name={section.icon} size={15} />}
+                  <span>{section.label}</span>
+                </span>
+                <span className={`nav-accordion-chevron ${isOpen ? 'expanded' : ''}`}>
+                  <Icon name="chevronRight" size={14} />
+                </span>
+              </button>
+              <div
+                id={contentId}
+                className="nav-accordion-content"
+                hidden={!isOpen}
+              >
+                {visibleItems.map((item) => {
+                  const isActive = isNavItemActive(item.to, location.pathname, location.search);
+                  return (
+                    <NavLink
+                      to={item.to}
+                      key={item.to}
+                      aria-current={isActive ? 'page' : undefined}
+                      className={() => `nav-link nav-sub-link ${isActive ? 'active' : ''}`.trim()}
+                      onClick={mobile ? () => setMobileNavOpen(false) : undefined}
+                    >
+                      <Icon name={item.icon} />
+                      <span>{item.label}</span>
+                      {item.to === '/messages' && chatUnread.total > 0 && (
+                        <span className="nav-chat-count">
+                          {chatUnread.total > 99 ? '99+' : chatUnread.total}
+                        </span>
+                      )}
+                    </NavLink>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   const renderNavigation = (mobile = false) => {
     if (isAdmin) {
-      const prefix = mobile ? 'mobile' : 'desktop';
-      return (
-        <div
-          className="principal-nav-accordion admin-nav-accordion"
-          role="region"
-          aria-label={mobile ? 'Menu chức năng quản trị di động' : 'Menu chức năng quản trị'}
-        >
-          {adminNavSections.map((section) => {
-            const isOpen = adminOpenSections.includes(section.id);
-            const contentId = `${prefix}-admin-nav-section-${section.id}`;
-            return (
-              <div key={section.id} className="nav-accordion-section">
-                <button
-                  type="button"
-                  className={`nav-accordion-header ${isOpen ? 'is-open' : ''}`}
-                  aria-expanded={isOpen}
-                  aria-controls={contentId}
-                  onClick={() => toggleAdminSection(section.id)}
-                >
-                  <span className="nav-accordion-header-title">
-                    {section.icon && <Icon name={section.icon} size={15} />}
-                    <span>{section.label}</span>
-                  </span>
-                  <span className={`nav-accordion-chevron ${isOpen ? 'expanded' : ''}`}>
-                    <Icon name="chevronRight" size={14} />
-                  </span>
-                </button>
-                <div
-                  id={contentId}
-                  className="nav-accordion-content"
-                  hidden={!isOpen}
-                >
-                  {section.items.map((item) => {
-                    const isActive = isNavItemActive(item.to, location.pathname, location.search);
-                    return (
-                      <NavLink
-                        to={item.to}
-                        key={item.to}
-                        aria-current={isActive ? 'page' : undefined}
-                        className={() => `nav-link nav-sub-link ${isActive ? 'active' : ''}`.trim()}
-                        onClick={mobile ? () => setMobileNavOpen(false) : undefined}
-                      >
-                        <Icon name={item.icon} />
-                        <span>{item.label}</span>
-                      </NavLink>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+      return renderAccordionSections(
+        adminNavSections,
+        adminOpenSections,
+        toggleAdminSection,
+        mobile ? 'Menu chức năng quản trị di động' : 'Menu chức năng quản trị',
+        'admin-nav-accordion',
+        mobile
       );
     }
 
     if (isPrincipal) {
-      const prefix = mobile ? 'mobile' : 'desktop';
-      return (
-        <div
-          className="principal-nav-accordion"
-          role="region"
-          aria-label={mobile ? 'Menu chức năng hiệu trưởng di động' : 'Menu chức năng hiệu trưởng'}
-        >
-          {principalNavSections.map((section) => {
-            const isOpen = openSections.includes(section.id);
-            const contentId = `${prefix}-principal-nav-section-${section.id}`;
-            return (
-              <div key={section.id} className="nav-accordion-section">
-                <button
-                  type="button"
-                  className={`nav-accordion-header ${isOpen ? 'is-open' : ''}`}
-                  aria-expanded={isOpen}
-                  aria-controls={contentId}
-                  onClick={() => toggleSection(section.id)}
-                >
-                  <span className="nav-accordion-header-title">
-                    {section.icon && <Icon name={section.icon} size={15} />}
-                    <span>{section.label}</span>
-                  </span>
-                  <span className={`nav-accordion-chevron ${isOpen ? 'expanded' : ''}`}>
-                    <Icon name="chevronRight" size={14} />
-                  </span>
-                </button>
-                <div
-                  id={contentId}
-                  className="nav-accordion-content"
-                  hidden={!isOpen}
-                >
-                  {section.items.map((item) => {
-                    const isActive = isPrincipalItemActive(item.to, location.pathname, location.search);
-                    return (
-                      <NavLink
-                        to={item.to}
-                        key={item.to}
-                        aria-current={isActive ? 'page' : undefined}
-                        className={() => `nav-link nav-sub-link ${isActive ? 'active' : ''}`.trim()}
-                        onClick={mobile ? () => setMobileNavOpen(false) : undefined}
-                      >
-                        <Icon name={item.icon} />
-                        {item.label}
-                      </NavLink>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+      return renderAccordionSections(
+        principalNavSections,
+        openSections,
+        toggleSection,
+        mobile ? 'Menu chức năng hiệu trưởng di động' : 'Menu chức năng hiệu trưởng',
+        '',
+        mobile
       );
     }
 
     if (isTeacher) {
-      const prefix = mobile ? 'mobile' : 'desktop';
-      return (
-        <div
-          className="principal-nav-accordion teacher-nav-accordion"
-          role="region"
-          aria-label={mobile ? 'Menu chức năng giáo viên di động' : 'Menu chức năng giáo viên'}
-        >
-          {teacherNavSections.map((section) => {
-            const visibleItems = section.items.filter(
-              (item) => !item.positions || item.positions.includes(user?.employeeInfo?.position)
-            );
-            if (!visibleItems.length) return null;
-
-            const isOpen = teacherOpenSections.includes(section.id);
-            const contentId = `${prefix}-teacher-nav-section-${section.id}`;
-            return (
-              <div key={section.id} className="nav-accordion-section">
-                <button
-                  type="button"
-                  className={`nav-accordion-header ${isOpen ? 'is-open' : ''}`}
-                  aria-expanded={isOpen}
-                  aria-controls={contentId}
-                  onClick={() => toggleTeacherSection(section.id)}
-                >
-                  <span className="nav-accordion-header-title">
-                    {section.icon && <Icon name={section.icon} size={15} />}
-                    <span>{section.label}</span>
-                  </span>
-                  <span className={`nav-accordion-chevron ${isOpen ? 'expanded' : ''}`}>
-                    <Icon name="chevronRight" size={14} />
-                  </span>
-                </button>
-                <div
-                  id={contentId}
-                  className="nav-accordion-content"
-                  hidden={!isOpen}
-                >
-                  {visibleItems.map((item) => {
-                    const isActive = isNavItemActive(item.to, location.pathname, location.search);
-                    return (
-                      <NavLink
-                        to={item.to}
-                        key={item.to}
-                        aria-current={isActive ? 'page' : undefined}
-                        className={() => `nav-link nav-sub-link ${isActive ? 'active' : ''}`.trim()}
-                        onClick={mobile ? () => setMobileNavOpen(false) : undefined}
-                      >
-                        <Icon name={item.icon} />
-                        {item.label}
-                        {item.to === '/messages' && chatUnread.total > 0 && (
-                          <span className="nav-chat-count">
-                            {chatUnread.total > 99 ? '99+' : chatUnread.total}
-                          </span>
-                        )}
-                      </NavLink>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+      return renderAccordionSections(
+        teacherNavSections,
+        teacherOpenSections,
+        toggleTeacherSection,
+        mobile ? 'Menu chức năng giáo viên di động' : 'Menu chức năng giáo viên',
+        'teacher-nav-accordion',
+        mobile
       );
     }
 
     if (isAccountant) {
-      const prefix = mobile ? 'mobile' : 'desktop';
-      return (
-        <div
-          className="principal-nav-accordion accountant-nav-accordion"
-          role="region"
-          aria-label={mobile ? 'Menu chức năng kế toán di động' : 'Menu chức năng kế toán'}
-        >
-          {accountantNavSections.map((section) => {
-            const isOpen = accountantOpenSections.includes(section.id);
-            const contentId = `${prefix}-accountant-nav-section-${section.id}`;
-            return (
-              <div key={section.id} className="nav-accordion-section">
-                <button
-                  type="button"
-                  className={`nav-accordion-header ${isOpen ? 'is-open' : ''}`}
-                  aria-expanded={isOpen}
-                  aria-controls={contentId}
-                  onClick={() => toggleAccountantSection(section.id)}
-                >
-                  <span className="nav-accordion-header-title">
-                    {section.icon && <Icon name={section.icon} size={15} />}
-                    <span>{section.label}</span>
-                  </span>
-                  <span className={`nav-accordion-chevron ${isOpen ? 'expanded' : ''}`}>
-                    <Icon name="chevronRight" size={14} />
-                  </span>
-                </button>
-                <div
-                  id={contentId}
-                  className="nav-accordion-content"
-                  hidden={!isOpen}
-                >
-                  {section.items.map((item) => {
-                    const isActive = isNavItemActive(item.to, location.pathname, location.search);
-                    return (
-                      <NavLink
-                        to={item.to}
-                        key={item.to}
-                        aria-current={isActive ? 'page' : undefined}
-                        className={() => `nav-link nav-sub-link ${isActive ? 'active' : ''}`.trim()}
-                        onClick={mobile ? () => setMobileNavOpen(false) : undefined}
-                      >
-                        <Icon name={item.icon} />
-                        {item.label}
-                      </NavLink>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+      return renderAccordionSections(
+        accountantNavSections,
+        accountantOpenSections,
+        toggleAccountantSection,
+        mobile ? 'Menu chức năng kế toán di động' : 'Menu chức năng kế toán',
+        'accountant-nav-accordion',
+        mobile
       );
     }
 
     if (isGuard) {
-      const prefix = mobile ? 'mobile' : 'desktop';
-      return (
-        <div
-          className="principal-nav-accordion guard-nav-accordion"
-          role="region"
-          aria-label={mobile ? 'Menu chức năng bảo vệ di động' : 'Menu chức năng bảo vệ'}
-        >
-          {guardNavSections.map((section) => {
-            const isOpen = guardOpenSections.includes(section.id);
-            const contentId = `${prefix}-guard-nav-section-${section.id}`;
-            return (
-              <div key={section.id} className="nav-accordion-section">
-                <button
-                  type="button"
-                  className={`nav-accordion-header ${isOpen ? 'is-open' : ''}`}
-                  aria-expanded={isOpen}
-                  aria-controls={contentId}
-                  onClick={() => toggleGuardSection(section.id)}
-                >
-                  <span className="nav-accordion-header-title">
-                    {section.icon && <Icon name={section.icon} size={15} />}
-                    <span>{section.label}</span>
-                  </span>
-                  <span className={`nav-accordion-chevron ${isOpen ? 'expanded' : ''}`}>
-                    <Icon name="chevronRight" size={14} />
-                  </span>
-                </button>
-                <div
-                  id={contentId}
-                  className="nav-accordion-content"
-                  hidden={!isOpen}
-                >
-                  {section.items.map((item) => {
-                    const isActive = isNavItemActive(item.to, location.pathname, location.search);
-                    return (
-                      <NavLink
-                        to={item.to}
-                        key={item.to}
-                        aria-current={isActive ? 'page' : undefined}
-                        className={() => `nav-link nav-sub-link ${isActive ? 'active' : ''}`.trim()}
-                        onClick={mobile ? () => setMobileNavOpen(false) : undefined}
-                      >
-                        <Icon name={item.icon} />
-                        {item.label}
-                      </NavLink>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+      return renderAccordionSections(
+        guardNavSections,
+        guardOpenSections,
+        toggleGuardSection,
+        mobile ? 'Menu chức năng bảo vệ di động' : 'Menu chức năng bảo vệ',
+        'guard-nav-accordion',
+        mobile
       );
     }
 
     return (
       <>
-        <p className="nav-label">QUẢN LÝ</p>
+        <p className="nav-label">QUẢN LÝ THEO CHỦ ĐỀ</p>
         {navItems.map((item) => {
           const isActive = isNavItemActive(item.to, location.pathname, location.search);
+          const itemTheme = `nav-link-theme-${item.theme || 'system'}`;
           return (
             <NavLink
               to={item.to}
               key={item.to}
               aria-current={isActive ? 'page' : undefined}
-              className={() => `nav-link ${isActive ? 'active' : ''}`.trim()}
+              className={() => `nav-link ${itemTheme} ${isActive ? 'active' : ''}`.trim()}
               onClick={mobile ? () => setMobileNavOpen(false) : undefined}
             >
               <Icon name={item.icon} />
-              {item.label}
+              <span>{item.label}</span>
               {item.to === '/messages' && chatUnread.total > 0 && (
                 <span className="nav-chat-count">
                   {chatUnread.total > 99 ? '99+' : chatUnread.total}
@@ -1150,6 +999,20 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
     );
   };
 
+  const hasSuperAdminReturn = Boolean(localStorage.getItem('superadmin_token'));
+  const returnToMultiSchoolConsole = () => {
+    const superToken = localStorage.getItem('superadmin_token');
+    const superUserRaw = localStorage.getItem('superadmin_user');
+    if (superToken) {
+      localStorage.setItem('token', superToken);
+    }
+    if (superUserRaw) {
+      localStorage.setItem('user', superUserRaw);
+    }
+    localStorage.removeItem('tenant');
+    navigate('/multi-school');
+  };
+
   const logout = async () => {
     try {
       await api.post('/auth/logout');
@@ -1158,6 +1021,8 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
     } finally {
       setUser(null);
       setTenant(null);
+      localStorage.removeItem('superadmin_token');
+      localStorage.removeItem('superadmin_user');
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       localStorage.removeItem('tenant');
@@ -1189,16 +1054,21 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
                 </div>
               </div>
             )}
+            {hasSuperAdminReturn && (
+              <button type="button" className="superadmin-switch-btn" onClick={returnToMultiSchoolConsole}>
+                <Icon name="shield" size={14} /> Về Quản trị Tổng Đa Trường
+              </button>
+            )}
             <nav className="sidebar-nav" aria-label="Điều hướng chính di động">
               {renderNavigation(true)}
             </nav>
             <div className="sidebar-bottom">
               {user?.role === 'parent' ? (
-                <NavLink to="/parent-settings" className="nav-link" onClick={() => setMobileNavOpen(false)}>
-                  <Icon name="settings" />Cài đặt
+                <NavLink to="/parent-settings" className="nav-link nav-link-theme-personal" onClick={() => setMobileNavOpen(false)}>
+                  <Icon name="settings" />Cài đặt cá nhân
                 </NavLink>
               ) : (
-                <NavLink to="/staff-settings" className="nav-link" onClick={() => setMobileNavOpen(false)}>
+                <NavLink to="/staff-settings" className="nav-link nav-link-theme-personal" onClick={() => setMobileNavOpen(false)}>
                   <Icon name="settings" />Cài đặt tài khoản
                 </NavLink>
               )}
@@ -1229,16 +1099,21 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
             </div>
           </div>
         )}
+        {hasSuperAdminReturn && (
+          <button type="button" className="superadmin-switch-btn" onClick={returnToMultiSchoolConsole}>
+            <Icon name="shield" size={14} /> Về Quản trị Tổng Đa Trường
+          </button>
+        )}
         <nav ref={navRef} className="sidebar-nav" aria-label="Điều hướng chính">
           {renderNavigation()}
         </nav>
         <div className="sidebar-bottom">
           {user?.role === 'parent' ? (
-            <NavLink to="/parent-settings" className="nav-link">
-              <Icon name="settings" />Cài đặt
+            <NavLink to="/parent-settings" className="nav-link nav-link-theme-personal">
+              <Icon name="settings" />Cài đặt cá nhân
             </NavLink>
           ) : (
-            <NavLink to="/staff-settings" className="nav-link">
+            <NavLink to="/staff-settings" className="nav-link nav-link-theme-personal">
               <Icon name="settings" />Cài đặt tài khoản
             </NavLink>
           )}

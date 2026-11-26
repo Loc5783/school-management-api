@@ -2550,3 +2550,189 @@ input:-webkit-autofill:active {
   max-height: calc(100dvh - 36px);
   overflow-y: auto;
 }
+
+
+/* ==========================================================================
+   PHÂN CHIA MÀU CHỦ ĐỀ CỘT MENU (THEO YÊU CẦU VẬN HÀNH NHÀ TRƯỜNG)
+   - Xanh (student): Toàn bộ tính năng liên quan Học sinh & Lớp học
+   - Cam (hr): Toàn bộ tính năng liên quan Giáo viên & Nhân sự
+   - Vàng (personal): Thông tin & Tác vụ Cá nhân
+   - Lục (finance): Tài chính & Kế toán
+   - Tím (ops): Bếp ăn, Cơ sở vật chất & An ninh
+   - Xanh biển (system): Điều hành chung & Trường / Phân hiệu
+   ========================================================================== */
+
+.nav-theme-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 4px;
+  background: #93c5fd;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.22);
+}
+
+/* 1. XANH NGỌC / XANH DƯƠNG SÁNG — Nhóm Học sinh & Lớp học */
+.nav-theme-student .nav-theme-dot {
+  background: #38bdf8;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.75);
+}
+.nav-theme-student .nav-accordion-header {
+  color: #e0f7ff;
+  background: rgba(56, 189, 248, 0.12);
+  border-left: 3px solid #38bdf8;
+}
+.nav-theme-student .nav-accordion-header .nav-accordion-header-title svg,
+.nav-theme-student .nav-sub-link svg,
+.nav-link-theme-student svg {
+  color: #7dd3fc;
+}
+.nav-theme-student .nav-accordion-content {
+  border-left-color: rgba(56, 189, 248, 0.55);
+}
+.nav-theme-student .nav-sub-link.active,
+.nav-link.nav-link-theme-student.active {
+  background: linear-gradient(105deg, #0284c7, #0ea5e9) !important;
+  color: #ffffff !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4), 0 6px 16px rgba(2, 132, 199, 0.35);
+}
+
+/* 2. CAM — Nhóm Giáo viên & Nhân sự */
+.nav-theme-hr .nav-theme-dot {
+  background: #fb923c;
+  box-shadow: 0 0 8px rgba(251, 146, 60, 0.75);
+}
+.nav-theme-hr .nav-accordion-header {
+  color: #ffedd5;
+  background: rgba(251, 146, 60, 0.15);
+  border-left: 3px solid #fb923c;
+}
+.nav-theme-hr .nav-accordion-header .nav-accordion-header-title svg,
+.nav-theme-hr .nav-sub-link svg,
+.nav-link-theme-hr svg {
+  color: #fdba74;
+}
+.nav-theme-hr .nav-accordion-content {
+  border-left-color: rgba(251, 146, 60, 0.6);
+}
+.nav-theme-hr .nav-sub-link.active,
+.nav-link.nav-link-theme-hr.active {
+  background: linear-gradient(105deg, #ea580c, #f97316) !important;
+  color: #ffffff !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.38), 0 6px 16px rgba(234, 88, 12, 0.35);
+}
+
+/* 3. VÀNG — Nhóm Thông tin Cá nhân */
+.nav-theme-personal .nav-theme-dot {
+  background: #facc15;
+  box-shadow: 0 0 8px rgba(250, 204, 21, 0.8);
+}
+.nav-theme-personal .nav-accordion-header {
+  color: #fef9c3;
+  background: rgba(250, 204, 21, 0.16);
+  border-left: 3px solid #facc15;
+}
+.nav-theme-personal .nav-accordion-header .nav-accordion-header-title svg,
+.nav-theme-personal .nav-sub-link svg,
+.nav-link-theme-personal svg {
+  color: #fde047 !important;
+}
+.nav-theme-personal .nav-accordion-content {
+  border-left-color: rgba(250, 204, 21, 0.65);
+}
+.nav-link-theme-personal {
+  border-left: 3px solid rgba(250, 204, 21, 0.8);
+  background: rgba(250, 204, 21, 0.1);
+}
+.nav-theme-personal .nav-sub-link.active,
+.nav-link.nav-link-theme-personal.active {
+  background: linear-gradient(105deg, #ca8a04, #eab308) !important;
+  color: #ffffff !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42), 0 6px 16px rgba(202, 138, 4, 0.36);
+}
+.nav-theme-personal .nav-sub-link.active svg,
+.nav-link.nav-link-theme-personal.active svg {
+  color: #ffffff !important;
+}
+
+/* 4. XANH LÁ NGỌC — Nhóm Tài chính & Kế toán */
+.nav-theme-finance .nav-theme-dot {
+  background: #34d399;
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.75);
+}
+.nav-theme-finance .nav-accordion-header {
+  color: #d1fae5;
+  background: rgba(52, 211, 153, 0.13);
+  border-left: 3px solid #34d399;
+}
+.nav-theme-finance .nav-accordion-header .nav-accordion-header-title svg,
+.nav-theme-finance .nav-sub-link svg,
+.nav-link-theme-finance svg {
+  color: #6ee7b7;
+}
+.nav-theme-finance .nav-accordion-content {
+  border-left-color: rgba(52, 211, 153, 0.55);
+}
+.nav-theme-finance .nav-sub-link.active,
+.nav-link.nav-link-theme-finance.active {
+  background: linear-gradient(105deg, #059669, #10b981) !important;
+  color: #ffffff !important;
+}
+
+/* 5. TÍM — Nhóm Bếp ăn, Tài sản & An ninh */
+.nav-theme-ops .nav-theme-dot {
+  background: #c084fc;
+  box-shadow: 0 0 8px rgba(192, 132, 252, 0.75);
+}
+.nav-theme-ops .nav-accordion-header {
+  color: #f3e8ff;
+  background: rgba(192, 132, 252, 0.14);
+  border-left: 3px solid #c084fc;
+}
+.nav-theme-ops .nav-accordion-header .nav-accordion-header-title svg,
+.nav-theme-ops .nav-sub-link svg,
+.nav-link-theme-ops svg {
+  color: #d8b4fe;
+}
+.nav-theme-ops .nav-accordion-content {
+  border-left-color: rgba(192, 132, 252, 0.55);
+}
+.nav-theme-ops .nav-sub-link.active,
+.nav-link.nav-link-theme-ops.active {
+  background: linear-gradient(105deg, #7c3aed, #8b5cf6) !important;
+  color: #ffffff !important;
+}
+
+/* 6. XANH BIỂN SÁNG — Điều hành & Trường / Phân hiệu */
+.nav-theme-system .nav-theme-dot {
+  background: #93c5fd;
+}
+.nav-theme-system .nav-accordion-header {
+  border-left: 3px solid #93c5fd;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* Nút chuyển nhanh về Quản trị Tổng Đa Trường khi Admin Tổng đang xem 1 trường */
+.superadmin-switch-btn {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  margin: 0 0 10px;
+  padding: 6px 10px;
+  border: 1px solid rgba(250, 204, 21, 0.65);
+  border-radius: 10px;
+  background: linear-gradient(105deg, rgba(245, 158, 11, 0.28), rgba(234, 179, 8, 0.22));
+  color: #fef08a;
+  font-size: 11.5px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.18s ease, transform 0.15s ease;
+}
+.superadmin-switch-btn:hover {
+  background: linear-gradient(105deg, rgba(245, 158, 11, 0.42), rgba(234, 179, 8, 0.34));
+  color: #ffffff;
+  transform: translateY(-1px);
+}

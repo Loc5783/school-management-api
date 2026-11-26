@@ -87,6 +87,10 @@ const serializeStudent = (student, role, mode = 'detail') => {
             ethnicity: raw.ethnicity || '',
             birthPlace: raw.birthPlace || '',
             schoolYear: raw.schoolYear || '',
+            healthInsuranceCode: raw.healthInsuranceCode || '',
+            bloodType: raw.bloodType || '',
+            vaccinations: raw.vaccinations || [],
+            growthRecords: raw.growthRecords || [],
             allergies: raw.allergies || [],
             disease: raw.disease || {},
             emergencyContact: raw.emergencyContact || {},
@@ -102,6 +106,10 @@ const serializeStudent = (student, role, mode = 'detail') => {
         return {
             ...base,
             parents: raw.parents || [],
+            healthInsuranceCode: raw.healthInsuranceCode || '',
+            bloodType: raw.bloodType || '',
+            vaccinations: raw.vaccinations || [],
+            growthRecords: raw.growthRecords || [],
             allergies: raw.allergies || [], disease: raw.disease || {}, emergencyContact: raw.emergencyContact || {}, notes: raw.notes || '',
             authorizedPickers: (raw.authorizedPickers || []).filter((item) => item.isActive !== false).map((item) => ({
                 fullName: item.fullName || '', phone: item.phone || '', relationship: item.relationship || '', photoURL: item.photoURL || '', vehicleType: item.vehicleType || '', vehiclePlate: item.vehiclePlate || ''
@@ -111,6 +119,8 @@ const serializeStudent = (student, role, mode = 'detail') => {
     return {
         ...base,
         address: raw.address || '', nationality: raw.nationality || '', ethnicity: raw.ethnicity || '', birthPlace: raw.birthPlace || '',
+        healthInsuranceCode: raw.healthInsuranceCode || '', bloodType: raw.bloodType || '',
+        vaccinations: raw.vaccinations || [], growthRecords: raw.growthRecords || [],
         notes: raw.notes || '', parents: raw.parents || [], authorizedPickers: raw.authorizedPickers || [], allergies: raw.allergies || [],
         disease: raw.disease || {}, emergencyContact: raw.emergencyContact || {}, attendanceCardId: raw.attendanceCardId || '',
         faceProfileId: raw.faceProfileId || '', schoolYear: raw.schoolYear, statusHistory: raw.statusHistory || [],

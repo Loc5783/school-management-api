@@ -12,6 +12,10 @@ const {
   deleteStudent,
   getDailyReports,
   saveDailyReport,
+  saveGrowthRecord,
+  deleteGrowthRecord,
+  addVaccinationRecord,
+  deleteVaccinationRecord,
   downloadExcelTemplate,
   previewExcelImport,
   confirmExcelImport,
@@ -106,5 +110,9 @@ router.put('/:id', mutationGate, schoolAuthMiddleware, roleCheck(['admin', 'prin
 router.patch('/:id/status', mutationGate, schoolAuthMiddleware, roleCheck(['admin', 'principal']), changeStudentStatus);
 router.delete('/:id', mutationGate, schoolAuthMiddleware, roleCheck(['admin']), deleteStudent);
 router.put('/:id/daily-reports', mutationGate, schoolAuthMiddleware, roleCheck(['admin', 'principal', 'teacher']), saveDailyReport);
+router.post('/:id/growth-records', mutationGate, schoolAuthMiddleware, roleCheck(['admin', 'principal', 'teacher']), saveGrowthRecord);
+router.delete('/:id/growth-records/:recordId', mutationGate, schoolAuthMiddleware, roleCheck(['admin', 'principal', 'teacher']), deleteGrowthRecord);
+router.post('/:id/vaccinations', mutationGate, schoolAuthMiddleware, roleCheck(['admin', 'principal', 'teacher']), addVaccinationRecord);
+router.delete('/:id/vaccinations/:vaxId', mutationGate, schoolAuthMiddleware, roleCheck(['admin', 'principal', 'teacher']), deleteVaccinationRecord);
 
 module.exports = router;

@@ -8,6 +8,10 @@ const {
     deleteStudent,
     getDailyReports,
     saveDailyReport,
+    saveGrowthRecord,
+    deleteGrowthRecord,
+    addVaccinationRecord,
+    deleteVaccinationRecord,
     downloadExcelTemplate,
     previewExcelImport,
     confirmExcelImport,
@@ -60,6 +64,10 @@ router.post('/', roleCheck(['admin', 'teacher']), createStudent);
 router.get('/', getAllStudents);
 router.get('/:id/daily-reports', roleCheck(['admin', 'principal', 'teacher', 'parent']), getDailyReports);
 router.put('/:id/daily-reports', roleCheck(['admin', 'teacher']), saveDailyReport);
+router.post('/:id/growth-records', roleCheck(['admin', 'principal', 'teacher']), saveGrowthRecord);
+router.delete('/:id/growth-records/:recordId', roleCheck(['admin', 'principal', 'teacher']), deleteGrowthRecord);
+router.post('/:id/vaccinations', roleCheck(['admin', 'principal', 'teacher']), addVaccinationRecord);
+router.delete('/:id/vaccinations/:vaxId', roleCheck(['admin', 'principal', 'teacher']), deleteVaccinationRecord);
 router.get('/:id', getStudentById);
 router.put('/:id', roleCheck(['admin', 'teacher', 'parent']), updateStudent);
 router.patch('/:id/status', roleCheck(['admin', 'principal']), changeStudentStatus);

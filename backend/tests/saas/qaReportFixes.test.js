@@ -696,5 +696,133 @@ describe('QA & Security Evaluation Fixes — Full Replica Set Verification (phas
     expect(singleConfirm.body.data[0].parents).toHaveLength(2);
     expect((await Classroom.findById(nurseryRes.body.data._id).lean()).statistics.currentStudents).toBe(2);
   });
+
+  test('9. Handwritten Sheet Phase 2: BHYT, Nhóm máu, Tiêm chủng, Cân nặng chiều cao tháng, Phân hiệu & Admin Đa Trường', async () => {
+    const { ensureDefaultAdminAccount } = require('../../src/services/defaultAdminBootstrapService');
+
+    // 9.1 Cập nhật BHYT & Nhóm máu + Theo dõi Cân nặng Chiều cao theo tháng + Sổ Tiêm chủng
+    const targetStudent = await Student.findOne({ tenantId: tenantA._id, status: 'enrolled' });
+    expect(targetStudent).toBeTruthy();
+
+    const updateHealthRes = await request(app)
+      .put(`/api/students/${targetStudent._id}`)
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({
+        healthInsuranceCode: 'te1012600099887',
+        bloodType: 'O+'
+      });
+    expect(updateHealthRes.status).toBe(200);
+    expect(updateHealthRes.body.data.healthInsuranceCode).toBe('TE1012600099887');
+    expect(updateHealthRes.body.data.bloodType).toBe('O+');
+
+    const growthOct = await request(app)
+      .post(`/api/students/${targetStudent._id}/growth-records`)
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({ month: '2026-10', weightKg: 14.2, heightCm: 95.0, note: 'Tháng 10 ổn định' });
+    expect(growthOct.status).toBe(200);
+
+    const growthNov = await request(app)
+      .post(`/api/students/${targetStudent._id}/growth-records`)
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({ month: '2026-11', weightKg: 14.7, heightCm: 96.2, note: 'Tăng cân tốt' });
+    expect(growthNov.status).toBe(200);
+    expect(growthNov.body.data.growthRecords).toHaveLength(2);
+    expect(growthNov.body.data.growthRecords[0].month).toBe('2026-11');
+    expect(growthNov.body.data.growthRecords[0].bmi).toBeCloseTo(15.9, 1);
+
+    const vaxRes = await request(app)
+      .post(`/api/students/${targetStudent._id}/vaccinations`)
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({
+        vaccineName: 'Sởi - Quai bị - Rubella (MMR)',
+        doseNumber: 2,
+        vaccinatedDate: '2026-09-15',
+        status: 'completed',
+        facility: 'VNVC Cầu Giấy'
+      });
+    expect(vaxRes.status).toBe(201);
+    expect(vaxRes.body.data.vaccinations).toHaveLength(1);
+    expect(vaxRes.body.data.vaccinations[0].vaccineName).toContain('MMR');
+
+    // 9.2 Quản lý Trường & Phân hiệu trong từng trường (/api/system/campuses)
+    const addCampusRes = await request(app)
+      .post('/api/system/campuses')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({
+        code: 'PH-3',
+        name: 'Phân hiệu 3 - Cầu Giấy',
+        address: '120 Xuân Thủy, Cầu Giấy',
+        phone: '02438889999',
+        managerName: 'Cô Nguyễn Thu Hà'
+      });
+    expect(addCampusRes.status).toBe(201);
+
+    const listCampusesRes = await request(app)
+      .get('/api/system/campuses')
+      .set('Authorization', `Bearer ${tokenAdminA}`);
+    expect(listCampusesRes.status).toBe(200);
+    expect(listCampusesRes.body.data.campuses.some((c) => c.name === 'Phân hiệu 3 - Cầu Giấy')).toBe(true);
+    expect(listCampusesRes.body.data.campuses.some((c) => c.name === 'Phân hiệu 2' && c.classCount >= 1)).toBe(true);
+
+    // 9.3 Quản trị Tổng Đa Trường (Admin chung toàn bộ -> Tạo trường mới kèm 1 Account Admin riêng -> Chuyển vào quản lý từng trường)
+    await ensureDefaultAdminAccount({ useLegacyApp: false });
+
+    const superLoginRes = await request(app)
+      .post('/api/multi-school/login')
+      .send({ username: 'superadmin', password: '123456' });
+    expect(superLoginRes.status).toBe(200);
+    expect(superLoginRes.body.isSuperAdmin).toBe(true);
+    const superToken = superLoginRes.body.token;
+
+    const createSchoolRes = await request(app)
+      .post('/api/multi-school/schools')
+      .set('Authorization', `Bearer ${superToken}`)
+      .send({
+        code: 'HOANANG-C',
+        name: 'Trường Mầm non Hoa Nắng - Cơ sở C',
+        organizationCode: 'HOA-NANG-GROUP',
+        contactEmail: 'csc@hoanang.edu.vn',
+        adminUsername: 'admin_csc',
+        adminPassword: 'SchoolC@2026',
+        adminFullName: 'Quản trị Cơ sở C',
+        initialCampuses: [
+          { code: 'CS-CHINH', name: 'Cơ sở chính' },
+          { code: 'PH-MYDINH', name: 'Phân hiệu Mỹ Đình' }
+        ]
+      });
+    expect(createSchoolRes.status).toBe(201);
+    const newSchoolId = createSchoolRes.body.data.school._id;
+
+    // Account riêng của trường mới đăng nhập độc lập và chỉ thấy dữ liệu của trường C
+    const loginSchoolC = await request(app)
+      .post('/api/auth/login')
+      .send({
+        schoolCode: 'HOANANG-C',
+        username: 'admin_csc',
+        password: 'SchoolC@2026'
+      });
+    expect(loginSchoolC.status).toBe(200);
+    expect(loginSchoolC.body.tenant.code).toBe('HOANANG-C');
+
+    const studentsInC = await request(app)
+      .get('/api/students')
+      .set('Authorization', `Bearer ${loginSchoolC.body.token}`);
+    expect(studentsInC.status).toBe(200);
+    expect(studentsInC.body.data).toHaveLength(0);
+
+    // Admin Tổng có thể bấm "Vào quản lý trường" để nhận phiên điều hành trực tiếp trường C
+    const enterSchoolC = await request(app)
+      .post(`/api/multi-school/schools/${newSchoolId}/enter`)
+      .set('Authorization', `Bearer ${superToken}`);
+    expect(enterSchoolC.status).toBe(200);
+    expect(enterSchoolC.body.tenant.code).toBe('HOANANG-C');
+    expect(enterSchoolC.body.token).toBeTruthy();
+
+    const overviewRes = await request(app)
+      .get('/api/multi-school/schools')
+      .set('Authorization', `Bearer ${superToken}`);
+    expect(overviewRes.status).toBe(200);
+    expect(overviewRes.body.data.summary.totalSchools).toBeGreaterThanOrEqual(3);
+  });
 });
 

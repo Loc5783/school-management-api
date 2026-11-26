@@ -200,7 +200,9 @@ export default function ParentPortal() {
     setProfileForm({
       fullName: child.fullName || "", birthDate: dateInput(child.birthDate), gender: child.gender || "male",
       address: child.address || "", nationality: child.nationality || "Việt Nam", ethnicity: child.ethnicity || "",
-      birthPlace: child.birthPlace || "", allergens: (child.allergies || []).map((item) => item.allergen).filter(Boolean),
+      birthPlace: child.birthPlace || "",
+      healthInsuranceCode: child.healthInsuranceCode || "", bloodType: child.bloodType || "",
+      allergens: (child.allergies || []).map((item) => item.allergen).filter(Boolean),
       diseaseName: child.disease?.name || "", diseaseDescription: child.disease?.description || "",
       emergencyName: child.emergencyContact?.name || "", emergencyPhone: child.emergencyContact?.phone || "",
       emergencyRelationship: child.emergencyContact?.relationship || "",
@@ -220,6 +222,8 @@ export default function ParentPortal() {
         fullName: profileForm.fullName, birthDate: profileForm.birthDate, gender: profileForm.gender,
         address: profileForm.address, nationality: profileForm.nationality, ethnicity: profileForm.ethnicity,
         birthPlace: profileForm.birthPlace,
+        healthInsuranceCode: (profileForm.healthInsuranceCode || "").trim().toUpperCase(),
+        bloodType: profileForm.bloodType || "",
         allergies: (profileForm.allergens || []).map((allergen) => ({ allergen, severity: "moderate" })),
         disease: { name: profileForm.diseaseName, description: profileForm.diseaseDescription },
         emergencyContact: { name: profileForm.emergencyName, phone: profileForm.emergencyPhone, relationship: profileForm.emergencyRelationship },
@@ -451,6 +455,8 @@ export default function ParentPortal() {
               <div className="parent-form-section-title form-wide"><span className="green"><Icon name="phone" size={17} /></span><div><strong>Sức khỏe và liên hệ khẩn cấp</strong><small>Cung cấp người có thể liên hệ ngay khi bé cần hỗ trợ</small></div></div>
               <label>Bệnh lý cần lưu ý<input maxLength="120" value={profileForm.diseaseName || ""} onChange={(e) => setProfileForm({ ...profileForm, diseaseName: e.target.value })} /></label>
               <label>Mô tả bệnh lý<input maxLength="500" value={profileForm.diseaseDescription || ""} onChange={(e) => setProfileForm({ ...profileForm, diseaseDescription: e.target.value })} /></label>
+              <label>Số thẻ BHYT<input maxLength="30" placeholder="VD: TE1012600012345" value={profileForm.healthInsuranceCode || ""} onChange={(e) => setProfileForm({ ...profileForm, healthInsuranceCode: e.target.value.toUpperCase() })} /></label>
+              <label>Nhóm máu<select value={profileForm.bloodType || ""} onChange={(e) => setProfileForm({ ...profileForm, bloodType: e.target.value })}><option value="">Chưa xác định</option>{["A", "B", "AB", "O", "A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"].map((bt) => <option key={bt} value={bt}>Nhóm máu {bt}</option>)}</select></label>
               <label>Người liên hệ khẩn cấp<input maxLength="120" value={profileForm.emergencyName || ""} onChange={(e) => setProfileForm({ ...profileForm, emergencyName: e.target.value })} /></label>
               <label>Số điện thoại<input maxLength="15" value={profileForm.emergencyPhone || ""} onChange={(e) => setProfileForm({ ...profileForm, emergencyPhone: e.target.value })} /></label>
               <label className="form-wide">Quan hệ với bé<input maxLength="80" value={profileForm.emergencyRelationship || ""} onChange={(e) => setProfileForm({ ...profileForm, emergencyRelationship: e.target.value })} /></label>
@@ -478,6 +484,14 @@ export default function ParentPortal() {
               <div>
                 <small>Địa chỉ</small>
                 <strong>{child.address || "Chưa cập nhật"}</strong>
+              </div>
+              <div>
+                <small>Số thẻ Bảo hiểm Y tế (BHYT)</small>
+                <strong>{child.healthInsuranceCode || "Chưa cập nhật"}</strong>
+              </div>
+              <div>
+                <small>Nhóm máu</small>
+                <strong>{child.bloodType ? `Nhóm ${child.bloodType}` : "Chưa xác định"}</strong>
               </div>
               <div className="is-wide">
                 <small>Dị ứng / lưu ý ăn uống</small>
@@ -515,6 +529,75 @@ export default function ParentPortal() {
               </div>
             </div>
             )}
+            <div style={{ marginTop: "20px", display: "grid", gap: "16px" }}>
+              <div>
+                <h3 style={{ margin: "0 0 10px", fontSize: "15px", color: "#1e3a8a" }}>Theo dõi Cân nặng & Chiều cao theo tháng</h3>
+                {child.growthRecords?.length ? (
+                  <div className="table-wrap">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Tháng</th>
+                          <th>Cân nặng</th>
+                          <th>Chiều cao</th>
+                          <th>BMI</th>
+                          <th>Đánh giá thể trạng</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {child.growthRecords.map((g, idx) => (
+                          <tr key={g._id || idx}>
+                            <td><strong>{g.month ? g.month.split("-").reverse().join("/") : "—"}</strong></td>
+                            <td>{g.weightKg} kg</td>
+                            <td>{g.heightCm} cm</td>
+                            <td>{g.bmi || "—"}</td>
+                            <td>{g.nutritionStatus || "Bình thường"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p style={{ margin: 0, fontSize: "13px", color: "#64748b" }}>Nhà trường chưa cập nhật số đo cân nặng – chiều cao hàng tháng cho bé.</p>
+                )}
+              </div>
+
+              <div>
+                <h3 style={{ margin: "0 0 10px", fontSize: "15px", color: "#1e3a8a" }}>Sổ tiêm chủng</h3>
+                {child.vaccinations?.length ? (
+                  <div className="table-wrap">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Vắc-xin</th>
+                          <th>Mũi số</th>
+                          <th>Ngày tiêm</th>
+                          <th>Trạng thái</th>
+                          <th>Ghi chú / Cơ sở tiêm</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {child.vaccinations.map((v, idx) => (
+                          <tr key={v._id || idx}>
+                            <td><strong>{v.vaccineName}</strong></td>
+                            <td>Mũi {v.doseNumber || 1}</td>
+                            <td>{v.vaccinatedDate ? dateText(v.vaccinatedDate) : "—"}</td>
+                            <td>
+                              <span className={`student-status ${v.status === "completed" ? "enrolled" : "temporarily_absent"}`}>
+                                {v.status === "completed" ? "Đã tiêm" : v.status === "scheduled" ? "Lịch hẹn" : "Chưa tiêm"}
+                              </span>
+                            </td>
+                            <td>{[v.facility, v.note].filter(Boolean).join(" · ") || "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p style={{ margin: 0, fontSize: "13px", color: "#64748b" }}>Chưa có dữ liệu mũi tiêm chủng trong hồ sơ.</p>
+                )}
+              </div>
+            </div>
             {data.profileChangeRequests.length > 0 && <div className="parent-profile-request-history"><strong>Yêu cầu cập nhật gần đây</strong>{data.profileChangeRequests.slice(0, 3).map((request) => <div key={request._id}><span className={`student-status ${request.status === 'approved' ? 'enrolled' : request.status === 'pending' ? 'temporarily_absent' : 'withdrawn'}`}>{request.status === 'pending' ? 'Chờ duyệt' : request.status === 'approved' ? 'Đã duyệt' : request.status === 'rejected' ? 'Từ chối' : 'Đã hủy'}</span><p>{new Date(request.createdAt).toLocaleDateString('vi-VN')} · {Object.keys(request.changes || {}).length} thông tin thay đổi{request.reviewNote ? ` · ${request.reviewNote}` : ''}</p></div>)}</div>}
           </section>
           )}
