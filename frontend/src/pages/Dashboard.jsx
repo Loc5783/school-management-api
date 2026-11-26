@@ -46,7 +46,28 @@ export default function Dashboard() {
     fetchDashboard();
   }, [navigate, attendancePage]);
 
-  if (loading) return <div className="page-loader"><span className="loading-orb" />Đang tải không gian làm việc...</div>;
+  const todayText = new Intl.DateTimeFormat('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date());
+  const headerProps = {
+    title: isPrincipal ? 'Tổng quan hiệu trưởng' : 'Tổng quan',
+    subtitle: `Hôm nay là ${todayText}.`,
+    actions: (
+      <Link className="button button-primary" to={isPrincipal ? '/reports' : '/attendance'}>
+        <Icon name={isPrincipal ? 'chart' : 'attendance'} size={18} />
+        {isPrincipal ? 'Xem báo cáo trường' : 'Điểm danh hôm nay'}
+      </Link>
+    )
+  };
+
+  if (loading) {
+    return (
+      <AppShell {...headerProps}>
+        <div className="content-card inline-loader">
+          <span className="loading-orb" />
+          Đang tải dữ liệu tổng quan...
+        </div>
+      </AppShell>
+    );
+  }
 
   const summary = data?.summary || {};
   const staffing = data?.staffing;
@@ -90,10 +111,9 @@ export default function Dashboard() {
   // Thống nhất với định mức suất ăn của Bếp: đi muộn vẫn là trẻ có mặt tại trường
   const attendedCount = (attendanceBreakdown[0].count || 0) + (attendanceBreakdown[1].count || 0);
   const presentRate = attendanceTotal ? Math.round((attendedCount / attendanceTotal) * 100 * 10) / 10 : 0;
-  const todayText = new Intl.DateTimeFormat('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date());
 
   return (
-    <AppShell title={isPrincipal ? 'Tổng quan hiệu trưởng' : 'Tổng quan'} subtitle={`Hôm nay là ${todayText}.`} actions={<Link className="button button-primary" to={isPrincipal ? '/reports' : '/attendance'}><Icon name={isPrincipal ? 'chart' : 'attendance'} size={18} />{isPrincipal ? 'Xem báo cáo trường' : 'Điểm danh hôm nay'}</Link>}>
+    <AppShell {...headerProps}>
       {error && <div className="notice notice-warning"><span>!</span>{error}</div>}
       {isPrincipal && <section className="content-card" aria-label="Công việc cần hiệu trưởng xem xét"><div className="card-heading"><div><p className="card-kicker">ĐIỀU HÀNH NHÀ TRƯỜNG</p><h2>Việc cần xem xét</h2><p>Số lượng đang chờ xử lý trên toàn trường. Chọn một mục để mở đúng quy trình.</p></div></div>{principalWorkError && <div className="notice notice-warning" role="alert">{principalWorkError}</div>}<div className="principal-action-grid">{principalWorkItems.map((item) => <Link className="quick-action" to={item.to} key={item.key}><span className={`quick-icon ${item.tone}`}><Icon name={item.icon} /></span><span><strong>{item.label}</strong><small>{item.detail}</small></span><b className="principal-work-count" aria-label={`${principalWork?.[item.key] ?? 'Đang tải'} việc`}>{principalWork ? principalWork[item.key] : '—'}</b><Icon name="chevronRight" size={18} /></Link>)}</div></section>}
       <section className="stat-grid" aria-label="Chỉ số tổng quan">

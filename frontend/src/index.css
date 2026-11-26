@@ -1799,7 +1799,44 @@ textarea:focus {
 
 html, body {
   max-width: 100%;
-  overflow-x: hidden;
+  overflow-x: clip;
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
+/* Khe cắm Portal của PersistentAppShell và hiệu ứng chuyển nội dung trang mượt mà */
+.topbar-title-slot,
+.topbar-subtitle-slot {
+  min-width: 0;
+}
+
+.topbar-page-actions-slot {
+  display: contents;
+}
+
+.route-view-transition {
+  animation: hnRouteEnter 170ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes hnRouteEnter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+/* Ngăn .page-loader bên trong .page-content chiếm 100vh gây giật thanh cuộn & chớp nền xám */
+.page-content .page-loader {
+  min-height: 280px;
+  border-radius: 18px;
+  border: 1px solid rgba(226, 232, 240, 0.88);
+  background: rgba(255, 255, 255, 0.82);
 }
 
 /* 1. Đa phương tiện & Thành phần trực quan (Media, Camera, QR, Biểu đồ) */
@@ -1951,12 +1988,12 @@ input:-webkit-autofill:active {
   flex: 1 1 240px;
 }
 
-/* Nút bấm trong bảng dữ liệu: gọn gàng, đồng bộ kích thước, không vỡ dòng */
+/* Nút bấm trong bảng dữ liệu: gọn gàng, đồng bộ kích thước, thẳng hàng dưới tiêu đề cột */
 .data-table .classroom-actions,
 .data-table .account-row-actions,
 .data-table .leave-actions,
 .asset-table .asset-row-actions {
-  justify-content: flex-end;
+  justify-content: flex-start;
   flex-wrap: nowrap;
   gap: 7px;
 }
@@ -1966,7 +2003,7 @@ input:-webkit-autofill:active {
   min-height: 34px;
   padding: 0 12px;
   border-radius: 9px;
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 700;
 }
 
@@ -1981,15 +2018,6 @@ input:-webkit-autofill:active {
   color: #ffffff;
   background: #dc2626;
   border-color: #dc2626;
-}
-
-.data-table th:last-child,
-.data-table td:last-child {
-  text-align: right;
-}
-
-.data-table td:last-child > .button {
-  margin-left: auto;
 }
 
 /* Cuộn ngang mượt cho mọi bảng trên màn hình hẹp, giữ nguyên cột Thao tác */
@@ -2291,4 +2319,232 @@ input:-webkit-autofill:active {
   .report-modal-actions > .button {
     flex: 1 1 calc(50% - 6px);
   }
+}
+
+/* ==========================================================================
+   9. Chuẩn hóa UX Cố định Khung Điều hướng, Độ dễ đọc & Tương tác Bền vững
+   NOTE: Đảm bảo Sidebar luôn khóa cứng 100dvh không bao giờ bị hụt trắng khi
+   cuộn trang dài, Topbar neo cố định trên đỉnh và chữ rõ nét cho giáo viên/nhân sự.
+   ========================================================================== */
+
+/* 9.1. Khóa cứng Sidebar 100% chiều cao màn hình trên Desktop (>= 1025px) */
+@media (min-width: 1025px) {
+  .desktop-sidebar {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    bottom: 0 !important;
+    width: 272px !important;
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+    max-height: 100dvh !important;
+    padding: 18px 14px 14px !important;
+    overflow: hidden !important;
+    z-index: 60 !important;
+    display: flex !important;
+    flex-direction: column !important;
+  }
+
+  .app-shell > .main-content {
+    margin-left: 272px !important;
+    width: calc(100% - 272px) !important;
+    min-height: 100dvh;
+  }
+}
+
+/* Tối ưu không gian bên trong Sidebar để mọi nhóm menu & nút Cài đặt luôn hiển thị trọn vẹn */
+.sidebar .school-tenant-badge {
+  margin: 10px 6px 4px;
+  padding: 7px 11px;
+  flex-shrink: 0;
+}
+
+.sidebar .sidebar-nav {
+  margin-top: 12px !important;
+  margin-bottom: 8px !important;
+  padding-right: 4px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+}
+
+.sidebar .sidebar-nav::-webkit-scrollbar {
+  width: 5px;
+}
+
+.sidebar .sidebar-nav::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.38);
+  border-radius: 999px;
+}
+
+.sidebar .sidebar-nav::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.admin-nav-accordion {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+}
+
+/* Luôn giữ Cài đặt tài khoản hiển thị kể cả trên màn hình Laptop 1366x768 */
+.sidebar-bottom {
+  flex-shrink: 0;
+  padding-top: 8px !important;
+}
+
+.sidebar-bottom .nav-link {
+  display: flex !important;
+  min-height: 40px !important;
+  margin-bottom: 6px !important;
+}
+
+/* 9.2. Neo cố định Topbar kính mờ khi cuộn bảng dài trên Desktop & Tablet ngang */
+.topbar::before,
+.topbar::after,
+.topbar-scenery {
+  display: none !important;
+}
+
+@media (min-width: 769px) {
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    min-height: 82px;
+    padding: 14px 32px;
+    background: rgba(255, 255, 255, 0.93) !important;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 2px 14px rgba(15, 23, 42, 0.04);
+  }
+}
+
+/* 9.3. Bổ sung màu nền chuẩn cho icon màu hổ phách (amber) trên thẻ Truy cập nhanh */
+.quick-icon.amber {
+  color: #d97706;
+  background: linear-gradient(135deg, #fffbeb, #fef3c7);
+}
+
+/* 9.4. Nâng cấp độ rõ chữ (Typography & Contrast) cho người dùng vận hành thực tế */
+.data-table th,
+.report-table th {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #526588;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.data-table td,
+.report-table td {
+  font-size: 13px;
+  color: #334155;
+  vertical-align: middle;
+}
+
+.quick-action strong {
+  font-size: 13.5px;
+  color: #1e293b;
+}
+
+.quick-action small {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.stat-card small {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.stat-card-link-hint {
+  font-size: 11.5px;
+}
+
+.attendance-chart-copy h3 {
+  font-size: 15px;
+}
+
+.attendance-chart-copy span,
+.attendance-chart-legend li {
+  font-size: 12px;
+  color: #475569;
+}
+
+.attendance-chart-legend b {
+  font-size: 11.5px;
+  padding: 3px 8px;
+}
+
+/* Chuẩn hóa thanh phân trang rõ nét, dễ bấm trên mọi bảng */
+.dashboard-pagination,
+.finance-pagination,
+.student-pagination,
+.account-pagination,
+.table-pagination {
+  font-size: 12.5px;
+  color: #475569;
+  font-weight: 500;
+}
+
+.dashboard-pagination button,
+.finance-pagination button,
+.table-pagination button {
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 9px;
+  border: 1px solid #d5e1f4;
+  background: #ffffff;
+  color: #334155;
+  font-size: 12.5px;
+  font-weight: 700;
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.dashboard-pagination button:hover:not(:disabled),
+.finance-pagination button:hover:not(:disabled),
+.table-pagination button:hover:not(:disabled) {
+  background: #f1f6ff;
+  border-color: #93b4f5;
+  color: #1d4ed8;
+}
+
+/* Thông báo trạng thái / Lỗi / Thành công dễ nhận biết ngay lập tức */
+.notice,
+.timekeeping-notice,
+.form-error,
+.form-success {
+  font-size: 13px;
+  line-height: 1.5;
+  border-radius: 12px;
+  padding: 12px 16px;
+}
+
+.form-error {
+  border: 1px solid #fecdd3;
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.form-success {
+  border: 1px solid #bbf7d0;
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+/* Đảm bảo mọi hộp thoại Modal luôn cao vừa màn hình, cuộn mượt bên trong và nổi trên Topbar/Sidebar */
+.modal-backdrop,
+.asset-modal-backdrop,
+.report-modal-backdrop {
+  z-index: 1200 !important;
+}
+
+.modal-backdrop > .content-card,
+.modal-backdrop > form,
+.modal-backdrop > section {
+  max-height: calc(100dvh - 36px);
+  overflow-y: auto;
 }

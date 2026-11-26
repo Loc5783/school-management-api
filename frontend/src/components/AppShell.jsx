@@ -1,8 +1,22 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { Navigate, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import Icon from './Icon';
 import api from '../api/axiosConfig';
 import { getUnreadChat } from '../api/chat';
+
+// Context truyền các khe cắm (Portal Slots) của Topbar từ PersistentAppShell xuống từng trang,
+// giúp giữ nguyên Sidebar & Topbar xuyên suốt quá trình chuyển trang mà không bị remount hay nhấp nháy.
+const AppShellSlotContext = createContext(null);
+
+const readStoredJson = (key) => {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+};
 
 const allNavItems = [
   { to: '/dashboard', label: 'Tổng quan', icon: 'grid', roles: ['admin', 'principal', 'teacher'] },
@@ -38,6 +52,75 @@ const allNavItems = [
   { to: '/parent-care', label: 'Sổ chăm sóc của con', icon: 'attendance', roles: ['parent'] },
   { to: '/messages', label: 'Tin nhắn', icon: 'chat', roles: ['parent', 'teacher'] },
   { to: '/daily-care', label: 'Sổ chăm sóc lớp', icon: 'attendance', roles: ['teacher'] },
+];
+
+const ADMIN_SIDEBAR_STORAGE_KEY = 'admin_sidebar_open_groups';
+
+const adminNavSections = [
+  {
+    id: 'admin-overview',
+    label: 'TỔNG QUAN & ĐIỀU HÀNH',
+    icon: 'grid',
+    items: [
+      { to: '/dashboard', label: 'Tổng quan', icon: 'grid' },
+      { to: '/principal', label: 'Sổ điều hành', icon: 'chart' },
+      { to: '/accounts', label: 'Tài khoản & vai trò', icon: 'shield' },
+      { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar' },
+    ],
+  },
+  {
+    id: 'admin-students',
+    label: 'HỌC SINH & LỚP HỌC',
+    icon: 'students',
+    items: [
+      { to: '/students', label: 'Học sinh', icon: 'students' },
+      { to: '/classrooms', label: 'Lớp học', icon: 'classes' },
+      { to: '/attendance', label: 'Điểm danh', icon: 'attendance' },
+      { to: '/pickups', label: 'Đón trả trẻ', icon: 'users' },
+    ],
+  },
+  {
+    id: 'admin-hr',
+    label: 'NHÂN SỰ & TIỀN LƯƠNG',
+    icon: 'users',
+    items: [
+      { to: '/hr', label: 'Nhân sự', icon: 'users' },
+      { to: '/timekeeping', label: 'Chấm công nhân sự', icon: 'clock' },
+      { to: '/payroll', label: 'Lương & Chi trả', icon: 'money' },
+    ],
+  },
+  {
+    id: 'admin-finance',
+    label: 'TÀI CHÍNH & KẾ TOÁN',
+    icon: 'money',
+    items: [
+      { to: '/finance', label: 'Tài chính học phí', icon: 'money' },
+      { to: '/accounting/expenses', label: 'Sổ chi mua sắm', icon: 'money' },
+      { to: '/accounting/operating-expenses', label: 'Chi vận hành', icon: 'money' },
+      { to: '/accounting/cashbook', label: 'Đối soát thu – chi', icon: 'chart' },
+      { to: '/accounting/report', label: 'Báo cáo kế toán', icon: 'chart' },
+    ],
+  },
+  {
+    id: 'admin-operations',
+    label: 'BẾP ĂN, TÀI SẢN & AN NINH',
+    icon: 'utensils',
+    items: [
+      { to: '/kitchen', label: 'Bếp hôm nay', icon: 'grid' },
+      { to: '/nutrition', label: 'Bếp ăn & Bán trú', icon: 'utensils' },
+      { to: '/assets', label: 'Cơ sở vật chất', icon: 'settings' },
+      { to: '/guard', label: 'Trực cổng trường', icon: 'shield' },
+    ],
+  },
+  {
+    id: 'admin-reports',
+    label: 'BÁO CÁO & CÁ NHÂN',
+    icon: 'chart',
+    items: [
+      { to: '/reports', label: 'Báo cáo tổng hợp', icon: 'chart' },
+      { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
+    ],
+  },
 ];
 
 const PRINCIPAL_SIDEBAR_STORAGE_KEY = 'principal_sidebar_open_groups';
@@ -327,28 +410,29 @@ const getActiveSectionId = (sections, pathname, search) => {
   return null;
 };
 
-export default function AppShell({ title, subtitle, actions, children }) {
+function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = false }) {
   const navigate = useNavigate();
   const location = useLocation();
   const navRef = useRef(null);
+  const notificationMenuRef = useRef(null);
   const chatUnreadRequestRef = useRef(0);
-  const [user, setUser] = useState(null);
-  const [tenant, setTenant] = useState(() => {
-    try {
-      const saved = localStorage.getItem('tenant');
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
-  const [permissions, setPermissions] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [titleSlot, setTitleSlot] = useState(null);
+  const [subtitleSlot, setSubtitleSlot] = useState(null);
+  const [actionsSlot, setActionsSlot] = useState(null);
+  const [user, setUser] = useState(() => readStoredJson('user'));
+  const [tenant, setTenant] = useState(() => readStoredJson('tenant'));
+  const [permissions, setPermissions] = useState(() => readStoredJson('user')?.permissions || []);
+  const [loading, setLoading] = useState(() => !readStoredJson('user'));
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [chatUnread, setChatUnread] = useState({ total: 0, data: [] });
   const [showNotifications, setShowNotifications] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [prevPath, setPrevPath] = useState(location.pathname);
+  const slotContextValue = useMemo(
+    () => (isPersistentLayout ? { titleSlot, subtitleSlot, actionsSlot } : null),
+    [isPersistentLayout, titleSlot, subtitleSlot, actionsSlot]
+  );
   const [openSections, setOpenSections] = useState(() => {
     let initialOpen = principalNavSections.map((s) => s.id);
     try {
@@ -429,9 +513,30 @@ export default function AppShell({ title, subtitle, actions, children }) {
     return initialOpen;
   });
 
+  const [adminOpenSections, setAdminOpenSections] = useState(() => {
+    let initialOpen = ['admin-overview', 'admin-students'];
+    try {
+      const saved = localStorage.getItem(ADMIN_SIDEBAR_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          initialOpen = parsed;
+        }
+      }
+    } catch (e) {
+      console.error('Lỗi đọc trạng thái menu quản trị:', e);
+    }
+    const activeSectionId = getActiveSectionId(adminNavSections, location.pathname, location.search);
+    if (activeSectionId && !initialOpen.includes(activeSectionId)) {
+      initialOpen = [...initialOpen, activeSectionId];
+    }
+    return initialOpen;
+  });
+
   if (prevPath !== location.pathname) {
     setPrevPath(location.pathname);
     setMobileNavOpen(false);
+    setShowNotifications(false);
   }
 
   useEffect(() => {
@@ -441,6 +546,7 @@ export default function AppShell({ title, subtitle, actions, children }) {
         const userData = res.data?.data || res.data;
         setUser(userData);
         setPermissions(userData.permissions || []);
+        localStorage.setItem('user', JSON.stringify(userData));
         if (res.data?.tenant) {
           setTenant(res.data.tenant);
           localStorage.setItem('tenant', JSON.stringify(res.data.tenant));
@@ -460,13 +566,23 @@ export default function AppShell({ title, subtitle, actions, children }) {
   }, []);
 
   useEffect(() => {
+    if (!isPersistentLayout) return;
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, [location.pathname, isPersistentLayout]);
+
+  useEffect(() => {
     if (loading) return undefined;
     const frame = requestAnimationFrame(() => {
       const nav = navRef.current;
       const activeLink = nav?.querySelector('.nav-link.active');
       if (!nav || !activeLink) return;
-      const targetTop = activeLink.offsetTop - (nav.clientHeight - activeLink.offsetHeight) / 2;
-      nav.scrollTo({ top: Math.max(0, targetTop), behavior: 'auto' });
+      // Chỉ cuộn thanh bên khi mục đang chọn nằm khuất ngoài khung nhìn hiện tại,
+      // tránh làm danh sách menu bị giật lên/xuống dưới trỏ chuột mỗi lần chuyển trang.
+      const navRect = nav.getBoundingClientRect();
+      const linkRect = activeLink.getBoundingClientRect();
+      if (linkRect.top < navRect.top + 12 || linkRect.bottom > navRect.bottom - 12) {
+        activeLink.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
     });
     return () => cancelAnimationFrame(frame);
   }, [location.pathname, location.search, loading]);
@@ -508,6 +624,27 @@ export default function AppShell({ title, subtitle, actions, children }) {
     };
   }, [user, loadNotifications, loadUnreadChat]);
 
+  useEffect(() => {
+    if (!showNotifications) return undefined;
+    const handlePointerDown = (event) => {
+      if (notificationMenuRef.current && !notificationMenuRef.current.contains(event.target)) {
+        setShowNotifications(false);
+      }
+    };
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') {
+        setShowNotifications(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [showNotifications]);
+
+  const isAdminRole = user?.role === 'admin';
   const isPrincipal = user?.role === 'principal';
   const isTeacher = user?.role === 'teacher';
   const isAccountant = user?.role === 'accountant';
@@ -517,6 +654,18 @@ export default function AppShell({ title, subtitle, actions, children }) {
 
   if (prevLocationKey !== currentLocationKey) {
     setPrevLocationKey(currentLocationKey);
+    if (isAdminRole) {
+      const activeSectionId = getActiveSectionId(adminNavSections, location.pathname, location.search);
+      if (activeSectionId && !adminOpenSections.includes(activeSectionId)) {
+        const next = [...adminOpenSections, activeSectionId];
+        setAdminOpenSections(next);
+        try {
+          localStorage.setItem(ADMIN_SIDEBAR_STORAGE_KEY, JSON.stringify(next));
+        } catch (e) {
+          console.error('Lỗi lưu trạng thái menu quản trị:', e);
+        }
+      }
+    }
     if (isPrincipal) {
       const activeSectionId = getActiveSectionId(principalNavSections, location.pathname, location.search);
       if (activeSectionId && !openSections.includes(activeSectionId)) {
@@ -566,6 +715,20 @@ export default function AppShell({ title, subtitle, actions, children }) {
       }
     }
   }
+
+  const toggleAdminSection = (sectionId) => {
+    setAdminOpenSections((prev) => {
+      const next = prev.includes(sectionId)
+        ? prev.filter((id) => id !== sectionId)
+        : [...prev, sectionId];
+      try {
+        localStorage.setItem(ADMIN_SIDEBAR_STORAGE_KEY, JSON.stringify(next));
+      } catch (e) {
+        console.error('Lỗi lưu trạng thái menu quản trị:', e);
+      }
+      return next;
+    });
+  };
 
   const toggleSection = (sectionId) => {
     setOpenSections((prev) => {
@@ -670,6 +833,62 @@ export default function AppShell({ title, subtitle, actions, children }) {
   });
 
   const renderNavigation = (mobile = false) => {
+    if (isAdmin) {
+      const prefix = mobile ? 'mobile' : 'desktop';
+      return (
+        <div
+          className="principal-nav-accordion admin-nav-accordion"
+          role="region"
+          aria-label={mobile ? 'Menu chức năng quản trị di động' : 'Menu chức năng quản trị'}
+        >
+          {adminNavSections.map((section) => {
+            const isOpen = adminOpenSections.includes(section.id);
+            const contentId = `${prefix}-admin-nav-section-${section.id}`;
+            return (
+              <div key={section.id} className="nav-accordion-section">
+                <button
+                  type="button"
+                  className={`nav-accordion-header ${isOpen ? 'is-open' : ''}`}
+                  aria-expanded={isOpen}
+                  aria-controls={contentId}
+                  onClick={() => toggleAdminSection(section.id)}
+                >
+                  <span className="nav-accordion-header-title">
+                    {section.icon && <Icon name={section.icon} size={15} />}
+                    <span>{section.label}</span>
+                  </span>
+                  <span className={`nav-accordion-chevron ${isOpen ? 'expanded' : ''}`}>
+                    <Icon name="chevronRight" size={14} />
+                  </span>
+                </button>
+                <div
+                  id={contentId}
+                  className="nav-accordion-content"
+                  hidden={!isOpen}
+                >
+                  {section.items.map((item) => {
+                    const isActive = isNavItemActive(item.to, location.pathname, location.search);
+                    return (
+                      <NavLink
+                        to={item.to}
+                        key={item.to}
+                        aria-current={isActive ? 'page' : undefined}
+                        className={() => `nav-link nav-sub-link ${isActive ? 'active' : ''}`.trim()}
+                        onClick={mobile ? () => setMobileNavOpen(false) : undefined}
+                      >
+                        <Icon name={item.icon} />
+                        <span>{item.label}</span>
+                      </NavLink>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
     if (isPrincipal) {
       const prefix = mobile ? 'mobile' : 'desktop';
       return (
@@ -907,22 +1126,26 @@ export default function AppShell({ title, subtitle, actions, children }) {
     return (
       <>
         <p className="nav-label">QUẢN LÝ</p>
-        {navItems.map((item) => (
-          <NavLink
-            to={item.to}
-            key={item.to}
-            className="nav-link"
-            onClick={mobile ? () => setMobileNavOpen(false) : undefined}
-          >
-            <Icon name={item.icon} />
-            {item.label}
-            {item.to === '/messages' && chatUnread.total > 0 && (
-              <span className="nav-chat-count">
-                {chatUnread.total > 99 ? '99+' : chatUnread.total}
-              </span>
-            )}
-          </NavLink>
-        ))}
+        {navItems.map((item) => {
+          const isActive = isNavItemActive(item.to, location.pathname, location.search);
+          return (
+            <NavLink
+              to={item.to}
+              key={item.to}
+              aria-current={isActive ? 'page' : undefined}
+              className={() => `nav-link ${isActive ? 'active' : ''}`.trim()}
+              onClick={mobile ? () => setMobileNavOpen(false) : undefined}
+            >
+              <Icon name={item.icon} />
+              {item.label}
+              {item.to === '/messages' && chatUnread.total > 0 && (
+                <span className="nav-chat-count">
+                  {chatUnread.total > 99 ? '99+' : chatUnread.total}
+                </span>
+              )}
+            </NavLink>
+          );
+        })}
       </>
     );
   };
@@ -1045,14 +1268,26 @@ export default function AppShell({ title, subtitle, actions, children }) {
                     </span>
                   )}
                 </div>
-                <h1>{title}</h1>
+                {isPersistentLayout ? (
+                  <div ref={setTitleSlot} className="topbar-title-slot" />
+                ) : (
+                  <h1>{title}</h1>
+                )}
               </div>
             </div>
-            {subtitle && <p className="page-subtitle">{subtitle}</p>}
+            {isPersistentLayout ? (
+              <div ref={setSubtitleSlot} className="topbar-subtitle-slot" />
+            ) : (
+              subtitle && <p className="page-subtitle">{subtitle}</p>
+            )}
           </div>
           <div className="topbar-actions">
-            {actions}
-            <div className="notification-menu">
+            {isPersistentLayout ? (
+              <div ref={setActionsSlot} className="topbar-page-actions-slot" />
+            ) : (
+              actions
+            )}
+            <div className="notification-menu" ref={notificationMenuRef}>
               <button className="icon-button" aria-label={`Thông báo${totalUnread ? `, ${totalUnread} chưa đọc` : ''}`} onClick={toggleNotifications}>
                 <Icon name="bell" />{totalUnread > 0 && <span className="notification-count">{totalUnread > 99 ? '99+' : totalUnread}</span>}
               </button>
@@ -1094,8 +1329,58 @@ export default function AppShell({ title, subtitle, actions, children }) {
             </NavLink>
           </div>
         </header>
-        <div className="page-content">{children}</div>
+        <div className="page-content">
+          {isPersistentLayout ? (
+            <AppShellSlotContext.Provider value={slotContextValue}>
+              <div key={location.pathname} className="route-view-transition">
+                {children}
+              </div>
+            </AppShellSlotContext.Provider>
+          ) : (
+            children
+          )}
+        </div>
       </main>
     </div>
+  );
+}
+
+/**
+ * Khung điều hướng cố định (Persistent Layout Route) bọc quanh toàn bộ các route đăng nhập.
+ * Giữ Sidebar & Topbar không bao giờ bị hủy/tạo lại khi đổi trang, triệt tiêu hoàn toàn hiện tượng nhấp nháy.
+ */
+export function PersistentAppShell() {
+  if (!localStorage.getItem('token')) {
+    return <Navigate to="/login" replace />;
+  }
+  return (
+    <ShellFrame isPersistentLayout>
+      <Outlet />
+    </ShellFrame>
+  );
+}
+
+/**
+ * Thành phần khai báo tiêu đề/hành động của từng màn hình.
+ * Khi nằm trong PersistentAppShell, chỉ cập nhật Topbar qua Portal và trả về nội dung trang mượt mà;
+ * khi render độc lập (ví dụ trong kiểm thử đơn lẻ), tự động fallback về ShellFrame đầy đủ.
+ */
+export default function AppShell({ title, subtitle, actions, children }) {
+  const slots = useContext(AppShellSlotContext);
+  if (slots) {
+    return (
+      <>
+        {slots.titleSlot && createPortal(<h1>{title}</h1>, slots.titleSlot)}
+        {slots.subtitleSlot && createPortal(subtitle ? <p className="page-subtitle">{subtitle}</p> : null, slots.subtitleSlot)}
+        {slots.actionsSlot && createPortal(actions || null, slots.actionsSlot)}
+        {children}
+      </>
+    );
+  }
+
+  return (
+    <ShellFrame title={title} subtitle={subtitle} actions={actions}>
+      {children}
+    </ShellFrame>
   );
 }

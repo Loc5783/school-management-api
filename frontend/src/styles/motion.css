@@ -51,6 +51,8 @@
 
 /* ============================================================================
  * AMBIENT BACKGROUND DEPTH (Mesh Gradient ấm áp Hoa Nắng)
+ * NOTE: Không dùng background-attachment: fixed kết hợp backdrop-filter để tránh
+ * lỗi repaint nhấp nháy của Chromium khi chiều cao trang thay đổi lúc chuyển route.
  * ============================================================================
  */
 .app-shell {
@@ -59,7 +61,6 @@
     radial-gradient(at 0% 0%, rgba(245, 158, 11, 0.04) 0px, transparent 45%),
     radial-gradient(at 100% 0%, rgba(65, 105, 225, 0.05) 0px, transparent 50%),
     radial-gradient(at 50% 100%, rgba(16, 185, 129, 0.025) 0px, transparent 50%) !important;
-  background-attachment: fixed;
 }
 
 /* ============================================================================
@@ -91,12 +92,11 @@
 .sidebar .nav-sub-link {
   position: relative;
   transition:
-    transform var(--hn-dur-fast) var(--hn-ease-spring),
+    transform var(--hn-dur-fast) var(--hn-ease-smooth),
     background-color var(--hn-dur-fast) ease,
     color var(--hn-dur-fast) ease,
     border-color var(--hn-dur-fast) ease,
     box-shadow var(--hn-dur-fast) ease;
-  will-change: transform;
 }
 
 .sidebar .nav-link:hover,
@@ -164,6 +164,12 @@
 .school-tenant-badge:hover {
   transform: translateY(-1px);
   border-color: rgba(255, 255, 255, 0.4) !important;
+}
+.sidebar .tenant-school-name {
+  color: #ffffff !important;
+}
+.sidebar .tenant-school-code {
+  color: #bfdbfe !important;
 }
 
 /* Status Dot nhịp thở nhẹ nhàng */
@@ -269,28 +275,23 @@
 }
 
 /* ============================================================================
- * 3. STAT CARDS (3D DEPTH & PERSPECTIVE LIFT)
+ * 3. STAT CARDS (ELEVATION LIFT)
  * ============================================================================
  */
-.stat-grid {
-  perspective: 900px;
-}
-
 .stat-card {
   position: relative;
   border-radius: 18px !important;
   border: 1px solid rgba(236, 240, 246, 0.9) !important;
   box-shadow: var(--hn-shadow-card), var(--hn-rim-light) !important;
   transition:
-    transform var(--hn-dur-slow) var(--hn-ease-spring),
-    box-shadow var(--hn-dur-slow) ease,
+    transform var(--hn-dur-normal) var(--hn-ease-smooth),
+    box-shadow var(--hn-dur-normal) ease,
     border-color var(--hn-dur-normal) ease !important;
-  transform-style: preserve-3d;
-  will-change: transform, box-shadow;
+  backface-visibility: hidden;
 }
 
 .stat-card:hover {
-  transform: translateY(-6px) translateZ(8px);
+  transform: translateY(-4px);
   border-color: rgba(65, 105, 225, 0.32) !important;
   box-shadow: var(--hn-shadow-card-hover), var(--hn-rim-light) !important;
 }

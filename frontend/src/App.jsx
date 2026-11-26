@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { PersistentAppShell } from './components/AppShell';
 import Login from './pages/Login';
 import AccountManagement from './pages/AccountManagement';
 import Dashboard from './pages/Dashboard';
@@ -140,81 +141,83 @@ function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Navigate to="/login" replace />} />
-        <Route path="/parent-accounts" element={<RoleRoute roles={['admin']}><Navigate to="/accounts?tab=parents" replace /></RoleRoute>} />
-        <Route path="/accounts" element={<RoleRoute roles={['admin', 'hr']}><AccountManagement /></RoleRoute>} />
-        <Route path="/principal" element={<RoleRoute roles={['admin', 'principal']}><PrincipalOverview /></RoleRoute>} />
-        <Route
-          path="/dashboard"
-          element={<DashboardRoute><Dashboard /></DashboardRoute>}
-        />
-        <Route
-          path="/attendance"
-          element={<RoleRoute roles={['admin', 'teacher']}><AttendanceClassList /></RoleRoute>}
-        />
-        <Route
-          path="/attendance/class/:classroomId"
-          element={<RoleRoute roles={['admin', 'teacher']}><AttendanceDetail /></RoleRoute>}
-        />
-        <Route
-          path="/attendance/reports"
-          element={<RoleRoute roles={['admin', 'principal', 'teacher']}><AttendanceAbsenceReport /></RoleRoute>}
-        />
-        <Route
-          path="/attendance/leave-requests"
-          element={<RoleRoute roles={['admin', 'principal', 'teacher']}><AttendanceLeaveManagement /></RoleRoute>}
-        />
-        <Route
-          path="/smart-attendance"
-          element={<Navigate to="/timekeeping?tab=kiosk" replace />}
-        />
-        <Route
-          path="/timekeeping"
-          element={<ProtectedRoute><TimekeepingHub /></ProtectedRoute>}
-        />
-        <Route path="/my-leave-requests" element={<StaffRoute><TeacherLeavePage /></StaffRoute>} />
-        <Route path="/my-payroll" element={<StaffRoute><MyPayroll /></StaffRoute>} />
-        <Route path="/staff-settings" element={<StaffRoute><StaffSettings /></StaffRoute>} />
-        <Route path="/my-staffing" element={<StaffRoute><MyStaffing /></StaffRoute>} />
-        <Route path="/my-handovers" element={<Navigate to="/dashboard" replace />} />
-        <Route path="/internal-notices" element={<StaffRoute><InternalNotices /></StaffRoute>} />
-        <Route path="/my-requests" element={<Navigate to="/dashboard" replace />} />
-        <Route path="/professional-reviews" element={<Navigate to="/dashboard" replace />} />
-        <Route path="/daily-care" element={<TeacherRoute><DailyCare /></TeacherRoute>} />
-        <Route
-          path="/timekeeping-management"
-          element={<Navigate to="/hr?tab=timekeeping" replace />}
-        />
-        <Route
-          path="/nutrition"
-          element={<ProtectedRoute><NutritionManagement /></ProtectedRoute>}
-        />
-        <Route path="/kitchen" element={<RoleRoute roles={['chef', 'admin']}><ChefDashboard /></RoleRoute>} />
-        <Route path="/accounting" element={<RoleRoute roles={['accountant']}><AccountantDashboard /></RoleRoute>} />
-        <Route path="/accounting/expenses" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><AccountingExpenses /></RoleRoute>} />
-        <Route path="/accounting/operating-expenses" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><OperatingExpenses /></RoleRoute>} />
-        <Route path="/accounting/cashbook" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><AccountingCashbook /></RoleRoute>} />
-        <Route path="/accounting/report" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><AccountingReport /></RoleRoute>} />
-        <Route path="/students" element={<StudentManagementRoute><StudentList /></StudentManagementRoute>} />
-        <Route path="/students/new" element={<RoleRoute roles={['admin', 'teacher']}><StudentForm /></RoleRoute>} />
-        <Route path="/students/:id" element={<StudentManagementRoute><StudentDetail /></StudentManagementRoute>} />
-        <Route path="/students/:id/edit" element={<RoleRoute roles={['admin', 'teacher']}><StudentForm /></RoleRoute>} />
-        <Route path="/classrooms" element={<ClassroomRoute><ClassroomManagement /></ClassroomRoute>} />
-        <Route path="/finance" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><FinanceManagement /></RoleRoute>} />
-        <Route path="/reports" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><Reports /></RoleRoute>} />
-        <Route path="/assets" element={<RoleRoute roles={['admin', 'principal', 'teacher']}><AssetManagement /></RoleRoute>} />
-        <Route path="/hr" element={<RoleRoute roles={['admin', 'principal', 'accountant', 'hr']}><EmployeeManagement /></RoleRoute>} />
-        <Route path="/employees" element={<RoleRoute roles={['admin', 'principal', 'accountant', 'hr']}><EmployeeManagement /></RoleRoute>} />
-        <Route path="/payroll" element={<RoleRoute roles={['admin', 'principal', 'accountant', 'hr']}><PayrollManagement /></RoleRoute>} />
-        <Route path="/parent-dashboard" element={<ParentRoute><ParentPortal /></ParentRoute>} />
-        <Route path="/parent-portal" element={<ParentRoute><ParentPortal /></ParentRoute>} />
-        <Route path="/parent-settings" element={<ParentRoute><ParentSettings /></ParentRoute>} />
-        <Route path="/parent-care" element={<ParentRoute><ParentCare /></ParentRoute>} />
-        <Route path="/pickups" element={<PickupRoute><PickupManagement /></PickupRoute>} />
-        <Route path="/guard" element={<RoleRoute roles={['guard', 'admin']}><GuardOperations /></RoleRoute>} />
-        <Route path="/student-profile-change-requests" element={<ProfileRequestsRoute><StudentProfileChangeRequests /></ProfileRequestsRoute>} />
-        <Route path="/parent-feedback" element={<ParentFeedbackRoute><ParentFeedbackManagement /></ParentFeedbackRoute>} />
-        <Route path="/messages" element={<ChatRoute><Messages /></ChatRoute>} />
-        <Route path="*" element={<Navigate to="/dashboard" />} />
+        <Route element={<PersistentAppShell />}>
+          <Route path="/parent-accounts" element={<RoleRoute roles={['admin']}><Navigate to="/accounts?tab=parents" replace /></RoleRoute>} />
+          <Route path="/accounts" element={<RoleRoute roles={['admin', 'hr']}><AccountManagement /></RoleRoute>} />
+          <Route path="/principal" element={<RoleRoute roles={['admin', 'principal']}><PrincipalOverview /></RoleRoute>} />
+          <Route
+            path="/dashboard"
+            element={<DashboardRoute><Dashboard /></DashboardRoute>}
+          />
+          <Route
+            path="/attendance"
+            element={<RoleRoute roles={['admin', 'teacher']}><AttendanceClassList /></RoleRoute>}
+          />
+          <Route
+            path="/attendance/class/:classroomId"
+            element={<RoleRoute roles={['admin', 'teacher']}><AttendanceDetail /></RoleRoute>}
+          />
+          <Route
+            path="/attendance/reports"
+            element={<RoleRoute roles={['admin', 'principal', 'teacher']}><AttendanceAbsenceReport /></RoleRoute>}
+          />
+          <Route
+            path="/attendance/leave-requests"
+            element={<RoleRoute roles={['admin', 'principal', 'teacher']}><AttendanceLeaveManagement /></RoleRoute>}
+          />
+          <Route
+            path="/smart-attendance"
+            element={<Navigate to="/timekeeping?tab=kiosk" replace />}
+          />
+          <Route
+            path="/timekeeping"
+            element={<ProtectedRoute><TimekeepingHub /></ProtectedRoute>}
+          />
+          <Route path="/my-leave-requests" element={<StaffRoute><TeacherLeavePage /></StaffRoute>} />
+          <Route path="/my-payroll" element={<StaffRoute><MyPayroll /></StaffRoute>} />
+          <Route path="/staff-settings" element={<StaffRoute><StaffSettings /></StaffRoute>} />
+          <Route path="/my-staffing" element={<StaffRoute><MyStaffing /></StaffRoute>} />
+          <Route path="/my-handovers" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/internal-notices" element={<StaffRoute><InternalNotices /></StaffRoute>} />
+          <Route path="/my-requests" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/professional-reviews" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/daily-care" element={<TeacherRoute><DailyCare /></TeacherRoute>} />
+          <Route
+            path="/timekeeping-management"
+            element={<Navigate to="/hr?tab=timekeeping" replace />}
+          />
+          <Route
+            path="/nutrition"
+            element={<ProtectedRoute><NutritionManagement /></ProtectedRoute>}
+          />
+          <Route path="/kitchen" element={<RoleRoute roles={['chef', 'admin']}><ChefDashboard /></RoleRoute>} />
+          <Route path="/accounting" element={<RoleRoute roles={['accountant']}><AccountantDashboard /></RoleRoute>} />
+          <Route path="/accounting/expenses" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><AccountingExpenses /></RoleRoute>} />
+          <Route path="/accounting/operating-expenses" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><OperatingExpenses /></RoleRoute>} />
+          <Route path="/accounting/cashbook" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><AccountingCashbook /></RoleRoute>} />
+          <Route path="/accounting/report" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><AccountingReport /></RoleRoute>} />
+          <Route path="/students" element={<StudentManagementRoute><StudentList /></StudentManagementRoute>} />
+          <Route path="/students/new" element={<RoleRoute roles={['admin', 'teacher']}><StudentForm /></RoleRoute>} />
+          <Route path="/students/:id" element={<StudentManagementRoute><StudentDetail /></StudentManagementRoute>} />
+          <Route path="/students/:id/edit" element={<RoleRoute roles={['admin', 'teacher']}><StudentForm /></RoleRoute>} />
+          <Route path="/classrooms" element={<ClassroomRoute><ClassroomManagement /></ClassroomRoute>} />
+          <Route path="/finance" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><FinanceManagement /></RoleRoute>} />
+          <Route path="/reports" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><Reports /></RoleRoute>} />
+          <Route path="/assets" element={<RoleRoute roles={['admin', 'principal', 'teacher']}><AssetManagement /></RoleRoute>} />
+          <Route path="/hr" element={<RoleRoute roles={['admin', 'principal', 'accountant', 'hr']}><EmployeeManagement /></RoleRoute>} />
+          <Route path="/employees" element={<RoleRoute roles={['admin', 'principal', 'accountant', 'hr']}><EmployeeManagement /></RoleRoute>} />
+          <Route path="/payroll" element={<RoleRoute roles={['admin', 'principal', 'accountant', 'hr']}><PayrollManagement /></RoleRoute>} />
+          <Route path="/parent-dashboard" element={<ParentRoute><ParentPortal /></ParentRoute>} />
+          <Route path="/parent-portal" element={<ParentRoute><ParentPortal /></ParentRoute>} />
+          <Route path="/parent-settings" element={<ParentRoute><ParentSettings /></ParentRoute>} />
+          <Route path="/parent-care" element={<ParentRoute><ParentCare /></ParentRoute>} />
+          <Route path="/pickups" element={<PickupRoute><PickupManagement /></PickupRoute>} />
+          <Route path="/guard" element={<RoleRoute roles={['guard', 'admin']}><GuardOperations /></RoleRoute>} />
+          <Route path="/student-profile-change-requests" element={<ProfileRequestsRoute><StudentProfileChangeRequests /></ProfileRequestsRoute>} />
+          <Route path="/parent-feedback" element={<ParentFeedbackRoute><ParentFeedbackManagement /></ParentFeedbackRoute>} />
+          <Route path="/messages" element={<ChatRoute><Messages /></ChatRoute>} />
+        </Route>
+        <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </BrowserRouter>
   );
