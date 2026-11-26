@@ -6,6 +6,7 @@ const Notification = require('../models/zone1_system/Notification');
 const User = require('../models/zone1_system/User');
 const Student = require('../models/zone3_school/Student');
 const Classroom = require('../models/zone3_school/Classroom');
+const StudentAttendance = require('../models/zone3_school/StudentAttendance');
 const ProcurementRequest = require('../models/zone6_procurement/ProcurementRequest');
 const PurchaseOrder = require('../models/zone6_procurement/PurchaseOrder');
 const FeeSchedule = require('../models/zone4_finance/FeeSchedule');
@@ -52,6 +53,79 @@ const validateInvoiceInput = ({ period, tuitionBase, mealFee, busFee, extraFee, 
     const totalAmount = amounts.tuitionBase + amounts.mealFee + amounts.busFee + amounts.extraFee + additionalTotal - amounts.discount;
     if (totalAmount < 0) { const error = new Error('Giảm trừ không được lớn hơn tổng khoản thu'); error.statusCode = 422; throw error; }
     return { ...amounts, additionalItems: normalizedAdditionalItems, totalAmount, dueDate: due };
+};
+
+const STANDARD_MEAL_DAYS_PER_MONTH = 22;
+
+/**
+ * Tính khấu trừ tiền ăn bán trú tự động từ số ngày nghỉ có phép (`absent_permission`) của tháng liền trước.
+ * Áp dụng đúng quy tắc: đầu kỳ thu theo định mức, sang kỳ sau khấu trừ lại số ngày nghỉ có phép của kỳ trước.
+ *
+ * @param {import('mongoose').Types.ObjectId[]} studentIds
+ * @param {string} period - Chuỗi kỳ thu `MM-YYYY`
+ * @param {number} baseMealFee - Định mức tiền ăn của kỳ hiện tại
+ * @param {Record<string, any>} tenantFilter
+ * @returns {Promise<{ prevPeriodLabel: string, byStudentId: Map<string, { absentDays: number, deduction: number }> }>}
+ */
+const computePriorMonthMealCredits = async (studentIds, period, baseMealFee, tenantFilter) => {
+    const byStudentId = new Map();
+    if (!studentIds?.length || !(baseMealFee > 0) || !PERIOD_PATTERN.test(String(period || ''))) {
+        return { prevPeriodLabel: '', byStudentId };
+    }
+
+    const [mmStr, yyyyStr] = String(period).split('-');
+    const month = Number(mmStr);
+    const year = Number(yyyyStr);
+    const prevMonth = month === 1 ? 12 : month - 1;
+    const prevYear = month === 1 ? year - 1 : year;
+    const prevPeriodLabel = `${String(prevMonth).padStart(2, '0')}-${prevYear}`;
+
+    const prevStart = startOfWorkDate(`${prevYear}-${String(prevMonth).padStart(2, '0')}-01`);
+    const prevEnd = startOfWorkDate(`${year}-${String(month).padStart(2, '0')}-01`);
+    const dailyMealRate = Math.round(baseMealFee / STANDARD_MEAL_DAYS_PER_MONTH);
+
+    const rows = await StudentAttendance.aggregate([
+        {
+            $match: {
+                ...tenantFilter,
+                studentId: { $in: studentIds },
+                status: 'absent_permission',
+                attendDate: { $gte: prevStart, $lt: prevEnd }
+            }
+        },
+        {
+            $group: {
+                _id: '$studentId',
+                dates: { $addToSet: { $ifNull: ['$attendanceDateKey', { $dateToString: { format: '%Y-%m-%d', date: '$attendDate' } }] } }
+            }
+        }
+    ]);
+
+    for (const row of rows) {
+        const absentDays = Array.isArray(row.dates) ? row.dates.length : 0;
+        if (absentDays > 0) {
+            const deduction = Math.min(baseMealFee, absentDays * dailyMealRate);
+            byStudentId.set(String(row._id), { absentDays, deduction });
+        }
+    }
+
+    return { prevPeriodLabel, byStudentId };
+};
+
+const applyStudentMealCreditToInput = (input, baseNote, creditInfo, prevPeriodLabel) => {
+    const cleanBaseNote = String(baseNote || '').trim();
+    if (!creditInfo || !(creditInfo.deduction > 0)) {
+        return { ...input, note: cleanBaseNote };
+    }
+    const adjustedDiscount = input.discount + creditInfo.deduction;
+    const adjustedTotal = Math.max(0, input.totalAmount - creditInfo.deduction);
+    const creditNote = `Khấu trừ ${creditInfo.absentDays} ngày ăn nghỉ có phép kỳ ${prevPeriodLabel} (-${creditInfo.deduction.toLocaleString('vi-VN')}đ)`;
+    return {
+        ...input,
+        discount: adjustedDiscount,
+        totalAmount: adjustedTotal,
+        note: cleanBaseNote ? `${cleanBaseNote} | ${creditNote}` : creditNote
+    };
 };
 const invoiceScope = async (req, invoice) => {
     if (!invoice) return false;
@@ -217,6 +291,10 @@ const createTuitionFee = async (req, res) => {
             return res.status(409).json({ message: 'Học sinh đã có hóa đơn cho kỳ này' });
         }
 
+        // Tự động khấu trừ tiền ăn từ số ngày nghỉ có phép của tháng trước (nếu có)
+        const { prevPeriodLabel, byStudentId: creditByStudent } = await computePriorMonthMealCredits([student._id], period, input.mealFee, tenantFilter);
+        const resolvedInvoiceInput = applyStudentMealCreditToInput(input, note, creditByStudent.get(String(student._id)), prevPeriodLabel);
+
         // Tính tổng
         const fee = new TuitionFee({
             ...(tenantId ? { tenantId } : { tenantId: null }),
@@ -225,8 +303,7 @@ const createTuitionFee = async (req, res) => {
             classroomId: classroom._id,
             className: classroom.name,
             period,
-            ...input,
-            note: String(note || '').trim()
+            ...resolvedInvoiceInput
         });
 
         await runStudentTransaction(async (session) => {
@@ -294,6 +371,15 @@ const createBulkTuitionFees = async (req, res) => {
             ...tenantFilter
         }).select('studentName className');
         if (existed.length) return res.status(409).json({ message: `${applyToAll ? 'Các lớp đã chọn' : 'Lớp'} đã có ${existed.length} hóa đơn kỳ ${period}. Không lập chồng hóa đơn.`, data: existed });
+
+        // Tự động khấu trừ tiền ăn những ngày nghỉ có phép của tháng trước cho toàn bộ danh sách học sinh (1 câu aggregate duy nhất)
+        const { prevPeriodLabel, byStudentId: creditByStudent } = await computePriorMonthMealCredits(
+            students.map((student) => student._id),
+            period,
+            input.mealFee,
+            tenantFilter
+        );
+
         const result = await runStudentTransaction(async (session) => {
             const actor = await User.findOne({ _id: req.user._id, status: 'active', ...tenantFilter }).session(session);
             if (!actor || !['admin', 'accountant'].includes(actor.role)) {
@@ -302,16 +388,23 @@ const createBulkTuitionFees = async (req, res) => {
                 throw err;
             }
             await lockOpenPeriod(fromPeriod(period), session, req);
-            const fees = students.map((student) => ({
-                ...(tenantId ? { tenantId } : { tenantId: null }),
-                studentId: student._id,
-                studentName: student.fullName,
-                classroomId: student.classroomId,
-                className: classroomNames.get(String(student.classroomId)) || student.className || '',
-                period,
-                ...input,
-                note: String(note || '').trim()
-            }));
+            const fees = students.map((student) => {
+                const resolvedStudentInput = applyStudentMealCreditToInput(
+                    input,
+                    note,
+                    creditByStudent.get(String(student._id)),
+                    prevPeriodLabel
+                );
+                return {
+                    ...(tenantId ? { tenantId } : { tenantId: null }),
+                    studentId: student._id,
+                    studentName: student.fullName,
+                    classroomId: student.classroomId,
+                    className: classroomNames.get(String(student.classroomId)) || student.className || '',
+                    period,
+                    ...resolvedStudentInput
+                };
+            });
             return TuitionFee.insertMany(fees, { session });
         });
 
@@ -347,13 +440,32 @@ const previewBulkTuitionFees = async (req, res) => {
             ...tenantFilter
         }).select('studentId').lean();
         const existingIds = new Set(existing.map((item) => String(item.studentId)));
+        const { prevPeriodLabel, byStudentId: creditByStudent } = await computePriorMonthMealCredits(
+            students.map((item) => item._id),
+            period,
+            input.mealFee,
+            tenantFilter
+        );
+        let netTotalAmount = 0;
+        let totalMealCreditDeduction = 0;
+        let mealCreditStudents = 0;
+        for (const student of students) {
+            const credit = creditByStudent.get(String(student._id));
+            const studentTotal = credit ? Math.max(0, input.totalAmount - credit.deduction) : input.totalAmount;
+            netTotalAmount += studentTotal;
+            if (credit?.deduction > 0) {
+                totalMealCreditDeduction += credit.deduction;
+                mealCreditStudents += 1;
+            }
+        }
         const byClass = classrooms.map((item) => {
             const classStudents = students.filter((student) => String(student.classroomId) === String(item._id));
             return { classroomId: item._id, name: item.name, studentCount: classStudents.length,
                 existingCount: classStudents.filter((student) => existingIds.has(String(student._id))).length };
         });
         return res.json({ success: true, data: { period, dueDate: input.dueDate, perStudent: input.totalAmount,
-            studentCount: students.length, existingCount: existingIds.size, totalAmount: students.length * input.totalAmount, byClass,
+            studentCount: students.length, existingCount: existingIds.size, totalAmount: netTotalAmount,
+            mealCreditPeriod: prevPeriodLabel, mealCreditStudents, totalMealCreditDeduction, byClass,
             canCreate: students.length > 0 && existingIds.size === 0 } });
     } catch (error) { return res.status(error.statusCode || 500).json({ message: error.statusCode ? error.message : 'Không thể xem trước hóa đơn' }); }
 };
@@ -648,6 +760,7 @@ const sendDebtReminders = async (req, res) => {
             const parents = parentsByStudent.get(String(invoice.studentId)) || [];
             const remaining = invoice.totalAmount - invoice.paidAmount;
             parents.forEach((parent) => notificationDocs.push({
+                ...(tenantId ? { tenantId } : {}),
                 recipientId: parent._id, title: overdueOnly ? 'Nhắc học phí quá hạn' : 'Nhắc thanh toán học phí',
                 message: `${invoice.studentName} còn ${remaining.toLocaleString('vi-VN')}đ học phí kỳ ${invoice.period}, hạn thanh toán ${invoice.dueDate.toLocaleDateString('vi-VN')}.`,
                 type: 'finance', link: '/parent-portal', createdBy: req.user._id,
@@ -656,11 +769,19 @@ const sendDebtReminders = async (req, res) => {
             }));
         }
         const result = notificationDocs.length ? await Notification.bulkWrite(notificationDocs.map((document) => ({ updateOne: {
-            filter: { deduplicationKey: document.deduplicationKey }, update: { $setOnInsert: document }, upsert: true
+            filter: { ...tenantFilter, deduplicationKey: document.deduplicationKey }, update: { $setOnInsert: document }, upsert: true
         } })), { ordered: false }) : null;
         const created = result?.upsertedCount || 0;
-        return res.json({ success: true, message: `Đã tạo ${created} thông báo nhắc học phí mới${notificationDocs.length - created ? `; ${notificationDocs.length - created} thông báo đã gửi trong hôm nay nên không gửi lại` : ''}.`,
-            data: { invoices: invoices.length, notifications: created, skippedToday: notificationDocs.length - created, unlinkedInvoices: invoices.filter((invoice) => !parentsByStudent.has(String(invoice.studentId))).length } });
+        const skippedToday = notificationDocs.length - created;
+        const unlinkedInvoices = invoices.filter((invoice) => !parentsByStudent.has(String(invoice.studentId))).length;
+        const details = [];
+        if (skippedToday > 0) details.push(`${skippedToday} thông báo đã gửi trong hôm nay nên không gửi lặp lại`);
+        if (unlinkedInvoices > 0) details.push(`còn ${unlinkedInvoices}/${invoices.length} hóa đơn nợ chưa gửi được vì học sinh chưa liên kết tài khoản phụ huynh`);
+        const message = invoices.length === 0
+            ? 'Không có hóa đơn còn nợ nào trong kỳ đã chọn.'
+            : `Đã tạo ${created} thông báo nhắc học phí mới${details.length ? ` (${details.join('; ')})` : ''}.`;
+        return res.json({ success: true, message,
+            data: { invoices: invoices.length, notifications: created, skippedToday, unlinkedInvoices } });
     } catch (err) { return res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Không thể gửi nhắc nợ' }); }
 };
 

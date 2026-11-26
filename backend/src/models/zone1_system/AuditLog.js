@@ -11,6 +11,7 @@ const AuditLogSchema = new mongoose.Schema({
   action: {
     type: String,
     enum: [
+      'PARENT_ACCOUNT_CREATED',
       'PARENT_STUDENTS_LINKED',
       'USER_STATUS_CHANGED',
       'INTERNAL_ACCOUNT_CREATED',

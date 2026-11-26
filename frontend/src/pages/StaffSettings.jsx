@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
 import ParentFeedbackManagement from './ParentFeedbackManagement';
@@ -39,7 +39,10 @@ export default function StaffSettings() {
     setSaving(true);
     try {
       await api.post('/auth/me/password', { currentPassword: form.currentPassword, newPassword: form.newPassword });
-      localStorage.removeItem('token'); localStorage.removeItem('user'); navigate('/login', { replace: true });
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      localStorage.removeItem('tenant');
+      navigate('/login', { replace: true });
     } catch (requestError) { setError(requestError.response?.data?.message || 'Không thể đổi mật khẩu'); }
     finally { setSaving(false); }
   };
@@ -72,15 +75,6 @@ export default function StaffSettings() {
       </section>
     ) : (
       <>
-        <section className="content-card staff-request-quick-link">
-          <div>
-            <h3>Cập nhật thông tin cá nhân</h3>
-            <p>Gửi thông tin mới để HR và Ban giám hiệu kiểm tra trước khi cập nhật hồ sơ.</p>
-          </div>
-          <Link className="button button-secondary" to="/my-requests?type=profile_change">
-            Yêu cầu cập nhật hồ sơ
-          </Link>
-        </section>
         <section className="content-card staff-settings-card">
           <div className="card-heading">
             <div>

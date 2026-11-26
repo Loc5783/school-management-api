@@ -42,9 +42,12 @@ const changeMyPassword = async (req, res) => {
       return res.status(422).json({ message: 'Nhập mật khẩu hiện tại và mật khẩu mới từ 8 đến 72 ký tự' });
     }
     if (currentPassword === newPassword) return res.status(422).json({ message: 'Mật khẩu mới phải khác mật khẩu hiện tại' });
-    const account = await User.findById(req.user._id).select('+passwordHash authVersion');
+    const tenantScope = req.tenantId || req.user?.tenantId
+      ? { tenantId: req.tenantId || req.user.tenantId }
+      : { tenantId: { $in: [null, undefined] } };
+    const account = await User.findOne({ _id: req.user._id, ...tenantScope }).select('passwordHash authVersion');
     if (!account || !await comparePassword(currentPassword, account.passwordHash)) return res.status(400).json({ message: 'Mật khẩu hiện tại không đúng' });
-    const changed = await User.updateOne({ _id: account._id, authVersion: account.authVersion || 0 }, {
+    const changed = await User.updateOne({ _id: account._id, ...tenantScope, authVersion: account.authVersion || 0 }, {
       $set: { passwordHash: await hashPassword(newPassword) }, $inc: { authVersion: 1 }
     });
     if (!changed.modifiedCount) return res.status(409).json({ message: 'Tài khoản vừa thay đổi, vui lòng đăng nhập lại' });

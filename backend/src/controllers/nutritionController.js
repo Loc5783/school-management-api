@@ -504,7 +504,7 @@ const submitMenuForApproval = async (req, res) => {
         validatePublishReadiness(menu);
         menu.status = 'pending_approval';
         menu.approvalNote = '';
-        appendMenuAudit(menu, req.user, 'submitted', 'draft', 'pending_approval', req.body.note || '');
+        appendMenuAudit(menu, req.user, 'submitted', 'draft', 'pending_approval', req.body?.note || '');
         await menu.save();
         res.json({ success: true, message: 'Đã gửi thực đơn chờ phê duyệt', data: menu });
     } catch (err) {
@@ -516,14 +516,14 @@ const approveMenu = async (req, res) => {
     try {
         const menu = await getMenuForWorkflow(req.params.id, req);
         if (menu.status !== 'pending_approval') return res.status(409).json({ message: 'Chỉ thực đơn đang chờ duyệt mới có thể được công bố' });
-        if (String(menu.createdBy) === String(req.user._id)) {
+        if (req.user.role !== 'admin' && String(menu.createdBy) === String(req.user._id)) {
             return res.status(403).json({ message: 'Người lập thực đơn không thể tự phê duyệt thực đơn của mình' });
         }
         validatePublishReadiness(menu);
         menu.status = 'published';
         menu.approvedBy = req.user._id;
         menu.approvedByName = getActorName(req.user);
-        menu.approvalNote = String(req.body.note || '').trim();
+        menu.approvalNote = String(req.body?.note || '').trim();
         appendMenuAudit(menu, req.user, 'approved', 'pending_approval', 'published', menu.approvalNote);
         await menu.save();
         res.json({ success: true, message: 'Đã phê duyệt và công bố thực đơn', data: menu });
@@ -534,7 +534,7 @@ const approveMenu = async (req, res) => {
 
 const returnMenuForRevision = async (req, res) => {
     try {
-        const reason = String(req.body.reason || '').trim();
+        const reason = String(req.body?.reason || '').trim();
         if (!reason) return res.status(400).json({ message: 'Vui lòng nêu lý do trả thực đơn để chỉnh sửa' });
         const menu = await getMenuForWorkflow(req.params.id, req);
         if (menu.status !== 'pending_approval') return res.status(409).json({ message: 'Chỉ thực đơn đang chờ duyệt mới có thể trả lại' });
@@ -554,7 +554,7 @@ const archiveMenu = async (req, res) => {
         if (menu.status === 'archived') return res.status(409).json({ message: 'Thực đơn này đã được lưu trữ' });
         const fromStatus = menu.status;
         menu.status = 'archived';
-        appendMenuAudit(menu, req.user, 'archived', fromStatus, 'archived', req.body.reason || '');
+        appendMenuAudit(menu, req.user, 'archived', fromStatus, 'archived', req.body?.reason || '');
         await menu.save();
         res.json({ success: true, message: 'Đã lưu trữ thực đơn', data: menu });
     } catch (err) {
@@ -771,29 +771,62 @@ const createImportBatchNumber = (ingredientId) => {
     return `LOT-${datePart}-${String(ingredientId).slice(-5).toUpperCase()}-${String(Date.now()).slice(-6)}`;
 };
 
+const VALID_INGREDIENT_CATEGORIES = new Set(['meat', 'seafood', 'vegetable', 'fruit', 'dry_grain', 'dairy', 'spice', 'other']);
+const VALID_INGREDIENT_UNITS = new Set(['kg', 'g', 'l', 'ml', 'piece', 'box', 'can', 'pack']);
+const INGREDIENT_UNIT_ALIASES = {
+    'kg': 'kg', 'gam': 'g', 'gram': 'g', 'g': 'g',
+    'lit': 'l', 'lít': 'l', 'l': 'l', 'ml': 'ml',
+    'cai': 'piece', 'cái': 'piece', 'qua': 'piece', 'quả': 'piece', 'piece': 'piece',
+    'hop': 'box', 'hộp': 'box', 'box': 'box',
+    'lon': 'can', 'can': 'can',
+    'goi': 'pack', 'gói': 'pack', 'pack': 'pack'
+};
+
 const createIngredient = async (req, res) => {
     try {
         const { name, category, unit, minStockAlert, description } = req.body;
-        if (!name || !category || !unit) {
-            return res.status(400).json({ message: 'Vui lòng nhập tên, nhóm và đơn vị nguyên liệu' });
+        const cleanName = String(name || '').trim();
+        const cleanCategory = String(category || '').trim();
+        const rawUnit = String(unit || '').trim().toLowerCase();
+        const cleanUnit = INGREDIENT_UNIT_ALIASES[rawUnit] || rawUnit;
+
+        if (!cleanName || !cleanCategory || !cleanUnit) {
+            return res.status(400).json({ message: 'Vui lòng nhập đầy đủ tên, nhóm và đơn vị tính của nguyên liệu' });
         }
+        if (!VALID_INGREDIENT_CATEGORIES.has(cleanCategory)) {
+            return res.status(422).json({ message: 'Nhóm nguyên liệu không hợp lệ (chọn: thịt, thủy hải sản, rau củ, trái cây, lương thực khô, sữa, gia vị, khác)' });
+        }
+        if (!VALID_INGREDIENT_UNITS.has(cleanUnit)) {
+            return res.status(422).json({ message: 'Đơn vị tính không hợp lệ (chọn: kg, g, l, ml, cái/quả, hộp, lon, gói)' });
+        }
+        const parsedAlert = minStockAlert !== undefined && minStockAlert !== '' ? Number(minStockAlert) : 0;
+        if (!Number.isFinite(parsedAlert) || parsedAlert < 0) {
+            return res.status(422).json({ message: 'Ngưỡng cảnh báo tồn kho không được âm' });
+        }
+
         const ingredient = await IngredientMaster.create({
             tenantId: req.tenantId || req.user?.tenantId,
-            name,
-            code: req.body.code?.trim().toUpperCase() || await createIngredientCode(name, req),
-            category,
-            unit,
-            minStockAlert: Number(minStockAlert) || 0,
-            description: description || ''
+            name: cleanName,
+            code: req.body.code?.trim().toUpperCase() || await createIngredientCode(cleanName, req),
+            category: cleanCategory,
+            unit: cleanUnit,
+            minStockAlert: parsedAlert,
+            description: String(description || '').trim()
         });
         res.status(201).json({ success: true, message: 'Đã thêm nguyên liệu mới', data: ingredient });
     } catch (err) {
-        res.status(400).json({ message: err.message || 'Không thể tạo nguyên liệu' });
+        if (err?.code === 11000) {
+            return res.status(409).json({ message: 'Mã nguyên liệu này đã tồn tại trong kho' });
+        }
+        res.status(400).json({ message: 'Dữ liệu nguyên liệu không hợp lệ, vui lòng kiểm tra lại thông tin' });
     }
 };
 
 const updateIngredient = async (req, res) => {
     try {
+        if (!isValidObjectId(req.params.id)) {
+            return res.status(400).json({ message: 'ID nguyên liệu không hợp lệ' });
+        }
         const allowedFields = ['name', 'category', 'unit', 'minStockAlert', 'description'];
         const updates = Object.fromEntries(
             allowedFields
@@ -801,6 +834,20 @@ const updateIngredient = async (req, res) => {
                 .map((field) => [field, field === 'minStockAlert' ? Number(req.body[field]) : req.body[field]])
         );
 
+        if (updates.name !== undefined) {
+            updates.name = String(updates.name).trim();
+            if (!updates.name) return res.status(422).json({ message: 'Tên nguyên liệu không được để trống' });
+        }
+        if (updates.category !== undefined && !VALID_INGREDIENT_CATEGORIES.has(String(updates.category))) {
+            return res.status(422).json({ message: 'Nhóm nguyên liệu không hợp lệ' });
+        }
+        if (updates.unit !== undefined) {
+            const rawUnit = String(updates.unit).trim().toLowerCase();
+            updates.unit = INGREDIENT_UNIT_ALIASES[rawUnit] || rawUnit;
+            if (!VALID_INGREDIENT_UNITS.has(updates.unit)) {
+                return res.status(422).json({ message: 'Đơn vị tính nguyên liệu không hợp lệ' });
+            }
+        }
         if (updates.minStockAlert !== undefined && (!Number.isFinite(updates.minStockAlert) || updates.minStockAlert < 0)) {
             return res.status(400).json({ message: 'Ngưỡng cảnh báo tồn không được âm' });
         }
@@ -813,7 +860,10 @@ const updateIngredient = async (req, res) => {
         if (!ingredient) return res.status(404).json({ message: 'Không tìm thấy nguyên liệu' });
         res.json({ success: true, message: 'Đã cập nhật nguyên liệu', data: ingredient });
     } catch (err) {
-        res.status(400).json({ message: err.message || 'Không thể cập nhật nguyên liệu' });
+        if (err?.code === 11000) {
+            return res.status(409).json({ message: 'Mã nguyên liệu bị trùng lặp' });
+        }
+        res.status(400).json({ message: 'Không thể cập nhật nguyên liệu, vui lòng kiểm tra lại dữ liệu' });
     }
 };
 

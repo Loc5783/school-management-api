@@ -82,17 +82,21 @@ const canManageInternalTarget = (actor, account) => {
   return null;
 };
 
-const writeAudit = (req, action, target, before, after, reason = '', session = null) => AuditLog.create([{
-  actorId: req.user._id,
-  actorUsername: req.user.username,
-  action,
-  targetType: 'User',
-  targetId: target._id,
-  before,
-  after,
-  reason: reason.trim(),
-  requestId: req.header('X-Request-Id') || undefined
-}], session ? { session } : {}).then(([log]) => log);
+const writeAudit = (req, action, target, before, after, reason = '', session = null) => {
+  const tenantId = req.tenantId || req.user?.tenantId || undefined;
+  return AuditLog.create([{
+    ...(tenantId ? { tenantId } : {}),
+    actorId: req.user._id,
+    actorUsername: req.user.username,
+    action,
+    targetType: 'User',
+    targetId: target._id,
+    before,
+    after,
+    reason: reason.trim(),
+    requestId: req.header('X-Request-Id') || undefined
+  }], session ? { session } : {}).then(([log]) => log);
+};
 
 const runLinkedAccountTransaction = async (operation) => {
   const topology = await mongoose.connection.db.admin().command({ hello: 1 });
@@ -104,19 +108,23 @@ const runLinkedAccountTransaction = async (operation) => {
   const session = await mongoose.startSession();
   try {
     let result;
-    await session.withTransaction(async () => { result = await operation(session); });
+    await session.withTransaction(async (activeSession) => {
+      result = await operation(activeSession === undefined ? session : activeSession);
+    });
     return result;
   } finally { await session.endSession(); }
 };
 
-const findParent = async (id) => {
+const findParent = async (req, id) => {
   if (!mongoose.isValidObjectId(id)) return null;
-  return User.findOne({ _id: id, role: 'parent', tenantId: { $in: [null, undefined] } });
+  const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+  return User.findOne({ _id: id, role: 'parent', ...tenantFilter });
 };
 
 const listParents = async (req, res) => {
   try {
-    const filter = { role: 'parent', tenantId: { $in: [null, undefined] } };
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+    const filter = { role: 'parent', ...tenantFilter };
     if (req.query.status) {
       if (!manageableStatuses.includes(req.query.status)) {
         return res.status(400).json({ message: 'Trạng thái lọc không hợp lệ' });
@@ -124,18 +132,115 @@ const listParents = async (req, res) => {
       filter.status = req.query.status;
     }
     const parents = await User.find(filter)
+      .select('username status profile parentInfo createdAt lastLogin')
       .populate('parentInfo.requestedClassroomId', 'name fullName ageGroup')
-      .sort({ createdAt: -1 }).limit(200);
+      .sort({ createdAt: -1 })
+      .limit(200)
+      .lean();
     return res.json({ data: parents.map(serializeParent) });
   } catch (error) {
+    if (error instanceof InvalidTenantContextError || error?.name === 'InvalidTenantContextError') {
+      return res.status(error.statusCode || 403).json({ message: error.message });
+    }
     console.error('List parent accounts failed:', error.message);
     return res.status(500).json({ message: 'Không thể tải danh sách tài khoản phụ huynh' });
   }
 };
 
+/**
+ * Tạo trực tiếp tài khoản phụ huynh tại trường (do cổng tự đăng ký công khai đã khóa vì lý do bảo mật).
+ * Ràng buộc: Cô lập theo `tenantId` và chỉ cho phép gắn học sinh `enrolled` thuộc cùng cơ sở.
+ */
+const createParentAccount = async (req, res) => {
+  try {
+    const tenantContext = assertTenantContext(req);
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+    const targetTenantId = tenantContext.isSaaS ? tenantContext.tenantId : null;
+
+    const { username, password, profile = {}, studentIds = [], registrationNote = '' } = req.body || {};
+    if (typeof username !== 'string' || !usernamePattern.test(username.trim())) {
+      return res.status(422).json({ message: 'Tên đăng nhập chỉ gồm chữ, số, dấu chấm, gạch dưới hoặc gạch ngang (3-50 ký tự)' });
+    }
+    if (typeof password !== 'string' || password.length < 8 || password.length > 72) {
+      return res.status(422).json({ message: 'Mật khẩu phải có từ 8 đến 72 ký tự' });
+    }
+    if (typeof profile?.fullName !== 'string' || !profile.fullName.trim() || profile.fullName.length > 120) {
+      return res.status(422).json({ message: 'Họ và tên phụ huynh phải có từ 1 đến 120 ký tự' });
+    }
+    if (profile?.email && (typeof profile.email !== 'string' || profile.email.length > 254 || !emailPattern.test(profile.email.trim()))) {
+      return res.status(422).json({ message: 'Email phụ huynh không hợp lệ' });
+    }
+    if (profile?.phone && (typeof profile.phone !== 'string' || !phonePattern.test(profile.phone.trim()))) {
+      return res.status(422).json({ message: 'Số điện thoại phụ huynh không hợp lệ' });
+    }
+    if (!Array.isArray(studentIds) || studentIds.some((id) => !mongoose.isValidObjectId(id))) {
+      return res.status(400).json({ message: 'Danh sách mã học sinh liên kết không hợp lệ' });
+    }
+
+    const normalizedUsername = username.trim();
+    if (await User.exists({ username: normalizedUsername, ...tenantFilter })) {
+      return res.status(409).json({ message: 'Tên đăng nhập đã tồn tại trong trường' });
+    }
+
+    const uniqueStudentIds = [...new Set(studentIds.map(String))];
+    if (uniqueStudentIds.length > 0) {
+      const validStudentCount = await Student.countDocuments({
+        _id: { $in: uniqueStudentIds },
+        status: 'enrolled',
+        ...tenantFilter
+      });
+      if (validStudentCount !== uniqueStudentIds.length) {
+        return res.status(400).json({ message: 'Có học sinh không tồn tại hoặc không thuộc danh sách đang theo học của trường' });
+      }
+    }
+
+    const passwordHash = await hashPassword(password);
+    const createdParent = await User.create({
+      username: normalizedUsername,
+      passwordHash,
+      role: 'parent',
+      status: uniqueStudentIds.length > 0 ? 'active' : 'inactive',
+      permissions: [],
+      tenantId: targetTenantId,
+      profile: {
+        fullName: profile.fullName.trim(),
+        phone: String(profile.phone || '').trim(),
+        email: String(profile.email || '').trim().toLowerCase()
+      },
+      parentInfo: {
+        studentIds: uniqueStudentIds,
+        registrationNote: String(registrationNote || 'Tài khoản do nhà trường cấp trực tiếp').trim().slice(0, 300)
+      }
+    });
+
+    await writeAudit(req, 'PARENT_ACCOUNT_CREATED', createdParent, {}, {
+      username: createdParent.username,
+      status: createdParent.status,
+      studentIds: uniqueStudentIds
+    });
+
+    return res.status(201).json({
+      message: uniqueStudentIds.length > 0
+        ? 'Đã tạo và kích hoạt tài khoản phụ huynh thành công'
+        : 'Đã tạo tài khoản phụ huynh (chờ liên kết học sinh để kích hoạt)',
+      data: serializeParent(createdParent)
+    });
+  } catch (error) {
+    if (error instanceof InvalidTenantContextError || error?.name === 'InvalidTenantContextError') {
+      return res.status(error.statusCode || 403).json({ message: error.message });
+    }
+    if (error?.code === 11000) {
+      return res.status(409).json({ message: 'Tên đăng nhập phụ huynh đã tồn tại' });
+    }
+    console.error('Create parent account failed:', error.message);
+    return res.status(500).json({ message: 'Không thể tạo tài khoản phụ huynh' });
+  }
+};
+
 const linkParentStudents = async (req, res) => {
   try {
-    const parent = await findParent(req.params.id);
+    const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
+    const parent = await findParent(req, req.params.id);
     if (!parent) return res.status(404).json({ message: 'Không tìm thấy tài khoản phụ huynh' });
 
     const suppliedIds = req.body.studentIds;
@@ -143,12 +248,12 @@ const linkParentStudents = async (req, res) => {
       return res.status(400).json({ message: 'studentIds phải là danh sách mã học sinh hợp lệ' });
     }
     const uniqueIds = [...new Set(suppliedIds.map(String))];
-    const requestedClassroomId = parent.parentInfo?.requestedClassroomId;
-    const studentFilter = { _id: { $in: uniqueIds }, status: 'enrolled' };
-    if (requestedClassroomId) studentFilter.classroomId = requestedClassroomId;
-    const studentCount = await Student.countDocuments(studentFilter);
-    if (studentCount !== uniqueIds.length) {
-      return res.status(400).json({ message: requestedClassroomId ? 'Chỉ được liên kết học sinh đang theo học trong lớp phụ huynh đã đăng ký' : 'Có học sinh không tồn tại hoặc không còn đang theo học' });
+    if (uniqueIds.length > 0) {
+      const studentFilter = { _id: { $in: uniqueIds }, status: 'enrolled', ...tenantFilter };
+      const studentCount = await Student.countDocuments(studentFilter);
+      if (studentCount !== uniqueIds.length) {
+        return res.status(400).json({ message: 'Có học sinh không tồn tại hoặc không còn đang theo học tại trường' });
+      }
     }
 
     const before = { studentIds: (parent.parentInfo?.studentIds || []).map(String) };
@@ -158,6 +263,9 @@ const linkParentStudents = async (req, res) => {
     await writeAudit(req, 'PARENT_STUDENTS_LINKED', parent, before, after, req.body.reason || '');
     return res.json({ message: 'Đã liên kết hồ sơ học sinh với phụ huynh', data: serializeParent(parent) });
   } catch (error) {
+    if (error instanceof InvalidTenantContextError || error?.name === 'InvalidTenantContextError') {
+      return res.status(error.statusCode || 403).json({ message: error.message });
+    }
     console.error('Link parent students failed:', error.message);
     return res.status(500).json({ message: 'Không thể liên kết học sinh cho phụ huynh' });
   }
@@ -169,7 +277,7 @@ const updateParentStatus = async (req, res) => {
     if (!manageableStatuses.includes(status)) {
       return res.status(400).json({ message: 'Chỉ có thể đặt trạng thái hoạt động, chờ kích hoạt hoặc tạm ngưng' });
     }
-    const parent = await findParent(req.params.id);
+    const parent = await findParent(req, req.params.id);
     if (!parent) return res.status(404).json({ message: 'Không tìm thấy tài khoản phụ huynh' });
     if (status === 'active' && !(parent.parentInfo?.studentIds || []).length) {
       return res.status(400).json({ message: 'Cần liên kết ít nhất một hồ sơ học sinh trước khi kích hoạt tài khoản' });
@@ -184,6 +292,9 @@ const updateParentStatus = async (req, res) => {
     }
     return res.json({ message: 'Đã cập nhật trạng thái tài khoản phụ huynh', data: serializeParent(parent) });
   } catch (error) {
+    if (error instanceof InvalidTenantContextError || error?.name === 'InvalidTenantContextError') {
+      return res.status(error.statusCode || 403).json({ message: error.message });
+    }
     console.error('Update parent status failed:', error.message);
     return res.status(500).json({ message: 'Không thể cập nhật trạng thái tài khoản phụ huynh' });
   }
@@ -228,7 +339,8 @@ const listInternalAccounts = async (req, res) => {
         .select('username role status profile employeeInfo createdAt lastLogin')
         .sort(req.query.sortBy === 'name' ? { role: 1, 'profile.fullName': 1, username: 1 } : { createdAt: -1, _id: -1 })
         .skip((page - 1) * limit)
-        .limit(limit),
+        .limit(limit)
+        .lean(),
       User.countDocuments(filter)
     ]);
 
@@ -267,9 +379,13 @@ const createInternalAccount = async (req, res) => {
     const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
     const targetTenantId = tenantContext.isSaaS ? tenantContext.tenantId : null;
 
-    const { username, password, profile = {}, role } = req.body;
+    const { username, password, profile = {}, role, existingEmployeeId } = req.body;
     const validationError = validateInternalAccount({ username, password, profile, role }, req.user);
     if (validationError) return res.status(422).json({ success: false, message: validationError });
+
+    if (existingEmployeeId !== undefined && existingEmployeeId !== null && existingEmployeeId !== '' && !mongoose.isValidObjectId(existingEmployeeId)) {
+      return res.status(400).json({ success: false, message: 'ID hồ sơ nhân sự liên kết không hợp lệ' });
+    }
 
     const normalizedUsername = username.trim();
     if (await User.exists({ username: normalizedUsername, ...tenantFilter })) {
@@ -277,7 +393,8 @@ const createInternalAccount = async (req, res) => {
     }
 
     const passwordHash = await hashPassword(password);
-    const { account, employee } = await runLinkedAccountTransaction(async (session) => {
+    const txOpts = (session) => (session ? { session } : {});
+    const { account, employee, linkedExisting } = await runLinkedAccountTransaction(async (session) => {
       const [createdAccount] = await User.create([{
         username: normalizedUsername,
         passwordHash,
@@ -291,50 +408,98 @@ const createInternalAccount = async (req, res) => {
           email: String(profile.email || '').trim().toLowerCase(),
           address: String(profile.address || '').trim()
         }
-      }], { session });
+      }], txOpts(session));
 
-      const rawRequestedCode = String(req.body?.employeeCode || '').trim();
-      const employeeCode = rawRequestedCode
-        ? await assertPersonCodeAvailable({ code: rawRequestedCode, tenantId: targetTenantId, excludeUserId: createdAccount._id, session })
-        : await generateNextPersonCode({ tenantId: targetTenantId, session });
+      const rawRequestedCode = String(req.body?.employeeCode || '').trim().toUpperCase();
 
-      const [createdEmployee] = await Employee.create([{
-        tenantId: targetTenantId,
-        userId: createdAccount._id,
-        employeeCode,
-        fullName: createdAccount.profile.fullName,
-        phone: createdAccount.profile.phone,
-        email: createdAccount.profile.email,
-        gender: null,
-        contractType: null,
-        startDate: null,
-        qualification: { degree: '', major: '' },
-        position: positionByRole[role] || 'teacher',
-        payrollRole: role,
-        status: 'active',
-        salaryConfig: { baseSalary: 0, positionAllowance: 0, lunchAllowance: 0 }
-      }], { session });
+      // Ưu tiên liên kết với hồ sơ nhân sự có sẵn chưa gắn tài khoản (tránh sinh bản ghi trùng 0đ lương)
+      let targetEmployee = null;
+      if (existingEmployeeId) {
+        targetEmployee = await Employee.findOne({
+          _id: existingEmployeeId,
+          status: { $ne: 'resigned' },
+          ...tenantFilter
+        }).session(session || null);
+        if (!targetEmployee) {
+          const err = new Error('Không tìm thấy hồ sơ nhân sự để liên kết');
+          err.statusCode = 404;
+          throw err;
+        }
+        if (targetEmployee.userId) {
+          const err = new Error('Hồ sơ nhân sự này đã được liên kết với một tài khoản khác');
+          err.statusCode = 409;
+          throw err;
+        }
+      } else if (rawRequestedCode) {
+        targetEmployee = await Employee.findOne({
+          employeeCode: rawRequestedCode,
+          userId: null,
+          status: { $ne: 'resigned' },
+          ...tenantFilter
+        }).session(session || null);
+      }
+
+      let resolvedEmployee = targetEmployee;
+      let isLinkedExisting = false;
+
+      if (resolvedEmployee) {
+        isLinkedExisting = true;
+        resolvedEmployee.userId = createdAccount._id;
+        resolvedEmployee.fullName = createdAccount.profile.fullName;
+        if (createdAccount.profile.phone) resolvedEmployee.phone = createdAccount.profile.phone;
+        if (createdAccount.profile.email) resolvedEmployee.email = createdAccount.profile.email;
+        resolvedEmployee.payrollRole = role;
+        if (!validPositionsByRole[role]?.includes(resolvedEmployee.position)) {
+          resolvedEmployee.position = positionByRole[role] || 'teacher';
+        }
+        await resolvedEmployee.save(txOpts(session));
+      } else {
+        const employeeCode = rawRequestedCode
+          ? await assertPersonCodeAvailable({ code: rawRequestedCode, tenantId: targetTenantId, excludeUserId: createdAccount._id, session })
+          : await generateNextPersonCode({ tenantId: targetTenantId, session });
+
+        const [createdEmployee] = await Employee.create([{
+          tenantId: targetTenantId,
+          userId: createdAccount._id,
+          employeeCode,
+          fullName: createdAccount.profile.fullName,
+          phone: createdAccount.profile.phone,
+          email: createdAccount.profile.email,
+          gender: null,
+          contractType: null,
+          startDate: null,
+          qualification: { degree: '', major: '' },
+          position: positionByRole[role] || 'teacher',
+          payrollRole: role,
+          status: 'active',
+          salaryConfig: { baseSalary: 0, positionAllowance: 0, lunchAllowance: 0 }
+        }], txOpts(session));
+        resolvedEmployee = createdEmployee;
+      }
 
       createdAccount.employeeInfo = {
-        employeeId: employeeCode,
-        position: positionByRole[role] || 'teacher',
-        baseSalary: 0
+        employeeId: resolvedEmployee.employeeCode,
+        position: resolvedEmployee.position || positionByRole[role] || 'teacher',
+        baseSalary: Number(resolvedEmployee.salaryConfig?.baseSalary || 0)
       };
-      await createdAccount.save({ session });
+      await createdAccount.save(txOpts(session));
 
       await writeAudit(req, 'INTERNAL_ACCOUNT_CREATED', createdAccount, {}, {
         username: createdAccount.username,
         role: createdAccount.role,
         status: createdAccount.status,
-        employeeCode
+        employeeCode: resolvedEmployee.employeeCode,
+        linkedExistingEmployee: isLinkedExisting
       }, '', session);
 
-      return { account: createdAccount, employee: createdEmployee };
+      return { account: createdAccount, employee: resolvedEmployee, linkedExisting: isLinkedExisting };
     });
 
     return res.status(201).json({
       success: true,
-      message: 'Đã tạo tài khoản và liên kết hồ sơ nhân sự',
+      message: linkedExisting
+        ? 'Đã tạo tài khoản và gắn với hồ sơ nhân sự có sẵn (giữ nguyên mức lương & hợp đồng)'
+        : 'Đã tạo tài khoản và khởi tạo hồ sơ nhân sự mới',
       data: serializeInternalAccount(account, employee)
     });
   } catch (error) {
@@ -722,6 +887,7 @@ const deactivateInternalAccount = async (req, res) => {
 };
 
 module.exports = {
+  createParentAccount,
   linkParentStudents,
   listParents,
   updateParentStatus,

@@ -1,6 +1,11 @@
 const mongoose = require('mongoose');
 
 const ReportSchema = new mongoose.Schema({
+    tenantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Tenant',
+        default: null
+    },
     reportType: {
         type: String,
         enum: ['student', 'attendance', 'finance', 'hr', 'class'],
@@ -43,6 +48,8 @@ const ReportSchema = new mongoose.Schema({
     timestamps: true
 });
 
+ReportSchema.index({ tenantId: 1, generatedAt: -1 });
+ReportSchema.index({ tenantId: 1, reportType: 1, period: 1, periodValue: 1 });
 ReportSchema.index({ reportType: 1, period: 1, periodValue: 1 });
 ReportSchema.index({ generatedBy: 1 });
 ReportSchema.index({ generatedAt: -1 });

@@ -8,7 +8,7 @@ const tenantFeatureGate = (req, res, next) => {
   return res.status(501).json({
     success: false,
     code: 'MODULE_NOT_IMPLEMENTED_IN_PHASE_1A',
-    message: 'Phân hệ nghiệp vụ chưa sẵn sàng trong Giai đoạn 1A (Backend Feature Gate Fail-Closed)'
+    message: 'Chức năng này hiện đang tạm ẩn hoặc chưa kích hoạt cho cơ sở của bạn.'
   });
 };
 

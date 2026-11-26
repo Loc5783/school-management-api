@@ -156,9 +156,9 @@ router.post('/accounting-period/:month/reopen', roleCheck(['admin', 'principal']
 
 // --- H. Tuition Refund Requests (4 endpoints - TUYỆT ĐỐI KHÔNG MỞ CHO PARENT) ---
 router.get('/refund-requests', roleCheck(['admin', 'principal', 'accountant']), refunds.listRefundRequests);
-router.post('/refund-requests', roleCheck(['accountant']), refunds.createRefundRequest);
+router.post('/refund-requests', roleCheck(['admin', 'accountant']), refunds.createRefundRequest);
 router.patch('/refund-requests/:id/review', roleCheck(['admin', 'principal']), refunds.reviewRefundRequest);
-router.post('/refund-requests/:id/pay', roleCheck(['accountant']), refunds.payRefundRequest);
+router.post('/refund-requests/:id/pay', roleCheck(['admin', 'accountant']), refunds.payRefundRequest);
 
 // --- I. Excel Export & Import (14 endpoints) ---
 // 1. Export (8 endpoints)

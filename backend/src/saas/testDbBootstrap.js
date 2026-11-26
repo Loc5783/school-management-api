@@ -1,4 +1,3 @@
-const { MongoMemoryReplSet } = require('mongodb-memory-server');
 const mongoose = require('mongoose');
 
 // Internal provenance registry in memory (private to this process)
@@ -119,6 +118,8 @@ function getRegisteredRecordByUri(uri) {
 }
 
 async function startTestDb(options = {}) {
+  // Nạp lười (lazy-load) thư viện devDependency chỉ khi chạy kiểm thử, tránh lỗi thiếu gói trong môi trường Production (--omit=dev)
+  const { MongoMemoryReplSet } = require('mongodb-memory-server');
   // 1. Controlled bootstrap spawns MongoMemoryReplSet
   const replSet = await MongoMemoryReplSet.create({
     replSet: {

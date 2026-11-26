@@ -604,21 +604,23 @@ const confirmExcelImport = async (req, res) => {
                 }
             }
 
-            // Lưu học sinh hàng loạt
+            // Lưu học sinh hàng loạt (hỗ trợ Ngày nhập học, Dị ứng, Bệnh lý và Người liên hệ từ Excel)
             const createdStudents = [];
             for (const data of validatedStudents) {
-                const studentCode = await generateStudentCode(now, session, tenantId);
+                const effectiveAdmissionDate = data.admissionDateObj || now;
+                const studentCode = await generateStudentCode(effectiveAdmissionDate, session, tenantId);
                 const studentPayload = {
                     ...data,
+                    schoolYear: data.schoolYear || deriveSchoolYear(effectiveAdmissionDate),
                     studentCode,
-                    admissionDate: now,
-                    enrollmentDate: now,
+                    admissionDate: effectiveAdmissionDate,
+                    enrollmentDate: effectiveAdmissionDate,
                     createdBy: req.user._id,
                     updatedBy: req.user._id,
                     statusHistory: [{
                         toStatus: 'enrolled',
                         reason: 'Nhập học sinh hàng loạt từ Excel',
-                        effectiveDate: now,
+                        effectiveDate: effectiveAdmissionDate,
                         changedBy: req.user._id,
                         changedByName: actorName(req.user)
                     }]
@@ -898,11 +900,9 @@ const transferStudentClassroom = async (req, res) => {
                 throw httpError('Lớp mới phải khác lớp hiện tại của học sinh', 422);
             }
 
-            // Read source and target classrooms inside session
-            const [fromClassroom, toClassroom] = await Promise.all([
-                Classroom.findOne({ _id: fromClassroomId, ...tenantFilter }).session(session),
-                Classroom.findOne({ _id: toClassroomId, status: 'active', ...tenantFilter }).session(session)
-            ]);
+            // Đọc tuần tự trong session để tránh xung đột startTransaction song song trên Replica Set
+            const fromClassroom = await Classroom.findOne({ _id: fromClassroomId, ...tenantFilter }).session(session);
+            const toClassroom = await Classroom.findOne({ _id: toClassroomId, status: 'active', ...tenantFilter }).session(session);
 
             if (!fromClassroom) throw httpError('Không tìm thấy lớp học hiện tại của học sinh', 404);
             if (!toClassroom) throw httpError('Không tìm thấy lớp chuyển đến hoặc lớp không hoạt động', 404);

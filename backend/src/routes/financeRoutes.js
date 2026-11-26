@@ -49,9 +49,9 @@ router.get('/accounting-period/:month', roleCheck(['admin', 'principal', 'accoun
 router.post('/accounting-period/:month/close', roleCheck(['admin', 'principal']), accountingPeriod.closePeriod);
 router.post('/accounting-period/:month/reopen', roleCheck(['admin', 'principal']), accountingPeriod.reopenPeriod);
 router.get('/refund-requests', roleCheck(['admin', 'principal', 'accountant']), refunds.listRefundRequests);
-router.post('/refund-requests', roleCheck(['accountant']), refunds.createRefundRequest);
+router.post('/refund-requests', roleCheck(['admin', 'accountant']), refunds.createRefundRequest);
 router.patch('/refund-requests/:id/review', roleCheck(['admin', 'principal']), refunds.reviewRefundRequest);
-router.post('/refund-requests/:id/pay', roleCheck(['accountant']), refunds.payRefundRequest);
+router.post('/refund-requests/:id/pay', roleCheck(['admin', 'accountant']), refunds.payRefundRequest);
 router.get('/fee-schedules', roleCheck(['admin', 'principal', 'accountant']), getFeeSchedules);
 router.put('/fee-schedules', roleCheck(['admin', 'accountant']), periodOpen.byPeriod, saveFeeSchedule);
 router.delete('/fee-schedules/:id', roleCheck(['admin', 'accountant']), periodOpen.bySchedule, deleteFeeSchedule);

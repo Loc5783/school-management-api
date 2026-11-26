@@ -4,6 +4,7 @@ const schoolAuthMiddleware = require('../middlewares/schoolAuthMiddleware');
 const roleCheck = require('../../middlewares/roleCheck');
 const hrAccessAudit = require('../../middlewares/hrAccessAudit');
 const hrController = require('../../controllers/hrController');
+const hrAuditController = require('../../controllers/hrAuditController');
 const staffingController = require('../../controllers/staffingController');
 const internalCommunicationController = require('../../controllers/internalCommunicationController');
 const financeExcelController = require('../../controllers/financeExcelController');
@@ -26,15 +27,18 @@ const UNAPPROVED_HR_PREFIXES = [
   '/development',
   '/handover',
   '/handovers',
-  '/internal',
-  '/reports',
-  '/audit'
+  '/reports'
 ];
 
 router.use((req, res, next) => {
   const saasMode = getRequestSaasMode(req);
   if (!isFinanceAllowed(saasMode)) {
-    if (req.path.startsWith('/payroll') || req.path.startsWith('/my-payroll')) {
+    if (
+      req.path.startsWith('/payroll')
+      || req.path.startsWith('/my-payroll')
+      || req.path.startsWith('/internal')
+      || req.path.startsWith('/audit')
+    ) {
       return next('router');
     }
   }
@@ -109,6 +113,11 @@ router.get('/internal/my-announcements', roleCheck(['admin', 'principal', 'hr', 
 router.post('/internal/timesheets', roleCheck(['admin', 'hr']), internalCommunicationController.publishTimesheet);
 router.get('/internal/my-timesheets', roleCheck(['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard']), internalCommunicationController.myTimesheets);
 router.patch('/internal/timesheets/:id/respond', roleCheck(['admin', 'hr', 'teacher', 'accountant', 'chef', 'guard']), internalCommunicationController.respondTimesheet);
+
+// 8. HR Access & Change Audit Journal (Tenant-scoped in controller)
+router.get('/audit/options', roleCheck(['admin', 'principal', 'hr', 'accountant']), hrAuditController.options);
+router.get('/audit', roleCheck(['admin', 'principal', 'hr', 'accountant']), hrAuditController.list);
+router.get('/audit/:source/:id', roleCheck(['admin', 'principal', 'hr', 'accountant']), hrAuditController.detail);
 
 // Catch-all: Any unhandled sub-route in /hr falls through to tenantFeatureGate (501)
 router.use((req, res, next) => {

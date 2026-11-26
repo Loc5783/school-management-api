@@ -175,7 +175,8 @@ const enableStandaloneTransactionFallback = (conn) => {
   const wrapSession = (session) => {
     if (session && typeof session === 'object' && !session._standalonePatched) {
       session._standalonePatched = true;
-      session.withTransaction = async (fn) => fn(session);
+      // Truyền `null` thay vì ClientSession sống vào callback trên MongoDB Standalone để tránh xung đột txnNumber
+      session.withTransaction = async (fn) => fn(null);
     }
     return session;
   };

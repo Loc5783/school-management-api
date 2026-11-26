@@ -6,6 +6,7 @@ import Icon from '../components/Icon';
 import ParentAccountManagement from './ParentAccountManagement';
 import StudentProfileChangeRequests from './StudentProfileChangeRequests';
 import { createInternalAccount, deactivateInternalAccount, getInternalAccounts, updateInternalAccount } from '../api/systemUsers';
+import { getEmployees } from '../api/hr';
 
 const roleOptions = [
   { value: 'principal', label: 'Hiệu trưởng' },
@@ -16,7 +17,25 @@ const roleOptions = [
   { value: 'hr', label: 'Nhân sự (HR)' }
 ];
 const statusOptions = { active: 'Đang hoạt động', suspended: 'Tạm ngưng', inactive: 'Đã thu hồi' };
-const emptyForm = { fullName: '', username: '', password: '', phone: '', email: '', role: 'teacher', status: 'active' };
+const emptyForm = { existingEmployeeId: '', fullName: '', username: '', password: '', phone: '', email: '', role: 'teacher', status: 'active' };
+const mapEmployeeToAccountRole = (emp) => {
+  if (emp?.payrollRole && ['principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'].includes(emp.payrollRole)) {
+    return emp.payrollRole;
+  }
+  const byPos = {
+    principal: 'principal',
+    vice_principal: 'principal',
+    teacher: 'teacher',
+    head_teacher: 'teacher',
+    assistant_teacher: 'teacher',
+    accountant: 'accountant',
+    chef: 'chef',
+    security: 'guard',
+    hr: 'hr'
+  };
+  return byPos[emp?.position] || 'teacher';
+};
+const formatVnd = (val) => `${new Intl.NumberFormat('vi-VN').format(Number(val || 0))} đ`;
 
 export default function AccountManagement() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -47,6 +66,7 @@ export default function AccountManagement() {
   };
 
   const [accounts, setAccounts] = useState([]);
+  const [unlinkedEmployees, setUnlinkedEmployees] = useState([]);
   const [form, setForm] = useState(emptyForm);
   const [editingAccount, setEditingAccount] = useState(null);
   const [showModal, setShowModal] = useState(false);
@@ -103,12 +123,38 @@ export default function AccountManagement() {
     dismissModal();
   }, [dismissModal]);
 
-  const openCreateModal = (e) => {
+  const openCreateModal = async (e) => {
     triggerRef.current = e?.currentTarget || document.activeElement;
     setEditingAccount(null);
     setForm(emptyForm);
     setModalError('');
     setShowModal(true);
+    try {
+      const empRes = await getEmployees();
+      const list = (empRes.data?.data || []).filter((emp) => !emp.userId && emp.status !== 'resigned');
+      setUnlinkedEmployees(list);
+    } catch {
+      setUnlinkedEmployees([]);
+    }
+  };
+
+  const handleSelectExistingEmployee = (employeeId) => {
+    if (!employeeId) {
+      setForm((current) => ({ ...current, existingEmployeeId: '' }));
+      return;
+    }
+    const matched = unlinkedEmployees.find((emp) => String(emp._id) === String(employeeId));
+    if (!matched) return;
+    const mappedRole = mapEmployeeToAccountRole(matched);
+    const safeRole = (!canAssignPrincipal && mappedRole === 'principal') ? 'teacher' : mappedRole;
+    setForm((current) => ({
+      ...current,
+      existingEmployeeId: matched._id,
+      fullName: matched.fullName || current.fullName,
+      phone: matched.phone || current.phone,
+      email: matched.email || current.email,
+      role: safeRole
+    }));
   };
 
   const openEditModal = (account, e) => {
@@ -215,6 +261,7 @@ export default function AccountManagement() {
           username: form.username,
           password: form.password,
           role: form.role,
+          ...(form.existingEmployeeId ? { existingEmployeeId: form.existingEmployeeId } : {}),
           profile: { fullName: form.fullName, phone: form.phone, email: form.email }
         });
         const createdAccount = createRes.data?.data;
@@ -223,7 +270,9 @@ export default function AccountManagement() {
         }
         setNotice({
           type: 'success',
-          text: `Đã tạo tài khoản @${form.username} và hồ sơ nhân sự liên kết. Hãy thiết lập lương, hợp đồng và thông tin còn thiếu tại mục Nhân sự & Lương.`
+          text: form.existingEmployeeId
+            ? `Đã tạo tài khoản @${form.username} và liên kết với hồ sơ nhân sự ${createdAccount?.employeeId || ''} (giữ nguyên mức lương & hợp đồng).`
+            : `Đã tạo tài khoản @${form.username} và hồ sơ nhân sự mới. Hãy thiết lập mức lương tại mục Nhân sự.`
         });
       }
       dismissModal();
@@ -534,6 +583,24 @@ export default function AccountManagement() {
 
               <form className="student-form account-modal-form" onSubmit={submit}>
                 <div className="student-form-grid">
+                  {!editingAccount && unlinkedEmployees.length > 0 && (
+                    <label className="form-wide">
+                      Gắn với hồ sơ nhân sự có sẵn (giữ nguyên mức lương & mã NV)
+                      <select
+                        value={form.existingEmployeeId || ''}
+                        onChange={(event) => handleSelectExistingEmployee(event.target.value)}
+                      >
+                        <option value="">-- Tạo mới hồ sơ nhân sự (mức lương khởi tạo 0 đ) --</option>
+                        {unlinkedEmployees.map((emp) => (
+                          <option key={emp._id} value={emp._id}>
+                            {emp.employeeCode} — {emp.fullName}
+                            {emp.salaryConfig?.baseSalary > 0 ? ` · Lương: ${formatVnd(emp.salaryConfig.baseSalary)}` : ' · Chưa đặt lương'}
+                          </option>
+                        ))}
+                      </select>
+                      <small>Chọn nhân sự có sẵn để tránh tạo trùng hồ sơ nhân viên 0đ khi tính bảng lương.</small>
+                    </label>
+                  )}
                   <label>
                     Họ và tên
                     <input

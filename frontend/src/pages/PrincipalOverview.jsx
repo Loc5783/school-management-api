@@ -6,9 +6,8 @@ import Icon from '../components/Icon';
 import './PrincipalOverview.css';
 
 const workTypes = [
-  ['payroll', 'Bảng lương chờ duyệt', '/hr?tab=payroll'],
+  ['payroll', 'Bảng lương chờ duyệt', '/payroll?tab=approvals'],
   ['leave', 'Đơn nghỉ nhân sự', '/hr?tab=leave'],
-  ['recruitment', 'Ứng viên chờ quyết định', '/hr?tab=recruitment'],
   ['refunds', 'Hoàn học phí', '/finance?tab=refunds'],
   ['operatingExpenses', 'Đề nghị chi vận hành', '/accounting/operating-expenses'],
   ['profileChanges', 'Hồ sơ học sinh', '/student-profile-change-requests'],

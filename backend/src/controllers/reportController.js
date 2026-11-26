@@ -46,19 +46,23 @@ const getDashboardStats = async (req, res) => {
             ...tenantFilter
         };
 
+        // NOTE: Không ghi đè paymentMatch.tenantId bằng chuỗi req.tenantId vì Payment.aggregate không tự ép kiểu sang ObjectId
         const paymentMatch = { paidAt: { $gte: today, $lt: tomorrow }, ...tenantFilter };
-        if (tenantId) paymentMatch.tenantId = tenantId;
 
         const User = require('../models/zone1_system/User');
-        const [totalStudents, totalClassrooms, totalTeachers, todayRevenue, attendedToday, recentAttendance, totalAttendance, attendanceSummary] = await Promise.all([
+        const Employee = require('../models/zone2_hr/Employee');
+        const [totalStudents, totalClassrooms, totalStaff, todayRevenue, attendedToday, recentAttendance, totalAttendance, attendanceSummary] = await Promise.all([
             Student.countDocuments(studentFilter),
             Classroom.countDocuments(classroomFilter),
-            req.user.role === 'teacher' ? Promise.resolve(1) : User.countDocuments({ role: 'teacher', status: 'active', ...tenantFilter }),
+            req.user.role === 'teacher'
+                ? Promise.resolve(1)
+                : Employee.countDocuments({ status: { $in: ['active', 'on_leave'] }, ...tenantFilter }),
             req.user.role === 'teacher' ? Promise.resolve([]) : Payment.aggregate([
                 { $match: paymentMatch },
                 { $group: { _id: null, total: { $sum: '$amount' } } }
             ]),
-            StudentAttendance.countDocuments({ ...attendanceFilter, status: 'present' }),
+            // Thống nhất nghiệp vụ với Bếp ăn: trẻ đi muộn (`late`) vẫn tính là có mặt đến trường
+            StudentAttendance.countDocuments({ ...attendanceFilter, status: { $in: ['present', 'late'] } }),
             StudentAttendance.find(attendanceFilter)
                 .sort({ checkInTime: -1, createdAt: -1 })
                 .skip((page - 1) * limit)
@@ -86,7 +90,8 @@ const getDashboardStats = async (req, res) => {
                 summary: {
                     totalStudents,
                     totalClassrooms,
-                    totalTeachers,
+                    totalTeachers: totalStaff,
+                    totalStaff,
                     todayRevenue: todayRevenue[0]?.total || 0,
                     attendedToday,
                     attendanceRate: totalStudents > 0 ? Math.round((attendedToday / totalStudents) * 100) : 0
@@ -128,19 +133,19 @@ const getClassReport = async (req, res) => {
             return res.status(400).json({ message: 'ID lớp học không hợp lệ' });
         }
 
-        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, classroomId)) {
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, classroomId, req)) {
             return res.status(403).json({ message: 'Bạn không có quyền xem báo cáo lớp này' });
         }
 
         const tenantFilter = buildTenantFilter(req);
         // Kiểm tra lớp tồn tại
-        const classroom = await Classroom.findOne({ _id: classroomId, ...tenantFilter });
+        const classroom = await Classroom.findOne({ _id: classroomId, ...tenantFilter }).select('name').lean();
         if (!classroom) {
             return res.status(404).json({ message: 'Không tìm thấy lớp học' });
         }
 
         // Lấy danh sách học sinh trong lớp
-        const students = await Student.find({ classroomId, status: 'enrolled', ...tenantFilter });
+        const students = await Student.find({ classroomId, status: 'enrolled', ...tenantFilter }).select('fullName').lean();
 
         const workDate = resolveWorkDate(date);
         if (!workDate) {
@@ -152,7 +157,7 @@ const getClassReport = async (req, res) => {
             classroomId,
             attendDate: { $gte: targetDate, $lt: nextDate },
             ...tenantFilter
-        });
+        }).select('studentId status checkInTime note').lean();
 
         // Tạo báo cáo
         const report = {
@@ -197,7 +202,9 @@ const getFinanceReport = async (req, res) => {
 
         const tenantFilter = buildTenantFilter(req);
         // Tất cả hóa đơn trong kỳ
-        const invoices = await TuitionFee.find({ period, status: { $ne: 'cancelled' }, ...tenantFilter });
+        const invoices = await TuitionFee.find({ period, status: { $ne: 'cancelled' }, ...tenantFilter })
+            .select('totalAmount paidAmount status')
+            .lean();
 
         const totalInvoices = invoices.length;
         const totalAmount = invoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
@@ -287,7 +294,8 @@ const getReports = async (req, res) => {
 
         const reports = await Report.find(filter)
             .sort({ generatedAt: -1 })
-            .limit(parseInt(limit));
+            .limit(Math.min(100, Math.max(1, parseInt(limit, 10) || 20)))
+            .lean();
 
         res.json({
             message: 'Lấy danh sách báo cáo thành công',
@@ -309,7 +317,7 @@ const getReportById = async (req, res) => {
             return res.status(400).json({ message: 'ID báo cáo không hợp lệ' });
         }
         const tenantFilter = buildTenantFilter(req);
-        const report = await Report.findOne({ _id: id, ...tenantFilter });
+        const report = await Report.findOne({ _id: id, ...tenantFilter }).lean();
         if (!report) {
             return res.status(404).json({ message: 'Không tìm thấy báo cáo' });
         }

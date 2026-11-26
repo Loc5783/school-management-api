@@ -108,7 +108,9 @@ const reviewRefundRequest = async (req, res) => {
             }
             const request = await TuitionRefundRequest.findOne({ _id: id, ...tenantFilter }).session(session);
             if (!request) fail('Không tìm thấy yêu cầu', 404);
-            if (String(request.requestedBy) === String(reviewer._id)) fail('Người lập yêu cầu không được tự duyệt', 403);
+            if (reviewer.role !== 'admin' && String(request.requestedBy) === String(reviewer._id)) {
+                fail('Người lập yêu cầu không được tự duyệt', 403);
+            }
             if (request.status !== 'pending') fail('Yêu cầu đã được xử lý. Hãy tải lại.', 409);
             if (decision === 'approved') {
                 const invoice = await TuitionFee.findOne({ _id: request.invoiceId, ...tenantFilter }).session(session).select('paidAmount status');

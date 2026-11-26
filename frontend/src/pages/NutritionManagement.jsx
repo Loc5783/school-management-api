@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
 import MealServingOperations from '../components/MealServingOperations';
-import api from '../api/axiosConfig';
 import './NutritionManagement.css';
 import {
   getWeeklyMenus,

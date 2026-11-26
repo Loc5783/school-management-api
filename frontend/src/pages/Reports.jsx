@@ -20,7 +20,9 @@ const attendanceStatus = (status) => ({
 }[status] || ['Chưa điểm danh', 'neutral']);
 
 export default function Reports() {
-  const [activeTab, setActiveTab] = useState('overview');
+  const currentRole = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const isAccountant = currentRole === 'accountant';
+  const [activeTab, setActiveTab] = useState(isAccountant ? 'finance' : 'overview');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(null);
   const [dashboardData, setDashboardData] = useState(null);
@@ -106,11 +108,13 @@ export default function Reports() {
 
   const summary = dashboardData?.summary || {};
   const attendanceItems = dashboardData?.recentAttendance || [];
-  const attendanceRate = classReportData?.totalStudents ? Math.round(((classReportData.present || 0) / classReportData.totalStudents) * 100) : 0;
+  const attendanceRate = classReportData?.totalStudents
+    ? Math.round((((classReportData.present || 0) + (classReportData.late || 0)) / classReportData.totalStudents) * 100)
+    : 0;
   const collectionRate = financeData?.totalAmount ? Math.round((financeData.totalPaid / financeData.totalAmount) * 100) : 0;
 
   const tabs = [
-    ['overview', 'Tổng quan vận hành', 'grid'],
+    ...(!isAccountant ? [['overview', 'Tổng quan vận hành', 'grid']] : []),
     ['attendance', 'Chuyên cần theo lớp', 'attendance'],
     ['finance', 'Thu chi & học phí', 'money'],
     ['saved', 'Kho báo cáo', 'classes']

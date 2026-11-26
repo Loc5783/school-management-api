@@ -201,6 +201,9 @@ const createAttendance = async (req, res) => {
             return res.status(409).json({ message: 'Học sinh đã có bản ghi điểm danh hôm nay', data: existing });
         }
 
+        const resolvedStatus = status || 'present';
+        const resolvedCheckInTime = checkInTime || (['present', 'late'].includes(resolvedStatus) ? new Date() : null);
+
         // Tạo bản ghi điểm danh
         const attendance = new StudentAttendance({
             tenantId: tenantContext.tenantId || null,
@@ -210,8 +213,8 @@ const createAttendance = async (req, res) => {
             className: classroom.name,
             attendDate: start,
             attendanceDateKey: workDate,
-            status: status || 'present',
-            checkInTime,
+            status: resolvedStatus,
+            checkInTime: resolvedCheckInTime,
             attendanceMethod: 'manual',
             checkOutTime,
             pickerName,
@@ -302,10 +305,13 @@ const createBulkAttendance = async (req, res) => {
         }).select('studentId');
         const existingStudentIds = new Set(existingRecords.map((record) => record.studentId.toString()));
         const studentsById = new Map(students.map((student) => [student._id.toString(), student]));
+        const savedAt = new Date();
         const attendanceRecords = records
             .filter((record) => !existingStudentIds.has(record.studentId.toString()))
             .map((record) => {
                 const student = studentsById.get(record.studentId.toString());
+                const rowStatus = record.status || 'present';
+                const rowCheckInTime = record.checkInTime || (['present', 'late'].includes(rowStatus) ? savedAt : null);
                 return {
                     tenantId: tenantContext.tenantId || null,
                     studentId: student._id,
@@ -314,8 +320,8 @@ const createBulkAttendance = async (req, res) => {
                     className: classroom.name,
                     attendDate: workDateStart,
                     attendanceDateKey: workDate,
-                    status: record.status || 'present',
-                    checkInTime: record.checkInTime,
+                    status: rowStatus,
+                    checkInTime: rowCheckInTime,
                     note: record.note,
                     recordedBy: req.user._id,
                     recordedByName: req.user.profile?.fullName || req.user.username
@@ -493,6 +499,15 @@ const updateAttendance = async (req, res) => {
 
         if (Object.keys(updates).length === 0) {
             return res.status(400).json({ message: 'Không có trường điểm danh hợp lệ để cập nhật' });
+        }
+
+        // Ghi giờ đến tự động khi cô chuyển trạng thái sang có mặt / đi muộn mà chưa có checkInTime
+        if (updates.status && !Object.hasOwn(req.body, 'checkInTime')) {
+            if (['present', 'late'].includes(updates.status) && !record.checkInTime) {
+                updates.checkInTime = new Date();
+            } else if (['absent', 'absent_permission'].includes(updates.status)) {
+                updates.checkInTime = null;
+            }
         }
 
         const updatedRecord = await StudentAttendance.findOneAndUpdate(

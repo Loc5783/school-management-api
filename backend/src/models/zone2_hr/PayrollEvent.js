@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const { sanitizeAuditValue, safeReason, stampActor } = require('../../services/hrAuditSafety');
 
 const PayrollEventSchema = new mongoose.Schema({
+  tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', default: null },
   payrollId: { type: mongoose.Schema.Types.ObjectId, ref: 'Payroll', required: true },
   actorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   actorName: { type: String, required: true, trim: true },
@@ -12,6 +13,7 @@ const PayrollEventSchema = new mongoose.Schema({
   reason: { type: String, trim: true, maxlength: 1000, default: '' }
 }, { timestamps: true });
 
+PayrollEventSchema.index({ tenantId: 1, createdAt: -1 });
 PayrollEventSchema.index({ payrollId: 1, createdAt: -1 });
 PayrollEventSchema.pre('validate', async function () {
   await stampActor(this, this.actorId);

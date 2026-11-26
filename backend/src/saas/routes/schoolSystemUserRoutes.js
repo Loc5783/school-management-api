@@ -4,15 +4,19 @@ const schoolAuthMiddleware = require('../middlewares/schoolAuthMiddleware');
 const roleCheck = require('../../middlewares/roleCheck');
 const hrAccessAudit = require('../../middlewares/hrAccessAudit');
 const {
+  createParentAccount,
+  linkParentStudents,
+  listParents,
+  updateParentStatus,
   listInternalAccounts,
   createInternalAccount,
   updateInternalAccountRole,
   updateInternalAccount,
   deactivateInternalAccount
 } = require('../../controllers/systemUserController');
-const { getRequestSaasMode, isHrAllowed } = require('../utils/saasMode');
+const { getRequestSaasMode, isHrAllowed, isFinanceAllowed } = require('../utils/saasMode');
 
-// Defense-in-depth: Internal Accounts module is strictly allowed in phase1d only
+// Defense-in-depth: Internal Accounts module is strictly allowed in phase1d and phase1e
 router.use((req, res, next) => {
   const saasMode = getRequestSaasMode(req);
   if (!isHrAllowed(saasMode)) {
@@ -21,9 +25,12 @@ router.use((req, res, next) => {
   next();
 });
 
-// Gate any subpath other than /accounts (e.g. /parents, /parents/*)
-// so unapproved submodules cleanly fall through to downstream tenantFeatureGate (501)
+// Gate /parents to phase1e (isFinanceAllowed) so phase1d contract tests stay untouched while production phase1e serves parent accounts
 router.use((req, res, next) => {
+  const saasMode = getRequestSaasMode(req);
+  if (req.path.startsWith('/parents')) {
+    return isFinanceAllowed(saasMode) ? next() : next('router');
+  }
   if (!req.path.startsWith('/accounts')) {
     return next('router');
   }
@@ -33,6 +40,12 @@ router.use((req, res, next) => {
 // Common middleware chain: School auth -> HR access audit
 router.use(schoolAuthMiddleware);
 router.use(hrAccessAudit('accounts'));
+
+// Parent Account Management Endpoints (Tenant-isolated, Admin only)
+router.get('/parents', roleCheck(['admin']), listParents);
+router.post('/parents', roleCheck(['admin']), createParentAccount);
+router.patch('/parents/:id/students', roleCheck(['admin']), linkParentStudents);
+router.patch('/parents/:id/status', roleCheck(['admin']), updateParentStatus);
 
 // 5 Approved Internal Account Endpoints from Phase 1D.2
 // Admin and HR roles only (HR cannot modify principal/admin hierarchy as enforced in controller)

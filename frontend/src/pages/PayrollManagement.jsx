@@ -1,9 +1,8 @@
 /* eslint-disable react-hooks/set-state-in-effect */
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
-import StaffPersonalRequests from '../components/StaffPersonalRequests';
 import {
   generatePayroll,
   getPayroll,
@@ -39,7 +38,7 @@ const payrollRoleText = {
 export default function PayrollManagement() {
   const [searchParams, setSearchParams] = useSearchParams();
   const initialTab = searchParams.get('tab') || 'sheets';
-  const [tab, setTab] = useState(['sheets', 'adjustments', 'approvals', 'payment', 'requests'].includes(initialTab) ? initialTab : 'sheets');
+  const [tab, setTab] = useState(['sheets', 'adjustments', 'approvals', 'payment'].includes(initialTab) ? initialTab : 'sheets');
 
   const [payrolls, setPayrolls] = useState([]);
   const [payrollSummary, setPayrollSummary] = useState({ totalEmployees: 0, totalNet: 0, byRole: [] });
@@ -65,13 +64,15 @@ export default function PayrollManagement() {
   const canReview = ['admin', 'accountant'].includes(role);
   const canOperateHr = ['admin', 'hr'].includes(role);
 
-  const allowedTabs = role === 'hr'
-    ? ['sheets', 'requests']
-    : role === 'accountant'
-      ? ['sheets', 'adjustments', 'approvals', 'payment', 'requests']
-      : role === 'principal'
-        ? ['sheets', 'approvals', 'requests']
-        : ['sheets', 'adjustments', 'approvals', 'payment', 'requests'];
+  const allowedTabs = useMemo(() => (
+    role === 'hr'
+      ? ['sheets']
+      : role === 'accountant'
+        ? ['sheets', 'adjustments', 'approvals', 'payment']
+        : role === 'principal'
+          ? ['sheets', 'approvals']
+          : ['sheets', 'adjustments', 'approvals', 'payment']
+  ), [role]);
 
   useEffect(() => {
     if (!allowedTabs.includes(tab)) {
@@ -123,9 +124,15 @@ export default function PayrollManagement() {
     setSuccessNotice('');
     setErrorMessage('');
     try {
-      await generatePayroll(period);
+      const res = await generatePayroll(period);
       await loadPayroll();
-      setSuccessNotice(`Đã tổng hợp bảng lương tháng ${period.month}/${period.year}.`);
+      const generatedCount = res.data?.data?.results?.length || 0;
+      const serverMsg = res.data?.message || `Đã tổng hợp bảng lương tháng ${period.month}/${period.year}.`;
+      if (generatedCount === 0) {
+        setErrorMessage(serverMsg);
+      } else {
+        setSuccessNotice(serverMsg);
+      }
     } catch (err) {
       setErrorMessage(err.response?.data?.message || err.message || 'Không thể tổng hợp bảng lương.');
     }
@@ -275,9 +282,6 @@ export default function PayrollManagement() {
                 <Icon name="card" size={16} /> Trạng thái chi trả
               </button>
             )}
-            <button className={tab === 'requests' ? 'active' : ''} onClick={() => changeTab('requests')}>
-              <Icon name="chat" size={16} /> Phản hồi phiếu lương
-            </button>
           </div>
         </section>
 
@@ -457,9 +461,6 @@ export default function PayrollManagement() {
             )}
           </section>
         )}
-
-        {/* Tab Content: Requests */}
-        {tab === 'requests' && <StaffPersonalRequests mode="manage" />}
 
         {/* Modal: Adjustments */}
         {adjustingPayroll && (

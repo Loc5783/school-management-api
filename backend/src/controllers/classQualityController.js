@@ -32,7 +32,7 @@ const getClassQualityReport = async (req, res) => {
     }
 
     const classrooms = await Classroom.find(classFilter)
-      .select('name schoolYear homeroomTeacherId teachers maxCapacity requiredTeachers')
+      .select('name schoolYear homeroomTeacherId teachers maxSize maxCapacity requiredTeachers')
       .lean();
 
     if (!classrooms.length) {
@@ -48,9 +48,9 @@ const getClassQualityReport = async (req, res) => {
 
     const classIds = classrooms.map((c) => c._id);
 
-    // Lấy tất cả học sinh đang học trong các lớp này
-    const students = await Student.find({ classroomId: { $in: classIds }, status: 'active', ...tenantFilter })
-      .select('fullName classroomId gender dateOfBirth allergies')
+    // Lấy tất cả học sinh đang theo học (`enrolled`) trong các lớp này (sửa lỗi lọc nhầm `status: 'active'`)
+    const students = await Student.find({ classroomId: { $in: classIds }, status: 'enrolled', ...tenantFilter })
+      .select('fullName classroomId gender birthDate allergies')
       .lean();
 
     const studentsByClass = new Map();

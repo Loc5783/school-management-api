@@ -3,7 +3,6 @@ import Icon from './Icon';
 import {
   listTimekeepingDevices,
   createTimekeepingDevice,
-  updateTimekeepingDevice,
   testTimekeepingDeviceConnection,
   syncTimekeepingDevice,
   listPersonMappings,
@@ -79,7 +78,7 @@ export default function TimekeepingDeviceManagement() {
       try {
         const stuRes = await api.get('/students');
         setStudents(stuRes.data.data || []);
-      } catch (_) {
+      } catch {
         setStudents([]);
       }
     } catch (err) {
@@ -91,7 +90,8 @@ export default function TimekeepingDeviceManagement() {
   }, []);
 
   useEffect(() => {
-    loadData();
+    const timer = window.setTimeout(() => { void loadData(); }, 0);
+    return () => window.clearTimeout(timer);
   }, [loadData]);
 
   const handleTestConnection = async (device) => {
@@ -154,7 +154,7 @@ export default function TimekeepingDeviceManagement() {
         subjectId: employees[0]?.userId || '',
         displayName: ''
       });
-    } catch (err) {
+    } catch {
       setNotice('Lỗi tải danh sách ánh xạ người');
       setNoticeType('error');
     } finally {
@@ -205,7 +205,7 @@ export default function TimekeepingDeviceManagement() {
     try {
       const res = await getTimekeepingDeviceSyncLogs(device._id);
       setSyncLogs(res.data.data || []);
-    } catch (err) {
+    } catch {
       setNotice('Lỗi tải nhật ký đồng bộ');
       setNoticeType('error');
     } finally {
@@ -220,7 +220,7 @@ export default function TimekeepingDeviceManagement() {
     try {
       const res = await getUnmappedDeviceEvents(device.deviceCode);
       setUnmappedEvents(res.data.data || []);
-    } catch (err) {
+    } catch {
       setNotice('Lỗi tải sự kiện chưa ánh xạ');
       setNoticeType('error');
     } finally {

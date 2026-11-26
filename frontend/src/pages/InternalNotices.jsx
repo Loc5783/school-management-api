@@ -1,6 +1,6 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 import { useCallback, useEffect, useState, useRef } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import AppShell from '../components/AppShell';
 import { getMyInternalAnnouncements, getMyTimesheets, respondMonthlyTimesheet } from '../api/hr';
 import api from '../api/axiosConfig';
@@ -270,8 +270,7 @@ export default function InternalNotices() {
 
         {tab === 'timesheets' && (
           <div className="staff-request-quick-link">
-            <p>Phản hồi sai lệch sẽ được chuyển trực tiếp tới phòng Nhân sự để đối soát. Bạn có thể theo dõi diễn biến tại mục Yêu cầu của tôi.</p>
-            <Link className="button button-secondary" to="/my-requests">Theo dõi yêu cầu</Link>
+            <p>Phản hồi sai lệch sẽ được chuyển trực tiếp tới phòng Nhân sự và Ban giám hiệu để kiểm tra, đối soát lại ngày công.</p>
           </div>
         )}
       </section>

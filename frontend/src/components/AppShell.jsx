@@ -30,10 +30,7 @@ const allNavItems = [
   { to: '/reports', label: 'Báo cáo', icon: 'chart', roles: ['admin', 'principal', 'accountant'] },
   { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar', roles: ['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard'] },
   { to: '/my-staffing', label: 'Lịch phân công của tôi', icon: 'calendar', roles: ['teacher', 'chef', 'guard'] },
-  { to: '/my-handovers', label: 'Việc bàn giao của tôi', icon: 'users', roles: ['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard'] },
-  { to: '/my-requests', label: 'Yêu cầu của tôi', icon: 'card', roles: ['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard'] },
   { to: '/my-payroll', label: 'Lương của tôi', icon: 'money', roles: ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'] },
-  { to: '/professional-reviews', label: 'Đánh giá chuyên môn', icon: 'users', roles: ['teacher', 'principal', 'admin'], positions: ['head_teacher', 'principal', 'vice_principal'] },
   { to: '/student-profile-change-requests', label: 'Duyệt cập nhật hồ sơ', icon: 'card', roles: ['principal'] },
   { to: '/parent-feedback', label: 'Phản hồi phụ huynh', icon: 'chat', roles: ['principal'] },
   { to: '/parent-dashboard', label: 'Tổng quan', icon: 'grid', roles: ['parent'] },
@@ -87,7 +84,6 @@ const principalNavSections = [
       { to: '/attendance/reports', label: 'Báo cáo chuyên cần', icon: 'attendance' },
       { to: '/reports', label: 'Báo cáo nhà trường', icon: 'chart' },
       { to: '/accounting/report', label: 'Báo cáo kế toán', icon: 'chart' },
-      { to: '/professional-reviews', label: 'Đánh giá chuyên môn', icon: 'users' },
     ],
   },
   {
@@ -103,7 +99,6 @@ const principalNavSections = [
     label: 'CÁ NHÂN',
     icon: 'users',
     items: [
-      { to: '/my-requests', label: 'Yêu cầu của tôi', icon: 'card' },
       { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
     ],
   },
@@ -146,9 +141,7 @@ const teacherNavSections = [
     icon: 'calendar',
     items: [
       { to: '/my-staffing', label: 'Lịch phân công của tôi', icon: 'calendar' },
-      { to: '/my-handovers', label: 'Việc bàn giao của tôi', icon: 'users' },
       { to: '/assets', label: 'Đề xuất mua sắm', icon: 'settings' },
-      { to: '/professional-reviews', label: 'Đánh giá chuyên môn', icon: 'users', positions: ['head_teacher'] },
     ],
   },
   {
@@ -157,7 +150,6 @@ const teacherNavSections = [
     icon: 'users',
     items: [
       { to: '/my-leave-requests', label: 'Nghỉ phép cá nhân', icon: 'calendar' },
-      { to: '/my-requests', label: 'Yêu cầu của tôi', icon: 'card' },
       { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
     ],
   },
@@ -220,8 +212,6 @@ const accountantNavSections = [
     icon: 'users',
     items: [
       { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar' },
-      { to: '/my-handovers', label: 'Việc bàn giao của tôi', icon: 'users' },
-      { to: '/my-requests', label: 'Yêu cầu của tôi', icon: 'card' },
       { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
     ],
   },
@@ -248,7 +238,6 @@ const guardNavSections = [
       { to: '/guard?tab=visitors', label: 'Khách ra/vào', icon: 'users' },
       { to: '/guard?tab=incidents', label: 'Sự cố an ninh', icon: 'alertCircle' },
       { to: '/guard?tab=emergency', label: 'Xử lý khẩn cấp', icon: 'shield' },
-      { to: '/guard?tab=devices', label: 'Thiết bị cổng', icon: 'settings' },
     ],
   },
   {
@@ -266,7 +255,6 @@ const guardNavSections = [
     icon: 'users',
     items: [
       { to: '/my-leave-requests', label: 'Nghỉ phép cá nhân', icon: 'calendar' },
-      { to: '/my-requests', label: 'Yêu cầu của tôi', icon: 'card' },
       { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
     ],
   },

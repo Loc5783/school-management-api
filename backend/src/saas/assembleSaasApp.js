@@ -3,6 +3,7 @@
 const express = require('express');
 const cors = require('cors');
 const { attachFrontendStatic, isSameHostOrigin } = require('../utils/staticFrontendMiddleware');
+const { applySecurityMiddleware, globalErrorHandler } = require('../middlewares/securityAndErrorMiddleware');
 const { tenantFeatureGate } = require('./middlewares/tenantFeatureGate');
 const schoolAuthRoutes = require('./routes/schoolAuthRoutes');
 const platformAuthRoutes = require('./routes/platformAuthRoutes');
@@ -43,6 +44,8 @@ const {
 
 const assembleSaasApp = (options = {}) => {
   const app = express();
+
+  applySecurityMiddleware(app);
 
   // Tin cậy Reverse Proxy (Nginx trong Docker) khi biến TRUST_PROXY được cấu hình để express-rate-limit v8 không báo lỗi X-Forwarded-For
   if (process.env.TRUST_PROXY) {
@@ -195,6 +198,9 @@ const assembleSaasApp = (options = {}) => {
 
   // Phục vụ trực tiếp giao diện Frontend Production (nếu đã có bản build dist) trên cùng máy chủ Backend
   attachFrontendStatic(app);
+
+  // Middleware xử lý lỗi tập trung: đảm bảo mọi lỗi đều trả JSON tiếng Việt an toàn, không lộ stack trace
+  app.use(globalErrorHandler);
 
   return app;
 };

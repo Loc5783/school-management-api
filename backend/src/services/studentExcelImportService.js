@@ -13,6 +13,11 @@ const EXCEL_COLUMNS = [
   { header: 'Họ và tên (*)', key: 'fullName', width: 26, required: true },
   { header: 'Ngày sinh (*)', key: 'birthDate', width: 16, required: true },
   { header: 'Giới tính (*)', key: 'gender', width: 14, required: true },
+  { header: 'Ngày nhập học', key: 'admissionDate', width: 16, required: false },
+  { header: 'Dị ứng thực phẩm', key: 'allergiesText', width: 24, required: false },
+  { header: 'Bệnh lý / Sức khỏe', key: 'diseaseText', width: 24, required: false },
+  { header: 'Họ tên phụ huynh', key: 'contactName', width: 24, required: false },
+  { header: 'SĐT liên hệ', key: 'contactPhone', width: 16, required: false },
   { header: 'Địa chỉ', key: 'address', width: 32, required: false },
   { header: 'Quốc tịch', key: 'nationality', width: 18, required: false },
   { header: 'Dân tộc', key: 'ethnicity', width: 16, required: false },
@@ -262,13 +267,18 @@ const extractCellStaticString = (cell, colLabel = '') => {
  * Tính toán mã băm fingerprint chuẩn (SHA-256) trên toàn bộ danh sách học sinh
  * Chuẩn hóa thành cấu trúc JSON xác định (canonical JSON) để loại bỏ hoàn toàn nguy cơ va chạm ký tự phân cách.
  */
-const computeBatchFingerprint = (classroomId, rows) => {
+  const computeBatchFingerprint = (classroomId, rows) => {
   const canonicalData = {
     classroomId: String(classroomId || ''),
     students: (rows || []).map(r => ({
       fullName: String(r.fullName || '').replace(/\s+/g, ' ').trim().toLowerCase(),
       birthDate: String(r.birthDateStr || r.birthDate || '').trim(),
       gender: String(r.gender || '').trim().toLowerCase(),
+      admissionDate: String(r.admissionDate || '').trim(),
+      allergiesText: String(r.allergiesText || '').trim().toLowerCase(),
+      diseaseText: String(r.diseaseText || '').trim().toLowerCase(),
+      contactName: String(r.contactName || '').trim(),
+      contactPhone: String(r.contactPhone || '').trim(),
       address: String(r.address || '').trim(),
       nationality: String(r.nationality || '').trim(),
       ethnicity: String(r.ethnicity || '').trim(),
@@ -293,6 +303,10 @@ const validateStudentRowStrict = (item, rowNumber, now = new Date(), is1904 = fa
   const ethnicity = item.ethnicity != null ? String(item.ethnicity).trim() : (item.rawEthnicity != null ? String(item.rawEthnicity).trim() : '');
   const birthPlace = item.birthPlace != null ? String(item.birthPlace).trim() : (item.rawBirthPlace != null ? String(item.rawBirthPlace).trim() : '');
   const notes = item.notes != null ? String(item.notes).trim() : (item.rawNotes != null ? String(item.rawNotes).trim() : '');
+  const allergiesText = item.allergiesText != null ? String(item.allergiesText).trim() : (item.rawAllergiesText != null ? String(item.rawAllergiesText).trim() : '');
+  const diseaseText = item.diseaseText != null ? String(item.diseaseText).trim() : (item.rawDiseaseText != null ? String(item.rawDiseaseText).trim() : '');
+  const contactName = item.contactName != null ? String(item.contactName).trim() : (item.rawContactName != null ? String(item.rawContactName).trim() : '');
+  const contactPhone = item.contactPhone != null ? String(item.contactPhone).replace(/[.\s-]/g, '').trim() : (item.rawContactPhone != null ? String(item.rawContactPhone).replace(/[.\s-]/g, '').trim() : '');
 
   // 1. Họ và tên
   if (!fullName) {
@@ -342,14 +356,56 @@ const validateStudentRowStrict = (item, rowNumber, now = new Date(), is1904 = fa
     errors.push(`Ghi chú vượt quá độ dài tối đa 2000 ký tự (hiện tại: ${notes.length} ký tự)`);
   }
 
+  // 5. Ngày nhập học tùy chọn (nếu để trống sẽ lấy ngày nhập file)
+  let admissionDateFormatted = '';
+  let admissionDateObj = null;
+  const rawAdmission = item.admissionDate != null ? item.admissionDate : item.rawAdmissionDate;
+  if (rawAdmission != null && String(rawAdmission).trim() !== '') {
+    const admParsed = parseBirthDate(rawAdmission, is1904);
+    if (admParsed.error && !admParsed.error.includes('12 tuổi')) {
+      errors.push(admParsed.error.replace(/Ngày sinh/g, 'Ngày nhập học'));
+    } else if (admParsed.dateObj) {
+      admissionDateFormatted = admParsed.date;
+      admissionDateObj = admParsed.dateObj;
+      if (birthDateObj && admissionDateObj < birthDateObj) {
+        errors.push('Ngày nhập học không được trước ngày sinh');
+      }
+    }
+  }
+
+  // 6. Dị ứng, bệnh lý & người liên hệ tùy chọn
+  const allergies = allergiesText
+    ? allergiesText.split(/[,;]/).map((s) => s.trim()).filter(Boolean).map((allergen) => ({ allergen, severity: 'moderate', note: '' }))
+    : [];
+  const disease = diseaseText ? { name: diseaseText.slice(0, 200), description: diseaseText, medication: '', note: '' } : {};
+  if (contactPhone && !/^(0|\+84)\d{9,10}$/.test(contactPhone)) {
+    errors.push(`Số điện thoại liên hệ "${contactPhone}" không hợp lệ`);
+  }
+  const emergencyContact = (contactName || contactPhone)
+    ? { name: contactName || 'Phụ huynh', phone: contactPhone || '', relationship: 'Phụ huynh' }
+    : {};
+  const parents = (contactName && contactPhone)
+    ? [{ fullName: contactName, phone: contactPhone, relationship: 'guardian', isPrimary: true }]
+    : [];
+
   const parsedData = {
     rowNumber,
     fullName,
     birthDate: birthDateFormatted,
     birthDateStr: birthDateFormatted,
     birthDateObj,
+    admissionDate: admissionDateFormatted,
+    admissionDateObj,
     gender,
     genderText: gender === 'female' ? 'Nữ' : (gender === 'male' ? 'Nam' : rawGender),
+    allergiesText,
+    allergies,
+    diseaseText,
+    disease,
+    contactName,
+    contactPhone,
+    emergencyContact,
+    parents,
     address,
     nationality: nationality || 'Việt Nam',
     ethnicity,
@@ -549,6 +605,11 @@ const parseAndValidateExcelBuffer = async (buffer, classroomId, user) => {
     fullName: ['hoten', 'hovaten', 'fullname'],
     birthDate: ['ngaysinh', 'birthdate', 'dob'],
     gender: ['gioitinh', 'gender', 'sex'],
+    admissionDate: ['ngaynhaphoc', 'admissiondate', 'ngayvaohoc'],
+    allergiesText: ['diung', 'diungthucpham', 'allergies', 'allergy'],
+    diseaseText: ['benhly', 'benhlysuckhoe', 'suckhoe', 'disease'],
+    contactName: ['hotenphuhuynh', 'nguoilienhe', 'phuhuynh', 'parentname', 'contactname'],
+    contactPhone: ['sdtlienhe', 'sodienthoai', 'sdtphuhuynh', 'phone', 'contactphone'],
     address: ['diachi', 'address'],
     nationality: ['quoctich', 'nationality'],
     ethnicity: ['dantoc', 'ethnicity'],
@@ -651,8 +712,43 @@ const parseAndValidateExcelBuffer = async (buffer, classroomId, user) => {
       if (cellNotesObj.isFormula) rowErrors.push(cellNotesObj.error);
     }
 
+    let rawAdmissionDate = null;
+    if (columnMap.admissionDate) {
+      const cellAdmission = row.getCell(columnMap.admissionDate);
+      if (isFormulaCell(cellAdmission)) {
+        rowErrors.push('Ô cột "Ngày nhập học" chứa công thức Excel. Vui lòng chuyển thành giá trị tĩnh.');
+      }
+      rawAdmissionDate = cellAdmission.value;
+    }
+
+    let cellAllergiesObj = { text: '' };
+    if (columnMap.allergiesText) {
+      cellAllergiesObj = extractCellStaticString(row.getCell(columnMap.allergiesText), 'Dị ứng thực phẩm');
+      if (cellAllergiesObj.isFormula) rowErrors.push(cellAllergiesObj.error);
+    }
+
+    let cellDiseaseObj = { text: '' };
+    if (columnMap.diseaseText) {
+      cellDiseaseObj = extractCellStaticString(row.getCell(columnMap.diseaseText), 'Bệnh lý / Sức khỏe');
+      if (cellDiseaseObj.isFormula) rowErrors.push(cellDiseaseObj.error);
+    }
+
+    let cellContactNameObj = { text: '' };
+    if (columnMap.contactName) {
+      cellContactNameObj = extractCellStaticString(row.getCell(columnMap.contactName), 'Họ tên phụ huynh');
+      if (cellContactNameObj.isFormula) rowErrors.push(cellContactNameObj.error);
+    }
+
+    let cellContactPhoneObj = { text: '' };
+    if (columnMap.contactPhone) {
+      cellContactPhoneObj = extractCellStaticString(row.getCell(columnMap.contactPhone), 'SĐT liên hệ');
+      if (cellContactPhoneObj.isFormula) rowErrors.push(cellContactPhoneObj.error);
+    }
+
     // Bỏ qua dòng hoàn toàn trống
     const allEmpty = !cellFullNameObj.text && !rawBirthDate && !cellGenderObj.text &&
+      !rawAdmissionDate && !cellAllergiesObj.text && !cellDiseaseObj.text &&
+      !cellContactNameObj.text && !cellContactPhoneObj.text &&
       !cellAddressObj.text && !cellNationalityObj.text && !cellEthnicityObj.text &&
       !cellBirthPlaceObj.text && !cellNotesObj.text;
     if (allEmpty) return;
@@ -662,6 +758,11 @@ const parseAndValidateExcelBuffer = async (buffer, classroomId, user) => {
       rawFullName: cellFullNameObj.text,
       rawBirthDate,
       rawGender: cellGenderObj.text,
+      rawAdmissionDate,
+      rawAllergiesText: cellAllergiesObj.text,
+      rawDiseaseText: cellDiseaseObj.text,
+      rawContactName: cellContactNameObj.text,
+      rawContactPhone: cellContactPhoneObj.text,
       rawAddress: cellAddressObj.text,
       rawNationality: cellNationalityObj.text,
       rawEthnicity: cellEthnicityObj.text,
@@ -782,8 +883,13 @@ const parseAndValidateExcelBuffer = async (buffer, classroomId, user) => {
       fullName: r.fullName,
       birthDate: r.birthDate,
       birthDateFormatted: r.birthDate ? r.birthDate.split('-').reverse().join('/') : '',
+      admissionDate: r.admissionDate || '',
       gender: r.gender,
       genderText: r.genderText,
+      allergiesText: r.allergiesText || '',
+      diseaseText: r.diseaseText || '',
+      contactName: r.contactName || '',
+      contactPhone: r.contactPhone || '',
       address: r.address,
       nationality: r.nationality,
       ethnicity: r.ethnicity,

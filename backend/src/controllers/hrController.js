@@ -362,9 +362,10 @@ const getEmployees = async (req, res) => {
         const employees = await Employee.find(filter)
             .populate({ path: 'departmentId', match: tenantFilter, select: 'name code tenantId' })
             .populate({ path: 'userId', match: tenantFilter, select: 'username role status profile employeeInfo tenantId' })
-            .sort({ fullName: 1 });
+            .sort({ fullName: 1 })
+            .lean();
         const data = employees.map((employee) => {
-            const item = employee.toObject();
+            const item = { ...employee };
             if (!item.departmentId || String(item.departmentId.tenantId || '') !== String(employee.tenantId || '')) {
                 item.departmentId = null;
             }
@@ -388,9 +389,10 @@ const getEmployeeById = async (req, res) => {
         if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'ID nhân viên không hợp lệ' });
         const employee = await Employee.findOne({ _id: req.params.id, ...tenantFilter })
             .populate({ path: 'departmentId', match: tenantFilter, select: 'name code tenantId' })
-            .populate({ path: 'userId', match: tenantFilter, select: 'username role status profile employeeInfo tenantId' });
+            .populate({ path: 'userId', match: tenantFilter, select: 'username role status profile employeeInfo tenantId' })
+            .lean();
         if (!employee) return res.status(404).json({ message: 'Không tìm thấy nhân viên' });
-        const item = employee.toObject();
+        const item = { ...employee };
         if (!item.departmentId || String(item.departmentId.tenantId || '') !== String(employee.tenantId || '')) {
             item.departmentId = null;
         }
@@ -669,12 +671,12 @@ const getLeaveRequests = async (req, res) => {
             const page = Number(req.query.page || 1);
             if (!Number.isInteger(page) || page < 1 || !Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > 100) return res.status(422).json({ message: 'Phân trang không hợp lệ' });
             const [requests, total] = await Promise.all([
-                LeaveRequest.find(filter).sort({ createdAt: -1 }).skip((page - 1) * requestedLimit).limit(requestedLimit),
+                LeaveRequest.find(filter).sort({ createdAt: -1 }).skip((page - 1) * requestedLimit).limit(requestedLimit).lean(),
                 LeaveRequest.countDocuments(filter)
             ]);
             return res.json({ message: 'Lấy danh sách đơn nghỉ phép thành công', data: requests, pagination: { page, limit: requestedLimit, total, totalPages: Math.ceil(total / requestedLimit) } });
         }
-        const requests = await LeaveRequest.find(filter).sort({ createdAt: -1 });
+        const requests = await LeaveRequest.find(filter).sort({ createdAt: -1 }).lean();
         res.json({ message: 'Lấy danh sách đơn nghỉ phép thành công', data: requests });
     } catch (error) {
         const status = error.statusCode || (error.name === 'InvalidTenantContextError' ? 403 : 500);
@@ -798,79 +800,134 @@ const generateMonthlyPayroll = async (req, res) => {
 
         // A linked employee whose salary is not configured is a valid HR profile,
         // but must not create a zero-value payroll record by accident.
-        const employees = await Employee.find({ status: { $in: ['active', 'on_leave'] }, userId: { $ne: null }, ...tenantFilter })
-            .populate('userId', 'role');
-        if (employees.length === 0) return res.status(400).json({ message: 'Không có nhân viên đang hoạt động' });
+        const [employees, unlinkedCount] = await Promise.all([
+            Employee.find({ status: { $in: ['active', 'on_leave'] }, userId: { $ne: null }, ...tenantFilter })
+                .populate('userId', 'role')
+                .lean(),
+            Employee.countDocuments({ status: { $in: ['active', 'on_leave'] }, userId: null, ...tenantFilter })
+        ]);
+        if (employees.length === 0) {
+            return res.status(400).json({
+                message: unlinkedCount > 0
+                    ? `Chưa có nhân viên nào được liên kết tài khoản để tính lương (${unlinkedCount} hồ sơ nhân sự chưa gắn tài khoản đăng nhập).`
+                    : 'Không có nhân viên đang hoạt động để tính lương.'
+            });
+        }
 
-        // Get approved leaves for this month
-        const periodPrefix = `${year}-${String(month).padStart(2, '0')}-`;
+        // Bước 1: Xác định biên thời gian tháng lương
+        const numericMonth = Number(month);
+        const numericYear = Number(year);
+        const periodPrefix = `${numericYear}-${String(numericMonth).padStart(2, '0')}-`;
         const monthStart = startOfWorkDate(`${periodPrefix}01`);
-        const nextMonthLabel = new Date(Date.UTC(Number(year), Number(month), 1)).toISOString().slice(0, 10);
+        const nextMonthLabel = new Date(Date.UTC(numericYear, numericMonth, 1)).toISOString().slice(0, 10);
         const monthEndExclusive = startOfWorkDate(nextMonthLabel);
+
+        // Bước 2: Tải lô (Batch Pre-fetch) toàn bộ bảng lương cũ, chấm công, nghỉ phép và tăng ca của kỳ này (khử triệt để lỗi N+1)
+        const employeeIds = employees.map((emp) => emp._id);
+        const userIds = employees.map((emp) => emp.userId?._id || emp.userId).filter(Boolean);
+
+        const [
+            existingPayrolls,
+            allAttendanceRecords,
+            allApprovedLeaves,
+            allApprovedOvertime,
+            allOvertimeRates
+        ] = await Promise.all([
+            Payroll.find({ employeeId: { $in: employeeIds }, month: numericMonth, year: numericYear, ...tenantFilter }).lean(),
+            AttendanceRecord.find({
+                userId: { $in: userIds },
+                workDate: { $gte: monthStart, $lt: monthEndExclusive },
+                finalized: true,
+                status: 'present',
+                checkInTime: { $ne: null },
+                checkOutTime: { $ne: null },
+                ...tenantFilter
+            }).lean(),
+            LeaveRequest.find({
+                employeeId: { $in: employeeIds },
+                status: 'approved',
+                leaveType: { $in: ['annual', 'sick', 'maternity', 'personal', 'unpaid'] },
+                startDate: { $lt: monthEndExclusive },
+                endDate: { $gte: monthStart },
+                ...tenantFilter
+            }).lean(),
+            OvertimeRequest.find({
+                employeeId: { $in: employeeIds },
+                status: 'approved',
+                workDate: { $regex: `^${periodPrefix}` },
+                ...tenantFilter
+            }).lean(),
+            OvertimeRate.find({
+                employeeId: { $in: employeeIds },
+                month: numericMonth,
+                year: numericYear,
+                ...tenantFilter
+            }).lean()
+        ]);
+
+        const payrollByEmpId = new Map(existingPayrolls.map((p) => [String(p.employeeId), p]));
+        const attendanceByUserId = new Map();
+        for (const rec of allAttendanceRecords) {
+            const key = String(rec.userId);
+            if (!attendanceByUserId.has(key)) attendanceByUserId.set(key, []);
+            attendanceByUserId.get(key).push(rec);
+        }
+        const leavesByEmpId = new Map();
+        for (const lr of allApprovedLeaves) {
+            const key = String(lr.employeeId);
+            if (!leavesByEmpId.has(key)) leavesByEmpId.set(key, []);
+            leavesByEmpId.get(key).push(lr);
+        }
+        const overtimeByEmpId = new Map();
+        for (const ot of allApprovedOvertime) {
+            const key = String(ot.employeeId);
+            if (!overtimeByEmpId.has(key)) overtimeByEmpId.set(key, []);
+            overtimeByEmpId.get(key).push(ot);
+        }
+        const overtimeRateByEmpId = new Map(allOvertimeRates.map((r) => [String(r.employeeId), r]));
 
         const results = [];
         const errors = [];
 
+        // Bước 3: Tính lương cho từng nhân sự từ dữ liệu đã gom sẵn trong bộ nhớ
         for (const employee of employees) {
             try {
                 if (!Number.isSafeInteger(Number(employee.salaryConfig?.baseSalary)) || Number(employee.salaryConfig?.baseSalary) <= 0) throw new Error('Chưa thiết lập lương cơ bản theo tháng trong hồ sơ nhân sự');
                 if (isUnverifiedLowMonthlySalary(employee.salaryConfig)) throw new Error(`Lương ${employee.salaryConfig.baseSalary.toLocaleString('vi-VN')}đ/tháng dễ nhầm với tiền một công. HR cần mở hồ sơ, chọn đúng đơn vị và xác nhận trước khi lập lương.`);
-                // Accounting-reviewed payroll cannot be silently recalculated by HR.
-                const existing = await Payroll.findOne({ employeeId: employee._id, month, year, ...tenantFilter });
+
+                const empIdStr = String(employee._id);
+                const userIdStr = String(employee.userId?._id || employee.userId);
+                const existing = payrollByEmpId.get(empIdStr) || null;
                 if (existing && existing.status !== 'draft') {
                     errors.push({ employee: employee.fullName, reason: 'Bảng lương đã được kế toán đối soát, xác nhận hoặc chi trả' });
                     continue;
                 }
 
-                // Count actual work days from AttendanceRecord
-                const attendanceRecords = await AttendanceRecord.find({
-                    userId: employee.userId,
-                    workDate: { $gte: monthStart, $lt: monthEndExclusive },
-                    finalized: true,
-                    status: 'present',
-                    checkInTime: { $ne: null },
-                    checkOutTime: { $ne: null },
-                    ...tenantFilter
-                });
+                const attendanceRecords = attendanceByUserId.get(userIdStr) || [];
                 const attendedDates = new Set(attendanceRecords.map((rec) => getWorkDate(rec.workDate)));
                 const actualWorkDays = attendanceRecords.reduce((sum, rec) => sum + (rec.workday ?? 1), 0);
 
-                // Count approved paid leave days
-                const approvedLeaves = await LeaveRequest.find({
-                    employeeId: employee._id,
-                    status: 'approved',
-                    leaveType: { $in: ['annual', 'sick', 'maternity'] },
-                    startDate: { $lt: monthEndExclusive },
-                    endDate: { $gte: monthStart }
-                });
-                const paidLeaveDates = new Set(approvedLeaves.flatMap((lr) => leaveDatesInYear(lr, Number(year)).filter((date) => date.startsWith(periodPrefix))));
+                const empLeaves = leavesByEmpId.get(empIdStr) || [];
+                const approvedPaidLeaves = empLeaves.filter((lr) => ['annual', 'sick', 'maternity'].includes(lr.leaveType));
+                const paidLeaveDates = new Set(approvedPaidLeaves.flatMap((lr) => leaveDatesInYear(lr, numericYear).filter((date) => date.startsWith(periodPrefix))));
                 const paidLeaveDays = [...paidLeaveDates].filter((date) => !attendedDates.has(date)).length;
 
-                // Count unpaid leave
-                const unpaidLeaves = await LeaveRequest.find({
-                    employeeId: employee._id,
-                    status: 'approved',
-                    leaveType: { $in: ['personal', 'unpaid'] },
-                    startDate: { $lt: monthEndExclusive },
-                    endDate: { $gte: monthStart }
-                });
-                const unpaidLeaveDates = new Set(unpaidLeaves.flatMap((lr) => leaveDatesInYear(lr, Number(year)).filter((date) => date.startsWith(periodPrefix))));
+                const unpaidLeaves = empLeaves.filter((lr) => ['personal', 'unpaid'].includes(lr.leaveType));
+                const unpaidLeaveDates = new Set(unpaidLeaves.flatMap((lr) => leaveDatesInYear(lr, numericYear).filter((date) => date.startsWith(periodPrefix))));
                 const unpaidLeaveDays = [...unpaidLeaveDates].filter((date) => !attendedDates.has(date) && !paidLeaveDates.has(date)).length;
 
-                const { baseSalary, positionAllowance, lunchAllowance } = employee.salaryConfig;
+                const { baseSalary, positionAllowance = 0, lunchAllowance = 0 } = employee.salaryConfig;
                 const standardWorkDays = employee.salaryConfig.standardWorkDays || 26;
 
-                const approvedOvertime = await OvertimeRequest.find({ employeeId: employee._id, status: 'approved', workDate: { $regex: `^${periodPrefix}` } }).lean();
+                const approvedOvertime = overtimeByEmpId.get(empIdStr) || [];
                 const overtimeMinutes = approvedOvertime.reduce((sum, request) => sum + request.approvedMinutes, 0);
-                const overtimeRate = await OvertimeRate.findOne({ employeeId: employee._id, month, year }).lean();
+                const overtimeRate = overtimeRateByEmpId.get(empIdStr) || null;
                 if (overtimeMinutes > 0 && !overtimeRate) throw new Error('Có giờ làm thêm đã duyệt nhưng HR chưa đặt đơn giá cho kỳ lương');
                 const overtimeHourlyAmount = overtimeRate?.hourlyAmount || 0;
                 const overtimePay = Math.round((overtimeMinutes / 60) * overtimeHourlyAmount);
 
                 // Formula: (baseSalary / standardWorkDays) * (actualWorkDays + paidLeaveDays)
                 const earnedBase = (baseSalary / standardWorkDays) * Math.min(actualWorkDays + paidLeaveDays, standardWorkDays);
-                // A legacy 10.5% estimate is shown only as a draft. HR/accounting must
-                // confirm the employee's actual contribution base and amount before approval.
                 const insuranceDeduction = existing?.insuranceConfirmed
                     ? existing.deductions.insurance : Math.round(baseSalary * 0.105);
                 const otherAllowance = existing?.allowances?.other || 0;
@@ -890,8 +947,8 @@ const generateMonthlyPayroll = async (req, res) => {
                     departmentName: employee.departmentName || '',
                     position: employee.position,
                     payrollRole,
-                    month,
-                    year,
+                    month: numericMonth,
+                    year: numericYear,
                     baseSalary,
                     standardWorkDays,
                     actualWorkDays,
@@ -923,17 +980,17 @@ const generateMonthlyPayroll = async (req, res) => {
 
                 if (existing) {
                     await runHrTransaction(async (session) => {
-                      await lockOpenPeriod(`${year}-${String(month).padStart(2, '0')}`, session);
+                      await lockOpenPeriod(`${numericYear}-${String(numericMonth).padStart(2, '0')}`, session);
                       const saved = await Payroll.findOneAndUpdate({ _id: existing._id, status: 'draft', updatedAt: existing.updatedAt }, { $set: payrollData }, { new: true, runValidators: true, session });
                       if (!saved) throw httpError('Bảng lương vừa thay đổi. Hãy tải lại.', 409);
-                      await PayrollEvent.create([{ payrollId: saved._id, actorId: req.user._id, action: 'generated', before: existing.toObject ? existing.toObject() : existing, after: saved.toObject(), reason: 'Tính lại bảng lương nháp' }], { session });
+                      await PayrollEvent.create([{ ...(tenantId ? { tenantId } : {}), payrollId: saved._id, actorId: req.user._id, action: 'generated', before: existing, after: saved.toObject(), reason: 'Tính lại bảng lương nháp' }], { session });
                     });
                     results.push({ employee: employee.fullName, action: 'updated', netSalary });
                 } else {
                     await runHrTransaction(async (session) => {
-                      await lockOpenPeriod(`${year}-${String(month).padStart(2, '0')}`, session);
+                      await lockOpenPeriod(`${numericYear}-${String(numericMonth).padStart(2, '0')}`, session);
                       const [created] = await Payroll.create([payrollData], { session });
-                      await PayrollEvent.create([{ payrollId: created._id, actorId: req.user._id, action: 'generated', after: created.toObject(), reason: 'Lập bảng lương nháp' }], { session });
+                      await PayrollEvent.create([{ ...(tenantId ? { tenantId } : {}), payrollId: created._id, actorId: req.user._id, action: 'generated', after: created.toObject(), reason: 'Lập bảng lương nháp' }], { session });
                     });
                     results.push({ employee: employee.fullName, action: 'created', netSalary });
                 }
@@ -942,9 +999,13 @@ const generateMonthlyPayroll = async (req, res) => {
             }
         }
 
+        const summaryMessage = results.length > 0
+            ? `Đã tính lương tháng ${numericMonth}/${numericYear} cho ${results.length} nhân viên${errors.length ? ` (${errors.length} hồ sơ bỏ qua do chưa đủ điều kiện)` : ''}`
+            : `Chưa tính được lương cho nhân viên nào trong tháng ${numericMonth}/${numericYear}: có ${errors.length} hồ sơ chưa đặt mức lương cơ bản > 0${unlinkedCount ? ` và ${unlinkedCount} hồ sơ nhân sự chưa gắn tài khoản` : ''}.`;
+
         res.json({
-            message: `Đã tính lương tháng ${month}/${year} cho ${results.length} nhân viên`,
-            data: { results, errors }
+            message: summaryMessage,
+            data: { results, errors, unlinkedCount }
         });
     } catch (error) {
         res.status(500).json({ message: 'Lỗi máy chủ', error: error.message });

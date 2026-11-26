@@ -5,9 +5,9 @@ const Employee = require('../models/zone2_hr/Employee');
 const Notification = require('../models/zone1_system/Notification');
 const AttendanceRecord = require('../models/zone2_hr/AttendanceRecord');
 const Correction = require('../models/zone2_hr/TimekeepingCorrectionRequest');
+const User = require('../models/zone1_system/User');
 const { getWorkDate, startOfWorkDate } = require('../utils/dateHelpers');
 const { fail, checkId, text, inTransaction, audit } = require('../services/credentialService');
-const { createTimesheetFeedback } = require('../services/staffPersonalRequestService');
 const { buildTenantFilter } = require('../services/tenantFilterService');
 
 const handle = (fn) => async (req, res) => {
@@ -96,7 +96,7 @@ const publishTimesheet = handle(async (req, res) => {
   const data = await inTransaction(async (session) => {
     const employee = await Employee.findOne({ _id: req.body.employeeId, status: { $in: ['active', 'on_leave'] }, userId: { $ne: null }, ...tenantFilter }).populate('userId', 'status role').session(session);
     if (!employee || employee.userId?.status !== 'active') throw fail('Nhân viên chưa có tài khoản đang hoạt động');
-    const pendingCorrection = await Correction.exists({ userId: employee.userId._id, workDate: { $gte: start, $lt: end }, status: { $in: ['DRAFT', 'PENDING'] } }).session(session);
+    const pendingCorrection = await Correction.exists({ userId: employee.userId._id, workDate: { $gte: start, $lt: end }, status: { $in: ['DRAFT', 'PENDING'] }, ...tenantFilter }).session(session);
     if (pendingCorrection) throw fail('Còn đơn điều chỉnh công chưa xử lý trong tháng. Hãy xử lý trước khi gửi bảng công.', 409);
     const records = await AttendanceRecord.find({ userId: employee.userId._id, workDate: { $gte: start, $lt: end }, ...tenantFilter }).sort({ workDate: 1 }).session(session);
     if (!records.length) throw fail('Tháng này chưa có ngày công được ghi nhận; chưa thể gửi bảng công để xác nhận.', 409);
@@ -152,11 +152,29 @@ const respondTimesheet = handle(async (req, res) => {
     if (!sheet) throw fail('Không tìm thấy bảng công của bạn', 404);
     versionOf(sheet, req.body.version);
     if (sheet.status !== 'pending') throw fail('Bảng công đã được phản hồi', 409);
-    const previous = { status: sheet.status, note: sheet.employeeNote, respondedAt: sheet.respondedAt };
     sheet.set({ status: req.body.status, employeeNote: note, respondedAt: new Date() }); await sheet.save({ session });
     await audit(req.user, 'MONTHLY_TIMESHEET_RESPONDED', 'MonthlyTimesheet', sheet._id, { status: 'pending' }, { status: sheet.status, note }, session);
     if (sheet.status === 'disputed') {
-      await createTimesheetFeedback({ sheet, user: req.user, note, previous }, session);
+      const tenantId = req.tenantId || req.user?.tenantId;
+      const hrManagers = await User.find({
+        role: { $in: ['admin', 'hr'] },
+        status: 'active',
+        _id: { $ne: req.user._id },
+        ...tenantFilter
+      }).select('_id').session(session);
+      if (hrManagers.length > 0) {
+        const senderName = req.user.profile?.fullName || req.user.username;
+        await Notification.insertMany(hrManagers.map((mgr) => ({
+          ...(tenantId ? { tenantId } : {}),
+          recipientId: mgr._id,
+          title: `Phản hồi bảng công tháng ${sheet.period}`,
+          message: `${senderName} phản hồi sai lệch bảng công tháng ${sheet.period}: ${note}`,
+          type: 'attendance',
+          link: '/hr?tab=internal',
+          createdBy: req.user._id,
+          metadata: { timesheetId: sheet._id, period: sheet.period }
+        })), { session });
+      }
     }
     return sheet;
   });

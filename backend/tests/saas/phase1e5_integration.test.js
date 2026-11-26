@@ -449,7 +449,8 @@ describe('SaaS Phase 1E.5 — Tích Hợp Router Tài Chính SaaS Và Nghiệm T
       const approvedReportRoutes = [
         '/reports/dashboard',
         '/reports/principal-work',
-        '/reports/class-quality'
+        '/reports/class-quality',
+        '/reports/finance?period=11-2026'
       ];
 
       for (const r of approvedReportRoutes) {
@@ -459,9 +460,9 @@ describe('SaaS Phase 1E.5 — Tích Hợp Router Tài Chính SaaS Và Nghiệm T
         expect([200, 403]).toContain(res.status);
       }
 
-      // 2. Route báo cáo tài chính chưa mở trong phase1e tiếp tục fail-closed 501
+      // 2. Route báo cáo lạ chưa phê duyệt trong phase1e tiếp tục fail-closed 501
       const resUnapproved = await request(app1e)
-        .get('/api/v1/reports/finance')
+        .get('/api/v1/reports/unapproved-custom-report')
         .set('Authorization', `Bearer ${tokenAdminA}`);
       expect(resUnapproved.status).toBe(501);
       expect(resUnapproved.body.code).toBe('MODULE_NOT_IMPLEMENTED_IN_PHASE_1A');

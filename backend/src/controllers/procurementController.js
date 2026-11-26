@@ -95,19 +95,20 @@ const createProcurementRequest = async (req, res) => {
         });
 
         const tenantId = req.tenantId || req.user?.tenantId;
+        const requesterName = req.user.profile?.fullName || req.user.username || 'Quản trị viên';
         const request = new ProcurementRequest({
             ...(tenantId ? { tenantId } : {}),
             ...rest,
             items: processedItems,
             totalEstimatedCost,
             requesterId: req.user._id,
-            requesterName: req.user.profile.fullName
+            requesterName
         });
         await request.save();
         res.status(201).json({ message: 'Tạo đề xuất mua sắm thành công', data: request });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ message: 'Lỗi server' });
+        res.status(500).json({ message: 'Không thể tạo đề xuất mua sắm lúc này' });
     }
 };
 
@@ -119,21 +120,22 @@ const getProcurementRequests = async (req, res) => {
         if (status) filter.status = status;
         if (urgency) filter.urgency = urgency;
         const tenantFilter = buildTenantFilter(req);
-        const requests = await ProcurementRequest.find({ ...filter, ...tenantFilter }).sort({ createdAt: -1 });
+        const requests = await ProcurementRequest.find({ ...filter, ...tenantFilter }).sort({ createdAt: -1 }).lean();
         res.json({ message: 'Lấy danh sách đề xuất thành công', data: requests });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ message: 'Lỗi server' });
+        res.status(500).json({ message: 'Không thể tải danh sách đề xuất mua sắm' });
     }
 };
 
-// Duyệt đề xuất (Level 1 hoặc Level 2)
+// Duyệt đề xuất (Level 1 hoặc Level 2; Admin có thẩm quyền duyệt trọn quy trình)
 const approveProcurementRequest = async (req, res) => {
     try {
         const { id } = req.params;
         const { level, status, rejectionReason } = req.body; // level: 1 hoặc 2
 
         const tenantFilter = buildTenantFilter(req);
+        const tenantId = req.tenantId || req.user?.tenantId;
         const request = await ProcurementRequest.findOne({ _id: id, ...tenantFilter });
         if (!request) return res.status(404).json({ message: 'Không tìm thấy đề xuất' });
 
@@ -141,25 +143,41 @@ const approveProcurementRequest = async (req, res) => {
             return res.status(409).json({ message: 'Đề xuất này đã được xử lý, không thể duyệt hoặc từ chối lại' });
         }
 
+        const approverName = req.user.profile?.fullName || req.user.username || 'Quản trị viên';
+
         if (status === 'rejected') {
             if (!String(rejectionReason || '').trim()) return res.status(422).json({ message: 'Vui lòng nhập lý do từ chối' });
             request.status = 'rejected';
             request.rejectionReason = String(rejectionReason).trim().slice(0, 500);
         } else {
-            if (level === 1) {
+            // Ép kiểu số nếu client gửi chuỗi "1"/"2"; nếu bỏ trống, Admin hoặc đơn đã qua bước 1 sẽ tự động duyệt bước 2
+            const parsedLevel = (level !== undefined && level !== null && level !== '')
+                ? Number(level)
+                : (request.status === 'approved_l1' || req.user.role === 'admin' ? 2 : 1);
+
+            if (parsedLevel === 1) {
                 request.approverLevel1 = req.user._id;
-                request.approverLevel1Name = req.user.profile.fullName;
+                request.approverLevel1Name = approverName;
                 request.approverLevel1At = new Date();
                 request.status = 'approved_l1';
-            } else if (level === 2) {
+            } else if (parsedLevel === 2) {
+                // Nếu Admin duyệt thẳng lên cấp 2 từ trạng thái chờ duyệt, đồng bộ cả thông tin cấp 1 để đủ hồ sơ lập đơn hàng
+                if (!request.approverLevel1) {
+                    request.approverLevel1 = req.user._id;
+                    request.approverLevel1Name = approverName;
+                    request.approverLevel1At = new Date();
+                }
                 request.approverLevel2 = req.user._id;
-                request.approverLevel2Name = req.user.profile.fullName;
+                request.approverLevel2Name = approverName;
                 request.approverLevel2At = new Date();
                 request.status = 'approved_l2';
-            } else return res.status(400).json({ message: 'Cấp phê duyệt không hợp lệ' });
+            } else {
+                return res.status(400).json({ message: 'Cấp phê duyệt không hợp lệ (chỉ nhận cấp 1 hoặc 2)' });
+            }
         }
         await request.save();
         await Notification.create({
+            ...(tenantId ? { tenantId } : {}),
             recipientId: request.requesterId,
             title: status === 'rejected' ? 'Đề xuất mua sắm bị từ chối' : 'Đề xuất mua sắm đã được duyệt',
             message: status === 'rejected' ? (rejectionReason || 'Đề xuất chưa được phê duyệt.') : 'Đề xuất của bạn đã được phê duyệt và chuyển sang bước mua sắm.',
@@ -168,7 +186,7 @@ const approveProcurementRequest = async (req, res) => {
         res.json({ message: 'Duyệt đề xuất thành công', data: request });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ message: 'Lỗi server' });
+        res.status(500).json({ message: 'Không thể xử lý phê duyệt đề xuất mua sắm' });
     }
 };
 
@@ -416,7 +434,7 @@ const liquidateAsset = async (req, res) => {
                     liquidationValue,
                     reason,
                     approvedBy: req.user._id,
-                    approvedByName: req.user.profile.fullName,
+                    approvedByName: req.user.profile?.fullName || req.user.username || 'Quản trị viên',
                     note
                 },
                 status: 'liquidated'

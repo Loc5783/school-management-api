@@ -1,5 +1,6 @@
 const express = require('express');
 const {
+  createParentAccount,
   linkParentStudents,
   listParents,
   updateParentStatus,
@@ -18,6 +19,7 @@ router.use(auth);
 router.use(require('../middlewares/hrAccessAudit')('accounts'));
 // Phụ huynh là dữ liệu nhạy cảm của học sinh, HR không duyệt hoặc liên kết phụ huynh.
 router.get('/parents', roleCheck(['admin']), listParents);
+router.post('/parents', roleCheck(['admin']), createParentAccount);
 router.patch('/parents/:id/students', roleCheck(['admin']), linkParentStudents);
 router.patch('/parents/:id/status', roleCheck(['admin']), updateParentStatus);
 // HR được quản lý tài khoản nhân sự nhưng không được tạo/sửa tài khoản Hiệu trưởng.

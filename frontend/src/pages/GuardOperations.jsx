@@ -6,7 +6,6 @@ import Icon from '../components/Icon';
 import QrScanner from '../components/QrScanner';
 import StudentPagination from '../components/StudentPagination';
 import { GuardDeliveryPanel, GuardEmergencyPanel, GuardReportPanel } from '../components/GuardAdvancedPanels';
-import GuardDevicePanel from '../components/GuardDevicePanel';
 import { queueGuardOperation, syncGuardQueue, safeReadGuardQueue } from '../utils/guardOfflineQueue';
 
 const localDate = () => {
@@ -37,7 +36,6 @@ export default function GuardOperations() {
     'incidents',
     'handover',
     'emergency',
-    'devices',
     ...(isManager ? ['deliveries', 'reports'] : [])
   ], [isManager]);
 
@@ -274,7 +272,6 @@ export default function GuardOperations() {
     ['incidents', 'Sự cố an ninh', 'alertCircle'],
     ['handover', 'Bàn giao ca', 'clock'],
     ['emergency', 'Khẩn cấp', 'shield'],
-    ['devices', 'Thiết bị cổng', 'settings'],
     ...(isManager ? [
       ['deliveries', 'Giao hàng', 'card'],
       ['reports', 'Báo cáo cổng', 'chart']
@@ -297,7 +294,7 @@ export default function GuardOperations() {
           <article><span className="orange"><Icon name="clock" /></span><div><small>BÀN GIAO CA HÔM NAY</small><strong>{handovers.length || 0}</strong><em>biên bản ghi nhận</em></div></article>
           <article><span className="green"><Icon name="shield" /></span><div><small>AN NINH CỔNG</small><strong>{emergencyMode ? 'CẢNH BÁO KHẨN CẤP' : 'Bình thường'}</strong><em>{emergencyMode ? emergencyMode.level.toUpperCase() : 'Hệ thống an toàn'}</em></div></article>
         </section>
-        <section className="guard-quick-actions content-card"><div className="card-heading"><div><p className="card-kicker">THAO TÁC NHANH</p><h2>Nhiệm vụ trực cổng</h2></div></div><div>{isManager && <button onClick={() => setActiveTab('gate')}><Icon name="attendance" />Học sinh & QR</button>}<button onClick={() => setActiveTab('visitors')}><Icon name="users" />Đăng ký khách</button><button onClick={() => setActiveTab('incidents')}><Icon name="alertCircle" />Báo sự cố</button><button onClick={() => setActiveTab('handover')}><Icon name="clock" />Bàn giao ca</button><button onClick={() => setActiveTab('emergency')}><Icon name="shield" />Xử lý khẩn cấp</button><button onClick={() => setActiveTab('devices')}><Icon name="settings" />Thiết bị cổng</button><Link to="/timekeeping"><Icon name="check" />Chấm công</Link></div></section>
+        <section className="guard-quick-actions content-card"><div className="card-heading"><div><p className="card-kicker">THAO TÁC NHANH</p><h2>Nhiệm vụ trực cổng</h2></div></div><div>{isManager && <button onClick={() => setActiveTab('gate')}><Icon name="attendance" />Học sinh & QR</button>}<button onClick={() => setActiveTab('visitors')}><Icon name="users" />Đăng ký khách</button><button onClick={() => setActiveTab('incidents')}><Icon name="alertCircle" />Báo sự cố</button><button onClick={() => setActiveTab('handover')}><Icon name="clock" />Bàn giao ca</button><button onClick={() => setActiveTab('emergency')}><Icon name="shield" />Xử lý khẩn cấp</button><Link to="/timekeeping"><Icon name="check" />Chấm công</Link></div></section>
         <div className="guard-overview-grid">
           <section className="content-card"><div className="card-heading"><div><p className="card-kicker">VIỆC CẦN XỬ LÝ</p><h2>Cảnh báo sự cố trong ca</h2></div><button className="button button-secondary" onClick={() => setActiveTab('incidents')}>Xem chi tiết</button></div><div className="guard-alert-list">{dashboard?.incidents?.slice(0, 5).map((item) => <button key={item._id} onClick={() => setActiveTab('incidents')}><Icon name="alertCircle" /><span><strong>{incidentCategory[item.category]}</strong><small>{item.location} · {incidentStatus[item.status]}</small></span></button>)}{!dashboard?.incidents?.length && <div className="empty-state compact">Không có sự cố nào cần xử lý.</div>}</div></section>
           <section className="content-card">
@@ -397,7 +394,6 @@ export default function GuardOperations() {
       {activeTab === 'deliveries' && isManager && <GuardDeliveryPanel date={date} onOfflineQueued={() => { const ins = safeReadGuardQueue(); setQueueState({ count: ins.queue.length, error: ins.error }); }} />}
 
       {activeTab === 'emergency' && <GuardEmergencyPanel />}
-      {activeTab === 'devices' && <GuardDevicePanel isManager={isManager} />}
 
       {activeTab === 'reports' && isManager && <GuardReportPanel />}
 

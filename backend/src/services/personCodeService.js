@@ -101,11 +101,27 @@ const assertPersonCodeAvailable = async ({
   const stuFilter = { ...scope, studentCode: cleanCode };
   if (excludeStudentId) stuFilter._id = { $ne: excludeStudentId };
 
-  const [conflictEmp, conflictUser, conflictStu] = await Promise.all([
-    Employee.findOne(empFilter).select('fullName').session(session || null).lean(),
-    User.findOne(userFilter).select('username profile.fullName').session(session || null).lean(),
-    Student.findOne(stuFilter).select('fullName').session(session || null).lean()
-  ]);
+  // NOTE: Tuyệt đối KHÔNG chạy Promise.all trên cùng một ClientSession đang mở Transaction của Replica Set,
+  // vì gửi đồng thời nhiều lệnh mang cờ `startTransaction: true` trên cùng `txnNumber` sẽ khiến MongoDB
+  // ném lỗi 500: "Only servers in a sharded cluster can start a new transaction at the active transaction number".
+  let conflictEmp;
+  let conflictUser;
+  let conflictStu;
+  if (session) {
+    conflictEmp = await Employee.findOne(empFilter).select('fullName').session(session).lean();
+    if (!conflictEmp) {
+      conflictUser = await User.findOne(userFilter).select('username profile.fullName').session(session).lean();
+    }
+    if (!conflictEmp && !conflictUser) {
+      conflictStu = await Student.findOne(stuFilter).select('fullName').session(session).lean();
+    }
+  } else {
+    [conflictEmp, conflictUser, conflictStu] = await Promise.all([
+      Employee.findOne(empFilter).select('fullName').lean(),
+      User.findOne(userFilter).select('username profile.fullName').lean(),
+      Student.findOne(stuFilter).select('fullName').lean()
+    ]);
+  }
 
   if (conflictEmp) {
     throw createCodeError(
@@ -144,11 +160,20 @@ const findCurrentMaxNumericCode = async (tenantId, session = null) => {
   const Student = mongoose.model('Student');
   const scope = buildScopeFilter(tenantId);
 
-  const [emps, users, students] = await Promise.all([
-    Employee.find({ ...scope, employeeCode: /^\d+$/ }).select('employeeCode').session(session || null).lean(),
-    User.find({ ...scope, 'employeeInfo.employeeId': /^\d+$/ }).select('employeeInfo.employeeId').session(session || null).lean(),
-    Student.find({ ...scope, studentCode: /^\d+$/ }).select('studentCode').session(session || null).lean()
-  ]);
+  let emps;
+  let users;
+  let students;
+  if (session) {
+    emps = await Employee.find({ ...scope, employeeCode: /^\d+$/ }).select('employeeCode').session(session).lean();
+    users = await User.find({ ...scope, 'employeeInfo.employeeId': /^\d+$/ }).select('employeeInfo.employeeId').session(session).lean();
+    students = await Student.find({ ...scope, studentCode: /^\d+$/ }).select('studentCode').session(session).lean();
+  } else {
+    [emps, users, students] = await Promise.all([
+      Employee.find({ ...scope, employeeCode: /^\d+$/ }).select('employeeCode').lean(),
+      User.find({ ...scope, 'employeeInfo.employeeId': /^\d+$/ }).select('employeeInfo.employeeId').lean(),
+      Student.find({ ...scope, studentCode: /^\d+$/ }).select('studentCode').lean()
+    ]);
+  }
 
   let maxVal = 0;
   for (const item of emps) {

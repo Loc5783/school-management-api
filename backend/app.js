@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { attachFrontendStatic, isSameHostOrigin } = require('./src/utils/staticFrontendMiddleware');
+const { applySecurityMiddleware, globalErrorHandler } = require('./src/middlewares/securityAndErrorMiddleware');
 
 const authRoutes = require('./src/routes/authRoutes');
 const classroomRoutes = require('./src/routes/classroomRoutes');
@@ -29,6 +30,8 @@ const LAN_OR_LOCAL_ORIGIN_REGEX = /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\
 
 const createApp = () => {
     const app = express();
+
+    applySecurityMiddleware(app);
 
     // Tin cậy Reverse Proxy (Nginx trong Docker) khi biến TRUST_PROXY được cấu hình để express-rate-limit lấy đúng IP thật của người dùng
     if (process.env.TRUST_PROXY) {
@@ -99,6 +102,9 @@ const createApp = () => {
 
     // Phục vụ trực tiếp giao diện Frontend Production (nếu đã có bản build dist) trên cùng máy chủ Backend
     attachFrontendStatic(app);
+
+    // Middleware xử lý lỗi tập trung toàn hệ thống
+    app.use(globalErrorHandler);
 
     return app;
 };

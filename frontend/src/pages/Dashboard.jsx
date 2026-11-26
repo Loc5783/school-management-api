@@ -51,9 +51,8 @@ export default function Dashboard() {
   const summary = data?.summary || {};
   const staffing = data?.staffing;
   const principalWorkItems = [
-    { key: 'payroll', label: 'Bảng lương kỳ này', detail: 'Đã đối soát, chờ duyệt', to: '/hr?tab=payroll', icon: 'money', tone: 'blue' },
+    { key: 'payroll', label: 'Bảng lương kỳ này', detail: 'Đã đối soát, chờ duyệt', to: '/payroll?tab=approvals', icon: 'money', tone: 'blue' },
     { key: 'leave', label: 'Đơn nghỉ nhân sự', detail: 'Chờ người phụ trách xử lý', to: '/hr?tab=leave', icon: 'calendar', tone: 'orange' },
-    { key: 'recruitment', label: 'Ứng viên được đề xuất', detail: 'Chờ quyết định tiếp nhận', to: '/hr?tab=recruitment', icon: 'users', tone: 'violet' },
     { key: 'refunds', label: 'Yêu cầu hoàn học phí', detail: 'Chờ duyệt hoàn tiền', to: '/finance?tab=refunds', icon: 'money', tone: 'green' },
     { key: 'operatingExpenses', label: 'Đề nghị chi vận hành', detail: 'Chờ duyệt trước khi chi', to: '/accounting/operating-expenses', icon: 'money', tone: 'orange' },
     { key: 'profileChanges', label: 'Cập nhật hồ sơ học sinh', detail: 'Thay đổi nhạy cảm chờ duyệt', to: '/student-profile-change-requests', icon: 'card', tone: 'blue' },
@@ -65,7 +64,7 @@ export default function Dashboard() {
     { label: 'Có mặt hôm nay', value: summary.attendedToday || 0, note: 'Theo điểm danh của lớp', icon: 'attendance', tone: 'green', to: '/attendance', detailLabel: 'Điểm danh lớp' },
   ] : [
     { label: 'Tổng số học sinh', value: summary.totalStudents || 0, note: 'Đang theo học', icon: 'students', tone: 'blue', to: '/students', detailLabel: 'Xem danh sách học sinh' },
-    { label: 'Giáo viên & nhân sự', value: summary.totalTeachers || 0, note: 'Đang làm việc', icon: 'users', tone: 'violet', to: '/hr', detailLabel: 'Xem danh sách nhân sự' },
+    { label: 'Giáo viên & nhân sự', value: summary.totalStaff ?? summary.totalTeachers ?? 0, note: 'Đang làm việc', icon: 'users', tone: 'violet', to: '/hr', detailLabel: 'Xem danh sách nhân sự' },
     { label: 'Lớp học hoạt động', value: summary.totalClassrooms || 0, note: 'Trong năm học này', icon: 'classes', tone: 'orange', to: '/classrooms', detailLabel: 'Xem danh sách lớp học' },
     { label: 'Doanh thu hôm nay', value: formatMoney(summary.todayRevenue), note: 'Cập nhật trong ngày', icon: 'money', tone: 'green', to: '/finance', detailLabel: 'Xem giao dịch tài chính' },
   ];
@@ -88,7 +87,9 @@ export default function Dashboard() {
       return `${entry.color} ${start}% ${chartOffset}%`;
     }).join(', ')
     : '#e7edf8 0 100%';
-  const presentRate = attendanceTotal ? Math.round((attendanceBreakdown[0].count / attendanceTotal) * 100) : 0;
+  // Thống nhất với định mức suất ăn của Bếp: đi muộn vẫn là trẻ có mặt tại trường
+  const attendedCount = (attendanceBreakdown[0].count || 0) + (attendanceBreakdown[1].count || 0);
+  const presentRate = attendanceTotal ? Math.round((attendedCount / attendanceTotal) * 100 * 10) / 10 : 0;
   const todayText = new Intl.DateTimeFormat('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date());
 
   return (

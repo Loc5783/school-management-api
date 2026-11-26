@@ -13,6 +13,7 @@ const {
   getMyAdjustment,
   getMyTimekeeping,
   getPendingCorrectionRequests,
+  kioskCheckIn,
   listMyAdjustments,
   manualCheckIn,
   recalculateAttendance,
@@ -23,9 +24,9 @@ const {
   getDeviceEvents
 } = require('../../controllers/timekeepingController');
 const deviceCtrl = require('../../controllers/timekeepingDeviceController');
-const { getRequestSaasMode, isHrAllowed } = require('../utils/saasMode');
+const { getRequestSaasMode, isHrAllowed, isFinanceAllowed } = require('../utils/saasMode');
 
-// Defense-in-depth: Timekeeping module is strictly allowed in phase1d only
+// Defense-in-depth: Timekeeping module is strictly allowed in phase1d and phase1e
 router.use((req, res, next) => {
   const saasMode = getRequestSaasMode(req);
   if (!isHrAllowed(saasMode)) {
@@ -38,14 +39,16 @@ router.use((req, res, next) => {
 router.post('/device-events', saasDeviceAuth, receiveDeviceEvent);
 
 // Explicitly gate unapproved timekeeping submodules so they cleanly fall through to tenantFeatureGate (501)
-// E.g. kiosk terminals, overtime & overtime rates, GET /device-events
 const UNAPPROVED_TIMEKEEPING_PREFIXES = [
-  '/kiosk',
   '/overtime',
   '/overtime-rates'
 ];
 
 router.use((req, res, next) => {
+  const saasMode = getRequestSaasMode(req);
+  if (req.path.startsWith('/kiosk') && !isFinanceAllowed(saasMode)) {
+    return next('router');
+  }
   if (UNAPPROVED_TIMEKEEPING_PREFIXES.some((prefix) => req.path.startsWith(prefix))) {
     return next('router');
   }
@@ -63,8 +66,9 @@ const employeeRoles = ['admin', 'principal', 'teacher', 'accountant', 'chef', 'g
 const approvalRoles = ['admin', 'principal'];
 const adjustmentRoles = ['admin', 'principal', 'teacher', 'accountant', 'chef', 'hr'];
 
-// 1. Web Check-in & Inquiries
+// 1. Web Check-in, Kiosk Code Check-in & Inquiries
 router.post('/check-in', roleCheck(employeeRoles), manualCheckIn);
+router.post('/kiosk/check-in', roleCheck(employeeRoles), kioskCheckIn);
 router.get('/me', roleCheck(employeeRoles), getMyTimekeeping);
 router.get('/daily', roleCheck(['admin', 'principal', 'hr']), getDailyTimekeeping);
 

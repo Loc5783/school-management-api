@@ -570,7 +570,9 @@ const kioskCheckInByIdentifier = async (actor, identifier, eventType = 'CHECK_IN
   if (!code) throw new TimekeepingError('Vui lòng nhập mã nhân viên');
   if (code.length > 50) throw new TimekeepingError('Mã nhân viên không hợp lệ');
 
-  const tenantFilter = actor.tenantId ? { tenantId: actor.tenantId } : {};
+  const tenantFilter = actor.tenantId
+    ? { tenantId: actor.tenantId }
+    : { tenantId: { $in: [null, undefined] } };
 
   let employee = await User.findOne({
     status: 'active',
@@ -675,7 +677,8 @@ const kioskCheckInByIdentifier = async (actor, identifier, eventType = 'CHECK_IN
     source: 'MANUAL_CODE',
     occurredAt: now,
     workDate: workDateLabel,
-    rawPayload: { channel: 'WEB_KIOSK', enteredIdentifier: code }
+    rawPayload: { channel: 'WEB_KIOSK', enteredIdentifier: code },
+    calculateImmediately: true
   });
 
   return {

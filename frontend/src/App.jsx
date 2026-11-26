@@ -36,10 +36,7 @@ import ParentSettings from './pages/ParentSettings';
 import GuardOperations from './pages/GuardOperations';
 import StaffSettings from './pages/StaffSettings';
 import MyStaffing from './pages/MyStaffing';
-import ProfessionalReviews from './pages/ProfessionalReviews';
-import MyHandovers from './pages/MyHandovers';
 import InternalNotices from './pages/InternalNotices';
-import MyStaffRequests from './pages/MyStaffRequests';
 import TeacherLeavePage from './pages/TeacherLeavePage';
 
 function ProtectedRoute({ children }) {
@@ -178,10 +175,10 @@ function App() {
         <Route path="/my-payroll" element={<StaffRoute><MyPayroll /></StaffRoute>} />
         <Route path="/staff-settings" element={<StaffRoute><StaffSettings /></StaffRoute>} />
         <Route path="/my-staffing" element={<StaffRoute><MyStaffing /></StaffRoute>} />
-        <Route path="/my-handovers" element={<StaffRoute><MyHandovers /></StaffRoute>} />
+        <Route path="/my-handovers" element={<Navigate to="/dashboard" replace />} />
         <Route path="/internal-notices" element={<StaffRoute><InternalNotices /></StaffRoute>} />
-        <Route path="/my-requests" element={<StaffRoute><MyStaffRequests /></StaffRoute>} />
-        <Route path="/professional-reviews" element={<RoleRoute roles={['teacher', 'principal', 'admin']}><ProfessionalReviews /></RoleRoute>} />
+        <Route path="/my-requests" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/professional-reviews" element={<Navigate to="/dashboard" replace />} />
         <Route path="/daily-care" element={<TeacherRoute><DailyCare /></TeacherRoute>} />
         <Route
           path="/timekeeping-management"
