@@ -1126,7 +1126,7 @@ export default function NutritionManagement() {
                 >
                   {classrooms.map((c) => (
                     <option key={c._id} value={c._id}>
-                      {c.name} ({c.ageGroup} tuổi)
+                      {c.name} ({c.ageGroup === '6-12m' ? '6–12 tháng' : `${c.ageGroup} tuổi`})
                     </option>
                   ))}
                 </select>
@@ -1911,7 +1911,7 @@ export default function NutritionManagement() {
                   >
                     <option value="">{classrooms.length ? '-- Chọn lớp --' : (classroomLoadError || 'Chưa có lớp học nào đang hoạt động')}</option>
                     {classrooms.map((c) => (
-                      <option key={c._id} value={c._id}>{c.name} ({c.ageGroup} tuổi)</option>
+                      <option key={c._id} value={c._id}>{c.name} ({c.ageGroup === '6-12m' ? '6–12 tháng' : `${c.ageGroup} tuổi`})</option>
                     ))}
                   </select>
                 </div>

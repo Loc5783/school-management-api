@@ -52,6 +52,7 @@ const serializeStudent = (student, role, mode = 'detail') => {
     const base = {
         _id: raw._id,
         studentCode: raw.studentCode || '',
+        identityCode: raw.identityCode || '',
         fullName: raw.fullName,
         birthDate: raw.birthDate,
         gender: raw.gender,
@@ -100,6 +101,7 @@ const serializeStudent = (student, role, mode = 'detail') => {
     if (role === 'teacher') {
         return {
             ...base,
+            parents: raw.parents || [],
             allergies: raw.allergies || [], disease: raw.disease || {}, emergencyContact: raw.emergencyContact || {}, notes: raw.notes || '',
             authorizedPickers: (raw.authorizedPickers || []).filter((item) => item.isActive !== false).map((item) => ({
                 fullName: item.fullName || '', phone: item.phone || '', relationship: item.relationship || '', photoURL: item.photoURL || '', vehicleType: item.vehicleType || '', vehiclePlate: item.vehiclePlate || ''

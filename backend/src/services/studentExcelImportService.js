@@ -1,36 +1,68 @@
 const ExcelJS = require('exceljs');
 const crypto = require('crypto');
 const Student = require('../models/zone3_school/Student');
-const Classroom = require('../models/zone3_school/Classroom');
 const { getTeacherClassroomIds } = require('../services/schoolDataAccessService');
+const { buildTenantFilter } = require('../services/tenantFilterService');
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
 const MAX_ROWS = 500;
 const MAX_SHEETS = 5;
-const MAX_COLUMNS = 20;
+const MAX_COLUMNS = 30;
+const MULTI_CLASS_TARGET = '__ALL__';
 
+/**
+ * Cấu trúc cột chuẩn của file Excel mẫu nhập học sinh.
+ * Hỗ trợ:
+ * - Đẩy danh sách tổng toàn trường tự động chia lớp theo cột "Lớp" (dành cho Admin / BGH / Tổng phụ trách).
+ * - Đẩy danh sách riêng từng lớp (dành cho Giáo viên chủ nhiệm).
+ * - Lưu Mã ID học sinh, Mã định danh cá nhân và thông tin đầy đủ 2 Phụ huynh (dự phòng khẩn cấp).
+ */
 const EXCEL_COLUMNS = [
+  { header: 'Lớp', key: 'classNameInput', width: 20, required: false },
+  { header: 'Mã ID học sinh', key: 'studentCode', width: 16, required: false },
+  { header: 'Mã định danh học sinh', key: 'identityCode', width: 22, required: false },
   { header: 'Họ và tên (*)', key: 'fullName', width: 26, required: true },
   { header: 'Ngày sinh (*)', key: 'birthDate', width: 16, required: true },
   { header: 'Giới tính (*)', key: 'gender', width: 14, required: true },
   { header: 'Ngày nhập học', key: 'admissionDate', width: 16, required: false },
-  { header: 'Dị ứng thực phẩm', key: 'allergiesText', width: 24, required: false },
-  { header: 'Bệnh lý / Sức khỏe', key: 'diseaseText', width: 24, required: false },
-  { header: 'Họ tên phụ huynh', key: 'contactName', width: 24, required: false },
-  { header: 'SĐT liên hệ', key: 'contactPhone', width: 16, required: false },
-  { header: 'Địa chỉ', key: 'address', width: 32, required: false },
-  { header: 'Quốc tịch', key: 'nationality', width: 18, required: false },
-  { header: 'Dân tộc', key: 'ethnicity', width: 16, required: false },
-  { header: 'Nơi sinh', key: 'birthPlace', width: 22, required: false },
-  { header: 'Ghi chú', key: 'notes', width: 30, required: false }
+  { header: 'Họ tên phụ huynh 1', key: 'parent1Name', width: 24, required: false },
+  { header: 'Điện thoại phụ huynh 1', key: 'parent1Phone', width: 18, required: false },
+  { header: 'Hòm thư phụ huynh 1', key: 'parent1Email', width: 24, required: false },
+  { header: 'Quan hệ PH 1', key: 'parent1Relationship', width: 16, required: false },
+  { header: 'Họ tên phụ huynh 2', key: 'parent2Name', width: 24, required: false },
+  { header: 'Điện thoại phụ huynh 2', key: 'parent2Phone', width: 18, required: false },
+  { header: 'Hòm thư phụ huynh 2', key: 'parent2Email', width: 24, required: false },
+  { header: 'Quan hệ PH 2', key: 'parent2Relationship', width: 16, required: false },
+  { header: 'Dị ứng thực phẩm', key: 'allergiesText', width: 22, required: false },
+  { header: 'Bệnh lý / Sức khỏe', key: 'diseaseText', width: 22, required: false },
+  { header: 'Địa chỉ', key: 'address', width: 30, required: false },
+  { header: 'Quốc tịch', key: 'nationality', width: 16, required: false },
+  { header: 'Dân tộc', key: 'ethnicity', width: 15, required: false },
+  { header: 'Nơi sinh', key: 'birthPlace', width: 20, required: false },
+  { header: 'Ghi chú', key: 'notes', width: 28, required: false }
 ];
 
 const GENDER_MAP = {
-  'nam': 'male',
+  nam: 'male',
   'nữ': 'female',
-  'nu': 'female',
-  'male': 'male',
-  'female': 'female'
+  nu: 'female',
+  male: 'male',
+  female: 'female'
+};
+
+const RELATIONSHIP_MAP = {
+  bo: 'father',
+  cha: 'father',
+  ba: 'father',
+  father: 'father',
+  me: 'mother',
+  ma: 'mother',
+  mother: 'mother',
+  nguoigiamho: 'guardian',
+  giamho: 'guardian',
+  ong: 'guardian',
+  guardian: 'guardian',
+  phuhuynh: 'guardian'
 };
 
 const deriveSchoolYear = (date = new Date()) => {
@@ -39,37 +71,52 @@ const deriveSchoolYear = (date = new Date()) => {
   return `${startYear}-${startYear + 1}`;
 };
 
+const normalizeViKey = (text) => String(text || '')
+  .replace(/đ/g, 'd')
+  .replace(/Đ/g, 'd')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase()
+  .replace(/[^a-z0-9]/g, '');
+
+const normalizeRelationship = (rawValue, fallback = 'guardian') => {
+  if (!rawValue) return fallback;
+  const key = normalizeViKey(rawValue);
+  return RELATIONSHIP_MAP[key] || fallback;
+};
+
 /**
- * Tạo file Excel mẫu chuẩn (.xlsx) gồm 3 sheet:
- * 1. "Danh sách học sinh": Chứa header mẫu, định dạng cột, dropdown giới tính trên từng ô C2..C500.
- * 2. "Hướng dẫn": Hướng dẫn chi tiết định dạng, bắt buộc/tùy chọn, ví dụ.
- * 3. "Danh mục": Danh mục giới tính.
+ * Tạo file Excel mẫu chuẩn (.xlsx) gồm 3 trang tính:
+ * 1. "Danh sách học sinh": Đầy đủ cột Lớp, Mã ID, Mã định danh, 2 Phụ huynh, Y tế & Nhân khẩu; có dropdown Lớp, Giới tính, Quan hệ.
+ * 2. "Hướng dẫn": Hướng dẫn chi tiết cách đẩy tổng nhiều lớp và đẩy theo từng lớp.
+ * 3. "Danh mục" (ẩn): Nguồn tham chiếu danh sách lớp đang hoạt động của trường.
+ *
+ * @param {Array<{name: string, campus?: string}>} classrooms Danh sách lớp đang hoạt động của trường (tùy chọn)
  */
-const generateTemplateWorkbook = async () => {
+const generateTemplateWorkbook = async (classrooms = []) => {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Hệ thống Quản lý Trường Mầm non Hoa Nắng';
   workbook.created = new Date();
 
   // Sheet 1: Danh sách học sinh
   const dataSheet = workbook.addWorksheet('Danh sách học sinh', {
-    views: [{ state: 'frozen', xSplit: 0, ySplit: 1 }]
+    views: [{ state: 'frozen', xSplit: 4, ySplit: 1 }]
   });
 
-  dataSheet.columns = EXCEL_COLUMNS.map(col => ({
+  dataSheet.columns = EXCEL_COLUMNS.map((col) => ({
     header: col.header,
     key: col.key,
     width: col.width
   }));
 
-  // Style header
   const headerRow = dataSheet.getRow(1);
-  headerRow.height = 28;
+  headerRow.height = 30;
   headerRow.eachCell((cell) => {
-    cell.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.font = { name: 'Arial', size: 10.5, bold: true, color: { argb: 'FFFFFFFF' } };
     cell.fill = {
       type: 'pattern',
       pattern: 'solid',
-      fgColor: { argb: 'FF1E3A8A' } // Navy blue
+      fgColor: { argb: 'FF1E3A8A' }
     };
     cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
     cell.border = {
@@ -80,21 +127,46 @@ const generateTemplateWorkbook = async () => {
     };
   });
 
-  // Sheet 3: Danh mục tham chiếu
+  // Định dạng text (@) cho các cột Mã, Ngày và Số điện thoại để Excel không tự cắt số 0 đầu
+  ['studentCode', 'identityCode', 'birthDate', 'admissionDate', 'parent1Phone', 'parent2Phone'].forEach((colKey) => {
+    const col = dataSheet.getColumn(colKey);
+    if (col) col.numFmt = '@';
+  });
+
+  // Sheet 3: Danh mục tham chiếu (ẩn)
   const catSheet = workbook.addWorksheet('Danh mục');
-  catSheet.addRow(['Giới tính']);
-  catSheet.addRow(['Nam']);
-  catSheet.addRow(['Nữ']);
+  catSheet.getCell('A1').value = 'Giới tính';
+  catSheet.getCell('A2').value = 'Nam';
+  catSheet.getCell('A3').value = 'Nữ';
+
+  catSheet.getCell('B1').value = 'Quan hệ';
+  catSheet.getCell('B2').value = 'Bố';
+  catSheet.getCell('B3').value = 'Mẹ';
+  catSheet.getCell('B4').value = 'Người giám hộ';
+
+  catSheet.getCell('C1').value = 'Lớp học';
+  const classNames = [...new Set((classrooms || []).map((c) => String(c.name || '').trim()).filter(Boolean))];
+  classNames.forEach((clsName, idx) => {
+    catSheet.getCell(`C${idx + 2}`).value = clsName;
+  });
   catSheet.state = 'hidden';
 
-  // Định dạng text cho cột Ngày sinh
-  dataSheet.getColumn(2).numFmt = '@';
+  const classDropdownFormula = classNames.length > 0
+    ? [`'Danh mục'!$C$2:$C$${classNames.length + 1}`]
+    : null;
 
-  // Bắt buộc: Gán dataValidation trực tiếp trên từng ô của cột C (dòng 2 đến 501, đủ 500 học sinh)
-  // để Excel hiển thị dropdown thực sự khi người dùng mở file
+  // Gán dropdown trực tiếp cho từng dòng 2..501
   for (let r = 2; r <= MAX_ROWS + 1; r++) {
-    const cell = dataSheet.getCell(`C${r}`);
-    cell.dataValidation = {
+    if (classDropdownFormula) {
+      dataSheet.getCell(`A${r}`).dataValidation = {
+        type: 'list',
+        allowBlank: true,
+        formulae: classDropdownFormula,
+        showErrorMessage: false
+      };
+    }
+
+    dataSheet.getCell(`F${r}`).dataValidation = {
       type: 'list',
       allowBlank: true,
       formulae: ['"Nam,Nữ"'],
@@ -102,39 +174,45 @@ const generateTemplateWorkbook = async () => {
       errorTitle: 'Giới tính không hợp lệ',
       error: 'Vui lòng chọn Nam hoặc Nữ từ danh sách.'
     };
+
+    ['K', 'O'].forEach((colLetter) => {
+      dataSheet.getCell(`${colLetter}${r}`).dataValidation = {
+        type: 'list',
+        allowBlank: true,
+        formulae: ['"Bố,Mẹ,Người giám hộ"'],
+        showErrorMessage: false
+      };
+    });
   }
 
-  // Sheet 2: Hướng dẫn
+  // Sheet 2: Hướng dẫn chi tiết
   const guideSheet = workbook.addWorksheet('Hướng dẫn');
   guideSheet.columns = [
-    { header: 'Nội dung', key: 'title', width: 28 },
-    { header: 'Chi tiết hướng dẫn', key: 'detail', width: 65 }
+    { header: 'Nội dung', key: 'title', width: 32 },
+    { header: 'Chi tiết hướng dẫn', key: 'detail', width: 78 }
   ];
 
   const guideHeader = guideSheet.getRow(1);
   guideHeader.height = 26;
-  guideHeader.eachCell(cell => {
+  guideHeader.eachCell((cell) => {
     cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2563EB' } };
     cell.alignment = { vertical: 'middle', horizontal: 'center' };
   });
 
   const guideData = [
-    ['1. Lớp học nhận dữ liệu', 'Lớp học được chọn trực tiếp trên giao diện web trước khi import. Dữ liệu trong file này sẽ được nạp vào đúng lớp đã chọn.'],
-    ['2. Các cột bắt buộc (*)', 'Họ và tên (*), Ngày sinh (*), Giới tính (*). Bắt buộc phải có đầy đủ ở mỗi dòng.'],
-    ['3. Định dạng Họ và tên', 'Tối đa 120 ký tự. Hệ thống tự động chuẩn hóa khoảng trắng thừa và giữ nguyên dấu tiếng Việt.'],
-    ['4. Định dạng Ngày sinh', 'Hỗ trợ định dạng dd/MM/yyyy (ví dụ: 15/08/2021) hoặc định dạng ngày tháng chuẩn của Excel. Không được ở tương lai.'],
-    ['5. Định dạng Giới tính', 'Chọn "Nam" hoặc "Nữ" (hoặc chọn từ dropdown tại cột Giới tính).'],
-    ['6. Không dùng công thức', 'Hệ thống từ chối các ô chứa công thức Excel. Vui lòng chuyển thành giá trị tĩnh (Paste Values).'],
-    ['7. Các cột tùy chọn', 'Địa chỉ (tối đa 500 ký tự), Quốc tịch (tối đa 80 ký tự, mặc định "Việt Nam" nếu để trống), Dân tộc (tối đa 80 ký tự), Nơi sinh (tối đa 120 ký tự), Ghi chú (tối đa 2000 ký tự).'],
-    ['8. Giới hạn import', 'Tối đa 500 học sinh/lần import. File không vượt quá 5 MB.'],
-    ['9. Chính sách import', 'Nguyên khối (All or Nothing): nếu có bất kỳ dòng nào bị lỗi, vượt sĩ số hoặc nghi trùng thông tin, hệ thống sẽ yêu cầu sửa trước khi xác nhận lưu.'],
+    ['1. Hai chế độ nhập linh hoạt', '• Đẩy danh sách tổng toàn trường (Admin / Hiệu trưởng / Tổng phụ trách): Chọn "Đẩy danh sách tổng theo cột Lớp" trên web và điền tên lớp vào cột "Lớp" ở từng dòng.\n• Đẩy theo từng lớp (Giáo viên chủ nhiệm): Chọn sẵn 1 lớp trên web (cột "Lớp" có thể để trống hoặc ghi đúng tên lớp đó).'],
+    ['2. Các cột bắt buộc (*)', 'Họ và tên (*), Ngày sinh (*), Giới tính (*). Khi đẩy danh sách tổng toàn trường, cột "Lớp" là bắt buộc ở mọi dòng.'],
+    ['3. Mã ID & Mã định danh học sinh', '• Mã ID học sinh: Mã nội bộ/máy chấm công của trường (để trống hệ thống tự sinh số tăng dần 1, 2, 3...).\n• Mã định danh học sinh: Mã định danh cá nhân / mã Bộ GD&ĐT (tùy chọn, tối đa 40 ký tự).'],
+    ['4. Thông tin 2 Phụ huynh', 'Khuyến khích điền đủ Phụ huynh 1 và Phụ huynh 2 (Họ tên, Điện thoại, Hòm thư Email, Quan hệ Bố/Mẹ/Người giám hộ) để nhà trường luôn có số gọi dự phòng khi khẩn cấp.'],
+    ['5. Định dạng Ngày tháng', 'Hỗ trợ dd/MM/yyyy (ví dụ: 15/08/2022) hoặc yyyy-MM-dd. Ngày sinh không được ở tương lai; nhận trẻ từ bậc Nhà trẻ (6 tháng tuổi) đến Mẫu giáo.'],
+    ['6. Không dùng công thức Excel', 'Hệ thống từ chối ô chứa công thức để bảo đảm an toàn dữ liệu. Vui lòng dán giá trị tĩnh (Paste Values).'],
+    ['7. Chính sách nhập nguyên khối', 'Tối đa 500 học sinh / lần import (tối đa 5 MB). Chỉ lưu khi tất cả các dòng hợp lệ, không trùng lặp và không vượt sĩ số tối đa của từng lớp.'],
     ['---', '---'],
-    ['Ví dụ mẫu dòng 1', 'Họ tên: Nguyễn Văn An | Ngày sinh: 12/03/2021 | Giới tính: Nam | Địa chỉ: 123 Cầu Giấy, Hà Nội'],
-    ['Ví dụ mẫu dòng 2', 'Họ tên: Trần Thị Mai | Ngày sinh: 20/09/2022 | Giới tính: Nữ | Nơi sinh: Hà Nội']
+    ['Ví dụ dòng mẫu', 'Lớp: Mầm 1 | Mã ID: (để trống) | Mã định danh: 001322001234 | Họ tên: Nguyễn Minh An | Ngày sinh: 12/05/2023 | Giới tính: Nam | PH1: Nguyễn Văn Hùng - 0901234567 - hung@gmail.com (Bố) | PH2: Trần Thị Lan - 0912345678 - lan@gmail.com (Mẹ)']
   ];
 
-  guideData.forEach(row => guideSheet.addRow(row));
+  guideData.forEach((row) => guideSheet.addRow(row));
   guideSheet.eachRow((row, rowNumber) => {
     if (rowNumber > 1) {
       row.alignment = { vertical: 'top', wrapText: true };
@@ -144,9 +222,6 @@ const generateTemplateWorkbook = async () => {
   return workbook;
 };
 
-/**
- * Kiểm tra xem một cell có chứa công thức hay không (phải từ chối ô công thức)
- */
 const isFormulaCell = (cell) => {
   if (!cell) return false;
   if (cell.type === ExcelJS.ValueType.Formula) return true;
@@ -155,29 +230,20 @@ const isFormulaCell = (cell) => {
   return false;
 };
 
-/**
- * Phân tích ngày sinh nghiêm ngặt (hỗ trợ Date, số serial Excel 1900/1904, chuỗi dd/MM/yyyy, yyyy-MM-dd)
- */
 const parseBirthDate = (cellValue, is1904 = false) => {
   if (cellValue == null || cellValue === '') return { error: 'Ngày sinh không được để trống' };
 
   let d = null;
-
   if (cellValue instanceof Date && !Number.isNaN(cellValue.getTime())) {
     d = cellValue;
   } else if (typeof cellValue === 'number') {
-    // Xử lý hệ ngày Excel 1904 vs 1900
-    // Hệ 1900: serial 1 = 1900-01-01, 1970-01-01 = 25569
-    // Hệ 1904: serial 0 = 1904-01-01, 1970-01-01 = 24107
     const epochOffset = is1904 ? 24107 : 25569;
     const utcDays = Math.floor(cellValue - epochOffset);
-    const utcValue = utcDays * 86400;
-    d = new Date(utcValue * 1000);
+    d = new Date(utcDays * 86400 * 1000);
   } else if (typeof cellValue === 'string') {
     const trimmed = cellValue.trim();
     if (!trimmed) return { error: 'Ngày sinh không được để trống' };
 
-    // Kiểm tra định dạng dd/MM/yyyy hoặc d/M/yyyy
     const dmyMatch = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
     if (dmyMatch) {
       const day = Number(dmyMatch[1]);
@@ -188,7 +254,6 @@ const parseBirthDate = (cellValue, is1904 = false) => {
         return { error: `Ngày sinh không hợp lệ: ngày ${day} tháng ${month} năm ${year} không tồn tại` };
       }
     } else {
-      // Kiểm tra định dạng yyyy-MM-dd
       const ymdMatch = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
       if (ymdMatch) {
         const year = Number(ymdMatch[1]);
@@ -199,7 +264,7 @@ const parseBirthDate = (cellValue, is1904 = false) => {
           return { error: `Ngày sinh không hợp lệ: ngày ${day} tháng ${month} năm ${year} không tồn tại` };
         }
       } else {
-        return { error: 'Định dạng ngày sinh phải là dd/MM/yyyy (ví dụ: 15/08/2021)' };
+        return { error: 'Định dạng ngày sinh phải là dd/MM/yyyy (ví dụ: 15/08/2022)' };
       }
     }
   } else if (typeof cellValue === 'object' && cellValue !== null) {
@@ -220,22 +285,17 @@ const parseBirthDate = (cellValue, is1904 = false) => {
     return { error: 'Ngày sinh không được ở tương lai' };
   }
 
-  // Giới hạn tuổi mầm non hợp lý (0 đến 12 tuổi)
   const ageInYears = (now.getTime() - d.getTime()) / (365.25 * 24 * 3600 * 1000);
   if (ageInYears > 12) {
     return { error: 'Độ tuổi học sinh mầm non không hợp lệ (vượt quá 12 tuổi)' };
   }
 
-  // Chuẩn hóa thành Date ISO string dạng YYYY-MM-DD
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, '0');
   const dayStr = String(d.getUTCDate()).padStart(2, '0');
   return { date: `${y}-${m}-${dayStr}`, dateObj: d };
 };
 
-/**
- * Trích xuất text tĩnh an toàn từ cell, từ chối công thức
- */
 const extractCellStaticString = (cell, colLabel = '') => {
   if (cell == null) return { text: '' };
   if (isFormulaCell(cell)) {
@@ -254,31 +314,38 @@ const extractCellStaticString = (cell, colLabel = '') => {
   if (val instanceof Date) return { text: val.toISOString() };
   if (typeof val === 'object') {
     if (Array.isArray(val.richText)) {
-      return { text: val.richText.map(t => t.text || '').join('').trim() };
+      return { text: val.richText.map((t) => t.text || '').join('').trim() };
     }
     if (val.text != null) {
       return { text: String(val.text).trim() };
+    }
+    if (val.hyperlink && val.text == null) {
+      return { text: String(val.hyperlink).replace(/^mailto:/i, '').trim() };
     }
   }
   return { text: '' };
 };
 
-/**
- * Tính toán mã băm fingerprint chuẩn (SHA-256) trên toàn bộ danh sách học sinh
- * Chuẩn hóa thành cấu trúc JSON xác định (canonical JSON) để loại bỏ hoàn toàn nguy cơ va chạm ký tự phân cách.
- */
-  const computeBatchFingerprint = (classroomId, rows) => {
+const computeBatchFingerprint = (classroomId, rows) => {
   const canonicalData = {
-    classroomId: String(classroomId || ''),
-    students: (rows || []).map(r => ({
+    classroomId: String(classroomId || MULTI_CLASS_TARGET),
+    students: (rows || []).map((r) => ({
+      classNameInput: String(r.classNameInput || r.resolvedClassName || '').trim().toLowerCase(),
+      resolvedClassroomId: String(r.resolvedClassroomId || '').trim(),
+      studentCode: String(r.studentCode || '').trim().toUpperCase(),
+      identityCode: String(r.identityCode || '').trim().toUpperCase(),
       fullName: String(r.fullName || '').replace(/\s+/g, ' ').trim().toLowerCase(),
       birthDate: String(r.birthDateStr || r.birthDate || '').trim(),
       gender: String(r.gender || '').trim().toLowerCase(),
       admissionDate: String(r.admissionDate || '').trim(),
+      parent1Name: String(r.parent1Name || r.contactName || '').trim(),
+      parent1Phone: String(r.parent1Phone || r.contactPhone || '').trim(),
+      parent1Email: String(r.parent1Email || '').trim().toLowerCase(),
+      parent2Name: String(r.parent2Name || '').trim(),
+      parent2Phone: String(r.parent2Phone || '').trim(),
+      parent2Email: String(r.parent2Email || '').trim().toLowerCase(),
       allergiesText: String(r.allergiesText || '').trim().toLowerCase(),
       diseaseText: String(r.diseaseText || '').trim().toLowerCase(),
-      contactName: String(r.contactName || '').trim(),
-      contactPhone: String(r.contactPhone || '').trim(),
       address: String(r.address || '').trim(),
       nationality: String(r.nationality || '').trim(),
       ethnicity: String(r.ethnicity || '').trim(),
@@ -286,36 +353,60 @@ const extractCellStaticString = (cell, colLabel = '') => {
       notes: String(r.notes || '').trim()
     }))
   };
-  const jsonString = JSON.stringify(canonicalData);
-  return crypto.createHash('sha256').update(jsonString, 'utf8').digest('hex');
+  return crypto.createHash('sha256').update(JSON.stringify(canonicalData), 'utf8').digest('hex');
+};
+
+const pickString = (item, primaryKey, rawKey = '') => {
+  if (item[primaryKey] != null) return String(item[primaryKey]).trim();
+  if (rawKey && item[rawKey] != null) return String(item[rawKey]).trim();
+  return '';
 };
 
 /**
- * Kiểm tra tính nghiêm ngặt của 1 dòng dữ liệu (Dùng chung cho cả preview và confirm)
- * Không cho phép âm thầm cắt ngắn chuỗi (.slice()), báo lỗi nếu vượt quá độ dài quy định.
+ * Kiểm tra tính hợp lệ nghiêm ngặt của 1 dòng dữ liệu học sinh (dùng chung cho cả Preview & Confirm).
  */
-const validateStudentRowStrict = (item, rowNumber, now = new Date(), is1904 = false) => {
+const validateStudentRowStrict = (item, rowNumber, _now = new Date(), is1904 = false) => {
   const errors = [];
-  const fullName = String(item.fullName || item.rawFullName || '').replace(/\s+/g, ' ').trim();
-  const rawGender = String(item.gender || item.rawGender || '').trim();
-  const address = item.address != null ? String(item.address).trim() : (item.rawAddress != null ? String(item.rawAddress).trim() : '');
-  const nationality = item.nationality != null ? String(item.nationality).trim() : (item.rawNationality != null ? String(item.rawNationality).trim() : '');
-  const ethnicity = item.ethnicity != null ? String(item.ethnicity).trim() : (item.rawEthnicity != null ? String(item.rawEthnicity).trim() : '');
-  const birthPlace = item.birthPlace != null ? String(item.birthPlace).trim() : (item.rawBirthPlace != null ? String(item.rawBirthPlace).trim() : '');
-  const notes = item.notes != null ? String(item.notes).trim() : (item.rawNotes != null ? String(item.rawNotes).trim() : '');
-  const allergiesText = item.allergiesText != null ? String(item.allergiesText).trim() : (item.rawAllergiesText != null ? String(item.rawAllergiesText).trim() : '');
-  const diseaseText = item.diseaseText != null ? String(item.diseaseText).trim() : (item.rawDiseaseText != null ? String(item.rawDiseaseText).trim() : '');
-  const contactName = item.contactName != null ? String(item.contactName).trim() : (item.rawContactName != null ? String(item.rawContactName).trim() : '');
-  const contactPhone = item.contactPhone != null ? String(item.contactPhone).replace(/[.\s-]/g, '').trim() : (item.rawContactPhone != null ? String(item.rawContactPhone).replace(/[.\s-]/g, '').trim() : '');
+  const classNameInput = pickString(item, 'classNameInput', 'rawClassNameInput');
+  const studentCode = pickString(item, 'studentCode', 'rawStudentCode').toUpperCase();
+  const identityCode = pickString(item, 'identityCode', 'rawIdentityCode').toUpperCase();
+  const fullName = pickString(item, 'fullName', 'rawFullName').replace(/\s+/g, ' ');
+  const rawGender = pickString(item, 'gender', 'rawGender');
+  const address = pickString(item, 'address', 'rawAddress');
+  const nationality = pickString(item, 'nationality', 'rawNationality');
+  const ethnicity = pickString(item, 'ethnicity', 'rawEthnicity');
+  const birthPlace = pickString(item, 'birthPlace', 'rawBirthPlace');
+  const notes = pickString(item, 'notes', 'rawNotes');
+  const allergiesText = pickString(item, 'allergiesText', 'rawAllergiesText');
+  const diseaseText = pickString(item, 'diseaseText', 'rawDiseaseText');
 
-  // 1. Họ và tên
+  // Tương thích ngược với các cột đơn contactName / contactPhone cũ
+  const parent1Name = pickString(item, 'parent1Name', 'rawParent1Name') || pickString(item, 'contactName', 'rawContactName');
+  const parent1Phone = (pickString(item, 'parent1Phone', 'rawParent1Phone') || pickString(item, 'contactPhone', 'rawContactPhone')).replace(/[.\s-]/g, '');
+  const parent1Email = pickString(item, 'parent1Email', 'rawParent1Email').toLowerCase();
+  const parent1RelRaw = pickString(item, 'parent1Relationship', 'rawParent1Relationship');
+
+  const parent2Name = pickString(item, 'parent2Name', 'rawParent2Name');
+  const parent2Phone = pickString(item, 'parent2Phone', 'rawParent2Phone').replace(/[.\s-]/g, '');
+  const parent2Email = pickString(item, 'parent2Email', 'rawParent2Email').toLowerCase();
+  const parent2RelRaw = pickString(item, 'parent2Relationship', 'rawParent2Relationship');
+
+  // 1. Mã ID & Mã định danh
+  if (studentCode && !/^[A-Z0-9_-]{1,30}$/.test(studentCode)) {
+    errors.push('Mã ID học sinh chỉ được chứa chữ cái không dấu, chữ số, dấu gạch ngang/dưới (tối đa 30 ký tự)');
+  }
+  if (identityCode.length > 40) {
+    errors.push(`Mã định danh học sinh vượt quá 40 ký tự (hiện tại: ${identityCode.length} ký tự)`);
+  }
+
+  // 2. Họ và tên
   if (!fullName) {
     errors.push('Họ và tên không được để trống');
   } else if (fullName.length > 120) {
     errors.push(`Họ và tên vượt quá độ dài tối đa 120 ký tự (hiện tại: ${fullName.length} ký tự)`);
   }
 
-  // 2. Ngày sinh
+  // 3. Ngày sinh
   let birthDateFormatted = '';
   let birthDateObj = null;
   const rawBirth = item.birthDate != null ? item.birthDate : item.rawBirthDate;
@@ -327,36 +418,25 @@ const validateStudentRowStrict = (item, rowNumber, now = new Date(), is1904 = fa
     birthDateObj = dateResult.dateObj;
   }
 
-  // 3. Giới tính
+  // 4. Giới tính
   let gender = '';
   if (!rawGender) {
     errors.push('Giới tính không được để trống');
   } else {
-    const normalizedGender = rawGender.toLowerCase();
-    gender = GENDER_MAP[normalizedGender] || '';
+    gender = GENDER_MAP[rawGender.toLowerCase()] || '';
     if (!gender) {
       errors.push(`Giới tính "${rawGender}" không hợp lệ. Vui lòng chọn "Nam" hoặc "Nữ"`);
     }
   }
 
-  // 4. Các trường tùy chọn (Kiểm tra nghiêm ngặt độ dài, không âm thầm cắt ngắn)
-  if (address.length > 500) {
-    errors.push(`Địa chỉ vượt quá độ dài tối đa 500 ký tự (hiện tại: ${address.length} ký tự)`);
-  }
-  if (nationality.length > 80) {
-    errors.push(`Quốc tịch vượt quá độ dài tối đa 80 ký tự (hiện tại: ${nationality.length} ký tự)`);
-  }
-  if (ethnicity.length > 80) {
-    errors.push(`Dân tộc vượt quá độ dài tối đa 80 ký tự (hiện tại: ${ethnicity.length} ký tự)`);
-  }
-  if (birthPlace.length > 120) {
-    errors.push(`Nơi sinh vượt quá độ dài tối đa 120 ký tự (hiện tại: ${birthPlace.length} ký tự)`);
-  }
-  if (notes.length > 2000) {
-    errors.push(`Ghi chú vượt quá độ dài tối đa 2000 ký tự (hiện tại: ${notes.length} ký tự)`);
-  }
+  // 5. Độ dài các trường văn bản tùy chọn
+  if (address.length > 500) errors.push(`Địa chỉ vượt quá độ dài tối đa 500 ký tự (hiện tại: ${address.length} ký tự)`);
+  if (nationality.length > 80) errors.push(`Quốc tịch vượt quá độ dài tối đa 80 ký tự (hiện tại: ${nationality.length} ký tự)`);
+  if (ethnicity.length > 80) errors.push(`Dân tộc vượt quá độ dài tối đa 80 ký tự (hiện tại: ${ethnicity.length} ký tự)`);
+  if (birthPlace.length > 120) errors.push(`Nơi sinh vượt quá độ dài tối đa 120 ký tự (hiện tại: ${birthPlace.length} ký tự)`);
+  if (notes.length > 2000) errors.push(`Ghi chú vượt quá độ dài tối đa 2000 ký tự (hiện tại: ${notes.length} ký tự)`);
 
-  // 5. Ngày nhập học tùy chọn (nếu để trống sẽ lấy ngày nhập file)
+  // 6. Ngày nhập học
   let admissionDateFormatted = '';
   let admissionDateObj = null;
   const rawAdmission = item.admissionDate != null ? item.admissionDate : item.rawAdmissionDate;
@@ -373,23 +453,78 @@ const validateStudentRowStrict = (item, rowNumber, now = new Date(), is1904 = fa
     }
   }
 
-  // 6. Dị ứng, bệnh lý & người liên hệ tùy chọn
+  // 7. Kiểm tra thông tin Phụ huynh 1 & Phụ huynh 2
+  const phoneRegex = /^(0|\+84)\d{9,10}$/;
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  if (parent1Phone && !phoneRegex.test(parent1Phone)) {
+    errors.push(`SĐT phụ huynh 1 "${parent1Phone}" không hợp lệ`);
+  }
+  if (parent1Email && !emailRegex.test(parent1Email)) {
+    errors.push(`Hòm thư phụ huynh 1 "${parent1Email}" không đúng định dạng email`);
+  }
+  if ((parent1Phone || parent1Email) && !parent1Name) {
+    errors.push('Vui lòng nhập Họ tên phụ huynh 1 khi đã khai báo SĐT/Hòm thư phụ huynh 1');
+  }
+  if (parent1Name && !parent1Phone) {
+    errors.push('Vui lòng nhập SĐT phụ huynh 1 khi đã khai báo Họ tên phụ huynh 1');
+  }
+
+  if (parent2Phone && !phoneRegex.test(parent2Phone)) {
+    errors.push(`SĐT phụ huynh 2 "${parent2Phone}" không hợp lệ`);
+  }
+  if (parent2Email && !emailRegex.test(parent2Email)) {
+    errors.push(`Hòm thư phụ huynh 2 "${parent2Email}" không đúng định dạng email`);
+  }
+  if ((parent2Phone || parent2Email) && !parent2Name) {
+    errors.push('Vui lòng nhập Họ tên phụ huynh 2 khi đã khai báo SĐT/Hòm thư phụ huynh 2');
+  }
+  if (parent2Name && !parent2Phone) {
+    errors.push('Vui lòng nhập SĐT phụ huynh 2 khi đã khai báo Họ tên phụ huynh 2');
+  }
+
+  const parents = [];
+  if (parent1Name && parent1Phone) {
+    parents.push({
+      fullName: parent1Name,
+      phone: parent1Phone,
+      ...(parent1Email ? { email: parent1Email } : {}),
+      relationship: normalizeRelationship(parent1RelRaw, 'father'),
+      isPrimary: true
+    });
+  }
+  if (parent2Name && parent2Phone) {
+    parents.push({
+      fullName: parent2Name,
+      phone: parent2Phone,
+      ...(parent2Email ? { email: parent2Email } : {}),
+      relationship: normalizeRelationship(parent2RelRaw, 'mother'),
+      isPrimary: parents.length === 0
+    });
+  }
+
+  const primaryParent = parents[0];
+  const emergencyContact = primaryParent
+    ? {
+        name: primaryParent.fullName,
+        phone: primaryParent.phone,
+        relationship: { father: 'Bố', mother: 'Mẹ', guardian: 'Người giám hộ' }[primaryParent.relationship] || 'Phụ huynh'
+      }
+    : {};
+
+  // 8. Dị ứng & Bệnh lý
   const allergies = allergiesText
     ? allergiesText.split(/[,;]/).map((s) => s.trim()).filter(Boolean).map((allergen) => ({ allergen, severity: 'moderate', note: '' }))
     : [];
   const disease = diseaseText ? { name: diseaseText.slice(0, 200), description: diseaseText, medication: '', note: '' } : {};
-  if (contactPhone && !/^(0|\+84)\d{9,10}$/.test(contactPhone)) {
-    errors.push(`Số điện thoại liên hệ "${contactPhone}" không hợp lệ`);
-  }
-  const emergencyContact = (contactName || contactPhone)
-    ? { name: contactName || 'Phụ huynh', phone: contactPhone || '', relationship: 'Phụ huynh' }
-    : {};
-  const parents = (contactName && contactPhone)
-    ? [{ fullName: contactName, phone: contactPhone, relationship: 'guardian', isPrimary: true }]
-    : [];
 
   const parsedData = {
     rowNumber,
+    classNameInput,
+    resolvedClassroomId: item.resolvedClassroomId || '',
+    resolvedClassName: item.resolvedClassName || '',
+    studentCode,
+    identityCode,
     fullName,
     birthDate: birthDateFormatted,
     birthDateStr: birthDateFormatted,
@@ -398,14 +533,22 @@ const validateStudentRowStrict = (item, rowNumber, now = new Date(), is1904 = fa
     admissionDateObj,
     gender,
     genderText: gender === 'female' ? 'Nữ' : (gender === 'male' ? 'Nam' : rawGender),
+    parent1Name,
+    parent1Phone,
+    parent1Email,
+    parent1Relationship: parent1RelRaw,
+    parent2Name,
+    parent2Phone,
+    parent2Email,
+    parent2Relationship: parent2RelRaw,
+    contactName: parent1Name,
+    contactPhone: parent1Phone,
+    parents,
+    emergencyContact,
     allergiesText,
     allergies,
     diseaseText,
     disease,
-    contactName,
-    contactPhone,
-    emergencyContact,
-    parents,
     address,
     nationality: nationality || 'Việt Nam',
     ethnicity,
@@ -421,23 +564,14 @@ const validateStudentRowStrict = (item, rowNumber, now = new Date(), is1904 = fa
   };
 };
 
-/**
- * Kiểm tra cấu trúc ZIP trực tiếp từ buffer trước khi giải nén:
- * - Bảo vệ chống Zip bomb (tỷ lệ nén bất thường)
- * - Giới hạn dung lượng sau giải nén (tối đa 30 MB)
- * - Giới hạn số lượng entries (tối đa 100) và số lượng worksheet (tối đa 5)
- */
 const assertZipSafety = (buffer) => {
   if (!buffer || buffer.length < 22) {
     throw Object.assign(new Error('Tập tin Excel không hợp lệ hoặc bị hỏng.'), { statusCode: 400 });
   }
-
-  // Magic header PK\x03\x04
   if (buffer.readUInt32LE(0) !== 0x04034b50) {
     throw Object.assign(new Error('Tập tin không phải định dạng Excel (.xlsx) hợp lệ.'), { statusCode: 422 });
   }
 
-  // Tìm End of Central Directory (EOCD) trong 65KB cuối
   const maxSearch = Math.min(buffer.length, 65557);
   let eocdOffset = -1;
   for (let i = buffer.length - 22; i >= buffer.length - maxSearch; i--) {
@@ -446,7 +580,6 @@ const assertZipSafety = (buffer) => {
       break;
     }
   }
-
   if (eocdOffset === -1) {
     throw Object.assign(new Error('Cấu trúc tập tin Excel bị hỏng hoặc không đúng định dạng ZIP.'), { statusCode: 422 });
   }
@@ -458,7 +591,6 @@ const assertZipSafety = (buffer) => {
   if (totalEntries > 100) {
     throw Object.assign(new Error(`Tập tin Excel chứa quá nhiều tệp con (${totalEntries}), vượt quá giới hạn an toàn.`), { statusCode: 422 });
   }
-
   if (cdOffset + cdSize > buffer.length) {
     throw Object.assign(new Error('Cấu trúc nén của tập tin Excel bị sai lệch.'), { statusCode: 422 });
   }
@@ -466,16 +598,15 @@ const assertZipSafety = (buffer) => {
   let offset = cdOffset;
   let totalUncompressedSize = 0;
   let sheetCount = 0;
-  const MAX_TOTAL_UNCOMPRESSED = 30 * 1024 * 1024; // 30 MB
-  const MAX_ENTRY_UNCOMPRESSED = 10 * 1024 * 1024; // 10 MB
+  const MAX_TOTAL_UNCOMPRESSED = 30 * 1024 * 1024;
+  const MAX_ENTRY_UNCOMPRESSED = 10 * 1024 * 1024;
 
   for (let i = 0; i < totalEntries; i++) {
     if (offset + 46 > buffer.length) {
       throw Object.assign(new Error(`Tập tin Excel bị hỏng: thiếu dữ liệu Central Directory tại mục thứ ${i + 1}/${totalEntries}.`), { statusCode: 422 });
     }
-    const sig = buffer.readUInt32LE(offset);
-    if (sig !== 0x02014b50) {
-      throw Object.assign(new Error(`Tập tin Excel có cấu trúc nén ZIP không hợp lệ: chữ ký Central Directory bị sai lệch tại mục ${i + 1}.`), { statusCode: 422 });
+    if (buffer.readUInt32LE(offset) !== 0x02014b50) {
+      throw Object.assign(new Error(`Tập tin Excel có cấu trúc nén ZIP không hợp lệ tại mục ${i + 1}.`), { statusCode: 422 });
     }
 
     const uncompressedSize = buffer.readUInt32LE(offset + 24);
@@ -485,34 +616,29 @@ const assertZipSafety = (buffer) => {
 
     const entryLength = 46 + nameLen + extraLen + commentLen;
     if (offset + entryLength > buffer.length) {
-      throw Object.assign(new Error(`Tập tin Excel bị cắt cụt (truncated): mục "${i + 1}" vượt quá độ dài dữ liệu.`), { statusCode: 422 });
+      throw Object.assign(new Error(`Tập tin Excel bị cắt cụt (truncated) tại mục "${i + 1}".`), { statusCode: 422 });
     }
 
     const fileName = buffer.toString('utf8', offset + 46, offset + 46 + nameLen);
-
     if (fileName.startsWith('xl/worksheets/sheet') && fileName.endsWith('.xml')) {
       sheetCount++;
     }
-
     if (uncompressedSize > MAX_ENTRY_UNCOMPRESSED) {
-      throw Object.assign(new Error(`Tập tin chứa dữ liệu "${fileName}" vượt quá giới hạn giải nén an toàn (${(uncompressedSize / 1024 / 1024).toFixed(1)} MB).`), { statusCode: 422 });
+      throw Object.assign(new Error(`Tập tin chứa dữ liệu "${fileName}" vượt quá giới hạn giải nén an toàn.`), { statusCode: 422 });
     }
 
     totalUncompressedSize += uncompressedSize;
     offset += entryLength;
   }
 
-  // Xác nhận đã đọc đúng kích thước khai báo của Central Directory
   if (offset - cdOffset !== cdSize) {
     throw Object.assign(new Error('Kích thước Central Directory không khớp với khai báo EOCD trong tập tin Excel.'), { statusCode: 422 });
   }
-
   if (sheetCount > MAX_SHEETS) {
     throw Object.assign(new Error(`Tập tin Excel chứa quá nhiều trang tính (${sheetCount} sheets), giới hạn tối đa là ${MAX_SHEETS}.`), { statusCode: 422 });
   }
-
   if (totalUncompressedSize > MAX_TOTAL_UNCOMPRESSED) {
-    throw Object.assign(new Error(`Tổng dung lượng sau giải nén (${(totalUncompressedSize / 1024 / 1024).toFixed(1)} MB) vượt quá giới hạn an toàn.`), { statusCode: 422 });
+    throw Object.assign(new Error('Tổng dung lượng sau giải nén vượt quá giới hạn an toàn.'), { statusCode: 422 });
   }
 
   const compressionRatio = totalUncompressedSize / Math.max(buffer.length, 1);
@@ -522,70 +648,136 @@ const assertZipSafety = (buffer) => {
 };
 
 /**
- * Bỏ dấu tiếng Việt chuẩn bao gồm cả Đ/đ
+ * Nhận diện tiêu đề cột tiếng Việt không xung đột thứ tự từ khóa
+ * (hỗ trợ cả mẫu 22 cột mới lẫn các mẫu 8 cột / 13 cột cũ).
  */
-const normalizeHeaderKey = (text) => {
-  return String(text || '')
-    .replace(/đ/g, 'd')
-    .replace(/Đ/g, 'd')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '');
+const resolveHeaderField = (rawHeader) => {
+  const key = normalizeViKey(rawHeader);
+  if (!key) return null;
+
+  // 1. Nhóm Phụ huynh 2 (kiểm tra trước Phụ huynh 1 / Phụ huynh chung)
+  if (['hotenphuhuynh2', 'phuhuynh2', 'tenphuhuynh2', 'parent2name'].includes(key)) return 'parent2Name';
+  if (['dienthoaiphuhuynh2', 'sdtphuhuynh2', 'sodienthoaiphuhuynh2', 'sdtph2', 'parent2phone'].includes(key)) return 'parent2Phone';
+  if (['homthuphuhuynh2', 'emailphuhuynh2', 'mailphuhuynh2', 'parent2email'].includes(key)) return 'parent2Email';
+  if (['quanheph2', 'quanhephuhuynh2', 'parent2relationship'].includes(key)) return 'parent2Relationship';
+
+  // 2. Nhóm Phụ huynh 1 & tương thích ngược cột Phụ huynh đơn cũ
+  if (['hotenphuhuynh1', 'phuhuynh1', 'tenphuhuynh1', 'hotenphuhuynh', 'phuhuynhhocsinh', 'nguoilienhe', 'phuhuynh', 'parent1name', 'parentname', 'contactname'].includes(key)) return 'parent1Name';
+  if (['dienthoaiphuhuynh1', 'sdtphuhuynh1', 'sodienthoaiphuhuynh1', 'sdtph1', 'dienthoaiphuhuynh', 'sdtphuhuynh', 'sdtlienhe', 'sodienthoai', 'parent1phone', 'contactphone', 'phone'].includes(key)) return 'parent1Phone';
+  if (['homthuphuhuynh1', 'emailphuhuynh1', 'mailphuhuynh1', 'homthuphuhuynh', 'emailphuhuynh', 'email', 'parent1email', 'parentemail'].includes(key)) return 'parent1Email';
+  if (['quanheph1', 'quanhephuhuynh1', 'quanhephuhuynh', 'quanhe', 'parent1relationship'].includes(key)) return 'parent1Relationship';
+
+  // 3. Mã học sinh, Mã định danh & Lớp
+  if (['madinhdanhhocsinh', 'madinhdanh', 'sodinhdanh', 'madinhdanhcanhan', 'identitycode'].includes(key)) return 'identityCode';
+  if (['maidhocsinh', 'maidcuahocsinh', 'mahocsinh', 'mahs', 'studentcode', 'studentid'].includes(key)) return 'studentCode';
+  if (['lop', 'lophoc', 'tenlop', 'classroom', 'classname'].includes(key)) return 'classNameInput';
+
+  // 4. Thông tin học sinh cốt lõi
+  if (['hovaten', 'hotenhocsinh', 'hoten', 'fullname'].includes(key)) return 'fullName';
+  if (['ngaysinh', 'birthdate', 'dob'].includes(key)) return 'birthDate';
+  if (['gioitinh', 'gender', 'sex'].includes(key)) return 'gender';
+  if (['ngaynhaphoc', 'ngayvaohoc', 'admissiondate'].includes(key)) return 'admissionDate';
+
+  // 5. Y tế & Nhân khẩu
+  if (key.includes('diung') || key === 'allergies' || key === 'allergy') return 'allergiesText';
+  if (key.includes('benhly') || key.includes('suckhoe') || key === 'disease') return 'diseaseText';
+  if (['diachi', 'address'].includes(key)) return 'address';
+  if (['quoctich', 'nationality'].includes(key)) return 'nationality';
+  if (['dantoc', 'ethnicity'].includes(key)) return 'ethnicity';
+  if (['noisinh', 'birthplace'].includes(key)) return 'birthPlace';
+  if (['ghichu', 'notes', 'note'].includes(key)) return 'notes';
+
+  return null;
 };
 
 /**
- * Đọc buffer file Excel và parse + validate danh sách học sinh
+ * Đối chiếu tên lớp trong cột "Lớp" của Excel với danh sách lớp đang hoạt động của trường.
+ * Hỗ trợ nhập dạng "Mầm 1", "Lớp Mầm 1", hoặc "Mầm 1 (Phân hiệu 2)".
  */
-const parseAndValidateExcelBuffer = async (buffer, classroomId, user) => {
+const matchClassroomByInput = (rawInput, availableClassrooms = []) => {
+  const trimmed = String(rawInput || '').trim();
+  if (!trimmed) return { classroom: null };
+
+  const lower = trimmed.toLowerCase();
+  const normalized = normalizeViKey(trimmed);
+
+  // Khớp chính xác theo "Tên lớp (Phân hiệu)" trước
+  const exactWithCampus = availableClassrooms.filter((cls) => {
+    const labelWithCampus = `${cls.name} (${cls.campus || 'Cơ sở chính'})`.toLowerCase();
+    return labelWithCampus === lower;
+  });
+  if (exactWithCampus.length === 1) return { classroom: exactWithCampus[0] };
+
+  // Khớp chính xác theo name hoặc fullName
+  const exactMatches = availableClassrooms.filter((cls) =>
+    String(cls.name || '').trim().toLowerCase() === lower ||
+    String(cls.fullName || '').trim().toLowerCase() === lower ||
+    normalizeViKey(cls.name) === normalized ||
+    normalizeViKey(`Lớp ${cls.name}`) === normalized
+  );
+
+  if (exactMatches.length === 1) return { classroom: exactMatches[0] };
+  if (exactMatches.length > 1) {
+    const campuses = exactMatches.map((m) => m.campus || 'Cơ sở chính').join(', ');
+    return {
+      classroom: null,
+      ambiguousError: `Tên lớp "${trimmed}" tồn tại ở nhiều phân hiệu (${campuses}). Vui lòng ghi rõ "${trimmed} (Tên phân hiệu)"`
+    };
+  }
+
+  return {
+    classroom: null,
+    notFoundError: `Không tìm thấy lớp đang hoạt động "${trimmed}" trong trường`
+  };
+};
+
+/**
+ * Đọc buffer file Excel và phân tích + kiểm tra danh sách học sinh.
+ * Hỗ trợ cả 2 chế độ:
+ * - Chọn 1 lớp cụ thể (`classroomId` là ObjectId).
+ * - Đẩy danh sách tổng toàn trường (`classroomId === '__ALL__'` hoặc rỗng), phân lớp theo cột "Lớp".
+ */
+const parseAndValidateExcelBuffer = async (buffer, classroomId, user, options = {}) => {
+  const { availableClassrooms = [], selectedClassroom = null, reqContext = null } = options;
+  const isMultiClassMode = !classroomId || classroomId === MULTI_CLASS_TARGET;
+
   if (!buffer || !buffer.length) {
     throw Object.assign(new Error('Tập tin rỗng hoặc không tải được dữ liệu.'), { statusCode: 400 });
   }
-
   if (buffer.length > MAX_FILE_SIZE) {
-    throw Object.assign(new Error(`Kích thước tập tin vượt quá giới hạn cho phép (tối đa 5 MB).`), { statusCode: 400 });
+    throw Object.assign(new Error('Kích thước tập tin vượt quá giới hạn cho phép (tối đa 5 MB).'), { statusCode: 400 });
   }
 
-  // 1. Kiểm tra an toàn cấu trúc ZIP trực tiếp từ buffer TRƯỚC KHI giải nén
   assertZipSafety(buffer);
 
   const workbook = new ExcelJS.Workbook();
   try {
     await workbook.xlsx.load(buffer);
-  } catch (err) {
+  } catch {
     throw Object.assign(new Error('Tập tin không phải định dạng Excel (.xlsx) hợp lệ hoặc bị mã hóa mật khẩu.'), { statusCode: 400 });
   }
 
-  // Giới hạn phòng chống Decompression Bomb
   if (workbook.worksheets.length > MAX_SHEETS) {
     throw Object.assign(new Error(`Tập tin Excel chứa quá nhiều trang tính (${workbook.worksheets.length}/${MAX_SHEETS}).`), { statusCode: 422 });
   }
 
   const is1904 = Boolean(workbook.properties && workbook.properties.date1904);
 
-  // Tìm worksheet dữ liệu: ưu tiên sheet tên "Danh sách học sinh", hoặc sheet đầu tiên nếu không phải "Hướng dẫn"
   let worksheet = workbook.getWorksheet('Danh sách học sinh');
   if (!worksheet) {
-    worksheet = workbook.worksheets.find(s => s.name !== 'Hướng dẫn' && s.name !== 'Danh mục');
-    if (!worksheet) {
-      worksheet = workbook.worksheets[0];
-    }
+    worksheet = workbook.worksheets.find((s) => s.name !== 'Hướng dẫn' && s.name !== 'Danh mục') || workbook.worksheets[0];
   }
-
   if (!worksheet || worksheet.name === 'Hướng dẫn') {
     throw Object.assign(new Error('Không tìm thấy trang tính "Danh sách học sinh" trong file Excel.'), { statusCode: 422 });
   }
 
-  // Kiểm tra giới hạn số dòng và số cột của trang tính (cho phép dòng 1..501 cho template 500 học sinh)
   if (worksheet.rowCount > MAX_ROWS + 100) {
     throw Object.assign(new Error(`Tập tin Excel chứa quá nhiều dòng (${worksheet.rowCount} dòng). Giới hạn tối đa là ${MAX_ROWS} dòng dữ liệu.`), { statusCode: 422 });
   }
-
   if (worksheet.columnCount > MAX_COLUMNS) {
-    throw Object.assign(new Error(`Số lượng cột trong trang tính (${worksheet.columnCount}) vượt quá giới hạn cho phép.`), { statusCode: 422 });
+    throw Object.assign(new Error(`Số lượng cột trong trang tính (${worksheet.columnCount}) vượt quá giới hạn cho phép (${MAX_COLUMNS}).`), { statusCode: 422 });
   }
 
-  // Kiểm tra header ở dòng 1
   const headerRow = worksheet.getRow(1);
   const headers = [];
   headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
@@ -596,82 +788,57 @@ const parseAndValidateExcelBuffer = async (buffer, classroomId, user) => {
     throw Object.assign(new Error('File Excel chưa có dòng tiêu đề cột hợp lệ.'), { statusCode: 422 });
   }
 
-  // Ánh xạ tên cột tiếng Việt sang key dữ liệu
   const columnMap = {};
   const duplicateHeaderCheck = new Map();
   const unrecognizedHeaders = [];
 
-  const FIELD_KEYWORDS = {
-    fullName: ['hoten', 'hovaten', 'fullname'],
-    birthDate: ['ngaysinh', 'birthdate', 'dob'],
-    gender: ['gioitinh', 'gender', 'sex'],
-    admissionDate: ['ngaynhaphoc', 'admissiondate', 'ngayvaohoc'],
-    allergiesText: ['diung', 'diungthucpham', 'allergies', 'allergy'],
-    diseaseText: ['benhly', 'benhlysuckhoe', 'suckhoe', 'disease'],
-    contactName: ['hotenphuhuynh', 'nguoilienhe', 'phuhuynh', 'parentname', 'contactname'],
-    contactPhone: ['sdtlienhe', 'sodienthoai', 'sdtphuhuynh', 'phone', 'contactphone'],
-    address: ['diachi', 'address'],
-    nationality: ['quoctich', 'nationality'],
-    ethnicity: ['dantoc', 'ethnicity'],
-    birthPlace: ['noisinh', 'birthplace'],
-    notes: ['ghichu', 'notes', 'note']
-  };
-
-  headers.forEach(h => {
-    const raw = normalizeHeaderKey(h.text);
-
-    let matchedField = null;
-    for (const [field, keywords] of Object.entries(FIELD_KEYWORDS)) {
-      if (keywords.some(k => raw === k || raw.includes(k))) {
-        matchedField = field;
-        break;
-      }
-    }
-
+  headers.forEach((h) => {
+    const matchedField = resolveHeaderField(h.text);
     if (!matchedField) {
-      if (h.text.trim()) {
-        unrecognizedHeaders.push(h.text.trim());
-      }
+      if (h.text.trim()) unrecognizedHeaders.push(h.text.trim());
       return;
     }
-
-    // Kiểm tra header trùng lặp
     if (duplicateHeaderCheck.has(matchedField)) {
-      throw Object.assign(new Error(`File Excel có các cột tiêu đề trùng lặp nhau: "${h.text}" và "${duplicateHeaderCheck.get(matchedField)}".`), { statusCode: 422 });
+      throw Object.assign(new Error(`File Excel có các cột tiêu đề trùng lặp ý nghĩa: "${h.text}" và "${duplicateHeaderCheck.get(matchedField)}".`), { statusCode: 422 });
     }
-
     duplicateHeaderCheck.set(matchedField, h.text);
     columnMap[matchedField] = h.colNumber;
   });
 
-  // Từ chối nếu có cột lạ không thuộc mẫu
   if (unrecognizedHeaders.length > 0) {
-    throw Object.assign(new Error(`File Excel chứa cột không được nhận diện: "${unrecognizedHeaders.join(', ')}". Vui lòng chỉ sử dụng đúng các cột trong mẫu quy định.`), { statusCode: 422 });
+    throw Object.assign(new Error(`File Excel chứa cột không được nhận diện: "${unrecognizedHeaders.join(', ')}". Vui lòng tải file Excel mẫu mới nhất để sử dụng.`), { statusCode: 422 });
   }
 
   const missingRequiredHeaders = [];
   if (!columnMap.fullName) missingRequiredHeaders.push('Họ và tên (*)');
   if (!columnMap.birthDate) missingRequiredHeaders.push('Ngày sinh (*)');
   if (!columnMap.gender) missingRequiredHeaders.push('Giới tính (*)');
+  if (isMultiClassMode && !columnMap.classNameInput) {
+    missingRequiredHeaders.push('Lớp (bắt buộc khi đẩy danh sách tổng nhiều lớp)');
+  }
 
   if (missingRequiredHeaders.length > 0) {
     throw Object.assign(new Error(`File Excel thiếu các cột bắt buộc: ${missingRequiredHeaders.join(', ')}`), { statusCode: 422 });
   }
 
-  // Đọc các dòng dữ liệu
   const parsedRows = [];
-  let rowCount = 0;
   const now = new Date();
 
-  worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-    if (rowNumber === 1) return; // Bỏ qua header
-    rowCount++;
+  const readTextCol = (row, field, label, rowErrors) => {
+    if (!columnMap[field]) return '';
+    const extracted = extractCellStaticString(row.getCell(columnMap[field]), label);
+    if (extracted.isFormula) rowErrors.push(extracted.error);
+    return extracted.text;
+  };
 
-    // Kiểm tra từng cell xem có chứa công thức không
+  worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    if (rowNumber === 1) return;
     const rowErrors = [];
 
-    const cellFullNameObj = extractCellStaticString(row.getCell(columnMap.fullName), 'Họ và tên');
-    if (cellFullNameObj.isFormula) rowErrors.push(cellFullNameObj.error);
+    const rawClassNameInput = readTextCol(row, 'classNameInput', 'Lớp', rowErrors);
+    const rawStudentCode = readTextCol(row, 'studentCode', 'Mã ID học sinh', rowErrors);
+    const rawIdentityCode = readTextCol(row, 'identityCode', 'Mã định danh học sinh', rowErrors);
+    const rawFullName = readTextCol(row, 'fullName', 'Họ và tên', rowErrors);
 
     const cellBirthDate = row.getCell(columnMap.birthDate);
     if (isFormulaCell(cellBirthDate)) {
@@ -679,38 +846,7 @@ const parseAndValidateExcelBuffer = async (buffer, classroomId, user) => {
     }
     const rawBirthDate = cellBirthDate.value;
 
-    const cellGenderObj = extractCellStaticString(row.getCell(columnMap.gender), 'Giới tính');
-    if (cellGenderObj.isFormula) rowErrors.push(cellGenderObj.error);
-
-    let cellAddressObj = { text: '' };
-    if (columnMap.address) {
-      cellAddressObj = extractCellStaticString(row.getCell(columnMap.address), 'Địa chỉ');
-      if (cellAddressObj.isFormula) rowErrors.push(cellAddressObj.error);
-    }
-
-    let cellNationalityObj = { text: '' };
-    if (columnMap.nationality) {
-      cellNationalityObj = extractCellStaticString(row.getCell(columnMap.nationality), 'Quốc tịch');
-      if (cellNationalityObj.isFormula) rowErrors.push(cellNationalityObj.error);
-    }
-
-    let cellEthnicityObj = { text: '' };
-    if (columnMap.ethnicity) {
-      cellEthnicityObj = extractCellStaticString(row.getCell(columnMap.ethnicity), 'Dân tộc');
-      if (cellEthnicityObj.isFormula) rowErrors.push(cellEthnicityObj.error);
-    }
-
-    let cellBirthPlaceObj = { text: '' };
-    if (columnMap.birthPlace) {
-      cellBirthPlaceObj = extractCellStaticString(row.getCell(columnMap.birthPlace), 'Nơi sinh');
-      if (cellBirthPlaceObj.isFormula) rowErrors.push(cellBirthPlaceObj.error);
-    }
-
-    let cellNotesObj = { text: '' };
-    if (columnMap.notes) {
-      cellNotesObj = extractCellStaticString(row.getCell(columnMap.notes), 'Ghi chú');
-      if (cellNotesObj.isFormula) rowErrors.push(cellNotesObj.error);
-    }
+    const rawGender = readTextCol(row, 'gender', 'Giới tính', rowErrors);
 
     let rawAdmissionDate = null;
     if (columnMap.admissionDate) {
@@ -721,53 +857,56 @@ const parseAndValidateExcelBuffer = async (buffer, classroomId, user) => {
       rawAdmissionDate = cellAdmission.value;
     }
 
-    let cellAllergiesObj = { text: '' };
-    if (columnMap.allergiesText) {
-      cellAllergiesObj = extractCellStaticString(row.getCell(columnMap.allergiesText), 'Dị ứng thực phẩm');
-      if (cellAllergiesObj.isFormula) rowErrors.push(cellAllergiesObj.error);
-    }
+    const rawParent1Name = readTextCol(row, 'parent1Name', 'Họ tên phụ huynh 1', rowErrors);
+    const rawParent1Phone = readTextCol(row, 'parent1Phone', 'Điện thoại phụ huynh 1', rowErrors);
+    const rawParent1Email = readTextCol(row, 'parent1Email', 'Hòm thư phụ huynh 1', rowErrors);
+    const rawParent1Relationship = readTextCol(row, 'parent1Relationship', 'Quan hệ PH 1', rowErrors);
 
-    let cellDiseaseObj = { text: '' };
-    if (columnMap.diseaseText) {
-      cellDiseaseObj = extractCellStaticString(row.getCell(columnMap.diseaseText), 'Bệnh lý / Sức khỏe');
-      if (cellDiseaseObj.isFormula) rowErrors.push(cellDiseaseObj.error);
-    }
+    const rawParent2Name = readTextCol(row, 'parent2Name', 'Họ tên phụ huynh 2', rowErrors);
+    const rawParent2Phone = readTextCol(row, 'parent2Phone', 'Điện thoại phụ huynh 2', rowErrors);
+    const rawParent2Email = readTextCol(row, 'parent2Email', 'Hòm thư phụ huynh 2', rowErrors);
+    const rawParent2Relationship = readTextCol(row, 'parent2Relationship', 'Quan hệ PH 2', rowErrors);
 
-    let cellContactNameObj = { text: '' };
-    if (columnMap.contactName) {
-      cellContactNameObj = extractCellStaticString(row.getCell(columnMap.contactName), 'Họ tên phụ huynh');
-      if (cellContactNameObj.isFormula) rowErrors.push(cellContactNameObj.error);
-    }
+    const rawAllergiesText = readTextCol(row, 'allergiesText', 'Dị ứng thực phẩm', rowErrors);
+    const rawDiseaseText = readTextCol(row, 'diseaseText', 'Bệnh lý / Sức khỏe', rowErrors);
+    const rawAddress = readTextCol(row, 'address', 'Địa chỉ', rowErrors);
+    const rawNationality = readTextCol(row, 'nationality', 'Quốc tịch', rowErrors);
+    const rawEthnicity = readTextCol(row, 'ethnicity', 'Dân tộc', rowErrors);
+    const rawBirthPlace = readTextCol(row, 'birthPlace', 'Nơi sinh', rowErrors);
+    const rawNotes = readTextCol(row, 'notes', 'Ghi chú', rowErrors);
 
-    let cellContactPhoneObj = { text: '' };
-    if (columnMap.contactPhone) {
-      cellContactPhoneObj = extractCellStaticString(row.getCell(columnMap.contactPhone), 'SĐT liên hệ');
-      if (cellContactPhoneObj.isFormula) rowErrors.push(cellContactPhoneObj.error);
-    }
-
-    // Bỏ qua dòng hoàn toàn trống
-    const allEmpty = !cellFullNameObj.text && !rawBirthDate && !cellGenderObj.text &&
-      !rawAdmissionDate && !cellAllergiesObj.text && !cellDiseaseObj.text &&
-      !cellContactNameObj.text && !cellContactPhoneObj.text &&
-      !cellAddressObj.text && !cellNationalityObj.text && !cellEthnicityObj.text &&
-      !cellBirthPlaceObj.text && !cellNotesObj.text;
+    const allEmpty = !rawClassNameInput && !rawStudentCode && !rawIdentityCode &&
+      !rawFullName && !rawBirthDate && !rawGender && !rawAdmissionDate &&
+      !rawParent1Name && !rawParent1Phone && !rawParent1Email &&
+      !rawParent2Name && !rawParent2Phone && !rawParent2Email &&
+      !rawAllergiesText && !rawDiseaseText && !rawAddress &&
+      !rawNationality && !rawEthnicity && !rawBirthPlace && !rawNotes;
     if (allEmpty) return;
 
     parsedRows.push({
       rowNumber,
-      rawFullName: cellFullNameObj.text,
+      rawClassNameInput,
+      rawStudentCode,
+      rawIdentityCode,
+      rawFullName,
       rawBirthDate,
-      rawGender: cellGenderObj.text,
+      rawGender,
       rawAdmissionDate,
-      rawAllergiesText: cellAllergiesObj.text,
-      rawDiseaseText: cellDiseaseObj.text,
-      rawContactName: cellContactNameObj.text,
-      rawContactPhone: cellContactPhoneObj.text,
-      rawAddress: cellAddressObj.text,
-      rawNationality: cellNationalityObj.text,
-      rawEthnicity: cellEthnicityObj.text,
-      rawBirthPlace: cellBirthPlaceObj.text,
-      rawNotes: cellNotesObj.text,
+      rawParent1Name,
+      rawParent1Phone,
+      rawParent1Email,
+      rawParent1Relationship,
+      rawParent2Name,
+      rawParent2Phone,
+      rawParent2Email,
+      rawParent2Relationship,
+      rawAllergiesText,
+      rawDiseaseText,
+      rawAddress,
+      rawNationality,
+      rawEthnicity,
+      rawBirthPlace,
+      rawNotes,
       formulaErrors: rowErrors
     });
   });
@@ -775,121 +914,175 @@ const parseAndValidateExcelBuffer = async (buffer, classroomId, user) => {
   if (!parsedRows.length) {
     throw Object.assign(new Error('Tập tin Excel không có dữ liệu học sinh nào để nhập.'), { statusCode: 422 });
   }
-
   if (parsedRows.length > MAX_ROWS) {
     throw Object.assign(new Error(`Tập tin Excel chứa ${parsedRows.length} học sinh, vượt quá giới hạn tối đa ${MAX_ROWS} học sinh/lần import.`), { statusCode: 422 });
   }
 
-  // 1. Validate từng dòng dữ liệu bằng bộ validator nghiêm ngặt dùng chung
+  // Bước 1: Kiểm tra hợp lệ từng dòng, đối chiếu lớp đích và kiểm tra trùng lặp nội bộ trong file
   const validatedRows = [];
   const inMemoryDuplicates = new Map();
+  const inMemoryStudentCodes = new Map();
 
   for (const item of parsedRows) {
     const validated = validateStudentRowStrict(item, item.rowNumber, now, is1904);
-    if (item.formulaErrors && item.formulaErrors.length > 0) {
+    if (item.formulaErrors?.length) {
       validated.errors.unshift(...item.formulaErrors);
       validated.isValid = false;
     }
 
-    // Kiểm tra trùng lặp nội bộ trong file (cùng Họ tên + Ngày sinh + Giới tính)
+    // Phân giải lớp đích cho từng dòng
+    if (isMultiClassMode) {
+      if (!validated.classNameInput) {
+        validated.errors.push('Cột "Lớp" không được để trống khi đẩy danh sách tổng nhiều lớp');
+        validated.isValid = false;
+      } else {
+        const matched = matchClassroomByInput(validated.classNameInput, availableClassrooms);
+        if (matched.classroom) {
+          validated.resolvedClassroomId = String(matched.classroom._id);
+          validated.resolvedClassName = matched.classroom.name;
+        } else {
+          validated.errors.push(matched.ambiguousError || matched.notFoundError);
+          validated.isValid = false;
+        }
+      }
+    } else if (selectedClassroom) {
+      if (validated.classNameInput) {
+        const matchedSingle = matchClassroomByInput(validated.classNameInput, [selectedClassroom]);
+        if (!matchedSingle.classroom) {
+          validated.errors.push(`Cột Lớp "${validated.classNameInput}" không khớp với lớp đang chọn "${selectedClassroom.name}". Chọn chế độ "Đẩy danh sách tổng" nếu muốn nhập nhiều lớp cùng lúc`);
+          validated.isValid = false;
+        }
+      }
+      validated.resolvedClassroomId = String(selectedClassroom._id);
+      validated.resolvedClassName = selectedClassroom.name;
+    }
+
     if (validated.fullName && validated.birthDate && validated.gender) {
       const dupKey = `${validated.fullName.toLowerCase()}||${validated.birthDate}||${validated.gender}`;
-      if (!inMemoryDuplicates.has(dupKey)) {
-        inMemoryDuplicates.set(dupKey, [validated.rowNumber]);
-      } else {
-        inMemoryDuplicates.get(dupKey).push(validated.rowNumber);
-      }
+      if (!inMemoryDuplicates.has(dupKey)) inMemoryDuplicates.set(dupKey, [validated.rowNumber]);
+      else inMemoryDuplicates.get(dupKey).push(validated.rowNumber);
+    }
+
+    if (validated.studentCode) {
+      if (!inMemoryStudentCodes.has(validated.studentCode)) inMemoryStudentCodes.set(validated.studentCode, [validated.rowNumber]);
+      else inMemoryStudentCodes.get(validated.studentCode).push(validated.rowNumber);
     }
 
     validatedRows.push(validated);
   }
 
-  // Đánh dấu lỗi cho các dòng bị trùng lặp nội bộ
   for (const row of validatedRows) {
     if (row.fullName && row.birthDate && row.gender) {
       const dupKey = `${row.fullName.toLowerCase()}||${row.birthDate}||${row.gender}`;
-      const duplicateRowNumbers = inMemoryDuplicates.get(dupKey) || [];
-      if (duplicateRowNumbers.length > 1) {
+      const dupRows = inMemoryDuplicates.get(dupKey) || [];
+      if (dupRows.length > 1) {
         row.isValid = false;
-        const otherRows = duplicateRowNumbers.filter(r => r !== row.rowNumber);
-        row.errors.push(`Trùng lặp thông tin với dòng ${otherRows.join(', ')} trong file này`);
+        row.errors.push(`Trùng lặp thông tin với dòng ${dupRows.filter((r) => r !== row.rowNumber).join(', ')} trong file này`);
+      }
+    }
+    if (row.studentCode) {
+      const dupCodeRows = inMemoryStudentCodes.get(row.studentCode) || [];
+      if (dupCodeRows.length > 1) {
+        row.isValid = false;
+        row.errors.push(`Mã ID học sinh "${row.studentCode}" bị trùng ở dòng ${dupCodeRows.filter((r) => r !== row.rowNumber).join(', ')} trong file này`);
       }
     }
   }
 
-  // 2. Kiểm tra nghi trùng với học sinh đang tồn tại trong hệ thống (Tuân thủ quyền riêng tư phân lớp)
+  // Bước 2: Đối chiếu trùng lặp với cơ sở dữ liệu theo đúng phạm vi trường (tenantId) trong 1 truy vấn duy nhất
   let teacherClassroomIds = null;
   if (user && user.role === 'teacher') {
-    teacherClassroomIds = (await getTeacherClassroomIds(user)).map(String);
+    teacherClassroomIds = (await getTeacherClassroomIds(user, reqContext)).map(String);
   }
 
-  const validCandidates = validatedRows.filter(r => r.isValid);
+  const tenantFilter = reqContext ? buildTenantFilter(reqContext) : (user?.tenantId ? { tenantId: user.tenantId } : {});
+  const validCandidates = validatedRows.filter((r) => r.isValid);
+
   if (validCandidates.length > 0) {
-    const fullNames = [...new Set(validCandidates.map(r => r.fullName))];
+    const fullNames = [...new Set(validCandidates.map((r) => r.fullName))];
+    const manualCodes = [...new Set(validCandidates.map((r) => r.studentCode).filter(Boolean))];
+    const orConditions = [{ fullName: { $in: fullNames } }];
+    if (manualCodes.length > 0) {
+      orConditions.push({ studentCode: { $in: manualCodes } });
+    }
+
     const existingStudents = await Student.find({
-      fullName: { $in: fullNames }
+      ...tenantFilter,
+      $or: orConditions
     }).select('fullName birthDate gender classroomId className studentCode status').lean();
 
-    if (existingStudents.length > 0) {
-      for (const row of validCandidates) {
-        const match = existingStudents.find(s => {
-          if (s.fullName.toLowerCase() !== row.fullName.toLowerCase()) return false;
-          if (s.gender !== row.gender) return false;
-          if (s.birthDate) {
-            const sDate = s.birthDate instanceof Date ? s.birthDate.toISOString().slice(0, 10) : String(s.birthDate).slice(0, 10);
-            return sDate === row.birthDate;
-          }
-          return false;
-        });
-
-        if (match) {
+    for (const row of validCandidates) {
+      if (row.studentCode) {
+        const codeConflict = existingStudents.find((s) => String(s.studentCode || '').toUpperCase() === row.studentCode);
+        if (codeConflict) {
           row.isValid = false;
-          const isAccessibleByTeacher = !teacherClassroomIds || teacherClassroomIds.includes(String(match.classroomId));
+          row.errors.push(`Mã ID học sinh "${row.studentCode}" đã được cấp cho học sinh "${codeConflict.fullName}"`);
+          continue;
+        }
+      }
 
-          if (isAccessibleByTeacher || user.role === 'admin' || user.role === 'principal') {
-            row.errors.push(`Nghi trùng với học sinh "${match.fullName}" (${match.studentCode || 'Chưa có mã'}, lớp ${match.className || 'Chưa xếp lớp'})`);
-            row.duplicateInfo = {
-              studentCode: match.studentCode,
-              fullName: match.fullName,
-              className: match.className
-            };
-          } else {
-            // Không lộ mã học sinh và tên lớp của lớp khác cho giáo viên
-            row.errors.push(`Nghi trùng với học sinh "${match.fullName}" đã có hồ sơ trong hệ thống nhà trường. Vui lòng liên hệ Ban giám hiệu để kiểm tra.`);
-            row.duplicateInfo = {
-              isExternal: true,
-              fullName: match.fullName
-            };
-          }
+      const match = existingStudents.find((s) => {
+        if (s.fullName.toLowerCase() !== row.fullName.toLowerCase()) return false;
+        if (s.gender !== row.gender) return false;
+        if (s.birthDate) {
+          const sDate = s.birthDate instanceof Date ? s.birthDate.toISOString().slice(0, 10) : String(s.birthDate).slice(0, 10);
+          return sDate === row.birthDate;
+        }
+        return false;
+      });
+
+      if (match) {
+        row.isValid = false;
+        const isAccessibleByTeacher = !teacherClassroomIds || teacherClassroomIds.includes(String(match.classroomId));
+        if (isAccessibleByTeacher || ['admin', 'principal'].includes(user?.role)) {
+          row.errors.push(`Nghi trùng với học sinh "${match.fullName}" (${match.studentCode || 'Chưa có mã'}, lớp ${match.className || 'Chưa xếp lớp'})`);
+          row.duplicateInfo = { studentCode: match.studentCode, fullName: match.fullName, className: match.className };
+        } else {
+          row.errors.push(`Nghi trùng với học sinh "${match.fullName}" đã có hồ sơ trong hệ thống nhà trường.`);
+          row.duplicateInfo = { isExternal: true, fullName: match.fullName };
         }
       }
     }
   }
 
   const totalRows = validatedRows.length;
-  const totalValid = validatedRows.filter(r => r.isValid).length;
-  const totalErrors = validatedRows.filter(r => !r.isValid).length;
+  const totalValid = validatedRows.filter((r) => r.isValid).length;
+  const totalErrors = validatedRows.filter((r) => !r.isValid).length;
   const fingerprint = computeBatchFingerprint(classroomId, validatedRows);
 
   return {
     totalRows,
     totalValid,
     totalErrors,
+    isMultiClassMode,
     isValid: totalErrors === 0 && totalValid > 0,
     canImport: totalErrors === 0 && totalValid > 0,
     fingerprint,
-    rows: validatedRows.map(r => ({
+    rows: validatedRows.map((r) => ({
       rowNumber: r.rowNumber,
+      classNameInput: r.classNameInput || r.resolvedClassName || '',
+      resolvedClassroomId: r.resolvedClassroomId || '',
+      resolvedClassName: r.resolvedClassName || '',
+      studentCode: r.studentCode || '',
+      identityCode: r.identityCode || '',
       fullName: r.fullName,
       birthDate: r.birthDate,
       birthDateFormatted: r.birthDate ? r.birthDate.split('-').reverse().join('/') : '',
       admissionDate: r.admissionDate || '',
       gender: r.gender,
       genderText: r.genderText,
-      allergiesText: r.allergiesText || '',
-      diseaseText: r.diseaseText || '',
+      parent1Name: r.parent1Name || '',
+      parent1Phone: r.parent1Phone || '',
+      parent1Email: r.parent1Email || '',
+      parent1Relationship: r.parent1Relationship || '',
+      parent2Name: r.parent2Name || '',
+      parent2Phone: r.parent2Phone || '',
+      parent2Email: r.parent2Email || '',
+      parent2Relationship: r.parent2Relationship || '',
       contactName: r.contactName || '',
       contactPhone: r.contactPhone || '',
+      allergiesText: r.allergiesText || '',
+      diseaseText: r.diseaseText || '',
       address: r.address,
       nationality: r.nationality,
       ethnicity: r.ethnicity,
@@ -906,9 +1099,11 @@ module.exports = {
   EXCEL_COLUMNS,
   MAX_FILE_SIZE,
   MAX_ROWS,
+  MULTI_CLASS_TARGET,
   generateTemplateWorkbook,
   parseAndValidateExcelBuffer,
   validateStudentRowStrict,
   computeBatchFingerprint,
+  matchClassroomByInput,
   deriveSchoolYear
 };

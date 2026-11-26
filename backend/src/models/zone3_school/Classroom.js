@@ -22,9 +22,17 @@ const ClassroomSchema = new mongoose.Schema({
         maxlength: 120,
         default: ''
     },
+    // Phân hiệu / Cơ sở trực thuộc trong trường (mặc định 'Cơ sở chính' để tương thích ngược)
+    campus: {
+        type: String,
+        trim: true,
+        maxlength: 120,
+        default: 'Cơ sở chính'
+    },
+    // Hỗ trợ đầy đủ khối Nhà trẻ (từ 6 tháng tuổi) và khối Mẫu giáo (3–6 tuổi)
     ageGroup: {
         type: String,
-        enum: ['3-4', '4-5', '5-6'],
+        enum: ['6-12m', '1-2', '2-3', '3-4', '4-5', '5-6'],
         required: true
     },
     maxSize: {

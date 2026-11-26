@@ -32,6 +32,7 @@ const ALLERGEN_ALIASES = {
 };
 const empty = {
   studentCode: "",
+  identityCode: "",
   fullName: "",
   birthDate: "",
   gender: "male",
@@ -48,6 +49,14 @@ const empty = {
   allergyNote: "",
   diseaseName: "",
   diseaseDescription: "",
+  parent1Name: "",
+  parent1Phone: "",
+  parent1Email: "",
+  parent1Relationship: "father",
+  parent2Name: "",
+  parent2Phone: "",
+  parent2Email: "",
+  parent2Relationship: "mother",
   emergencyName: "",
   emergencyPhone: "",
 };
@@ -100,17 +109,29 @@ export default function StudentForm() {
           .filter((item) => !item.code)
           .map((item) => [item.allergen, item.note].filter(Boolean).join(": "))
           .filter(Boolean);
+        const existingParents = Array.isArray(data.parents) ? data.parents : [];
+        const p1 = existingParents[0] || {};
+        const p2 = existingParents[1] || {};
         setForm((old) => ({
           ...old,
           ...data,
+          identityCode: data.identityCode || "",
           birthDate: toDate(data.birthDate),
           admissionDate: toDate(data.admissionDate),
           allergens: standardCodes,
           allergyNote: otherNotes.join("; "),
           diseaseName: data.disease?.name || "",
           diseaseDescription: data.disease?.description || "",
-          emergencyName: data.emergencyContact?.name || "",
-          emergencyPhone: data.emergencyContact?.phone || "",
+          parent1Name: p1.fullName || "",
+          parent1Phone: p1.phone || "",
+          parent1Email: p1.email || "",
+          parent1Relationship: p1.relationship || "father",
+          parent2Name: p2.fullName || "",
+          parent2Phone: p2.phone || "",
+          parent2Email: p2.email || "",
+          parent2Relationship: p2.relationship || "mother",
+          emergencyName: data.emergencyContact?.name || p1.fullName || "",
+          emergencyPhone: data.emergencyContact?.phone || p1.phone || "",
         }));
       })
       .catch(() => setError("Không thể tải dữ liệu biểu mẫu."));
@@ -131,6 +152,7 @@ export default function StudentForm() {
     try {
       const teacherCreateFields = [
         "studentCode",
+        "identityCode",
         "fullName",
         "birthDate",
         "gender",
@@ -154,6 +176,30 @@ export default function StudentForm() {
           ? teacherUpdateFields
           : teacherCreateFields;
       const data = Object.fromEntries(fields.map((key) => [key, form[key]]));
+      const builtParents = [];
+      if (form.parent1Name.trim() && form.parent1Phone.trim()) {
+        builtParents.push({
+          fullName: form.parent1Name.trim(),
+          phone: form.parent1Phone.trim(),
+          email: form.parent1Email.trim() || undefined,
+          relationship: form.parent1Relationship || "father",
+          isPrimary: true,
+        });
+      }
+      if (form.parent2Name.trim() && form.parent2Phone.trim()) {
+        builtParents.push({
+          fullName: form.parent2Name.trim(),
+          phone: form.parent2Phone.trim(),
+          email: form.parent2Email.trim() || undefined,
+          relationship: form.parent2Relationship || "mother",
+          isPrimary: builtParents.length === 0,
+        });
+      }
+      if (manager || !editing) {
+        if (builtParents.length > 0 || manager) {
+          data.parents = builtParents;
+        }
+      }
       if (manager) {
         if (!editing) data.status = form.status;
         data.allergies = form.allergens.map((allergen) => ({
@@ -170,9 +216,10 @@ export default function StudentForm() {
           name: form.diseaseName.trim(),
           description: form.diseaseDescription.trim(),
         };
+        const fallbackParent = builtParents[0];
         data.emergencyContact = {
-          name: form.emergencyName.trim(),
-          phone: form.emergencyPhone.trim(),
+          name: form.emergencyName.trim() || fallbackParent?.fullName || "",
+          phone: form.emergencyPhone.trim() || fallbackParent?.phone || "",
         };
       }
       if (editing) await updateStudent(id, data);
@@ -202,20 +249,30 @@ export default function StudentForm() {
               className="button button-secondary"
               onClick={() => setShowExcelModal(true)}
             >
-              <Icon name="calendar" size={16} /> Nhập từ Excel
+              <Icon name="upload" size={16} /> Nhập từ Excel
             </button>
           )}
         </div>
         {error && <p className="form-error">{error}</p>}
         <div className="student-form-grid">
           <label>
-            Mã học sinh / Mã máy chấm công
+            Mã ID học sinh / Mã máy chấm công
             <input
               disabled={editing && !manager}
               maxLength="30"
-              placeholder="Để trống tự đánh số (1, 2, 3...) hoặc nhập mã trên máy"
+              placeholder="Để trống tự đánh số (1, 2, 3...) hoặc nhập mã riêng"
               value={form.studentCode || ""}
               onChange={(e) => set("studentCode", e.target.value)}
+            />
+          </label>
+          <label>
+            Mã định danh học sinh
+            <input
+              disabled={editing && !manager}
+              maxLength="40"
+              placeholder="Mã định danh cá nhân / Bộ GD&ĐT (nếu có)"
+              value={form.identityCode || ""}
+              onChange={(e) => set("identityCode", e.target.value)}
             />
           </label>
           <label>
@@ -379,15 +436,95 @@ export default function StudentForm() {
                   placeholder="Ví dụ: mang thuốc xịt theo chỉ định"
                 />
               </label>
+              <fieldset className="student-allergy-fieldset form-wide">
+                <legend>Thông tin 2 Phụ huynh (Đảm bảo liên lạc dự phòng khi khẩn cấp)</legend>
+                <p>
+                  Khai báo cả Phụ huynh 1 và Phụ huynh 2 để nhà trường luôn có số gọi dự phòng khi người thứ nhất không nghe máy.
+                </p>
+                <div className="student-form-grid" style={{ padding: 0 }}>
+                  <label>
+                    Họ tên Phụ huynh 1
+                    <input
+                      value={form.parent1Name}
+                      onChange={(e) => set("parent1Name", e.target.value)}
+                      placeholder="Ví dụ: Nguyễn Văn Hùng"
+                    />
+                  </label>
+                  <label>
+                    SĐT Phụ huynh 1
+                    <input
+                      value={form.parent1Phone}
+                      onChange={(e) => set("parent1Phone", e.target.value)}
+                      placeholder="09xxxxxxxx"
+                    />
+                  </label>
+                  <label>
+                    Hòm thư (Email) Phụ huynh 1
+                    <input
+                      type="email"
+                      value={form.parent1Email}
+                      onChange={(e) => set("parent1Email", e.target.value)}
+                      placeholder="phuhuynh1@gmail.com"
+                    />
+                  </label>
+                  <label>
+                    Quan hệ Phụ huynh 1
+                    <select
+                      value={form.parent1Relationship}
+                      onChange={(e) => set("parent1Relationship", e.target.value)}
+                    >
+                      <option value="father">Bố</option>
+                      <option value="mother">Mẹ</option>
+                      <option value="guardian">Người giám hộ</option>
+                    </select>
+                  </label>
+                  <label>
+                    Họ tên Phụ huynh 2 (Dự phòng)
+                    <input
+                      value={form.parent2Name}
+                      onChange={(e) => set("parent2Name", e.target.value)}
+                      placeholder="Ví dụ: Trần Thị Lan"
+                    />
+                  </label>
+                  <label>
+                    SĐT Phụ huynh 2 (Dự phòng)
+                    <input
+                      value={form.parent2Phone}
+                      onChange={(e) => set("parent2Phone", e.target.value)}
+                      placeholder="09xxxxxxxx"
+                    />
+                  </label>
+                  <label>
+                    Hòm thư (Email) Phụ huynh 2
+                    <input
+                      type="email"
+                      value={form.parent2Email}
+                      onChange={(e) => set("parent2Email", e.target.value)}
+                      placeholder="phuhuynh2@gmail.com"
+                    />
+                  </label>
+                  <label>
+                    Quan hệ Phụ huynh 2
+                    <select
+                      value={form.parent2Relationship}
+                      onChange={(e) => set("parent2Relationship", e.target.value)}
+                    >
+                      <option value="mother">Mẹ</option>
+                      <option value="father">Bố</option>
+                      <option value="guardian">Người giám hộ</option>
+                    </select>
+                  </label>
+                </div>
+              </fieldset>
               <label>
-                Người liên hệ khẩn cấp
+                Người liên hệ khẩn cấp khác
                 <input
                   value={form.emergencyName}
                   onChange={(e) => set("emergencyName", e.target.value)}
                 />
               </label>
               <label>
-                Số điện thoại khẩn cấp
+                Số điện thoại khẩn cấp khác
                 <input
                   value={form.emergencyPhone}
                   onChange={(e) => set("emergencyPhone", e.target.value)}

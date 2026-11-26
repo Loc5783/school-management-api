@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useParams } from 'react-router-dom';
 import AppShell from '../components/AppShell';
 import QRCodeImage from '../components/QRCodeImage';
@@ -397,6 +398,8 @@ export default function StudentDetail() {
               <article>
                 <h3>Thông tin tổng quan</h3>
                 <dl>
+                  <dt>Mã ID học sinh</dt><dd><strong>{student.studentCode || '—'}</strong></dd>
+                  <dt>Mã định danh</dt><dd>{student.identityCode || '—'}</dd>
                   <dt>Lớp học</dt><dd><strong>{student.currentClassName || '—'}</strong></dd>
                   <dt>Năm học</dt><dd>{student.schoolYear || '—'}</dd>
                   <dt>Ngày sinh</dt><dd>{new Date(student.birthDate).toLocaleDateString('vi-VN')}</dd>
@@ -413,17 +416,38 @@ export default function StudentDetail() {
                 <p><b>Ghi chú:</b> {student.notes || '—'}</p>
               </article>
 
-              {role === 'teacher' && (
+              {role !== 'hr' && (
                 <article>
-                  <h3>Liên hệ và đón trẻ</h3>
-                  <p><b>Liên hệ khẩn cấp:</b> {student.emergencyContact?.name || 'Chưa cập nhật'}{student.emergencyContact?.phone ? ` · ${student.emergencyContact.phone}` : ''}</p>
-                  <div className="student-picker-list">
-                    {student.authorizedPickers?.length ? student.authorizedPickers.map((picker, index) => (
-                      <p key={`${picker.fullName}-${index}`}>
-                        <b>{picker.fullName}</b> · {picker.relationship || 'Người được phép đón'}{picker.phone ? ` · ${picker.phone}` : ''}
-                      </p>
-                    )) : <p>Chưa khai báo người được phép đón.</p>}
-                  </div>
+                  <h3>Phụ huynh & Liên hệ khẩn cấp</h3>
+                  {student.parents?.length ? (
+                    <div className="student-picker-list" style={{ marginBottom: '10px' }}>
+                      {student.parents.map((parent, idx) => {
+                        const relLabel = { father: 'Bố', mother: 'Mẹ', guardian: 'Người giám hộ' }[parent.relationship] || 'Phụ huynh';
+                        return (
+                          <p key={`${parent.fullName}-${idx}`}>
+                            <b>Phụ huynh {idx + 1} ({relLabel}):</b> {parent.fullName}
+                            {parent.phone ? ` · ${parent.phone}` : ''}
+                            {parent.email ? ` · ${parent.email}` : ''}
+                          </p>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p><b>Phụ huynh:</b> Chưa khai báo thông tin phụ huynh.</p>
+                  )}
+                  <p>
+                    <b>Liên hệ khẩn cấp:</b> {student.emergencyContact?.name || 'Chưa cập nhật'}
+                    {student.emergencyContact?.phone ? ` · ${student.emergencyContact.phone}` : ''}
+                  </p>
+                  {role === 'teacher' && (
+                    <div className="student-picker-list" style={{ marginTop: '8px' }}>
+                      {student.authorizedPickers?.length ? student.authorizedPickers.map((picker, index) => (
+                        <p key={`${picker.fullName}-${index}`}>
+                          <b>Người đón: {picker.fullName}</b> · {picker.relationship || 'Người được phép đón'}{picker.phone ? ` · ${picker.phone}` : ''}
+                        </p>
+                      )) : <p>Chưa khai báo người được phép đón.</p>}
+                    </div>
+                  )}
                 </article>
               )}
 
@@ -480,7 +504,7 @@ export default function StudentDetail() {
             )}
 
             {/* Transfer Modal */}
-            {showTransferModal && (
+            {showTransferModal && createPortal(
               <div className="modal-backdrop">
                 <form className="content-card student-form hr-modal handover-modal" onSubmit={handleTransfer}>
                   <div className="card-heading">
@@ -584,7 +608,8 @@ export default function StudentDetail() {
                     </button>
                   </div>
                 </form>
-              </div>
+              </div>,
+              document.body
             )}
           </>
         )}

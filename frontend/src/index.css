@@ -574,8 +574,10 @@ a { color: inherit; text-decoration: none; }
   50% { box-shadow: 0 0 0 5px rgba(74, 222, 128, 0); }
 }
 
+/* NOTE: Không gắn animation giữ transform (fill-mode: both) trên .page-content vì sẽ tạo
+   containing block mới làm kẹt các popup position: fixed bên trong khung nội dung. */
 .page-content {
-  animation: pageFadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: none;
 }
 
 /* Nav links - lively interactive hover */

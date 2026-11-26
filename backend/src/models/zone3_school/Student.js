@@ -27,6 +27,14 @@ const StudentSchema = new mongoose.Schema({
         immutable: false,
         match: /^[A-Z0-9_-]{1,30}$/
     },
+    // Mã định danh cá nhân / mã Bộ GD&ĐT của học sinh (tùy chọn, phục vụ quản lý hồ sơ liên thông)
+    identityCode: {
+        type: String,
+        trim: true,
+        uppercase: true,
+        maxlength: 40,
+        default: ''
+    },
     fullName: {
         type: String,
         required: true,
@@ -172,6 +180,7 @@ const StudentSchema = new mongoose.Schema({
 StudentSchema.index({ classroomId: 1 });
 StudentSchema.index({ status: 1 });
 StudentSchema.index({ fullName: 'text' });
+StudentSchema.index({ tenantId: 1, identityCode: 1 });
 // Multi-tenant studentCode unique index
 StudentSchema.index({ tenantId: 1, studentCode: 1 }, {
     unique: true,

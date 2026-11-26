@@ -500,5 +500,201 @@ describe('QA & Security Evaluation Fixes — Full Replica Set Verification (phas
       .send({ currentPassword: 'Admin@123456', newPassword: 'NewAdmin@123456' });
     expect(pwRes.status).toBe(200);
   });
+
+  test('8. PM Requirements: Lớp < 3 tuổi (6 tháng+), Phân hiệu, Excel mẫu 2 Phụ huynh + Mã định danh & Đẩy tổng nhiều lớp', async () => {
+    const ExcelJS = require('exceljs');
+
+    // 8.1 Tạo lớp Nhà trẻ 6–12 tháng ở Cơ sở chính và lớp Nhà trẻ 1–2 tuổi ở Phân hiệu 2
+    const nurseryRes = await request(app)
+      .post('/api/classrooms')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({
+        name: 'Nhà trẻ 6T-A',
+        fullName: 'Nhà trẻ 6–12 tháng A',
+        campus: 'Cơ sở chính',
+        ageGroup: '6-12m',
+        maxSize: 18,
+        schoolYear: '2026-2027'
+      });
+    expect(nurseryRes.status).toBe(201);
+    expect(nurseryRes.body.data.ageGroup).toBe('6-12m');
+    expect(nurseryRes.body.data.campus).toBe('Cơ sở chính');
+
+    const toddlerBranchRes = await request(app)
+      .post('/api/classrooms')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({
+        name: 'Nhà trẻ 1-2B',
+        fullName: 'Nhà trẻ 1–2 tuổi Phân hiệu 2',
+        campus: 'Phân hiệu 2',
+        ageGroup: '1-2',
+        maxSize: 20,
+        schoolYear: '2026-2027'
+      });
+    expect(toddlerBranchRes.status).toBe(201);
+    expect(toddlerBranchRes.body.data.campus).toBe('Phân hiệu 2');
+
+    // Lọc lớp theo Phân hiệu 2 (cách ly chuẩn Multi-Tenant)
+    const branchListRes = await request(app)
+      .get('/api/classrooms')
+      .query({ campus: 'Phân hiệu 2' })
+      .set('Authorization', `Bearer ${tokenAdminA}`);
+    expect(branchListRes.status).toBe(200);
+    expect(branchListRes.body.data).toHaveLength(1);
+    expect(branchListRes.body.data[0].name).toBe('Nhà trẻ 1-2B');
+
+    // 8.2 Tải file Excel mẫu (.xlsx) và kiểm tra đầy đủ cột Lớp, Mã ID, Mã định danh, 2 Phụ huynh
+    const tplRes = await request(app)
+      .get('/api/students/excel/template')
+      .buffer(true)
+      .parse((res, cb) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => cb(null, Buffer.concat(chunks)));
+      })
+      .set('Authorization', `Bearer ${tokenAdminA}`);
+    expect(tplRes.status).toBe(200);
+
+    const tplWb = new ExcelJS.Workbook();
+    await tplWb.xlsx.load(tplRes.body);
+    const dataSheet = tplWb.getWorksheet('Danh sách học sinh');
+    expect(dataSheet).toBeDefined();
+    const headerTexts = [];
+    dataSheet.getRow(1).eachCell((c) => headerTexts.push(String(c.value)));
+    expect(headerTexts).toEqual(expect.arrayContaining([
+      'Lớp',
+      'Mã ID học sinh',
+      'Mã định danh học sinh',
+      'Họ và tên (*)',
+      'Ngày sinh (*)',
+      'Giới tính (*)',
+      'Họ tên phụ huynh 1',
+      'Điện thoại phụ huynh 1',
+      'Hòm thư phụ huynh 1',
+      'Họ tên phụ huynh 2',
+      'Điện thoại phụ huynh 2',
+      'Hòm thư phụ huynh 2'
+    ]));
+
+    // 8.3 Điền danh sách tổng gồm học sinh ở 2 lớp khác nhau + 2 phụ huynh + mã định danh (theo đúng thứ tự cột A..V như người dùng nhập trong Excel)
+    dataSheet.addRow([
+      'Nhà trẻ 6T-A',
+      'HS6TA01',
+      '001226000111',
+      'Lê Bảo Trâm',
+      '15/03/2026',
+      'Nữ',
+      '01/10/2026',
+      'Lê Quốc Bảo',
+      '0903111222',
+      'quocbao@example.com',
+      'Bố',
+      'Phạm Thu Hà',
+      '0904333444',
+      'thuha@example.com',
+      'Mẹ',
+      'Hải sản',
+      '',
+      'Cầu Giấy, Hà Nội',
+      'Việt Nam',
+      'Kinh',
+      'Hà Nội',
+      'Bé ăn cháo nhuyễn'
+    ]);
+    dataSheet.addRow([
+      'Nhà trẻ 1-2B',
+      '',
+      '001225000222',
+      'Đỗ Gia Huy',
+      '20/01/2025',
+      'Nam',
+      '01/10/2026',
+      'Đỗ Văn Nam',
+      '0912555666',
+      'vannam@example.com',
+      'Bố',
+      'Vũ Thị Mai',
+      '0988777888',
+      'thimai@example.com',
+      'Mẹ',
+      '',
+      '',
+      'Nam Từ Liêm, Hà Nội',
+      'Việt Nam',
+      'Kinh',
+      'Hà Nội',
+      ''
+    ]);
+
+    const uploadBuffer = Buffer.from(await tplWb.xlsx.writeBuffer());
+
+    // Xem trước ở chế độ Đẩy danh sách tổng toàn trường (__ALL__)
+    const previewRes = await request(app)
+      .post('/api/students/excel/preview')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .field('classroomId', '__ALL__')
+      .attach('file', uploadBuffer, 'Danh_Sach_Tong_Toan_Truong.xlsx');
+    expect(previewRes.status).toBe(200);
+    expect(previewRes.body.data.canImport).toBe(true);
+    expect(previewRes.body.data.totalValid).toBe(2);
+    expect(previewRes.body.data.classSummary).toHaveLength(2);
+
+    // Xác nhận lưu nguyên khối vào cả 2 lớp trong 1 Transaction
+    const confirmRes = await request(app)
+      .post('/api/students/excel/confirm')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .set('Idempotency-Key', 'idem-multi-class-pm-test-001')
+      .send({
+        classroomId: '__ALL__',
+        students: previewRes.body.data.rows
+      });
+    expect(confirmRes.status).toBe(201);
+    expect(confirmRes.body.data).toHaveLength(2);
+
+    const tram = confirmRes.body.data.find((s) => s.fullName === 'Lê Bảo Trâm');
+    const huy = confirmRes.body.data.find((s) => s.fullName === 'Đỗ Gia Huy');
+    expect(tram.studentCode).toBe('HS6TA01');
+    expect(tram.identityCode).toBe('001226000111');
+    expect(tram.parents).toHaveLength(2);
+    expect(tram.parents[1].phone).toBe('0904333444');
+    expect(huy.identityCode).toBe('001225000222');
+    expect(huy.parents).toHaveLength(2);
+
+    // Kiểm tra sĩ số của cả 2 lớp đã tăng chính xác (+1 mỗi lớp)
+    const checkCls1 = await Classroom.findById(nurseryRes.body.data._id).lean();
+    const checkCls2 = await Classroom.findById(toddlerBranchRes.body.data._id).lean();
+    expect(checkCls1.statistics.currentStudents).toBe(1);
+    expect(checkCls1.statistics.female).toBe(1);
+    expect(checkCls2.statistics.currentStudents).toBe(1);
+    expect(checkCls2.statistics.male).toBe(1);
+
+    // 8.4 Kiểm tra chế độ Đẩy riêng từng lớp (dành cho Giáo viên chủ nhiệm / Quản lý chọn 1 lớp cụ thể) vẫn hoạt động trơn tru
+    const singleWb = new ExcelJS.Workbook();
+    const singleSheet = singleWb.addWorksheet('Danh sách học sinh');
+    singleSheet.addRow(['Họ và tên (*)', 'Ngày sinh (*)', 'Giới tính (*)', 'Mã định danh học sinh', 'Họ tên phụ huynh 1', 'Điện thoại phụ huynh 1', 'Họ tên phụ huynh 2', 'Điện thoại phụ huynh 2']);
+    singleSheet.addRow(['Phạm Minh Châu', '10/02/2026', 'Nữ', '001226000333', 'Phạm Văn Bình', '0977111222', 'Nguyễn Thu Thủy', '0977333444']);
+    const singleBuffer = Buffer.from(await singleWb.xlsx.writeBuffer());
+
+    const singlePreview = await request(app)
+      .post('/api/students/excel/preview')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .field('classroomId', String(nurseryRes.body.data._id))
+      .attach('file', singleBuffer, 'Lop_6TA.xlsx');
+    expect(singlePreview.status).toBe(200);
+    expect(singlePreview.body.data.canImport).toBe(true);
+
+    const singleConfirm = await request(app)
+      .post('/api/students/excel/confirm')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .set('Idempotency-Key', 'idem-single-class-pm-test-002')
+      .send({
+        classroomId: String(nurseryRes.body.data._id),
+        students: singlePreview.body.data.rows
+      });
+    expect(singleConfirm.status).toBe(201);
+    expect(singleConfirm.body.data[0].identityCode).toBe('001226000333');
+    expect(singleConfirm.body.data[0].parents).toHaveLength(2);
+    expect((await Classroom.findById(nurseryRes.body.data._id).lean()).statistics.currentStudents).toBe(2);
+  });
 });
 

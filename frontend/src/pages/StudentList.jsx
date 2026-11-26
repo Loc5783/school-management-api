@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
@@ -6,13 +6,31 @@ import StudentExcelImportModal from '../components/StudentExcelImportModal';
 import { listStudents } from '../api/students';
 import api from '../api/axiosConfig';
 
-const statusText = { pending_admission: 'Chờ nhập học', enrolled: 'Đang theo học', temporarily_absent: 'Tạm nghỉ', withdrawn: 'Đã thôi học', transferred: 'Đã chuyển trường', graduated: 'Đã tốt nghiệp' };
+const DEFAULT_CAMPUS = 'Cơ sở chính';
+const statusText = {
+  pending_admission: 'Chờ nhập học',
+  enrolled: 'Đang theo học',
+  temporarily_absent: 'Tạm nghỉ',
+  withdrawn: 'Đã thôi học',
+  transferred: 'Đã chuyển trường',
+  graduated: 'Đã tốt nghiệp'
+};
 
 export default function StudentList() {
   const navigate = useNavigate();
   const [items, setItems] = useState([]);
   const [classes, setClasses] = useState([]);
-  const [filters, setFilters] = useState({ search: '', classroomId: '', status: 'all', schoolYear: '', sortBy: 'createdAt', sortOrder: 'desc', page: 1, limit: 10 });
+  const [campusFilter, setCampusFilter] = useState('all');
+  const [filters, setFilters] = useState({
+    search: '',
+    classroomId: '',
+    status: 'all',
+    schoolYear: '',
+    sortBy: 'createdAt',
+    sortOrder: 'desc',
+    page: 1,
+    limit: 10
+  });
   const [pagination, setPagination] = useState({});
   const [state, setState] = useState({ loading: true, error: '' });
   const [showImportModal, setShowImportModal] = useState(false);
@@ -32,16 +50,30 @@ export default function StudentList() {
   }, [filters]);
 
   useEffect(() => { void Promise.resolve().then(load); }, [load]);
-  useEffect(() => { api.get('/classrooms').then((r) => setClasses(r.data.data || [])).catch(() => {}); }, []);
+  useEffect(() => {
+    api.get('/classrooms').then((r) => setClasses(r.data.data || [])).catch(() => {});
+  }, []);
+
+  const campusOptions = useMemo(() => {
+    const unique = new Set();
+    classes.forEach((cls) => unique.add(cls.campus?.trim() || DEFAULT_CAMPUS));
+    return [...unique];
+  }, [classes]);
+
+  const visibleClasses = useMemo(() => {
+    if (campusFilter === 'all') return classes;
+    return classes.filter((cls) => (cls.campus?.trim() || DEFAULT_CAMPUS) === campusFilter);
+  }, [classes, campusFilter]);
 
   const change = (key, value) => setFilters((old) => ({ ...old, [key]: value, page: key === 'page' ? value : 1 }));
-  const canWrite = ['admin', 'teacher'].includes(role);
+  const canWrite = ['admin', 'principal', 'teacher'].includes(role);
+  const canCreateDirect = ['admin', 'teacher'].includes(role);
 
-  const handleImportSuccess = (createdStudents, targetClassId) => {
-    // Cập nhật bộ lọc về đúng lớp vừa nhập để tìm thấy ngay học sinh
+  const handleImportSuccess = (_createdStudents, targetClassId) => {
+    // Nếu đẩy theo 1 lớp cụ thể -> lọc về lớp đó; nếu đẩy danh sách tổng nhiều lớp -> hiện toàn bộ
     setFilters((old) => ({
       ...old,
-      classroomId: targetClassId,
+      classroomId: targetClassId || '',
       status: 'all',
       search: '',
       page: 1,
@@ -53,7 +85,7 @@ export default function StudentList() {
   return (
     <AppShell
       title="Học sinh"
-      subtitle="Tra cứu, quản lý hồ sơ và trạng thái học sinh theo đúng phạm vi quyền."
+      subtitle="Tra cứu, nhập danh sách tổng / theo lớp và quản lý hồ sơ học sinh theo đúng phạm vi quyền."
       actions={canWrite && (
         <div className="toolbar-buttons student-list-actions">
           <button
@@ -64,14 +96,16 @@ export default function StudentList() {
             <Icon name="upload" size={17} />
             Nhập từ Excel
           </button>
-          <button
-            type="button"
-            className="button button-primary"
-            onClick={() => navigate('/students/new')}
-          >
-            <Icon name="plus" size={17} />
-            Thêm học sinh
-          </button>
+          {canCreateDirect && (
+            <button
+              type="button"
+              className="button button-primary"
+              onClick={() => navigate('/students/new')}
+            >
+              <Icon name="plus" size={17} />
+              Thêm học sinh
+            </button>
+          )}
         </div>
       )}
     >
@@ -79,11 +113,27 @@ export default function StudentList() {
         <div className="student-filter-grid">
           <label className="search-box">
             <Icon name="search" size={18} />
-            <input value={filters.search} onChange={(e) => change('search', e.target.value)} placeholder="Tìm theo tên hoặc mã học sinh" />
+            <input value={filters.search} onChange={(e) => change('search', e.target.value)} placeholder="Tìm theo tên, mã HS hoặc mã định danh" />
           </label>
+          {campusOptions.length > 1 && (
+            <select
+              value={campusFilter}
+              onChange={(e) => {
+                setCampusFilter(e.target.value);
+                change('classroomId', '');
+              }}
+            >
+              <option value="all">Tất cả phân hiệu</option>
+              {campusOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          )}
           <select value={filters.classroomId} onChange={(e) => change('classroomId', e.target.value)}>
             <option value="">Tất cả lớp</option>
-            {classes.map((item) => <option key={item._id} value={item._id}>{item.name}</option>)}
+            {visibleClasses.map((item) => (
+              <option key={item._id} value={item._id}>
+                {item.name}{campusOptions.length > 1 ? ` (${item.campus || DEFAULT_CAMPUS})` : ''}
+              </option>
+            ))}
           </select>
           <select value={filters.status} onChange={(e) => change('status', e.target.value)}>
             <option value="all">Tất cả trạng thái</option>
@@ -110,8 +160,9 @@ export default function StudentList() {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>Mã học sinh</th>
+                    <th>Mã ID HS</th>
                     <th>Học sinh</th>
+                    <th>Mã định danh</th>
                     <th>Lớp</th>
                     <th>Ngày sinh</th>
                     <th>Trạng thái</th>
@@ -121,8 +172,12 @@ export default function StudentList() {
                 <tbody>
                   {items.map((student) => (
                     <tr key={student._id}>
-                      <td>{student.studentCode}</td>
-                      <td><strong>{student.fullName}</strong><small>{student.gender === 'female' ? 'Nữ' : 'Nam'}</small></td>
+                      <td><strong>{student.studentCode}</strong></td>
+                      <td>
+                        <strong>{student.fullName}</strong>
+                        <small>{student.gender === 'female' ? 'Nữ' : 'Nam'}</small>
+                      </td>
+                      <td>{student.identityCode || '—'}</td>
                       <td>{student.currentClassName || '—'}</td>
                       <td>{student.birthDate ? new Date(student.birthDate).toLocaleDateString('vi-VN') : '—'}</td>
                       <td><span className={`student-status ${student.status}`}>{statusText[student.status] || student.status}</span></td>
@@ -156,4 +211,3 @@ export default function StudentList() {
     </AppShell>
   );
 }
-

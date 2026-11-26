@@ -4,16 +4,25 @@ import Icon from '../components/Icon';
 import StudentPagination from '../components/StudentPagination';
 import { downloadExcelTemplate, previewExcelImport, confirmExcelImport } from '../api/students';
 
+const MULTI_CLASS_TARGET = '__ALL__';
+
 export default function StudentExcelImportModal({ isOpen, onClose, defaultClassroomId, classrooms = [], onSuccess }) {
+  const userRole = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const canMultiClassImport = ['admin', 'principal'].includes(userRole);
+
   const [prevDefaultClassroomId, setPrevDefaultClassroomId] = useState(defaultClassroomId);
-  const [selectedClassId, setSelectedClassId] = useState(
-    () => defaultClassroomId || (classrooms.length === 1 ? classrooms[0]._id : '')
-  );
+  const [selectedClassId, setSelectedClassId] = useState(() => {
+    if (defaultClassroomId) return defaultClassroomId;
+    if (canMultiClassImport) return MULTI_CLASS_TARGET;
+    return classrooms.length === 1 ? classrooms[0]._id : '';
+  });
 
   if (prevDefaultClassroomId !== defaultClassroomId) {
     setPrevDefaultClassroomId(defaultClassroomId);
     if (defaultClassroomId) {
       setSelectedClassId(defaultClassroomId);
+    } else if (canMultiClassImport) {
+      setSelectedClassId(MULTI_CLASS_TARGET);
     } else if (classrooms.length === 1) {
       setSelectedClassId(classrooms[0]._id);
     }
@@ -43,7 +52,6 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
     previewingRef.current = previewing;
   });
 
-  // Focus trap hoàn chỉnh và quản lý phím Escape
   useEffect(() => {
     if (!isOpen) return;
 
@@ -94,7 +102,6 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
 
     window.addEventListener('keydown', handleKeyDown);
 
-    // Focus vào phần tử tương tác đầu tiên hoặc modal card
     const timer = setTimeout(() => {
       const focusable = getFocusableElements();
       if (focusable.length > 0) {
@@ -162,7 +169,7 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
 
   const handleUploadAndPreview = async () => {
     if (!selectedClassId) {
-      setError('Vui lòng chọn lớp học tiếp nhận dữ liệu trước khi tải lên.');
+      setError('Vui lòng chọn chế độ nhập hoặc lớp học tiếp nhận dữ liệu trước khi tải lên.');
       return;
     }
     if (!file) {
@@ -214,7 +221,7 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
       const res = await confirmExcelImport(payload, activeKey);
       setSuccessResult(res.data);
       if (typeof onSuccess === 'function') {
-        onSuccess(res.data.data, selectedClassId);
+        onSuccess(res.data.data, selectedClassId === MULTI_CLASS_TARGET ? '' : selectedClassId);
       }
     } catch (err) {
       console.error('Lỗi xác nhận import:', err);
@@ -237,7 +244,8 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
 
   if (!isOpen) return null;
 
-  const currentClass = classrooms.find(c => String(c._id) === String(selectedClassId));
+  const isMultiMode = selectedClassId === MULTI_CLASS_TARGET;
+  const currentClass = classrooms.find((c) => String(c._id) === String(selectedClassId));
   const previewRows = previewData?.rows || [];
   const pageSize = 10;
   const currentPreviewRows = previewRows.slice((previewPage - 1) * pageSize, previewPage * pageSize);
@@ -285,17 +293,19 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
               </div>
               <h3>{successResult.message}</h3>
               <p>
-                Đã thêm <strong>{successResult.data?.length || 0}</strong> học sinh vào lớp{' '}
-                <strong>{currentClass?.name || 'đã chọn'}</strong>.
+                Đã thêm thành công <strong>{successResult.data?.length || 0}</strong> học sinh{' '}
+                {isMultiMode ? 'vào các lớp tương ứng theo file tổng.' : <>vào lớp <strong>{currentClass?.name || 'đã chọn'}</strong>.</>}
               </p>
-              <div className="success-students-list">
+              <div className="success-students-list" style={{ width: '100%' }}>
                 <div className="table-wrap">
                   <table className="data-table">
                     <thead>
                       <tr>
                         <th>STT</th>
-                        <th>Mã học sinh</th>
+                        <th>Mã ID HS</th>
+                        <th>Mã định danh</th>
                         <th>Họ và tên</th>
+                        <th>Lớp</th>
                         <th>Giới tính</th>
                         <th>Ngày sinh</th>
                       </tr>
@@ -305,7 +315,9 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
                         <tr key={s._id || idx}>
                           <td>{idx + 1}</td>
                           <td><strong>{s.studentCode}</strong></td>
+                          <td>{s.identityCode || '—'}</td>
                           <td>{s.fullName}</td>
+                          <td>{s.currentClassName || s.className || '—'}</td>
                           <td>{s.gender === 'female' ? 'Nữ' : 'Nam'}</td>
                           <td>{s.birthDate ? new Date(s.birthDate).toLocaleDateString('vi-VN') : '—'}</td>
                         </tr>
@@ -317,31 +329,31 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
               <div className="form-actions" style={{ marginTop: '20px' }}>
                 <button
                   type="button"
-                  className="button button-primary"
-                  onClick={onClose}
-                >
-                  Xem danh sách học sinh
-                </button>
-                <button
-                  type="button"
                   className="button button-secondary"
                   onClick={resetImport}
                 >
                   Nhập thêm file khác
                 </button>
+                <button
+                  type="button"
+                  className="button button-primary"
+                  onClick={onClose}
+                >
+                  Xem danh sách học sinh
+                </button>
               </div>
             </div>
           ) : (
             <>
-              {/* Bước 1: Chọn lớp và tải file mẫu */}
+              {/* Bước 1: Chọn chế độ nhập (Tổng toàn trường hoặc Từng lớp) & tải mẫu */}
               <section className="excel-import-step-card">
                 <div className="step-title-row">
                   <span className="step-badge">Bước 1</span>
-                  <h4>Chọn lớp học và tải file Excel mẫu</h4>
+                  <h4>Chọn phạm vi tiếp nhận và tải file Excel mẫu</h4>
                 </div>
                 <div className="step-content-grid">
                   <label className="import-field">
-                    <span>Lớp học tiếp nhận (*)</span>
+                    <span>Phạm vi / Lớp học tiếp nhận (*)</span>
                     <select
                       value={selectedClassId}
                       onChange={(e) => {
@@ -352,33 +364,45 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
                       disabled={previewing || confirming}
                       required
                     >
-                      <option value="">-- Chọn lớp tiếp nhận học sinh --</option>
+                      {canMultiClassImport && (
+                        <option value={MULTI_CLASS_TARGET}>
+                          Đẩy danh sách tổng toàn trường (Tự chia lớp theo cột &quot;Lớp&quot; trong Excel)
+                        </option>
+                      )}
+                      {!canMultiClassImport && (
+                        <option value="">-- Chọn lớp phụ trách tiếp nhận học sinh --</option>
+                      )}
                       {classrooms.map((cls) => (
                         <option key={cls._id} value={cls._id}>
-                          {cls.name} {cls.fullName ? `(${cls.fullName})` : ''} - Hiện có {cls.statistics?.currentStudents || 0}/{cls.maxSize || 25} HS
+                          Đẩy riêng vào lớp: {cls.name} {cls.campus && cls.campus !== 'Cơ sở chính' ? `(${cls.campus})` : ''} — Hiện có {cls.statistics?.currentStudents || 0}/{cls.maxSize || 25} HS
                         </option>
                       ))}
                     </select>
+                    <small className="field-hint">
+                      {isMultiMode
+                        ? 'Dành cho Ban giám hiệu / Tổng phụ trách đẩy 1 file tổng cho nhiều lớp cùng lúc.'
+                        : 'Dành cho Giáo viên chủ nhiệm hoặc khi đẩy danh sách của riêng 1 lớp.'}
+                    </small>
                     {!classrooms.length && (
                       <small className="field-hint text-danger">
-                        Bạn chưa được phân công lớp học nào đang hoạt động.
+                        Hiện chưa có lớp học nào đang hoạt động để tiếp nhận học sinh.
                       </small>
                     )}
                   </label>
 
                   <div className="import-field download-action">
-                    <span>Mẫu Excel chuẩn</span>
+                    <span>Mẫu Excel đầy đủ (2 Phụ huynh & Lớp)</span>
                     <button
                       type="button"
                       className="button button-secondary download-template-btn"
                       onClick={handleDownloadTemplate}
                       disabled={downloading}
                     >
-                      <Icon name="calendar" size={16} />
+                      <Icon name="download" size={16} />
                       {downloading ? 'Đang tải mẫu...' : 'Tải file Excel mẫu (.xlsx)'}
                     </button>
                     <small className="field-hint">
-                      File mẫu có sẵn dropdown giới tính và sheet hướng dẫn điền chi tiết.
+                      Có sẵn cột Lớp (dropdown lớp của trường), Mã ID, Mã định danh và thông tin 2 Phụ huynh.
                     </small>
                   </div>
                 </div>
@@ -401,7 +425,7 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
                     disabled={previewing || confirming}
                   />
                   <label htmlFor="excel-file-upload-input" className="button button-secondary upload-btn">
-                    <Icon name="search" size={16} />
+                    <Icon name="upload" size={16} />
                     {file ? 'Chọn file khác' : 'Chọn file Excel (.xlsx)'}
                   </label>
                   {file && (
@@ -413,7 +437,7 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
                     type="button"
                     className="button button-primary check-file-btn"
                     onClick={handleUploadAndPreview}
-                    disabled={!file || !selectedClassId || previewing || confirming}
+                    disabled={!file || !selectedClassId || !classrooms.length || previewing || confirming}
                   >
                     {previewing ? 'Đang kiểm tra...' : 'Kiểm tra & Xem trước'}
                   </button>
@@ -431,6 +455,11 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
                       <span className="summary-item valid">
                         Hợp lệ: <strong>{previewData.totalValid}</strong>
                       </span>
+                      {previewData.classSummary?.length > 0 && (
+                        <span className="summary-item total">
+                          Phân bổ: <strong>{previewData.classSummary.map((c) => `${c.className} (+${c.addingCount})`).join(', ')}</strong>
+                        </span>
+                      )}
                       {previewData.totalErrors > 0 && (
                         <span className="summary-item error">
                           Lỗi: <strong>{previewData.totalErrors}</strong>
@@ -450,11 +479,12 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
                       <thead>
                         <tr>
                           <th>Dòng</th>
+                          <th>Lớp</th>
+                          <th>Mã ID / Định danh</th>
                           <th>Họ và tên</th>
                           <th>Ngày sinh</th>
                           <th>Giới tính</th>
-                          <th>Địa chỉ</th>
-                          <th>Quốc tịch / Dân tộc</th>
+                          <th>Phụ huynh 1 & 2</th>
                           <th>Trạng thái kiểm tra</th>
                         </tr>
                       </thead>
@@ -462,11 +492,26 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
                         {currentPreviewRows.map((row) => (
                           <tr key={row.rowNumber} className={row.isValid ? 'row-valid' : 'row-invalid'}>
                             <td><strong>{row.rowNumber}</strong></td>
+                            <td><strong>{row.resolvedClassName || row.classNameInput || '—'}</strong></td>
+                            <td>
+                              {row.studentCode ? <div><b>ID:</b> {row.studentCode}</div> : <small style={{ color: '#64748b' }}>Tự sinh mã</small>}
+                              {row.identityCode && <small>ĐD: {row.identityCode}</small>}
+                            </td>
                             <td><strong>{row.fullName || '—'}</strong></td>
                             <td>{row.birthDateFormatted || '—'}</td>
                             <td>{row.genderText || '—'}</td>
-                            <td>{row.address || '—'}</td>
-                            <td>{row.nationality || 'Việt Nam'} {row.ethnicity ? `· ${row.ethnicity}` : ''}</td>
+                            <td>
+                              {row.parent1Name ? (
+                                <div>
+                                  <b>PH1:</b> {row.parent1Name} {row.parent1Phone ? `(${row.parent1Phone})` : ''}
+                                </div>
+                              ) : '—'}
+                              {row.parent2Name && (
+                                <small style={{ display: 'block', color: '#475569' }}>
+                                  <b>PH2:</b> {row.parent2Name} {row.parent2Phone ? `(${row.parent2Phone})` : ''}
+                                </small>
+                              )}
+                            </td>
                             <td>
                               {row.isValid ? (
                                 <span className="badge badge-success">
@@ -495,12 +540,11 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
                     onChange={setPreviewPage}
                   />
 
-                  {/* Nút xác nhận lưu */}
                   <div className="preview-confirm-footer">
                     <div className="policy-notice">
                       <Icon name="shield" size={16} />
                       <span>
-                        Chính sách nhập nguyên khối: Toàn bộ danh sách chỉ được lưu vào hệ thống khi tất cả dòng đều hợp lệ và không có nghi trùng.
+                        Chính sách nhập nguyên khối: Toàn bộ danh sách chỉ được lưu khi tất cả các dòng hợp lệ, không trùng lặp và không vượt sĩ số lớp.
                       </span>
                     </div>
                     <div className="footer-actions">
@@ -517,13 +561,6 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
                         className="button button-primary"
                         onClick={handleConfirmImport}
                         disabled={!previewData.canImport || previewData.capacityExceeded || confirming}
-                        title={
-                          previewData.capacityExceeded
-                            ? previewData.capacityWarning
-                            : !previewData.canImport
-                            ? 'Vui lòng sửa các dòng lỗi trong file Excel trước khi lưu'
-                            : ''
-                        }
                       >
                         {confirming ? 'Đang lưu vào hệ thống...' : `Xác nhận nhập ${previewData.totalValid} học sinh`}
                       </button>

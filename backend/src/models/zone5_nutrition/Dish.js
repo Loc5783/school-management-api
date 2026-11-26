@@ -18,7 +18,7 @@ const DishSchema = new mongoose.Schema({
     },
     ageGroup: [{
         type: String,
-        enum: ['3-4', '4-5', '5-6', 'all'],
+        enum: ['6-12m', '1-2', '2-3', '3-4', '4-5', '5-6', 'all'],
         default: ['all']
     }],
     calories: {
