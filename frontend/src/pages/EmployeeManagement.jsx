@@ -247,7 +247,18 @@ export default function EmployeeManagement() {
     <AppShell
       title="Nhân sự"
       subtitle="Quản lý hồ sơ nhân viên, phân công công việc, chấm công và thông báo nội bộ."
-      actions={canOperateHr && <button className="button button-primary" onClick={() => openEmployeeForm()}><Icon name="plus" size={15} /> Thêm nhân viên</button>}
+      actions={(
+        <div className="toolbar-buttons">
+          <button type="button" className="button button-secondary" onClick={load} disabled={loading}>
+            <Icon name="refresh" size={15} /> Làm mới
+          </button>
+          {canOperateHr && tab === 'employees' && (
+            <button type="button" className="button button-primary" onClick={() => openEmployeeForm()}>
+              <Icon name="plus" size={15} /> Thêm nhân viên
+            </button>
+          )}
+        </div>
+      )}
     >
       <section className="hr-workspace">
         {notice && <div className="form-error">{notice}</div>}
@@ -281,7 +292,7 @@ export default function EmployeeManagement() {
           <section className="content-card student-list-card">
             <div className="list-toolbar">
               <div><p className="card-kicker">DANH SÁCH NHÂN SỰ</p><h2>Hồ sơ nhân viên theo vai trò</h2><p>Vai trò là căn cứ phân loại và tổng hợp lương; tổ/bộ phận không tác động đến lương.</p></div>
-              {canOperateHr && <button className="button button-primary" onClick={() => openEmployeeForm()}><Icon name="plus" size={15} /> Thêm nhân viên</button>}
+              <span className="history-count">{employees.length} hồ sơ</span>
             </div>
             {loading ? <div className="inline-loader">Đang tải danh sách nhân sự...</div> : (
               <div className="table-wrap"><table className="data-table"><thead><tr><th>MÃ</th><th>NHÂN VIÊN</th><th>TÀI KHOẢN</th><th>VAI TRÒ TÍNH LƯƠNG</th><th>CHỨC DANH</th><th>TRẠNG THÁI</th>{canOperateHr && <th>THAO TÁC</th>}</tr></thead>

@@ -61,7 +61,7 @@ export default function StudentList() {
             className="button button-secondary"
             onClick={() => setShowImportModal(true)}
           >
-            <Icon name="calendar" size={17} />
+            <Icon name="upload" size={17} />
             Nhập từ Excel
           </button>
           <button
@@ -115,7 +115,7 @@ export default function StudentList() {
                     <th>Lớp</th>
                     <th>Ngày sinh</th>
                     <th>Trạng thái</th>
-                    <th />
+                    <th>Thao tác</th>
                   </tr>
                 </thead>
                 <tbody>

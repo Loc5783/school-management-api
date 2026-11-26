@@ -165,7 +165,7 @@ export default function Login() {
             </label>
 
             <div className="login-options">
-              <label className="show-password"><input type="checkbox" checked={showPassword} onChange={(event) => setShowPassword(event.target.checked)} /> <span>Hiển thị mật khẩu</span></label>
+              <span className="login-remember-hint"><Icon name="check" size={14} /> Tự động lưu mã trường</span>
               <a href="mailto:admin@hoanang.edu.vn">Cần hỗ trợ?</a>
             </div>
 

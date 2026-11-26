@@ -1083,11 +1083,15 @@ export default function AppShell({ title, subtitle, actions, children }) {
                 </div>
               )}
             </div>
-            <div className="topbar-profile">
+            <NavLink
+              to={user?.role === 'parent' ? '/parent-settings' : '/staff-settings'}
+              className="topbar-profile"
+              title="Cài đặt tài khoản cá nhân"
+            >
               <span className="avatar">{displayName.charAt(0).toUpperCase()}</span>
               <span><strong>{displayName}</strong><small className={`role-pill role-pill-${user?.role || 'default'}`}>{roleLabel}</small></span>
               <Icon name="chevronRight" size={15} />
-            </div>
+            </NavLink>
           </div>
         </header>
         <div className="page-content">{children}</div>

@@ -65,7 +65,7 @@ a { color: inherit; text-decoration: none; }
 .login-page { display: grid; grid-template-columns: minmax(420px, 1.08fr) minmax(420px, .92fr); min-height: 100vh; background: #fff; }.login-presentation { position: relative; display: flex; flex-direction: column; padding: 42px clamp(40px, 8vw, 135px); overflow: hidden; color: #fff; background: linear-gradient(148deg, #344cc1 0%, #526bd9 56%, #8298e9 100%); }.login-presentation::before { position: absolute; right: -135px; bottom: -150px; width: 520px; height: 520px; border: 70px solid rgba(255,255,255,.055); border-radius: 50%; content: ''; }.login-presentation::after { position: absolute; top: 22%; right: 12%; width: 18px; height: 18px; border-radius: 50%; background: rgba(255,255,255,.22); box-shadow: 88px 80px 0 rgba(255,255,255,.12), -46px 174px 0 rgba(255,255,255,.1); content: ''; }.login-presentation .login-brand { position: relative; z-index: 1; padding: 0; color: #fff; }.login-presentation .brand-mark { background: rgba(255,255,255,.18); box-shadow: none; }.login-presentation .login-brand small { color: rgba(255,255,255,.58); }.presentation-copy { position: relative; z-index: 1; max-width: 520px; margin: auto 0; }.presentation-copy .eyebrow { color: #cfd8ff; }.presentation-copy h1 { margin: 12px 0 19px; font: 700 clamp(35px, 4vw, 52px)/1.18 'Plus Jakarta Sans', sans-serif; letter-spacing: -1.8px; }.presentation-copy h1 em { color: #d9e2ff; font-style: normal; }.presentation-copy > p:last-child { max-width: 410px; color: #e2e7ff; font-size: 14px; line-height: 1.8; }.presentation-cards { position: relative; z-index: 1; display: flex; flex-wrap: wrap; gap: 20px; color: #e4e9ff; font-size: 12px; }.presentation-cards span { display: flex; align-items: center; gap: 7px; }.presentation-cards svg { color: #fff; }.login-form-section { display: grid; place-items: center; padding: 35px; background: #fff; }.login-form-wrap { width: min(100%, 366px); }.login-form-wrap h2 { margin-top: 8px; font-size: 25px; }.login-intro { margin: 0 0 28px; color: #8995aa; font-size: 12px; line-height: 1.65; }.login-form-wrap form label { display: block; margin-bottom: 16px; color: #57657e; font-size: 12px; font-weight: 700; }.login-form-wrap form input { width: 100%; height: 45px; margin-top: 7px; padding: 0 13px; outline: 0; border: 1px solid #dfe5ed; border-radius: 8px; color: #384660; background: #fff; font-size: 12px; }.login-form-wrap form input:focus { border-color: #7285dd; box-shadow: 0 0 0 3px #edf0ff; }.form-error { margin: -5px 0 13px; color: #d95f65; font-size: 11px; }.login-button { width: 100%; height: 46px; margin-top: 4px; }.login-help { margin: 22px 0 0; color: #a3adbc; font-size: 11px; text-align: center; }.mobile-brand { display: none; }
 @media (max-width: 1120px) { .stat-grid { grid-template-columns: repeat(2, 1fr); }.dashboard-grid { grid-template-columns: 1fr; }.quick-panel { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }.quick-panel > .card-kicker, .quick-panel > h2 { grid-column: 1 / -1; margin: 0; }.quick-action { border-bottom: 0; }.class-grid { grid-template-columns: repeat(2, 1fr); }.student-row { grid-template-columns: 26px 38px minmax(130px, 1fr) 290px; }.note-input { grid-column: 3 / -1; margin-top: -16px; margin-bottom: 12px; } }
 @media (max-width: 800px) { .sidebar { width: 74px; padding: 20px 10px 13px; }.brand { justify-content: center; padding: 0; }.brand > span:nth-child(2), .nav-label, .nav-link:not(.is-disabled) { font-size: 0; }.brand > span:nth-child(2), .account-card > span:nth-child(2), .account-card > svg, .nav-link small, .nav-link.is-disabled { display: none; }.sidebar-nav { margin-top: 40px; }.nav-link { justify-content: center; padding: 0; }.nav-link svg { width: 21px; height: 21px; }.account-card { justify-content: center; padding: 8px; }.main-content { width: calc(100% - 74px); }.topbar { min-height: 130px; padding: 27px 25px 22px; }.page-content { padding: 24px 25px 35px; }.class-grid { grid-template-columns: 1fr; }.login-page { grid-template-columns: 1fr; }.login-presentation { display: none; }.mobile-brand { display: flex; padding: 0; margin-bottom: 35px; }.login-form-section { min-height: 100vh; } }
-@media (max-width: 600px) { .sidebar { display: none; }.main-content { width: 100%; }.topbar { align-items: flex-start; min-height: auto; padding: 22px 18px; }.topbar h1 { font-size: 22px; }.page-subtitle { display: none; }.topbar-actions .button { width: 42px; padding: 0; font-size: 0; }.topbar-actions .button svg { width: 20px; height: 20px; }.page-content { padding: 18px 14px 28px; }.stat-grid { gap: 10px; }.stat-card { min-height: 114px; flex-direction: column; gap: 9px; padding: 14px; }.stat-icon { width: 34px; height: 34px; }.stat-card strong { font-size: 19px; }.stat-card small { display: none; }.stat-card p { margin: 0 0 5px; font-size: 10px; }.dashboard-grid { margin-top: 11px; }.card-heading, .list-toolbar { padding: 18px 15px; }.quick-panel { display: block; padding: 18px; }.quick-action { border-bottom: 1px solid #eff2f7; }.data-table th, .data-table td { padding-left: 14px; padding-right: 14px; }.data-table th:last-child, .data-table td:last-child { display: none; }.search-box { width: 100%; }.list-toolbar { align-items: stretch; flex-direction: column; }.class-grid { padding: 13px; gap: 10px; }.attendance-topline { align-items: flex-start; flex-direction: column; }.toolbar-buttons { align-items: stretch; flex-direction: column-reverse; }.toolbar-buttons .button { width: 100%; }.roster-list { padding: 0 14px; }.student-row { grid-template-columns: 23px 34px minmax(0, 1fr); gap: 8px; padding: 12px 0; }.status-controls { grid-column: 2 / -1; }.note-input { grid-column: 2 / -1; margin: 0; }.student-avatar.large { width: 31px; height: 31px; }.login-form-section { padding: 25px; } }
+@media (max-width: 600px) { .sidebar { display: none; }.main-content { width: 100%; }.topbar { align-items: flex-start; min-height: auto; padding: 16px; }.topbar h1 { font-size: 22px; }.page-content { padding: 16px 14px 28px; }.stat-grid { gap: 10px; }.stat-card { min-height: 114px; flex-direction: column; gap: 9px; padding: 14px; }.stat-icon { width: 36px; height: 36px; }.stat-card strong { font-size: 20px; }.stat-card p { margin: 0 0 5px; font-size: 11px; }.dashboard-grid { margin-top: 12px; }.card-heading, .list-toolbar { padding: 16px 15px; }.quick-panel { display: block; padding: 18px; }.quick-action { border-bottom: 1px solid #eff2f7; }.data-table th, .data-table td { padding-left: 14px; padding-right: 14px; }.search-box { width: 100%; }.list-toolbar { align-items: stretch; flex-direction: column; }.class-grid { padding: 13px; gap: 10px; }.attendance-topline { align-items: flex-start; flex-direction: column; }.roster-list { padding: 0 14px; }.student-row { grid-template-columns: 23px 34px minmax(0, 1fr); gap: 8px; padding: 12px 0; }.status-controls { grid-column: 2 / -1; }.note-input { grid-column: 2 / -1; margin: 0; }.student-avatar.large { width: 31px; height: 31px; }.login-form-section { padding: 20px 16px; } }
 .smart-layout { display: grid; grid-template-columns: minmax(480px, 1.45fr) minmax(280px, .72fr); gap: 18px; }.smart-scanner-card { overflow: hidden; border: 1px solid #e7edf5; border-radius: 13px; background: #fff; box-shadow: 0 4px 16px rgba(29,47,82,.022); }.scanner-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 25px 17px; }.scanner-heading h2, .activity-heading h2 { margin: 4px 0 0; color: #293550; font: 700 17px 'Plus Jakarta Sans', sans-serif; }.scanner-online { display: inline-flex; align-items: center; gap: 6px; color: #53a77e; font-size: 10px; font-weight: 700; }.scanner-online i { width: 6px; height: 6px; border-radius: 50%; background: #57bb87; box-shadow: 0 0 0 3px #e5f7ee; }.method-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 0 25px; padding: 4px; border-radius: 9px; background: #f3f5f9; }.method-tabs button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 38px; border: 0; border-radius: 6px; color: #8792a6; background: transparent; font-size: 11px; font-weight: 700; }.method-tabs button.active { color: #4861d3; background: #fff; box-shadow: 0 2px 5px rgba(42,58,99,.1); }.face-mode, .card-mode { padding: 23px 25px 20px; }.camera-frame { position: relative; display: grid; overflow: hidden; height: 255px; place-items: center; border-radius: 11px; background: linear-gradient(135deg,#1c2744,#2c3d67); }.camera-frame video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }.camera-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #e3ebff; background: linear-gradient(180deg,rgba(17,28,54,.04),rgba(16,28,55,.3)); pointer-events: none; }.face-guide { width: 107px; height: 136px; border: 2px solid rgba(184,202,255,.9); border-radius: 48% 48% 43% 43%; box-shadow: 0 0 0 400px rgba(13,25,51,.11),0 0 20px rgba(172,195,255,.4); }.camera-overlay p { margin: 15px 0 0; font-size: 11px; font-weight: 600; }.camera-start { position: absolute; z-index: 1; display: inline-flex; align-items: center; gap: 7px; padding: 10px 13px; border: 1px solid rgba(255,255,255,.28); border-radius: 8px; color: #fff; background: rgba(15,27,57,.7); font-size: 11px; font-weight: 700; }.scanner-form { display: flex; align-items: end; gap: 11px; margin-top: 16px; }.scanner-form label { flex: 1; color: #63718a; font-size: 11px; font-weight: 700; }.scanner-form label span { color: #a1acbc; font-weight: 500; }.scanner-form input { display: block; width: 100%; height: 39px; margin-top: 6px; padding: 0 11px; outline: 0; border: 1px solid #dfe6f0; border-radius: 7px; color: #43516b; font-size: 11px; }.scanner-form input:focus { border-color: #8193e4; box-shadow: 0 0 0 3px #eef1ff; }.scanner-form .button { height: 39px; white-space: nowrap; }.scanner-hint { display: flex; align-items: center; gap: 6px; margin: 13px 0 0; color: #95a0b3; font-size: 10px; }.scanner-hint svg { color: #7487da; }.card-mode { display: flex; min-height: 351px; flex-direction: column; align-items: center; justify-content: center; text-align: center; }.card-illustration { position: relative; display: grid; width: 111px; height: 84px; margin-bottom: 10px; place-items: center; overflow: hidden; border-radius: 14px; color: #526bdd; background: #e8edff; }.scan-line { position: absolute; left: 12px; right: 12px; height: 2px; background: #6580e6; box-shadow: 0 0 10px #6580e6; animation: cardScan 2s ease-in-out infinite; }@keyframes cardScan { 0%,100% { top: 15px; opacity: .35; } 50% { top: 66px; opacity: 1; } }.card-mode h3 { margin: 6px 0; color: #34415e; font: 700 15px 'Plus Jakarta Sans', sans-serif; }.card-mode > p { max-width: 360px; margin: 0; color: #909caf; font-size: 11px; line-height: 1.55; }.card-form { width: min(100%,455px); text-align: left; }.scan-message { display: flex; align-items: center; gap: 8px; margin: 0 25px 21px; padding: 11px 12px; border-radius: 8px; font-size: 11px; font-weight: 600; }.scan-message.success { color: #278d65; background: #e8f8f0; }.scan-message.error { color: #c55d63; background: #fff0f0; }.scan-message.info { color: #627392; background: #edf1f7; }.scan-activity { min-height: 480px; }.activity-heading { display: flex; align-items: flex-start; justify-content: space-between; padding: 22px 21px 15px; border-bottom: 1px solid #edf1f6; }.activity-heading h2 { font-size: 15px; }.activity-heading > span { display: grid; min-width: 23px; height: 23px; place-items: center; border-radius: 20px; color: #4a64d2; background: #e8edff; font-size: 10px; font-weight: 700; }.scan-log { padding: 3px 21px; }.scan-log article { display: flex; align-items: center; gap: 9px; min-height: 66px; border-bottom: 1px solid #eff2f6; }.scan-log article > div { min-width: 0; flex: 1; }.scan-log strong, .scan-log small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.scan-log strong { color: #43506a; font-size: 11px; }.scan-log small { margin-top: 4px; color: #9ba6b8; font-size: 9px; }.log-status { padding: 4px 6px; border-radius: 12px; color: #32986e; background: #e8f7ef; font-size: 9px; font-weight: 700; }.log-status.duplicate { color: #77849b; background: #eef1f6; }.setup-note { display: flex; gap: 11px; margin-top: 18px; padding: 16px 19px; border: 1px solid #dce4fb; border-radius: 11px; color: #71809d; background: #f3f6ff; }.setup-note > svg { flex: none; margin-top: 1px; color: #6079db; }.setup-note strong { display: block; margin-bottom: 4px; color: #5062a5; font-size: 11px; }.setup-note p { margin: 0; font-size: 10px; line-height: 1.6; }.setup-note code { padding: 2px 4px; border-radius: 3px; color: #526bd0; background: #e3e9ff; font: 600 9px monospace; }
 @media (max-width: 1120px) { .smart-layout { grid-template-columns: 1fr; }.scan-activity { min-height: auto; } }
 @media (max-width: 600px) { .smart-layout { display: block; }.scanner-heading, .face-mode, .card-mode { padding-left: 15px; padding-right: 15px; }.method-tabs { margin: 0 15px; }.scanner-form { align-items: stretch; flex-direction: column; }.scanner-form .button { width: 100%; }.camera-frame { height: 235px; }.scan-message { margin-left: 15px; margin-right: 15px; }.scan-activity { margin-top: 14px; }.setup-note { padding: 13px; } }
@@ -212,8 +212,8 @@ a { color: inherit; text-decoration: none; }
 .saved-report-panel .report-panel-heading { align-items: center; }.saved-report-list { padding: 4px 23px 15px; }.saved-report-list article { display: flex; align-items: center; gap: 12px; padding: 15px 0; border-bottom: 1px solid #edf1f8; }.saved-report-list article:last-child { border-bottom: 0; }.saved-report-icon { display: grid; width: 39px; height: 39px; flex: none; place-items: center; border-radius: 13px; color: #5c61d8; background: #eceeff; }.saved-report-list article > div { min-width: 0; flex: 1; }.saved-report-list h3 { margin: 0; overflow: hidden; color: #3a4d7a; font: 700 11px 'Plus Jakarta Sans', sans-serif; text-overflow: ellipsis; white-space: nowrap; }.saved-report-list p { overflow: hidden; margin: 5px 0 0; color: #8795aa; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.saved-report-list small { display: block; margin-top: 5px; color: #abb4c3; font-size: 9px; }.report-empty { display: grid; justify-items: center; gap: 8px; padding: 48px 24px; color: #8997ac; text-align: center; }.report-empty > span { display: grid; width: 50px; height: 50px; place-items: center; border-radius: 16px; color: #6371db; background: #ecedff; }.report-empty h3 { margin: 2px 0 0; color: #4b5d82; font: 700 14px 'Plus Jakarta Sans', sans-serif; }.report-empty p { max-width: 390px; margin: 0; font-size: 10px; line-height: 1.6; }
 .report-modal-backdrop { position: fixed; z-index: 60; inset: 0; display: grid; place-items: center; padding: 15px; background: rgba(23, 39, 87, .48); backdrop-filter: blur(4px); }.report-modal { width: min(480px, 100%); padding: 24px; border: 1px solid #e0e7f8; border-radius: 19px; background: #fff; box-shadow: 0 28px 70px rgba(22, 44, 102, .3); }.report-modal header { padding-bottom: 17px; border-bottom: 1px solid #e9eef8; }.report-modal h2 { margin: 5px 0 6px; color: #2f4174; font: 700 18px 'Plus Jakarta Sans', sans-serif; }.report-modal header p:not(.card-kicker) { margin: 0; color: #8d9bb0; font-size: 10px; }.report-form { display: grid; gap: 15px; margin-top: 18px; }.report-form label { display: grid; gap: 7px; color: #617291; font-size: 10px; font-weight: 700; }.report-form input, .report-form select { min-height: 41px; padding: 0 11px; outline: 0; border: 1px solid #dce5f5; border-radius: 10px; color: #465a7e; background: #fff; font: 500 11px 'Plus Jakarta Sans', sans-serif; }.report-form input:focus, .report-form select:focus { border-color: #93a0ef; box-shadow: 0 0 0 4px rgba(115,120,224,.12); }.report-modal-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 3px; padding-top: 16px; border-top: 1px solid #e9eef8; }
 @media (max-width: 1100px) { .report-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.report-overview-grid { grid-template-columns: 1fr; } }
-@media (max-width: 720px) { .report-header-actions .button:first-child { display: none; }.report-hero { align-items: flex-start; flex-direction: column; padding: 22px 19px; }.report-hero-rate { width: 100%; }.report-metric-grid, .attendance-summary-grid, .finance-summary-grid { grid-template-columns: 1fr 1fr; }.report-filter-card { align-items: stretch; flex-direction: column; }.report-filter-card > div { display: grid; grid-template-columns: 1fr; }.report-filter-card label { min-width: 0; }.report-filter-card .button { width: 100%; }.attendance-report-hero { align-items: flex-start; padding: 19px; }.report-panel-heading { padding: 18px; }.saved-report-list, .report-checkin-list { padding-left: 18px; padding-right: 18px; } }
-@media (max-width: 450px) { .report-metric-grid, .attendance-summary-grid, .finance-summary-grid { grid-template-columns: 1fr; }.report-header-actions .button { width: 42px; padding: 0; font-size: 0; }.report-header-actions .button svg { width: 18px; height: 18px; }.report-modal { padding: 20px 17px; }.report-modal-actions .button { flex: 1; } }
+@media (max-width: 720px) { .report-hero { align-items: flex-start; flex-direction: column; padding: 22px 19px; }.report-hero-rate { width: 100%; }.report-metric-grid, .attendance-summary-grid, .finance-summary-grid { grid-template-columns: 1fr 1fr; }.report-filter-card { align-items: stretch; flex-direction: column; }.report-filter-card > div { display: grid; grid-template-columns: 1fr; }.report-filter-card label { min-width: 0; }.report-filter-card .button { width: 100%; }.attendance-report-hero { align-items: flex-start; padding: 19px; }.report-panel-heading { padding: 18px; }.saved-report-list, .report-checkin-list { padding-left: 18px; padding-right: 18px; } }
+@media (max-width: 450px) { .report-metric-grid, .attendance-summary-grid, .finance-summary-grid { grid-template-columns: 1fr; }.report-modal { padding: 20px 17px; }.report-modal-actions .button { flex: 1; } }
 
 /* Login: a compact, trustworthy workspace instead of an illustration. */
 .login-page-refresh { grid-template-columns: minmax(500px, 1.02fr) minmax(430px, .98fr); isolation: isolate; background: #f7f9ff; }
@@ -704,7 +704,7 @@ input, select, textarea {
 .guard-incident-list { display: grid; gap: 10px; }.guard-incident-list article { padding: 13px; border: 1px solid #e5eaf3; border-left: 4px solid #7f91ae; border-radius: 11px; background: #fff; }.guard-incident-list article.serious { border-left-color: #e1953e; background: #fffcf7; }.guard-incident-list article.emergency { border-left-color: #df4d61; background: #fff8f9; }.guard-incident-list header, .guard-incident-list footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }.guard-incident-list header span:first-child, .guard-incident-list header strong { display: block; }.guard-incident-list header span:first-child { color: #8b98ab; font-size: 8px; font-weight: 800; text-transform: uppercase; }.guard-incident-list header strong { margin-top: 3px; color: #3c5074; font-size: 11px; }.guard-incident-list > article > p { color: #64738b; font-size: 10px; line-height: 1.55; }.guard-severity { padding: 5px 8px; border-radius: 8px; color: #61708a; background: #eef2f7; font-size: 8px; font-weight: 800; }.guard-severity.serious { color: #b16d26; background: #fff0d9; }.guard-severity.emergency { color: #c43d51; background: #ffe4e8; }.guard-incident-list footer { justify-content: flex-start; flex-wrap: wrap; }.guard-incident-list footer small { flex: 1; color: #929daf; font-size: 8px; }.guard-incident-list footer span { color: #5269b1; font-size: 9px; font-weight: 800; }.guard-incident-list footer button { padding: 5px 8px; border: 1px solid #dce4f2; border-radius: 7px; color: #536dbd; background: #f7f9ff; font-size: 8px; cursor: pointer; }
 .guard-handover-snapshot { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 0 20px 16px; }.guard-handover-snapshot span { padding: 11px; border-radius: 10px; background: #f4f7fc; }.guard-handover-snapshot small, .guard-handover-snapshot strong { display: block; }.guard-handover-snapshot small { color: #8794a9; font-size: 8px; }.guard-handover-snapshot strong { margin-top: 4px; color: #3b5488; font-size: 18px; }.guard-handover-list { display: grid; gap: 9px; }.guard-handover-list article { padding: 12px; border: 1px solid #e4eaf4; border-radius: 10px; background: #fbfcff; }.guard-handover-list header { display: flex; justify-content: space-between; color: #40557c; font-size: 10px; }.guard-handover-list p { margin: 8px 0; color: #66758c; font-size: 10px; }.guard-handover-list article > div { display: flex; flex-wrap: wrap; gap: 6px; }.guard-handover-list article > div span { padding: 5px 7px; border-radius: 7px; color: #5c70a1; background: #edf2ff; font-size: 8px; }.guard-handover-list article > small { display: block; margin-top: 8px; color: #8a97aa; font-size: 9px; line-height: 1.5; }
 @media (max-width: 1100px) { .guard-metrics { grid-template-columns: repeat(3, 1fr); }.guard-quick-actions > div:last-child { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 800px) { .guard-tabs { display: flex; overflow-x: auto; }.guard-tabs button { min-width: 145px; }.guard-metrics { grid-template-columns: 1fr 1fr; }.guard-overview-grid, .guard-workspace { grid-template-columns: 1fr; }.guard-date-filter { display: none; } }
+@media (max-width: 800px) { .guard-tabs { display: flex; overflow-x: auto; }.guard-tabs button { min-width: 145px; }.guard-metrics { grid-template-columns: 1fr 1fr; }.guard-overview-grid, .guard-workspace { grid-template-columns: 1fr; } }
 @media (max-width: 520px) { .guard-metrics { grid-template-columns: 1fr; }.guard-quick-actions > div:last-child { grid-template-columns: 1fr 1fr; }.guard-student-results article { grid-template-columns: 38px minmax(0, 1fr); }.guard-student-results article > .student-status { grid-column: 2; justify-self: start; }.guard-visitor-list article { flex-direction: column; }.guard-visitor-list article > div:last-child { justify-items: start; }.guard-handover-snapshot { grid-template-columns: 1fr; } }
 /* Guard shift follow-up and pickup verification */
 .guard-live-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:16px 0;color:#64748b;font-size:14px}
@@ -1789,4 +1789,506 @@ textarea:focus {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.5px;
+}
+
+/* ==========================================================================
+   Hệ thống Đa màn hình (Multi-Device Responsive), Đa phương tiện & Nút bấm
+   NOTE: Chuẩn hóa hiển thị đồng nhất trên Desktop lớn (>=1440px), Laptop
+   (1025px–1439px), Máy tính bảng (768px–1024px) và Điện thoại (<=767px).
+   ========================================================================== */
+
+html, body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+/* 1. Đa phương tiện & Thành phần trực quan (Media, Camera, QR, Biểu đồ) */
+img,
+svg,
+canvas {
+  max-width: 100%;
+}
+
+video:not(.camera-frame video) {
+  max-width: 100%;
+  height: auto;
+  border-radius: 12px;
+}
+
+/* 2. Đồng bộ Nền Autofill của Trình duyệt (Tránh khung xanh lệch màu trên Login/Form) */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 1000px #ffffff inset !important;
+  box-shadow: 0 0 0 1000px #ffffff inset !important;
+  -webkit-text-fill-color: #1e3158 !important;
+  caret-color: #1e3158;
+  transition: background-color 9999s ease-out 0s;
+}
+
+/* 3. Chuẩn hóa Trang Đăng nhập trên Mọi kích thước màn hình */
+.login-page-refresh {
+  grid-template-columns: minmax(480px, 1.06fr) minmax(420px, 0.94fr);
+}
+
+.login-page-refresh .login-form-wrap {
+  width: min(100%, 460px);
+  padding: 38px 40px 32px;
+  background: rgba(255, 255, 255, 0.95);
+}
+
+.login-page-refresh .login-field {
+  font-size: 12.5px !important;
+}
+
+.login-page-refresh .login-input-wrap {
+  height: 50px;
+  padding: 0 14px;
+  gap: 8px;
+  background: #ffffff;
+}
+
+.login-page-refresh .login-form-wrap form input {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: #1e3158;
+}
+
+.password-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid #dbe4f7;
+  border-radius: 8px;
+  color: #3f5fd4;
+  background: #f3f6ff;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+.password-toggle:hover {
+  background: #e6edff;
+  border-color: #b8cbf6;
+  color: #2845b8;
+}
+
+.login-options {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 2px 0 20px;
+  font-size: 12px;
+}
+
+.login-remember-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.login-remember-hint svg {
+  color: #2da478;
+  flex-shrink: 0;
+}
+
+.login-page-refresh .login-button {
+  height: 50px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+/* 4. Chuẩn hóa Hệ thống Nút bấm, Thanh công cụ & Nhóm thao tác bảng */
+.button,
+.btn-primary,
+.btn-secondary {
+  white-space: nowrap;
+  flex-shrink: 0;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.button:disabled,
+.btn-primary:disabled,
+.btn-secondary:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+  transform: none !important;
+}
+
+.toolbar-buttons,
+.report-header-actions,
+.account-header-actions,
+.classroom-actions,
+.account-row-actions,
+.leave-actions,
+.parent-actions,
+.order-card-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.card-heading,
+.list-toolbar {
+  flex-wrap: wrap;
+  gap: 14px 20px;
+}
+
+.card-heading > div:first-child,
+.list-toolbar > div:first-child {
+  min-width: min(100%, 220px);
+  flex: 1 1 240px;
+}
+
+/* Nút bấm trong bảng dữ liệu: gọn gàng, đồng bộ kích thước, không vỡ dòng */
+.data-table .classroom-actions,
+.data-table .account-row-actions,
+.data-table .leave-actions,
+.asset-table .asset-row-actions {
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: 7px;
+}
+
+.data-table .button,
+.asset-table .asset-row-actions button {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.data-table .button-danger {
+  color: #c83848;
+  background: #fff1f2;
+  border-color: #fecdd3;
+  box-shadow: none;
+}
+
+.data-table .button-danger:hover:not(:disabled) {
+  color: #ffffff;
+  background: #dc2626;
+  border-color: #dc2626;
+}
+
+.data-table th:last-child,
+.data-table td:last-child {
+  text-align: right;
+}
+
+.data-table td:last-child > .button {
+  margin-left: auto;
+}
+
+/* Cuộn ngang mượt cho mọi bảng trên màn hình hẹp, giữ nguyên cột Thao tác */
+.table-wrap,
+.student-table-wrap,
+.asset-table-wrap,
+.report-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Chuẩn hóa chân biểu mẫu / Modal: Hủy bên trái, Lưu/Xác nhận bên phải */
+.form-actions,
+.account-modal-actions,
+.asset-modal-actions,
+.report-modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* 5. Tinh chỉnh Topbar gọn gàng, tăng diện tích hiển thị nội dung trên Laptop */
+.topbar {
+  min-height: 98px;
+  padding: 18px 34px;
+  gap: 16px 24px;
+}
+
+.topbar-copy {
+  max-width: none;
+  min-width: 0;
+  flex: 1 1 280px;
+}
+
+.topbar h1 {
+  font-size: clamp(22px, 2.1vw, 28px);
+  line-height: 1.2;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.topbar-profile {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 5px 10px 5px 12px;
+  border-radius: 12px;
+  text-decoration: none;
+  transition: background-color 0.18s ease;
+}
+
+.topbar-profile:hover {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+/* 6. Breakpoint Máy tính bảng & Laptop nhỏ (<= 1024px): Mở Drawer Menu trượt mượt */
+@media (max-width: 1024px) {
+  .mobile-menu-toggle {
+    display: inline-flex !important;
+    flex-shrink: 0;
+  }
+
+  .desktop-sidebar {
+    display: none !important;
+  }
+
+  .main-content {
+    width: 100% !important;
+  }
+
+  .topbar {
+    min-height: auto;
+    padding: 16px 22px;
+  }
+
+  .topbar-profile {
+    display: inline-flex;
+    padding: 4px;
+    border-left: 0;
+  }
+
+  .topbar-profile > span:nth-child(2) {
+    display: none;
+  }
+
+  .page-content {
+    padding: 20px 22px 36px;
+  }
+
+  .student-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* Login trên Tablet: Giữ trọn thẻ đa phương tiện trực quan gọn gàng */
+  .login-page-refresh {
+    grid-template-columns: 1fr;
+  }
+
+  .login-page-refresh .login-presentation {
+    display: flex !important;
+    min-height: auto;
+    padding: 28px 32px 24px;
+  }
+
+  .login-page-refresh .presentation-copy {
+    margin: 18px 0 18px;
+    max-width: 100%;
+  }
+
+  .login-page-refresh .presentation-copy h1 {
+    font-size: clamp(28px, 4.5vw, 38px);
+    margin: 10px 0 10px;
+  }
+
+  .login-platform-preview {
+    width: 100%;
+    max-width: 640px;
+    margin-bottom: 14px;
+  }
+
+  .login-highlights {
+    display: flex !important;
+    gap: 10px 18px;
+  }
+
+  .login-highlights span {
+    max-width: none;
+  }
+
+  .login-page-refresh .login-form-section {
+    min-height: auto;
+    padding: 28px 24px 36px;
+  }
+
+  .login-page-refresh .login-form-wrap {
+    margin: 0 auto;
+  }
+
+  .login-page-refresh .mobile-brand {
+    display: none !important;
+  }
+}
+
+/* 7. Breakpoint Điện thoại & Màn hình dọc (<= 768px) */
+@media (max-width: 768px) {
+  .topbar {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 14px 16px;
+    gap: 12px;
+  }
+
+  .topbar-actions {
+    width: 100%;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .topbar-actions > .toolbar-buttons,
+  .topbar-actions > .report-header-actions {
+    flex: 1 1 auto;
+    justify-content: flex-start;
+  }
+
+  .topbar-actions .button {
+    width: auto;
+    min-height: 38px;
+    padding: 0 12px;
+    font-size: 12px;
+  }
+
+  .topbar-actions .button svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .guard-date-filter {
+    display: flex !important;
+    align-items: center;
+    gap: 8px;
+    flex: 1 1 auto;
+  }
+
+  .guard-date-filter input {
+    min-height: 38px;
+    flex: 1 1 auto;
+  }
+
+  .page-content {
+    padding: 16px 14px 30px;
+  }
+
+  .stat-grid,
+  .classroom-summary,
+  .hr-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .student-filter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .student-pagination,
+  .finance-pagination,
+  .account-pagination,
+  .table-pagination {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .student-pagination > div,
+  .finance-pagination > div,
+  .account-pagination > div,
+  .table-pagination > div {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+  }
+
+  /* Giữ đầy đủ cột Thao tác trong bảng trên điện thoại */
+  .data-table th:last-child,
+  .data-table td:last-child {
+    display: table-cell !important;
+  }
+
+  /* Popup thông báo vừa khít màn hình di động */
+  .notification-popover {
+    position: fixed;
+    top: 68px;
+    left: 12px;
+    right: 12px;
+    width: auto !important;
+    max-width: none !important;
+    max-height: calc(100dvh - 88px);
+  }
+}
+
+/* 8. Breakpoint Điện thoại cỡ nhỏ (<= 480px) */
+@media (max-width: 480px) {
+  .stat-grid,
+  .classroom-summary,
+  .hr-summary,
+  .asset-metrics,
+  .preview-metrics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .login-page-refresh .login-presentation {
+    padding: 20px 18px 18px;
+  }
+
+  .login-page-refresh .presentation-copy h1 {
+    font-size: 26px;
+    letter-spacing: -1px;
+  }
+
+  .login-highlights {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .login-page-refresh .login-form-section {
+    padding: 18px 14px 28px;
+  }
+
+  .login-page-refresh .login-form-wrap {
+    padding: 26px 20px 22px;
+    border-radius: 22px;
+  }
+
+  .toolbar-buttons {
+    width: 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .toolbar-buttons > .button {
+    flex: 1 1 calc(50% - 6px);
+    min-width: 130px;
+  }
+
+  .form-actions > .button,
+  .account-modal-actions > .button,
+  .asset-modal-actions > .button,
+  .report-modal-actions > .button {
+    flex: 1 1 calc(50% - 6px);
+  }
 }

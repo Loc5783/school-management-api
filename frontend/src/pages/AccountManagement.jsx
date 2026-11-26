@@ -401,7 +401,7 @@ export default function AccountManagement() {
                   onClick={openCreateModal}
                 >
                   <Icon name="plus" size={16} />
-                  + Tạo tài khoản
+                  Tạo tài khoản
                 </button>
               </div>
             </div>

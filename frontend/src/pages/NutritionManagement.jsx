@@ -1022,32 +1022,32 @@ export default function NutritionManagement() {
       title="Bếp Ăn & Dinh Dưỡng Bán Trú"
       subtitle="Quản lý thực đơn theo lớp, lưu trữ thực đơn tuần, cảnh báo dinh dưỡng, kho thực phẩm và suất ăn"
       actions={
-        <div className="flex gap-2">
+        <div className="toolbar-buttons nutrition-header-actions">
           {activeTab === 'menus' && canManageMenuContent && (
-            <button className="btn-primary" onClick={openNewMenuModal}>
-              <Icon name="plus" size={16} /> Lập Thực Đơn Tuần
+            <button type="button" className="button button-primary" onClick={openNewMenuModal}>
+              <Icon name="plus" size={16} /> Lập thực đơn tuần
             </button>
           )}
           {activeTab === 'dishes' && canManageMenuContent && (
-            <button className="btn-primary" onClick={() => { setEditingDishId(null); setNewDishForm(createEmptyDishForm()); setShowNewDishModal(true); }}>
-              <Icon name="plus" size={16} /> Thêm Món Ăn Mới
+            <button type="button" className="button button-primary" onClick={() => { setEditingDishId(null); setNewDishForm(createEmptyDishForm()); setShowNewDishModal(true); }}>
+              <Icon name="plus" size={16} /> Thêm món ăn mới
             </button>
           )}
           {activeTab === 'inventory' && (
-            <div className="flex gap-2">
-              <button className="btn-secondary" onClick={() => { setEditingIngredient(null); setShowIngredientManager(true); }}>
-                <Icon name="plus" size={16} /> Danh Mục Nguyên Liệu
+            <>
+              <button type="button" className="button button-secondary" onClick={() => { setEditingIngredient(null); setShowIngredientManager(true); }}>
+                Danh mục nguyên liệu
               </button>
-              <button className="btn-primary" onClick={() => setShowImportStockModal(true)}>
-                <Icon name="plus" size={16} /> Nhập Kho
+              <button type="button" className="button button-secondary" onClick={() => setShowExportStockModal(true)}>
+                Xuất cho bếp
               </button>
-              <button className="btn-secondary" onClick={() => setShowExportStockModal(true)}>
-                Xuất Cho Bếp
+              <button type="button" className="button button-secondary" onClick={() => setShowReturnLotModal(true)}>
+                Báo cáo chưa dùng
               </button>
-              <button className="btn-secondary" onClick={() => setShowReturnLotModal(true)}>
-                Báo Cáo Chưa Dùng
+              <button type="button" className="button button-primary" onClick={() => setShowImportStockModal(true)}>
+                <Icon name="plus" size={16} /> Nhập kho
               </button>
-            </div>
+            </>
           )}
         </div>
       }

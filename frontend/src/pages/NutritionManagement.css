@@ -27,6 +27,7 @@
 .nutrition-module .max-w-md { max-width: 448px !important; }
 .nutrition-module .max-w-lg { max-width: 512px !important; }
 .nutrition-module .max-w-xl { max-width: 576px !important; }
+.nutrition-module .max-w-2xl { max-width: 672px !important; }
 .nutrition-module .max-h-\[90vh\] { max-height: 90vh !important; }
 .nutrition-module .overflow-hidden { overflow: hidden !important; }
 .nutrition-module .overflow-x-auto { overflow-x: auto !important; }
@@ -312,7 +313,8 @@
   .nutrition-finance-kpis, .nutrition-finance-grid { grid-template-columns: 1fr; }
   .nutrition-module .max-w-md,
   .nutrition-module .max-w-lg,
-  .nutrition-module .max-w-xl { max-width: 100% !important; }
+  .nutrition-module .max-w-xl,
+  .nutrition-module .max-w-2xl { max-width: 100% !important; }
   .nutrition-menu-fields { grid-template-columns: 1fr; }
   .nutrition-allergen-options { grid-template-columns: 1fr; }
 }
