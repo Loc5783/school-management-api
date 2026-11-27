@@ -47,7 +47,8 @@ const ensurePublishedSafeMenu = async (classroomId, date, req = null) => {
     const weekday = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][new Date(`${date}T00:00:00.000Z`).getUTCDay()];
     const day = menu?.days?.find((item) => item.dayOfWeek === weekday);
     if (!day) throw fail('Lớp chưa có thực đơn được công bố cho ngày này', 409);
-    const conflicts = await checkAllergyAndDiseaseConflicts(classroomId, [day]);
+    const tenantId = req?.tenantId || req?.user?.tenantId;
+    const conflicts = await checkAllergyAndDiseaseConflicts(classroomId, [day], tenantId);
     if (conflicts.length) throw fail('Thực đơn lớp còn xung đột dị ứng; cần điều chỉnh và phê duyệt lại trước khi ghi nhận nấu', 409);
 };
 

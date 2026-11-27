@@ -1429,5 +1429,74 @@ describe('QA & Security Evaluation Fixes — Full Replica Set Verification (phas
       });
     expect(forcedAbsentHandover.status).toBe(201);
   });
+
+  test('14. Anti-Bot Public Shield, NoSQL Sanitizer, Honeypot, Webhook Auth & Preschool Asset/HR Sync', async () => {
+    // 14.1 robots.txt cấm thu thập dữ liệu và gắn X-Robots-Tag
+    const robotsRes = await request(app).get('/robots.txt');
+    expect(robotsRes.status).toBe(200);
+    expect(robotsRes.text).toContain('Disallow: /');
+    expect(robotsRes.headers['x-robots-tag']).toContain('noindex');
+
+    // 14.2 Chặn ngay các đường dẫn dò quét lỗ hổng (.env, wp-login.php, phpmyadmin) trước SPA Fallback (không trả 200 HTML)
+    for (const probePath of ['/.env', '/.git/config', '/wp-login.php', '/phpmyadmin/index.php', '/actuator/env']) {
+      const probeRes = await request(app).get(probePath);
+      expect(probeRes.status).toBe(404);
+      expect(probeRes.headers['content-type']).toMatch(/application\/json/);
+    }
+
+    // 14.3 Chặn công cụ quét tự động (sqlmap, nuclei, nikto) qua User-Agent
+    const scannerUaRes = await request(app)
+      .get('/api/health')
+      .set('User-Agent', 'sqlmap/1.8.2#stable (https://sqlmap.org)');
+    expect(scannerUaRes.status).toBe(403);
+    expect(scannerUaRes.body.code).toBe('BOT_SCANNER_BLOCKED');
+
+    // 14.4 Bẫy Honeypot ẩn trên biểu mẫu đăng nhập chặn ngay Bot tự điền form
+    const honeypotLogin = await request(app)
+      .post('/api/auth/login')
+      .send({
+        schoolCode: 'HOANANG-A',
+        username: 'admin',
+        password: '123456',
+        _hp_website: 'http://spam-bot.example.com'
+      });
+    expect(honeypotLogin.status).toBe(403);
+    expect(honeypotLogin.body.code).toBe('BOT_DETECTED');
+
+    // 14.5 Chống NoSQL Operator Injection ($gt, $ne) trên body đăng nhập
+    const nosqlLogin = await request(app)
+      .post('/api/auth/login')
+      .send({
+        schoolCode: 'HOANANG-A',
+        username: { $gt: '' },
+        password: { $gt: '' }
+      });
+    expect(nosqlLogin.status).toBe(400);
+
+    // 14.6 Khóa đọc /api/attendance/webhook/logs ẩn danh (chống lộ dữ liệu sinh trắc học đa trường)
+    const anonWebhookLogs = await request(app).get('/api/attendance/webhook/logs');
+    expect(anonWebhookLogs.status).toBe(401);
+
+    const authedWebhookLogs = await request(app)
+      .get('/api/attendance/webhook/logs')
+      .set('Authorization', `Bearer ${tokenAdminA}`);
+    expect(authedWebhookLogs.status).toBe(200);
+
+    // 14.7 Tạo Tài sản lớp học trực tiếp (không bắt buộc tạo ItemMaster trước) thành công 201
+    const assetRes = await request(app)
+      .post('/api/procurement/assets')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({
+        assetCode: 'TS-LOP-01',
+        name: 'Tủ sấy ca cốc tiệt trùng UV',
+        category: 'equipment',
+        purchaseValue: 6500000,
+        currentValue: 6000000,
+        location: 'Lớp Nhà trẻ 1',
+        status: 'active'
+      });
+    expect(assetRes.status).toBe(201);
+    expect(assetRes.body.data.originalCost).toBe(6500000);
+  });
 });
 

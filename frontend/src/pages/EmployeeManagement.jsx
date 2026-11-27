@@ -228,7 +228,7 @@ export default function EmployeeManagement() {
     const allowed = [
       'employees',
       'timekeeping',
-      'devices',
+      ...(role !== 'accountant' ? ['devices'] : []),
       ...(role === 'admin' ? ['audit'] : []),
       ...(canManageHr ? ['staffing', 'transfers', 'internal'] : []),
       ...(canReviewHr ? ['leave'] : [])
@@ -257,7 +257,7 @@ export default function EmployeeManagement() {
       }
       const isCreatingAccountInline = !editingEmployee && form.accountMode === 'create_new';
       if (isCreatingAccountInline) {
-        if (!String(form.accountUsername || '').trim() || /\s/.test(String(form.accountUsername || '').trim())) {
+        if (String(form.accountUsername || '').trim().length < 3 || /\s/.test(String(form.accountUsername || '').trim())) {
           setFormError('Tên đăng nhập phải từ 3 ký tự trở lên và không chứa khoảng trắng.');
           return;
         }
@@ -740,7 +740,7 @@ export default function EmployeeManagement() {
                         <tr key={req._id}>
                           <td><strong>{req.employeeName}</strong></td>
                           <td>{new Date(req.workDate).toLocaleDateString('vi-VN')}</td>
-                          <td><span className="badge-time">{req.requestedCheckInTime}</span></td>
+                          <td><span className="badge-time">{req.requestedTime || req.requestedCheckInTime || '—'}</span></td>
                           <td>{req.reason}</td>
                           {canApproveTimekeeping && (
                             <td>

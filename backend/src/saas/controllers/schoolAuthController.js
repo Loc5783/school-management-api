@@ -19,9 +19,18 @@ const User = require('../../models/zone1_system/User');
 const PlatformAdmin = require('../../models/zone1_system/PlatformAdmin');
 const RevokedSession = require('../../models/zone1_system/RevokedSession');
 const { generateSchoolUserToken, generatePlatformAdminToken } = require('../utils/saasJwt');
+const { isHoneypotTriggered } = require('../../middlewares/botScannerShield');
 
 const login = async (req, res) => {
   try {
+    if (isHoneypotTriggered(req)) {
+      return res.status(403).json({
+        success: false,
+        code: 'BOT_DETECTED',
+        message: 'Yêu cầu đăng nhập tự động bị từ chối.'
+      });
+    }
+
     const { schoolCode, username, password } = req.body || {};
 
     if (typeof username !== 'string' || typeof password !== 'string' || !username.trim() || !password) {

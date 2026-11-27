@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 
-export default function QRCodeImage({ value, size = 150, label = 'Mã QR' }) {
+export default function QrCodeImage({ value, size = 150, label = 'Mã QR' }) {
   const [src, setSrc] = useState('');
 
   useEffect(() => {

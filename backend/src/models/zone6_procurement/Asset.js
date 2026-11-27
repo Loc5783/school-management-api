@@ -5,11 +5,17 @@ const AssetSchema = new mongoose.Schema({
     itemId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'ItemMaster',
-        required: true
+        default: null
+    },
+    assetCode: {
+        type: String,
+        trim: true,
+        maxlength: 60
     },
     name: {
         type: String,
-        required: true
+        required: true,
+        trim: true
     },
     category: {
         type: String,
@@ -21,16 +27,23 @@ const AssetSchema = new mongoose.Schema({
     originalCost: {
         type: Number,
         required: true,
-        min: 0
+        min: 0,
+        default: 0
     },
     residualValue: {
         type: Number,
         min: 0
     },
     purchaseDate: Date,
+    warrantyExpiry: Date,
     purchaseOrderId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'PurchaseOrder'
+    },
+    classroomId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Classroom',
+        default: null
     },
     location: String, // phòng ban / lớp học
     assignedTo: {
@@ -73,6 +86,7 @@ const AssetSchema = new mongoose.Schema({
 
 AssetSchema.index({ itemId: 1 });
 AssetSchema.index({ assignedTo: 1 });
+AssetSchema.index({ classroomId: 1 });
 AssetSchema.index({ status: 1 });
 AssetSchema.index({ tenantId: 1, qrCode: 1 });
 AssetSchema.index({ qrCode: 1 });

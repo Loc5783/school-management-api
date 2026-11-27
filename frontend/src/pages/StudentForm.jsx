@@ -426,7 +426,7 @@ export default function StudentForm() {
               onChange={(e) => set("address", e.target.value)}
             />
           </label>
-          {manager && (
+          {(manager || !editing) && (
             <>
               <label>
                 Quốc tịch

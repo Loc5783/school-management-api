@@ -4,7 +4,6 @@ const roleCheck = require('../middlewares/roleCheck');
 const controller = require('../controllers/hrController');
 const staffing = require('../controllers/staffingController');
 const credentials = require('../controllers/credentialController');
-const recruitment = require('../controllers/recruitmentController');
 const development = require('../controllers/staffDevelopmentController');
 const handover = require('../controllers/staffHandoverController');
 const internal = require('../controllers/internalCommunicationController');

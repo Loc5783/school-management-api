@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
-import ParentAccountManagement from './ParentAccountManagement';
+import ParentAccountPanel from '../components/ParentAccountPanel';
 import StudentProfileChangeRequests from './StudentProfileChangeRequests';
 import { createInternalAccount, deactivateInternalAccount, getInternalAccounts, updateInternalAccount } from '../api/systemUsers';
 import { getEmployees } from '../api/hr';
@@ -376,7 +376,7 @@ export default function AccountManagement() {
               <p>Kiểm tra thông tin, liên kết con và kích hoạt quyền truy cập trong một luồng.</p>
             </div>
           </div>
-          <ParentAccountManagement embedded />
+          <ParentAccountPanel embedded />
         </section>
       )}
 

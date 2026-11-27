@@ -26,6 +26,7 @@ const Employee = require('../../models/zone2_hr/Employee');
 const { ensureAllPermissions } = require('../../services/defaultAdminBootstrapService');
 const { generatePlatformAdminToken, generateSchoolUserToken } = require('../utils/saasJwt');
 const { runSafeTransaction } = require('../../utils/safeTransaction');
+const { isHoneypotTriggered } = require('../../middlewares/botScannerShield');
 
 const TENANT_CODE_REGEX = /^[A-Z0-9_-]{3,20}$/;
 const BCRYPT_SALT_ROUNDS = 10;
@@ -51,6 +52,14 @@ const ALL_ENABLED_MODULES = [
  */
 const loginSuperAdmin = async (req, res) => {
   try {
+    if (isHoneypotTriggered(req)) {
+      return res.status(403).json({
+        success: false,
+        code: 'BOT_DETECTED',
+        message: 'Yêu cầu đăng nhập tự động bị từ chối.'
+      });
+    }
+
     const username = String(req.body?.username || '').trim();
     const password = String(req.body?.password || '');
 

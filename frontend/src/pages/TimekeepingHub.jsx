@@ -1,15 +1,15 @@
 import { useSearchParams } from 'react-router-dom';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
-import SmartAttendance from './SmartAttendance';
-import ManualTimekeeping from './ManualTimekeeping';
-import MyLeaveRequests from './MyLeaveRequests';
+import KioskAttendancePanel from '../components/KioskAttendancePanel';
+import ManualTimekeepingPanel from '../components/ManualTimekeepingPanel';
+import StaffLeaveRequestPanel from '../components/StaffLeaveRequestPanel';
 import { getStoredUser } from '../utils/storage';
 
 const tabs = [
-  { id: 'kiosk', label: 'Chấm công bằng mã', icon: 'clock', roles: ['admin', 'principal', 'guard', 'accountant', 'chef', 'hr'], Component: SmartAttendance },
-  { id: 'corrections', label: 'Đơn chấm công bù', icon: 'attendance', roles: ['admin', 'principal', 'teacher', 'accountant', 'chef', 'hr'], Component: ManualTimekeeping },
-  { id: 'leave', label: 'Nghỉ phép cá nhân', icon: 'calendar', roles: null, Component: MyLeaveRequests }
+  { id: 'kiosk', label: 'Chấm công bằng mã', icon: 'clock', roles: ['admin', 'principal', 'teacher', 'guard', 'accountant', 'chef', 'hr'], Component: KioskAttendancePanel },
+  { id: 'corrections', label: 'Đơn chấm công bù', icon: 'attendance', roles: ['admin', 'principal', 'teacher', 'accountant', 'chef', 'hr'], Component: ManualTimekeepingPanel },
+  { id: 'leave', label: 'Nghỉ phép cá nhân', icon: 'calendar', roles: null, Component: StaffLeaveRequestPanel }
 ];
 
 export default function TimekeepingHub() {
@@ -26,9 +26,7 @@ export default function TimekeepingHub() {
 
   const subtitleText = role === 'guard'
     ? 'Chấm công ca trực và gửi đơn xin nghỉ phép cá nhân.'
-    : role === 'teacher'
-      ? 'Lập đơn điểm danh / chấm công bổ sung và gửi đơn xin nghỉ phép cá nhân.'
-      : 'Ghi nhận check-in hàng ngày và gửi đơn chấm công bù.';
+    : 'Ghi nhận chấm công hàng ngày, lập đơn chấm công bổ sung và gửi đơn xin nghỉ phép cá nhân.';
 
   return (
     <AppShell title="Chấm công nhân sự" subtitle={subtitleText}>
@@ -43,13 +41,15 @@ export default function TimekeepingHub() {
               className={active === tab.id ? 'active' : ''}
               onClick={() => setSearchParams({ tab: tab.id })}
             >
-              <Icon name={tab.icon} size={18} />
-              {tab.label}
+              <Icon name={tab.icon} size={17} />
+              <span>{tab.label}</span>
             </button>
           ))}
         </div>
+        <div className="timekeeping-hub-body">
+          {Content && <Content embedded />}
+        </div>
       </section>
-      <div className="timekeeping-hub-content">{Content && <Content embedded />}</div>
     </AppShell>
   );
 }

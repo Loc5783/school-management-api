@@ -567,8 +567,12 @@ const listWebhookLogs = async ({
   const filter = {};
   if (tenantId && mongoose.isValidObjectId(tenantId)) {
     filter.tenantId = new mongoose.Types.ObjectId(tenantId);
-  } else if (schoolCode) {
-    filter.schoolCode = String(schoolCode).trim().toUpperCase();
+  } else {
+    // Fail-closed: Nếu không có ngữ cảnh trường hợp lệ thì chỉ trả log Legacy (tenantId: null), không bao giờ rò rỉ chéo trường
+    filter.tenantId = null;
+    if (schoolCode) {
+      filter.schoolCode = String(schoolCode).trim().toUpperCase();
+    }
   }
 
   const [items, total] = await Promise.all([
@@ -601,6 +605,8 @@ const getWebhookLogDetail = async (id, tenantId = null) => {
   const filter = { _id: id };
   if (tenantId && mongoose.isValidObjectId(tenantId)) {
     filter.tenantId = new mongoose.Types.ObjectId(tenantId);
+  } else {
+    filter.tenantId = null;
   }
 
   return TimekeepingWebhookLog.findOne(filter).lean();

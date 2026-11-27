@@ -41,8 +41,8 @@ const validateAdditionalItems = (rawItems) => {
             const error = new Error(`Tên khoản thu thứ ${index + 1} phải có từ 1 đến 120 ký tự`); error.statusCode = 422; throw error;
         }
         const amount = Number(item?.amount);
-        if (!Number.isFinite(amount) || amount <= 0) {
-            const error = new Error(`Số tiền của khoản “${name}” phải lớn hơn 0`); error.statusCode = 422; throw error;
+        if (!Number.isSafeInteger(amount) || amount <= 0) {
+            const error = new Error(`Số tiền của khoản “${name}” phải là số nguyên VND lớn hơn 0`); error.statusCode = 422; throw error;
         }
         return { name, amount };
     });
@@ -832,7 +832,9 @@ const cancelTuitionFee = async (req, res) => {
         const current = await TuitionFee.findOne({ _id: id, ...tenantFilter });
         if (!current) return res.status(404).json({ message: 'Không tìm thấy hóa đơn' });
         if (current.status === 'cancelled') return res.status(409).json({ message: 'Hóa đơn đã được hủy trước đó' });
-        if (current.paidAmount > 0) return res.status(409).json({ message: 'Hóa đơn đã có giao dịch thu tiền, hãy dùng nghiệp vụ hoàn tiền hoặc điều chỉnh thay vì hủy' });
+        if (current.paidAmount > 0 || await Payment.exists({ tuitionFeeId: current._id, ...tenantFilter })) {
+            return res.status(409).json({ message: 'Hóa đơn đã phát sinh giao dịch trên sổ quỹ, hãy dùng nghiệp vụ hoàn tiền hoặc điều chỉnh thay vì hủy' });
+        }
         // Conditional update prevents a concurrent payment from leaving us with
         // a paid invoice that was nevertheless cancelled.
         const fee = await runStudentTransaction(async (session) => {

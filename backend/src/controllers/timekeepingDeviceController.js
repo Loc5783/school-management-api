@@ -220,6 +220,9 @@ async function createDevice(req, res) {
 async function getDeviceById(req, res) {
   try {
     const tenantId = assertTenantContext(req);
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'ID thiết bị không hợp lệ' });
+    }
     const device = await TimekeepingDevice.findOne({ _id: req.params.id, tenantId });
     if (!device) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy thiết bị' });
@@ -253,6 +256,9 @@ async function getDeviceById(req, res) {
 async function updateDevice(req, res) {
   try {
     const tenantId = assertTenantContext(req);
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'ID thiết bị không hợp lệ' });
+    }
     const device = await TimekeepingDevice.findOne({ _id: req.params.id, tenantId });
     if (!device) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy thiết bị' });
@@ -343,6 +349,9 @@ async function updateDevice(req, res) {
 async function testDeviceConn(req, res) {
   try {
     const tenantId = assertTenantContext(req);
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'ID thiết bị không hợp lệ' });
+    }
     const device = await TimekeepingDevice.findOne({ _id: req.params.id, tenantId });
     if (!device) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy thiết bị' });
@@ -365,6 +374,9 @@ async function testDeviceConn(req, res) {
 async function triggerDeviceSync(req, res) {
   try {
     const tenantId = assertTenantContext(req);
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'ID thiết bị không hợp lệ' });
+    }
     const device = await TimekeepingDevice.findOne({ _id: req.params.id, tenantId });
     if (!device) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy thiết bị' });
@@ -395,6 +407,9 @@ async function listPersonMappings(req, res) {
   try {
     const tenantId = assertTenantContext(req);
     const deviceId = req.params.id;
+    if (!mongoose.isValidObjectId(deviceId)) {
+      return res.status(400).json({ success: false, message: 'ID thiết bị không hợp lệ' });
+    }
 
     const device = await TimekeepingDevice.findOne({ _id: deviceId, tenantId });
     if (!device) {
@@ -429,6 +444,12 @@ async function upsertPersonMapping(req, res) {
       return res.status(400).json({
         success: false,
         message: 'Vui lòng cung cấp externalPersonId, subjectType (EMPLOYEE/STUDENT) và subjectId'
+      });
+    }
+    if (!mongoose.isValidObjectId(deviceId) || !mongoose.isValidObjectId(subjectId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'ID thiết bị hoặc ID đối tượng ánh xạ không hợp lệ'
       });
     }
 
@@ -578,6 +599,9 @@ async function deletePersonMapping(req, res) {
   try {
     const tenantId = assertTenantContext(req);
     const { id: deviceId, mappingId } = req.params;
+    if (!mongoose.isValidObjectId(deviceId) || !mongoose.isValidObjectId(mappingId)) {
+      return res.status(400).json({ success: false, message: 'ID thiết bị hoặc ID ánh xạ không hợp lệ' });
+    }
 
     const device = await TimekeepingDevice.findOne({ _id: deviceId, tenantId });
     if (!device) {
@@ -606,6 +630,9 @@ async function getSyncLogs(req, res) {
   try {
     const tenantId = assertTenantContext(req);
     const deviceId = req.params.id;
+    if (!mongoose.isValidObjectId(deviceId)) {
+      return res.status(400).json({ success: false, message: 'ID thiết bị không hợp lệ' });
+    }
 
     const device = await TimekeepingDevice.findOne({ _id: deviceId, tenantId });
     if (!device) {

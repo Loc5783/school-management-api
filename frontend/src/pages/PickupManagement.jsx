@@ -4,7 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
 import StudentPagination from '../components/StudentPagination';
-import QRCodeImage from '../components/QRCodeImage';
+import QrCodeImage from '../components/QrCodeImage';
 import api from '../api/axiosConfig';
 import { getStoredUser } from '../utils/storage';
 import {
@@ -599,7 +599,7 @@ export default function PickupManagement({ embedded = false, classroomId = '', f
                                 <option value={CUSTOM_PICKER_KEY}>+ Nhập người đón khác...</option>
                               </select>
                               {isCustom && (
-                                <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: '6px' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.9fr 1fr', gap: '6px' }}>
                                   <input
                                     placeholder="Họ tên người đón *"
                                     value={customVal.fullName}
@@ -612,12 +612,23 @@ export default function PickupManagement({ embedded = false, classroomId = '', f
                                     style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
                                   />
                                   <input
-                                    placeholder="Quan hệ / SĐT"
+                                    placeholder="Quan hệ (Ông/Bà...)"
                                     value={customVal.relationship}
                                     onChange={(e) =>
                                       setCustomPickerByStudent((prev) => ({
                                         ...prev,
                                         [sid]: { ...customVal, relationship: e.target.value }
+                                      }))
+                                    }
+                                    style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                                  />
+                                  <input
+                                    placeholder="SĐT người đón"
+                                    value={customVal.phone || ''}
+                                    onChange={(e) =>
+                                      setCustomPickerByStudent((prev) => ({
+                                        ...prev,
+                                        [sid]: { ...customVal, phone: e.target.value }
                                       }))
                                     }
                                     style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
@@ -821,7 +832,7 @@ export default function PickupManagement({ embedded = false, classroomId = '', f
                     {record.note && <em>{record.note}</em>}
                     {isParent && record.status === 'scheduled' && record.pickupQrPayload && (
                       <div className="pickup-qr-ticket">
-                        <QRCodeImage value={record.pickupQrPayload} size={112} label={`QR đón ${record.studentName}`} />
+                        <QrCodeImage value={record.pickupQrPayload} size={112} label={`QR đón ${record.studentName}`} />
                         <span>
                           <strong>QR bàn giao hôm nay</strong>
                           <small>Người đón đưa mã này cho bảo vệ quét. Không gửi cho người không được ủy quyền.</small>

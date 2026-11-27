@@ -7,6 +7,7 @@ export default function Login() {
   const [schoolCode, setSchoolCode] = useState(() => localStorage.getItem('last_school_code') || '');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [hpWebsite, setHpWebsite] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -24,7 +25,8 @@ export default function Login() {
     try {
       const payload = {
         username: username.trim(),
-        password
+        password,
+        ...(hpWebsite ? { _hp_website: hpWebsite } : {})
       };
       if (trimmedSchoolCode) {
         payload.schoolCode = trimmedSchoolCode;
@@ -63,6 +65,7 @@ export default function Login() {
       }
 
       const homeByRole = {
+        principal: '/principal',
         parent: '/parent-portal',
         guard: '/guard',
         chef: '/kitchen',
@@ -157,6 +160,20 @@ export default function Login() {
           </p>
 
           <form onSubmit={handleSubmit} noValidate>
+            {/* Trường Honeypot ẩn chống Bot tự động điền form đăng nhập */}
+            <div aria-hidden="true" style={{ position: 'absolute', left: '-9999px', width: '1px', height: '1px', overflow: 'hidden' }}>
+              <label>
+                Website
+                <input
+                  type="text"
+                  name="_hp_website"
+                  tabIndex={-1}
+                  autoComplete="off"
+                  value={hpWebsite}
+                  onChange={(e) => setHpWebsite(e.target.value)}
+                />
+              </label>
+            </div>
             <label className="login-field">
               <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
                 <span>Mã trường học (School Code)</span>

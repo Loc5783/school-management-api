@@ -176,10 +176,13 @@ const createAttendance = async (req, res) => {
             return res.status(400).json({ message: 'ID học sinh không hợp lệ' });
         }
 
-        // Kiểm tra học sinh tồn tại trong đúng tenant
+        // Kiểm tra học sinh tồn tại và đang theo học trong đúng tenant
         const student = await Student.findOne({ _id: studentId, ...tenantFilter });
         if (!student) {
             return res.status(404).json({ message: 'Không tìm thấy học sinh' });
+        }
+        if (student.status !== 'enrolled') {
+            return res.status(409).json({ message: 'Chỉ có thể điểm danh học sinh đang theo học tại trường' });
         }
 
         if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, student.classroomId, req)) {
@@ -257,11 +260,15 @@ const createBulkAttendance = async (req, res) => {
             return res.status(400).json({ message: 'Cần gửi ít nhất một bản ghi điểm danh' });
         }
 
+        const todayKey = getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE);
         const workDate = attendDate
             ? parseWorkDate(String(attendDate))
-            : getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE);
+            : todayKey;
         if (!workDate) {
             return res.status(400).json({ message: 'Ngày điểm danh không hợp lệ' });
+        }
+        if (workDate > todayKey) {
+            return res.status(400).json({ message: 'Không thể điểm danh trước cho ngày trong tương lai' });
         }
 
         if (!isValidObjectId(classroomId)) {
@@ -580,8 +587,12 @@ const createLeaveRequest = async (req, res) => {
         if (!start || !end || start > end) {
             return res.status(400).json({ success: false, message: 'Khoảng ngày xin nghỉ không hợp lệ' });
         }
-        if (!getWeekdayDateKeys(start, end).length) {
+        const weekdayKeys = getWeekdayDateKeys(start, end);
+        if (!weekdayKeys.length) {
             return res.status(400).json({ success: false, message: 'Khoảng xin nghỉ phải có ít nhất một ngày học từ Thứ Hai đến Thứ Sáu' });
+        }
+        if (weekdayKeys.length > 60) {
+            return res.status(400).json({ success: false, message: 'Một đơn xin nghỉ phép không được vượt quá 60 ngày học' });
         }
         if (start < getWorkDate(new Date(), DEFAULT_SCHOOL_TIMEZONE)) {
             return res.status(400).json({ success: false, message: 'Chỉ có thể gửi đơn nghỉ từ ngày hôm nay trở đi' });

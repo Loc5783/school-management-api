@@ -72,7 +72,9 @@ api.interceptors.response.use(
     const isAuthAttemptOrPasswordCheck =
       reqUrl.includes('/auth/login') ||
       reqUrl.includes('/multi-school/login') ||
-      reqUrl.includes('/auth/change-password');
+      reqUrl.includes('/auth/change-password') ||
+      reqUrl.includes('/auth/me/password') ||
+      reqUrl.includes('/multi-school/me/password');
 
     if (error.response.status === 401 && !isAuthAttemptOrPasswordCheck) {
       const currentToken = localStorage.getItem('token');

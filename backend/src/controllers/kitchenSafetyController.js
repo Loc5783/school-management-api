@@ -35,7 +35,7 @@ const expectedDishes = async (date, req = null) => {
     });
     const conflicts = await Promise.all(menus.map(async (menu) => {
         const day = menu.days?.find((item) => item.dayOfWeek === weekday);
-        return day ? checkAllergyAndDiseaseConflicts(menu.classroomId, [day]) : [];
+        return day ? checkAllergyAndDiseaseConflicts(menu.classroomId, [day], tenantId) : [];
     }));
     return { expected: Object.fromEntries(MEALS.map((meal) => [meal, [...names[meal]].sort((a, b) => a.localeCompare(b, 'vi'))])), missingMenus: missingMenus.length,
         allergyConflicts: Object.fromEntries(MEALS.map((meal) => [meal, conflicts.flat().filter((item) => item.mealType?.split('.')[0] === meal).length])) };

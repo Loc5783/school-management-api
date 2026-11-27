@@ -40,7 +40,7 @@ const ROLE_POSITIONS = {
 const DEFAULT_POSITION_BY_ROLE = { admin: 'principal', principal: 'principal', teacher: 'teacher', accountant: 'accountant', chef: 'chef', guard: 'security', hr: 'hr' };
 const DEFAULT_PAYROLL_ROLE_BY_ACCOUNT_ROLE = { admin: 'principal', principal: 'principal', teacher: 'teacher', accountant: 'accountant', chef: 'chef', guard: 'guard', hr: 'hr' };
 const EMPLOYEE_CODE_PREFIX_BY_ROLE = { admin: 'HT', principal: 'HT', teacher: 'GV', accountant: 'KT', chef: 'BEP', guard: 'BV', hr: 'NS' };
-const EMPLOYEE_FIELDS = ['employeeCode', 'fullName', 'phone', 'email', 'address', 'departmentId', 'position', 'payrollRole', 'salaryConfig', 'startDate', 'contractType', 'contractNumber', 'contractSignedDate', 'contractStartDate', 'endDate'];
+const EMPLOYEE_FIELDS = ['employeeCode', 'fullName', 'phone', 'email', 'address', 'departmentId', 'position', 'payrollRole', 'salaryConfig', 'startDate', 'contractType', 'contractNumber', 'contractSignedDate', 'contractStartDate', 'endDate', 'status'];
 const PROFILE_HISTORY_FIELDS = ['employeeCode', 'fullName', 'phone', 'email', 'address', 'position', 'payrollRole', 'startDate', 'contractType', 'contractNumber', 'contractSignedDate', 'contractStartDate', 'endDate', 'status'];
 const profileSnapshot = (employee) => Object.fromEntries(PROFILE_HISTORY_FIELDS.map((key) => [key, employee?.[key] ?? null]).concat([
     ['userId', employee?.userId?._id || employee?.userId || null],
@@ -584,6 +584,25 @@ const updateEmployee = async (req, res) => {
                 await clearFormerLinkedUser(formerLinkedUser, current.employeeCode, session);
             }
             await syncLinkedUser(linkedUser, updated, session, tenantFilter);
+            if (fields.status === 'resigned' && linkedUser) {
+                await User.updateOne(
+                    { _id: linkedUser._id, ...tenantFilter },
+                    { $set: { status: 'inactive' }, $inc: { authVersion: 1 } },
+                    { session }
+                );
+                const Classroom = require('../models/zone3_school/Classroom');
+                await Classroom.updateMany(
+                    { homeroomTeacherId: linkedUser._id, ...tenantFilter },
+                    { $set: { homeroomTeacherId: null } },
+                    { session }
+                );
+            } else if (fields.status === 'active' && linkedUser && linkedUser.status === 'inactive') {
+                await User.updateOne(
+                    { _id: linkedUser._id, ...tenantFilter },
+                    { $set: { status: 'active' } },
+                    { session }
+                );
+            }
             const changes = changedSnapshot(profileSnapshot(current), profileSnapshot(updated));
             if (Object.keys(changes.after).length) await AuditLog.create([{ actorId: currentActor._id, actorUsername: currentActor.username,
                 action: 'EMPLOYEE_UPDATED', targetType: 'Employee', targetId: updated._id,
@@ -996,7 +1015,9 @@ const generateMonthlyPayroll = async (req, res) => {
                 const otherAllowance = existing?.allowances?.other || 0;
                 const advancePayment = existing?.deductions?.advancePayment || 0;
                 const otherDeduction = existing?.deductions?.other || 0;
-                const grossSalary = Math.round(earnedBase + positionAllowance + lunchAllowance + overtimePay + otherAllowance);
+                // Nếu nhân sự không đi làm ngày nào trong tháng (actualWorkDays === 0), không cộng phụ cấp ăn trưa
+                const effectiveLunchAllowance = actualWorkDays > 0 ? lunchAllowance : 0;
+                const grossSalary = Math.round(earnedBase + positionAllowance + effectiveLunchAllowance + overtimePay + otherAllowance);
                 const deductionShortfall = Math.max(0, insuranceDeduction + advancePayment + otherDeduction - grossSalary);
                 const netSalary = Math.max(0, grossSalary - insuranceDeduction - advancePayment - otherDeduction);
 

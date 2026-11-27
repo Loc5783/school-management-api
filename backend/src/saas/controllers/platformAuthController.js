@@ -222,9 +222,14 @@ const verifyMfa = async (req, res) => {
       });
     }
 
-    // Hỗ trợ mock epoch time để test ổn định không phụ thuộc ranh giới 30s
-    const mockTimeHeader = req.header('x-mock-epoch-time');
-    const nowTime = mockTimeHeader ? parseInt(mockTimeHeader, 10) : Date.now();
+    // Hỗ trợ mock epoch time CHỈ trong môi trường kiểm thử tự động để test ổn định không phụ thuộc ranh giới 30s
+    const isTestEnv = process.env.NODE_ENV === 'test' || Boolean(process.env.JEST_WORKER_ID);
+    const mockTimeHeader = isTestEnv ? req.header('x-mock-epoch-time') : null;
+    const parsedMockTime = mockTimeHeader ? Number.parseInt(mockTimeHeader, 10) : NaN;
+    const nowTime =
+      Number.isSafeInteger(parsedMockTime) && parsedMockTime > 0 && parsedMockTime < 9000000000000
+        ? parsedMockTime
+        : Date.now();
 
     const totpResult = verifyTotpWithStep(rawSecret, cleanTotpCode, 1, 30, nowTime);
     if (!totpResult.valid) {

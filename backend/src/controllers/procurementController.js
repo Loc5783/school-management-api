@@ -31,7 +31,12 @@ const parseExpectedDelivery = (value) => {
 };
 
 const ITEM_EDITABLE_FIELDS = ['code', 'name', 'category', 'unit', 'referencePrice', 'description', 'status'];
-const ASSET_EDITABLE_FIELDS = ['assetCode', 'name', 'category', 'purchaseDate', 'purchaseValue', 'currentValue', 'classroomId', 'location', 'assignedTo', 'status', 'warrantyExpiry', 'note'];
+const ASSET_EDITABLE_FIELDS = [
+    'itemId', 'assetCode', 'name', 'category', 'qrCode', 'serialNumber',
+    'originalCost', 'residualValue', 'purchaseDate', 'purchaseValue', 'currentValue',
+    'purchaseOrderId', 'classroomId', 'location', 'assignedTo', 'status', 'warrantyExpiry', 'note'
+];
+const MAINTENANCE_FIELDS = ['maintenanceDate', 'description', 'cost', 'contractor', 'nextMaintenanceDate', 'note'];
 const pickAllowed = (body = {}, keys = []) => Object.fromEntries(keys.filter((k) => Object.hasOwn(body || {}, k)).map((k) => [k, body[k]]));
 
 // ==============================
@@ -404,20 +409,46 @@ const createAsset = async (req, res) => {
         const tenantFilter = buildTenantFilter(req);
         const tenantId = req.tenantId || req.user?.tenantId;
         const allowed = pickAllowed(req.body, ASSET_EDITABLE_FIELDS);
-        if (allowed.purchaseValue != null && (!Number.isFinite(Number(allowed.purchaseValue)) || Number(allowed.purchaseValue) < 0)) {
+        const resolvedOriginalCost = Number(allowed.originalCost ?? allowed.purchaseValue ?? 0);
+        if (!Number.isFinite(resolvedOriginalCost) || resolvedOriginalCost < 0) {
             return res.status(422).json({ message: 'Nguyên giá mua sắm phải là số không âm' });
         }
+        allowed.originalCost = resolvedOriginalCost;
+        if (allowed.residualValue == null && allowed.currentValue != null) {
+            const curVal = Number(allowed.currentValue);
+            if (Number.isFinite(curVal) && curVal >= 0) allowed.residualValue = curVal;
+        }
+        delete allowed.purchaseValue;
+        delete allowed.currentValue;
+        if (allowed.itemId) {
+            if (!isValidObjectId(allowed.itemId)) return res.status(422).json({ message: 'Mã danh mục vật tư không hợp lệ' });
+        } else {
+            delete allowed.itemId;
+        }
+        if (allowed.purchaseOrderId) {
+            if (!isValidObjectId(allowed.purchaseOrderId)) return res.status(422).json({ message: 'Mã đơn đặt hàng không hợp lệ' });
+        } else {
+            delete allowed.purchaseOrderId;
+        }
         if (allowed.assignedTo) {
-            if (!isValidObjectId(allowed.assignedTo) || !(await User.exists({ _id: allowed.assignedTo, ...tenantFilter }))) {
+            const targetUser = isValidObjectId(allowed.assignedTo)
+                ? await User.findOne({ _id: allowed.assignedTo, ...tenantFilter }).select('_id profile username').lean()
+                : null;
+            if (!targetUser) {
                 return res.status(422).json({ message: 'Người được giao quản lý tài sản không hợp lệ' });
             }
+            allowed.assignedToName = targetUser.profile?.fullName || targetUser.username;
         } else {
             delete allowed.assignedTo;
         }
         if (allowed.classroomId) {
-            if (!isValidObjectId(allowed.classroomId) || !(await Classroom.exists({ _id: allowed.classroomId, ...tenantFilter }))) {
+            const targetClassroom = isValidObjectId(allowed.classroomId)
+                ? await Classroom.findOne({ _id: allowed.classroomId, ...tenantFilter }).select('_id name').lean()
+                : null;
+            if (!targetClassroom) {
                 return res.status(422).json({ message: 'Lớp học sử dụng tài sản không hợp lệ' });
             }
+            if (!allowed.location) allowed.location = targetClassroom.name;
         } else {
             delete allowed.classroomId;
         }
@@ -432,7 +463,9 @@ const createAsset = async (req, res) => {
 
 const getAssets = async (req, res) => {
     try {
-        if (!['admin', 'principal'].includes(req.user.role)) return res.status(403).json({ message: 'Bạn không có quyền xem danh mục tài sản toàn trường' });
+        if (!['admin', 'principal', 'teacher'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'Bạn không có quyền xem danh mục tài sản' });
+        }
         const { status, category, assignedTo } = req.query;
         const filter = {};
         if (status && typeof status === 'string') filter.status = status;
@@ -442,7 +475,20 @@ const getAssets = async (req, res) => {
             filter.assignedTo = assignedTo;
         }
         const tenantFilter = buildTenantFilter(req);
-        const assets = await Asset.find({ ...filter, ...tenantFilter }).sort({ createdAt: -1 });
+        if (req.user.role === 'teacher') {
+            const teacherClassrooms = await Classroom.find({
+                ...tenantFilter,
+                $or: [{ homeroomTeacherId: req.user._id }, { 'teachers.teacherId': req.user._id }]
+            }).select('_id name').lean();
+            const classIds = teacherClassrooms.map((c) => c._id);
+            const classNames = teacherClassrooms.map((c) => c.name).filter(Boolean);
+            filter.$or = [
+                { assignedTo: req.user._id },
+                ...(classIds.length ? [{ classroomId: { $in: classIds } }] : []),
+                ...(classNames.length ? [{ location: { $in: classNames } }] : [])
+            ];
+        }
+        const assets = await Asset.find({ ...filter, ...tenantFilter }).sort({ createdAt: -1 }).lean();
         res.json({ message: 'Lấy danh sách tài sản thành công', data: assets });
     } catch (err) {
         console.error(err);
@@ -456,13 +502,25 @@ const updateAsset = async (req, res) => {
         if (!isValidObjectId(id)) return res.status(400).json({ message: 'ID tài sản không hợp lệ' });
         const tenantFilter = buildTenantFilter(req);
         const allowed = pickAllowed(req.body, ASSET_EDITABLE_FIELDS);
-        if (allowed.purchaseValue != null && (!Number.isFinite(Number(allowed.purchaseValue)) || Number(allowed.purchaseValue) < 0)) {
+        if (allowed.originalCost == null && allowed.purchaseValue != null) {
+            allowed.originalCost = Number(allowed.purchaseValue);
+        }
+        if (allowed.originalCost != null && (!Number.isFinite(Number(allowed.originalCost)) || Number(allowed.originalCost) < 0)) {
             return res.status(422).json({ message: 'Nguyên giá tài sản phải là số không âm' });
         }
+        if (allowed.residualValue == null && allowed.currentValue != null) {
+            allowed.residualValue = Number(allowed.currentValue);
+        }
+        delete allowed.purchaseValue;
+        delete allowed.currentValue;
         if (allowed.assignedTo) {
-            if (!isValidObjectId(allowed.assignedTo) || !(await User.exists({ _id: allowed.assignedTo, ...tenantFilter }))) {
+            const targetUser = isValidObjectId(allowed.assignedTo)
+                ? await User.findOne({ _id: allowed.assignedTo, ...tenantFilter }).select('_id profile username').lean()
+                : null;
+            if (!targetUser) {
                 return res.status(422).json({ message: 'Người quản lý tài sản không hợp lệ' });
             }
+            allowed.assignedToName = targetUser.profile?.fullName || targetUser.username;
         }
         if (allowed.classroomId) {
             if (!isValidObjectId(allowed.classroomId) || !(await Classroom.exists({ _id: allowed.classroomId, ...tenantFilter }))) {
@@ -506,8 +564,13 @@ const addMaintenance = async (req, res) => {
         if (current.status === 'liquidated') {
             return res.status(409).json({ message: 'Tài sản đã thanh lý, không thể ghi nhận bảo trì mới' });
         }
+        const safeMaint = pickAllowed(req.body, MAINTENANCE_FIELDS);
         const maintenanceRecord = {
-            ...req.body,
+            maintenanceDate: safeMaint.maintenanceDate || new Date(),
+            description: String(safeMaint.description || '').trim().slice(0, 500),
+            contractor: String(safeMaint.contractor || '').trim().slice(0, 160),
+            ...(safeMaint.nextMaintenanceDate ? { nextMaintenanceDate: safeMaint.nextMaintenanceDate } : {}),
+            note: String(safeMaint.note || '').trim().slice(0, 500),
             cost,
             recordedBy: req.user._id
         };

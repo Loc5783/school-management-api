@@ -143,13 +143,6 @@ export const exportCashbook = (param) => {
   return downloadExcelFile('/finance/export/cashbook', params, `SoQuy_${label}.xlsx`);
 };
 
-export const exportPayroll = (param1, param2) => {
-  const params = (typeof param1 === 'object' && param1 !== null)
-    ? { ...param1 }
-    : { month: param1, year: param2 };
-  return downloadExcelFile('/finance/export/payroll', params, `BangLuong_${params.month || ''}_${params.year || ''}.xlsx`);
-};
-
 export const exportAccountingReport = (param) => {
   const params = typeof param === 'string' ? { month: param } : (param || {});
   return downloadExcelFile('/finance/export/accounting-report', params, `BaoCaoKeToan_${params.month || 'KyHienTai'}.xlsx`);

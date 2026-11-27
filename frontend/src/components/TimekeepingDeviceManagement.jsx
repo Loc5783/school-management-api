@@ -75,9 +75,9 @@ export default function TimekeepingDeviceManagement() {
       setDevices(devRes.data.data || []);
       setEmployees(empRes.data.data || []);
 
-      // Also try fetching students for mapping
+      // Also try fetching all enrolled students in the school for biometric mapping
       try {
-        const stuRes = await api.get('/students');
+        const stuRes = await api.get('/students', { params: { limit: 500, status: 'enrolled' } });
         setStudents(stuRes.data.data || []);
       } catch {
         setStudents([]);

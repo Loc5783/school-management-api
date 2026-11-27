@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const schoolAuthMiddleware = require('../middlewares/schoolAuthMiddleware');
 const saasDeviceAuth = require('../../middlewares/saasDeviceAuth');
+const { deviceIngestLimiter } = require('../middlewares/rateLimiter');
 const roleCheck = require('../../middlewares/roleCheck');
 const hrAccessAudit = require('../../middlewares/hrAccessAudit');
 const {
@@ -35,8 +36,8 @@ router.use((req, res, next) => {
   next();
 });
 
-// Hardware machine ingest endpoint: Bypasses staff JWT and strictly enforces saasDeviceAuth
-router.post('/device-events', saasDeviceAuth, receiveDeviceEvent);
+// Hardware machine ingest endpoint: Bypasses staff JWT and strictly enforces deviceIngestLimiter + saasDeviceAuth
+router.post('/device-events', deviceIngestLimiter, saasDeviceAuth, receiveDeviceEvent);
 
 // Explicitly gate unapproved timekeeping submodules so they cleanly fall through to tenantFeatureGate (501)
 const UNAPPROVED_TIMEKEEPING_PREFIXES = [

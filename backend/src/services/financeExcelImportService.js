@@ -528,6 +528,8 @@ const assertZipSafety = (buffer) => {
   let offset = cdOffset;
   let worksheetCount = 0;
   let entryCount = 0;
+  let totalUncompressedBytes = 0;
+  const MAX_UNCOMPRESSED_BYTES = 25 * 1024 * 1024; // 25 MB chống tấn công Excel Zip-Bomb
 
   while (offset < cdOffset + cdSize) {
     if (offset + 46 > buffer.length) {
@@ -536,6 +538,12 @@ const assertZipSafety = (buffer) => {
 
     if (buffer.readUInt32LE(offset) !== 0x02014b50) {
       throw Object.assign(new Error('Chữ ký Central Directory của Excel không hợp lệ.'), { statusCode: 422 });
+    }
+
+    const uncompressedSize = buffer.readUInt32LE(offset + 24);
+    totalUncompressedBytes += uncompressedSize;
+    if (totalUncompressedBytes > MAX_UNCOMPRESSED_BYTES) {
+      throw Object.assign(new Error('Dung lượng giải nén của tập tin Excel vượt quá ngưỡng an toàn (25 MB).'), { statusCode: 413 });
     }
 
     const fileNameLen = buffer.readUInt16LE(offset + 28);
@@ -771,7 +779,15 @@ const generateFeeScheduleTemplateWorkbook = async (context) => {
   dataSheet.getColumn(2).numFmt = '@';
   dataSheet.getColumn(8).numFmt = '@';
 
-  const classListFormula = `'Danh mục lớp'!$A$2:$A$${Math.max(2, classrooms.length + 2)}`;
+  const inlineOptions = [
+    'Tất cả lớp (áp dụng chung)',
+    ...classrooms.map((c) => String(c.name || '').replace(/[,"]/g, ' ').trim()).filter(Boolean)
+  ];
+  const inlineJoined = inlineOptions.join(',');
+  // Excel giới hạn chuỗi inline DataValidation tối đa 255 ký tự; nếu vượt quá sẽ tự chuyển sang tham chiếu vùng 'Danh mục lớp'
+  const classListFormula = inlineJoined.length <= 240
+    ? `"${inlineJoined}"`
+    : `'Danh mục lớp'!$A$2:$A$${Math.max(2, classrooms.length + 2)}`;
 
   for (let r = 2; r <= MAX_ROWS + 1; r++) {
     const cellA = dataSheet.getCell(`A${r}`);

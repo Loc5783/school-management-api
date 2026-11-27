@@ -16,7 +16,14 @@ const cleanChanges = (body = {}) => {
   const changes = Object.fromEntries(Object.entries(body).filter(([key]) => PARENT_CHANGE_FIELDS.has(key)));
   if (!Object.keys(changes).length) throw error('Không có thông tin hồ sơ hợp lệ để gửi duyệt');
   if (changes.fullName != null && (!String(changes.fullName).trim() || String(changes.fullName).trim().length > 120)) throw error('Họ và tên không hợp lệ');
-  if (changes.birthDate && (Number.isNaN(new Date(changes.birthDate).getTime()) || new Date(changes.birthDate) > new Date())) throw error('Ngày sinh không hợp lệ');
+  if (changes.birthDate) {
+    const parsedBirth = new Date(changes.birthDate);
+    const minPreschoolBirth = new Date();
+    minPreschoolBirth.setFullYear(minPreschoolBirth.getFullYear() - 9);
+    if (Number.isNaN(parsedBirth.getTime()) || parsedBirth > new Date() || parsedBirth < minPreschoolBirth) {
+      throw error('Ngày sinh không hợp lệ đối với độ tuổi mầm non');
+    }
+  }
   if (changes.gender && !['male', 'female'].includes(changes.gender)) throw error('Giới tính không hợp lệ');
   if (changes.bloodType != null) {
     const cleanBlood = String(changes.bloodType).trim().toUpperCase();
@@ -31,7 +38,20 @@ const cleanChanges = (body = {}) => {
   return changes;
 };
 
-const writeAudit = (req, action, target, before, after, reason = '') => AuditLog.create({ actorId: req.user._id, actorUsername: req.user.username, action, targetType: 'StudentProfileChangeRequest', targetId: target._id, before, after, reason });
+const writeAudit = (req, action, target, before, after, reason = '') => {
+  const tenantId = req.tenantId || req.user?.tenantId;
+  return AuditLog.create({
+    ...(tenantId ? { tenantId } : {}),
+    actorId: req.user._id,
+    actorUsername: req.user.username,
+    action,
+    targetType: 'StudentProfileChangeRequest',
+    targetId: target._id,
+    before,
+    after,
+    reason
+  });
+};
 
 const createRequest = async (req, res) => {
   try {

@@ -27,7 +27,7 @@ import {
 } from '../api/finance';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
-import FeeSchedulePanel from './FeeSchedulePanel';
+import FeeSchedulePanel from '../components/FeeSchedulePanel';
 import FinanceExcelImportModal from '../components/FinanceExcelImportModal';
 import { generateClientId, getStoredUser } from '../utils/storage';
 
@@ -113,6 +113,7 @@ export default function FinanceManagement() {
   const [paymentError, setPaymentError] = useState('');
   const [paymentSubmitting, setPaymentSubmitting] = useState(false);
   const [bulkItem, setBulkItem] = useState(null);
+  const [bulkSubmitting, setBulkSubmitting] = useState(false);
   const [invoicePreview, setInvoicePreview] = useState(null);
   const [studentCreditOverrides, setStudentCreditOverrides] = useState({});
   const [issuingInvoices, setIssuingInvoices] = useState(false);
@@ -372,7 +373,9 @@ export default function FinanceManagement() {
   const openBulkItem = () => setBulkItem({ period: filters.period, classroomId: filters.classroomId, name: '', amount: '', reason: '' });
   const submitBulkItem = async (event) => {
     event.preventDefault();
+    if (bulkSubmitting) return;
     if (!window.confirm(`Thêm khoản “${bulkItem.name}” vào tất cả hóa đơn chưa hủy của ${bulkItem.classroomId ? 'lớp đã chọn' : 'toàn bộ các lớp'} trong kỳ ${bulkItem.period}?`)) return;
+    setBulkSubmitting(true);
     try {
       const res = await addBulkInvoiceItem({ ...bulkItem, amount: Number(bulkItem.amount) });
       setNotice(res.data.message || 'Đã bổ sung khoản thu.');
@@ -380,6 +383,8 @@ export default function FinanceManagement() {
       await load();
     } catch (err) {
       setError(err.response?.data?.message || 'Không thể bổ sung khoản thu hàng loạt.');
+    } finally {
+      setBulkSubmitting(false);
     }
   };
 
@@ -1184,7 +1189,7 @@ export default function FinanceManagement() {
               <label>Số tiền / học sinh<input type="number" min="1" value={bulkItem.amount} onChange={(e) => setBulkItem({ ...bulkItem, amount: e.target.value })} placeholder="100000" required /></label>
               <label className="form-wide">Lý do / ghi chú<textarea value={bulkItem.reason} onChange={(e) => setBulkItem({ ...bulkItem, reason: e.target.value })} placeholder="Ví dụ: Thu bổ sung theo thông báo số..." maxLength="1000" /></label>
             </div>
-            <div className="form-actions"><button className="button button-primary">Thêm vào hóa đơn phù hợp</button></div>
+            <div className="form-actions"><button className="button button-primary" disabled={bulkSubmitting}>{bulkSubmitting ? 'Đang bổ sung...' : 'Thêm vào hóa đơn phù hợp'}</button></div>
           </form>
         </div>,
         document.body
@@ -1292,7 +1297,7 @@ export default function FinanceManagement() {
                     <select value={adjustmentForm.type} onChange={(e) => changeAdjustment({ type: e.target.value })}>
                       <option value="discount">Giảm trừ hóa đơn</option>
                       <option value="surcharge">Thu thêm</option>
-                      <option value="refund" disabled={role !== 'accountant'}>Đề nghị hoàn tiền</option>
+                      <option value="refund" disabled={!canManageInvoices}>Đề nghị hoàn tiền</option>
                     </select>
                   </label>
                   <label>Số tiền<input type="number" min="1" step="1" value={adjustmentForm.amount} onChange={(e) => changeAdjustment({ amount: e.target.value })} required /></label>
@@ -1333,7 +1338,7 @@ export default function FinanceManagement() {
                     </div>
                   </div>
                 )}
-                {request.status === 'approved' && role === 'accountant' && (
+                {request.status === 'approved' && canManageInvoices && (
                   <div className="student-form-grid">
                     <label>Ngày chi thực tế<input type="date" max={schoolToday()} value={adjustmentForm.paidDate} onChange={(event) => changeAdjustment({ paidDate: event.target.value })} /></label>
                     <label>

@@ -4,7 +4,7 @@ import Icon from '../components/Icon';
 import { getMyPayroll } from '../api/hr';
 
 const money = (value) => `${new Intl.NumberFormat('vi-VN').format(Number(value || 0))} đ`;
-const statusText = { draft: 'Bản nháp', confirmed: 'Đã xác nhận', paid: 'Đã chi trả' };
+const statusText = { draft: 'Bản nháp', reviewed: 'Đã rà soát', confirmed: 'Đã xác nhận', paid: 'Đã chi trả' };
 
 export default function MyPayroll() {
   const today = new Date();
@@ -29,7 +29,7 @@ export default function MyPayroll() {
     return () => window.clearTimeout(initialLoad);
   }, [load]);
   const payroll = data?.payroll;
-  const allowanceTotal = Number(payroll?.allowances?.position || 0) + Number(payroll?.allowances?.lunch || 0) + Number(payroll?.allowances?.other || 0);
+  const allowanceTotal = Number(payroll?.allowances?.position || 0) + Number(payroll?.allowances?.meal ?? payroll?.allowances?.lunch ?? 0) + Number(payroll?.allowances?.other || 0);
   const deductionTotal = Number(payroll?.deductions?.insurance || 0) + Number(payroll?.deductions?.advancePayment || 0) + Number(payroll?.deductions?.other || 0);
 
   return <AppShell title="Lương của tôi" subtitle="Theo dõi phiếu lương cá nhân theo từng tháng. Chỉ bạn có thể xem dữ liệu này.">

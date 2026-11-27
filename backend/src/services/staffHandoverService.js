@@ -24,10 +24,13 @@ const completeDueHandovers = async () => {
             const employee = await Employee.findById(plan.employeeId).session(session);
             if (!employee?.userId) throw new Error('Không tìm thấy tài khoản liên kết của nhân viên cần kết thúc làm việc');
             const effectiveDay = new Intl.DateTimeFormat('en-CA', { timeZone: DEFAULT_SCHOOL_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(plan.effectiveAt);
+            const scopeFilter = employee.tenantId
+              ? { tenantId: employee.tenantId }
+              : { tenantId: { $in: [null, undefined] } };
             const [classroom, shift, asset] = await Promise.all([
-              Classroom.exists({ status: 'active', $or: [{ homeroomTeacherId: employee.userId }, { 'teachers.teacherId': employee.userId }] }).session(session),
-              StaffShift.exists({ employeeId: employee._id, status: 'active', validUntil: { $gte: effectiveDay } }).session(session),
-              Asset.exists({ assignedTo: employee.userId, status: { $in: ['active', 'maintenance'] } }).session(session)
+              Classroom.exists({ ...scopeFilter, status: 'active', $or: [{ homeroomTeacherId: employee.userId }, { 'teachers.teacherId': employee.userId }] }).session(session),
+              StaffShift.exists({ ...scopeFilter, employeeId: employee._id, status: 'active', validUntil: { $gte: effectiveDay } }).session(session),
+              Asset.exists({ ...scopeFilter, assignedTo: employee.userId, status: { $in: ['active', 'maintenance'] } }).session(session)
             ]);
             if (classroom || shift || asset) throw new Error('Phát sinh lại lớp, ca hoặc tài sản sau khi hẹn bàn giao; cần HR xử lý trước khi chốt');
             employee.status = 'resigned'; employee.endDate = plan.effectiveAt;

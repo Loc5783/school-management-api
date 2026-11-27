@@ -40,7 +40,7 @@ import GuardOperations from './pages/GuardOperations';
 import StaffSettings from './pages/StaffSettings';
 import MyStaffing from './pages/MyStaffing';
 import InternalNotices from './pages/InternalNotices';
-import TeacherLeavePage from './pages/TeacherLeavePage';
+import StaffLeaveRequests from './pages/StaffLeaveRequests';
 import { getStoredSuperAdminUser, getStoredUser } from './utils/storage';
 
 function ParentRoute({ children }) {
@@ -65,6 +65,9 @@ function DashboardRoute({ children }) {
   if (user.role === 'superadmin') return <Navigate to="/multi-school" replace />;
   if (user.role === 'guard') return <Navigate to="/guard" replace />;
   if (user.role === 'parent') return <Navigate to="/parent-dashboard" replace />;
+  if (user.role === 'chef') return <Navigate to="/kitchen" replace />;
+  if (user.role === 'accountant') return <Navigate to="/accounting" replace />;
+  if (user.role === 'hr') return <Navigate to="/hr" replace />;
   return children;
 }
 
@@ -162,11 +165,11 @@ function App() {
           />
           <Route
             path="/attendance"
-            element={<RoleRoute roles={['admin', 'teacher']}><AttendanceClassList /></RoleRoute>}
+            element={<RoleRoute roles={['admin', 'principal', 'teacher']}><AttendanceClassList /></RoleRoute>}
           />
           <Route
             path="/attendance/class/:classroomId"
-            element={<RoleRoute roles={['admin', 'teacher']}><AttendanceDetail /></RoleRoute>}
+            element={<RoleRoute roles={['admin', 'principal', 'teacher']}><AttendanceDetail /></RoleRoute>}
           />
           <Route
             path="/attendance/reports"
@@ -184,7 +187,7 @@ function App() {
             path="/timekeeping"
             element={<StaffRoute><TimekeepingHub /></StaffRoute>}
           />
-          <Route path="/my-leave-requests" element={<StaffRoute><TeacherLeavePage /></StaffRoute>} />
+          <Route path="/my-leave-requests" element={<StaffRoute><StaffLeaveRequests /></StaffRoute>} />
           <Route path="/my-payroll" element={<StaffRoute><MyPayroll /></StaffRoute>} />
           <Route path="/staff-settings" element={<StaffRoute><StaffSettings /></StaffRoute>} />
           <Route path="/my-staffing" element={<StaffRoute><MyStaffing /></StaffRoute>} />

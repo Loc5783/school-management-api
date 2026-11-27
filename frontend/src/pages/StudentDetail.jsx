@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useParams } from 'react-router-dom';
 import AppShell from '../components/AppShell';
-import QRCodeImage from '../components/QRCodeImage';
+import QrCodeImage from '../components/QrCodeImage';
 import {
   changeStudentStatus,
   deleteStudent,
@@ -473,7 +473,7 @@ export default function StudentDetail() {
 
             <div className="student-detail-grid">
               <article className="student-qr-card">
-                <QRCodeImage value={`STUDENT:${student.studentCode}`} size={126} label={`QR học sinh ${student.fullName}`} />
+                <QrCodeImage value={`STUDENT:${student.studentCode}`} size={126} label={`QR học sinh ${student.fullName}`} />
                 <div>
                   <h3>QR qua cổng</h3>
                   <p>Bảo vệ quét mã này để tìm đúng hồ sơ và ghi nhận học sinh vào trường.</p>

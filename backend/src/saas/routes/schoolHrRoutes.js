@@ -90,7 +90,7 @@ router.post('/staffing/replacements', roleCheck(['admin', 'hr']), staffingContro
 router.delete('/staffing/replacements/:id', roleCheck(['admin', 'hr']), staffingController.cancelReplacement);
 
 // 5. Leave Requests (5 endpoints)
-router.post('/leave-requests', roleCheck(['admin', 'teacher', 'accountant', 'chef', 'guard', 'hr']), hrController.createLeaveRequest);
+router.post('/leave-requests', roleCheck(['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr']), hrController.createLeaveRequest);
 router.get('/my-leave-requests', roleCheck(['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr']), hrController.getMyLeaveRequests);
 router.get('/leave-requests/overview', roleCheck(['admin', 'principal', 'hr']), hrController.getLeaveOverview);
 router.get('/leave-requests', roleCheck(['admin', 'principal', 'hr']), hrController.getLeaveRequests);
@@ -112,7 +112,7 @@ router.get('/internal/announcements/:id/receipts', roleCheck(['admin', 'principa
 router.get('/internal/my-announcements', roleCheck(['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard']), internalCommunicationController.myAnnouncements);
 router.post('/internal/timesheets', roleCheck(['admin', 'hr']), internalCommunicationController.publishTimesheet);
 router.get('/internal/my-timesheets', roleCheck(['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard']), internalCommunicationController.myTimesheets);
-router.patch('/internal/timesheets/:id/respond', roleCheck(['admin', 'hr', 'teacher', 'accountant', 'chef', 'guard']), internalCommunicationController.respondTimesheet);
+router.patch('/internal/timesheets/:id/respond', roleCheck(['admin', 'principal', 'hr', 'teacher', 'accountant', 'chef', 'guard']), internalCommunicationController.respondTimesheet);
 
 // 8. HR Access & Change Audit Journal (Tenant-scoped in controller)
 router.get('/audit/options', roleCheck(['admin', 'principal', 'hr', 'accountant']), hrAuditController.options);

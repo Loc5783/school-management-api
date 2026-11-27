@@ -1,14 +1,16 @@
 'use strict';
 
 /**
- * Middleware bảo mật HTTP Headers & Xử lý lỗi tập trung toàn hệ thống.
+ * @fileoverview Middleware bảo mật HTTP Headers, Chống Bot Quét & Xử lý lỗi tập trung toàn hệ thống.
  *
  * Mục đích:
- * 1. Ẩn thông tin công nghệ máy chủ (`X-Powered-By`) để chống dò quét lỗ hổng theo phiên bản.
- * 2. Bổ sung bộ HTTP Security Headers chuẩn (CSP, HSTS, X-Frame-Options, nosniff, Referrer-Policy, Permissions-Policy).
- * 3. Chuẩn hóa mọi lỗi phát sinh (JSON sai cú pháp, lỗi Mongoose, vượt dung lượng, lỗi không mong muốn)
- *    về định dạng JSON tiếng Việt thân thiện, tuyệt đối không trả trang HTML lỗi thô hoặc lộ stack trace.
+ * 1. Ẩn dấu vết công nghệ máy chủ (`X-Powered-By`) để chống dò quét lỗ hổng theo phiên bản.
+ * 2. Kích hoạt lá chắn `botScannerShieldMiddleware` chặn sớm các công cụ quét lỗ hổng tự động (`sqlmap`, `nuclei`, `/.env`, `*.php`).
+ * 3. Bổ sung bộ HTTP Security Headers chuẩn (CSP, HSTS, X-Frame-Options, nosniff, Referrer-Policy, Permissions-Policy).
+ * 4. Chuẩn hóa mọi ngoại lệ phát sinh về định dạng JSON tiếng Việt thân thiện, tuyệt đối không lộ stack trace.
  */
+
+const { botScannerShieldMiddleware, requestPayloadSanitizer } = require('./botScannerShield');
 
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
@@ -25,11 +27,14 @@ const CONTENT_SECURITY_POLICY = [
 ].join('; ');
 
 /**
- * Gắn cấu hình ẩn dấu vết framework và thiết lập HTTP Security Headers cho ứng dụng Express.
+ * Gắn cấu hình ẩn dấu vết framework, lá chắn chống Bot quét và HTTP Security Headers cho Express.
  * @param {import('express').Application} app
  */
 const applySecurityMiddleware = (app) => {
   app.disable('x-powered-by');
+
+  // Chặn sớm các hành vi dò quét lỗ hổng tự động trước mọi middleware nặng khác
+  app.use(botScannerShieldMiddleware);
 
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -46,6 +51,13 @@ const applySecurityMiddleware = (app) => {
 
     next();
   });
+};
+
+const MULTER_ERROR_MESSAGES = {
+  LIMIT_FILE_SIZE: 'Tệp tải lên vượt quá dung lượng tối đa cho phép.',
+  LIMIT_FILE_COUNT: 'Chỉ được phép tải lên tối đa 1 tệp mỗi lần thao tác.',
+  LIMIT_UNEXPECTED_FILE: 'Trường dữ liệu tệp đính kèm không đúng định dạng quy định.',
+  LIMIT_PART_COUNT: 'Biểu mẫu tải lên chứa quá nhiều trường dữ liệu.'
 };
 
 /**
@@ -66,11 +78,15 @@ const globalErrorHandler = (err, req, res, next) => {
     });
   }
 
-  // 2. Lỗi gửi gói tin JSON sai cú pháp từ phía client
-  if ((err instanceof SyntaxError && err.status === 400 && 'body' in err) || err?.type === 'entity.parse.failed') {
+  // 2. Lỗi gửi gói tin JSON sai cú pháp hoặc URL sai bảng mã URI
+  if (
+    (err instanceof SyntaxError && err.status === 400 && 'body' in err) ||
+    err?.type === 'entity.parse.failed' ||
+    err instanceof URIError
+  ) {
     return res.status(400).json({
       success: false,
-      message: 'Dữ liệu gửi lên không đúng định dạng hợp lệ. Vui lòng thử lại.'
+      message: 'Dữ liệu hoặc đường dẫn gửi lên không đúng định dạng hợp lệ. Vui lòng thử lại.'
     });
   }
 
@@ -83,17 +99,20 @@ const globalErrorHandler = (err, req, res, next) => {
   }
 
   if (err?.name === 'MulterError') {
-    const message = err.code === 'LIMIT_FILE_SIZE'
-      ? 'Tệp tải lên vượt quá dung lượng cho phép.'
-      : 'Tệp tải lên không hợp lệ, vui lòng kiểm tra lại định dạng tệp.';
+    const message =
+      MULTER_ERROR_MESSAGES[err.code] ||
+      'Tệp tải lên không hợp lệ, vui lòng kiểm tra lại định dạng và dung lượng tệp.';
     return res.status(400).json({ success: false, message });
   }
 
   // 4. Lỗi kiểm tra dữ liệu hoặc mã định danh từ tầng cơ sở dữ liệu
   if (err?.name === 'ValidationError') {
+    const details = Object.values(err.errors || {})
+      .map((item) => item?.message)
+      .filter(Boolean);
     return res.status(422).json({
       success: false,
-      message: 'Dữ liệu nhập vào chưa hợp lệ hoặc thiếu trường bắt buộc. Vui lòng kiểm tra lại.'
+      message: details[0] || 'Dữ liệu nhập vào chưa hợp lệ hoặc thiếu trường bắt buộc. Vui lòng kiểm tra lại.'
     });
   }
 
@@ -130,6 +149,6 @@ const globalErrorHandler = (err, req, res, next) => {
 
 module.exports = {
   applySecurityMiddleware,
+  requestPayloadSanitizer,
   globalErrorHandler
 };
-

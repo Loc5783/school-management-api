@@ -14,6 +14,7 @@ const connectDB = require('./src/config/database');
 const createLegacyApp = require('./app');
 const assembleSaasApp = require('./src/saas/assembleSaasApp');
 const { ensureDefaultAdminAccount } = require('./src/services/defaultAdminBootstrapService');
+const { ensureMultiTenantIndexes } = require('./src/services/multiTenantIndexService');
 const { resolveFrontendDistPath } = require('./src/utils/staticFrontendMiddleware');
 const { startTimekeepingSync } = require('./src/services/timekeepingSyncService');
 const { startGuardAlertReminders } = require('./src/services/guardAlertReminderService');
@@ -47,6 +48,11 @@ const resolveLanIp = () => {
 
 const startServer = async () => {
   await connectDB();
+  if (!useLegacyApp && process.env.ENSURE_SAAS_INDEXES !== 'false') {
+    await ensureMultiTenantIndexes(mongoose.connection.db).catch((err) => {
+      console.warn('⚠️ [Bootstrap Indexes] Không thể đồng bộ một số index phụ:', err.message);
+    });
+  }
   await ensureDefaultAdminAccount({ useLegacyApp });
 
   const app = useLegacyApp
@@ -110,6 +116,16 @@ const startServer = async () => {
 
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
   process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  process.on('unhandledRejection', (reason) => {
+    console.error('⚠️ [UnhandledRejection] Bắt giữ lỗi bất đồng bộ ngoài luồng request:', reason);
+  });
+  process.on('uncaughtException', (err) => {
+    console.error('❌ [UncaughtException] Lỗi nghiêm trọng cấp tiến trình:', err);
+    gracefulShutdown('uncaughtException');
+  });
 };
 
-startServer();
+startServer().catch((err) => {
+  console.error('❌ Không thể khởi động máy chủ Backend:', err);
+  process.exit(1);
+});

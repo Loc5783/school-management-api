@@ -507,6 +507,8 @@ const submitMenuForApproval = async (req, res) => {
     try {
         const menu = await getMenuForWorkflow(req.params.id, req);
         if (menu.status !== 'draft') return res.status(409).json({ message: 'Chỉ bản nháp mới có thể gửi duyệt' });
+        const freshWarnings = await checkAllergyAndDiseaseConflicts(menu.classroomId, menu.days, req.tenantId || req.user?.tenantId);
+        menu.allergyWarnings = freshWarnings;
         validatePublishReadiness(menu);
         menu.status = 'pending_approval';
         menu.approvalNote = '';
@@ -525,6 +527,8 @@ const approveMenu = async (req, res) => {
         if (req.user.role !== 'admin' && String(menu.createdBy) === String(req.user._id)) {
             return res.status(403).json({ message: 'Người lập thực đơn không thể tự phê duyệt thực đơn của mình' });
         }
+        const freshWarnings = await checkAllergyAndDiseaseConflicts(menu.classroomId, menu.days, req.tenantId || req.user?.tenantId);
+        menu.allergyWarnings = freshWarnings;
         validatePublishReadiness(menu);
         menu.status = 'published';
         menu.approvedBy = req.user._id;
@@ -1120,8 +1124,9 @@ const getSuppliers = async (req, res) => {
 
 const createSupplier = async (req, res) => {
     try {
+        const { tenantId: _ignoredTenant, _id: _ignoredId, ...safeBody } = req.body || {};
         const supplier = await Supplier.create({
-            ...req.body,
+            ...safeBody,
             tenantId: req.tenantId || req.user?.tenantId
         });
         res.status(201).json({ success: true, message: 'Đã thêm nhà cung cấp mới', data: supplier });
@@ -1132,7 +1137,13 @@ const createSupplier = async (req, res) => {
 
 const updateSupplier = async (req, res) => {
     try {
-        const supplier = await Supplier.findOneAndUpdate({ _id: req.params.id, ...buildTenantFilter(req) }, req.body, { new: true });
+        if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ message: 'ID nhà cung cấp không hợp lệ' });
+        const { tenantId: _ignoredTenant, _id: _ignoredId, ...safeBody } = req.body || {};
+        const supplier = await Supplier.findOneAndUpdate(
+            { _id: req.params.id, ...buildTenantFilter(req) },
+            { $set: safeBody },
+            { new: true, runValidators: true }
+        );
         if (!supplier) return res.status(404).json({ message: 'Không tìm thấy nhà cung cấp' });
         res.json({ success: true, message: 'Cập nhật nhà cung cấp thành công', data: supplier });
     } catch (err) {
@@ -1203,8 +1214,9 @@ const getKitchenStaffList = async (req, res) => {
 
 const createKitchenStaff = async (req, res) => {
     try {
+        const { tenantId: _ignoredTenant, _id: _ignoredId, ...safeBody } = req.body || {};
         const staff = await KitchenStaff.create({
-            ...req.body,
+            ...safeBody,
             tenantId: req.tenantId || req.user?.tenantId
         });
         res.status(201).json({ success: true, message: 'Đã thêm nhân viên bếp mới', data: staff });
@@ -1215,7 +1227,13 @@ const createKitchenStaff = async (req, res) => {
 
 const updateKitchenStaff = async (req, res) => {
     try {
-        const staff = await KitchenStaff.findOneAndUpdate({ _id: req.params.id, ...buildTenantFilter(req) }, req.body, { new: true });
+        if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ message: 'ID nhân viên bếp không hợp lệ' });
+        const { tenantId: _ignoredTenant, _id: _ignoredId, ...safeBody } = req.body || {};
+        const staff = await KitchenStaff.findOneAndUpdate(
+            { _id: req.params.id, ...buildTenantFilter(req) },
+            { $set: safeBody },
+            { new: true, runValidators: true }
+        );
         if (!staff) return res.status(404).json({ message: 'Không tìm thấy nhân viên bếp' });
         res.json({ success: true, message: 'Cập nhật nhân viên bếp thành công', data: staff });
     } catch (err) {
@@ -1286,25 +1304,38 @@ const createFoodSample = async (req, res) => {
 
 const disposeFoodSample = async (req, res) => {
     try {
-        const { status, notes } = req.body;
+        if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ message: 'ID mẫu lưu không hợp lệ' });
+        const { status = 'disposed_normal', notes } = req.body || {};
         const sample = await FoodSample.findOne({ _id: req.params.id, ...buildTenantFilter(req) });
         if (!sample) return res.status(404).json({ message: 'Không tìm thấy mẫu lưu' });
 
-        if (sample.status !== 'stored') return res.status(409).json({ message: 'Mẫu này không còn ở trạng thái đang lưu' });
-        if (status && status !== 'disposed_normal') return res.status(400).json({ message: 'Trạng thái xử lý mẫu không hợp lệ' });
-        if (Date.now() - new Date(sample.storedAt).getTime() < 24 * 60 * 60 * 1000) {
-            return res.status(409).json({ message: 'Chỉ được hủy mẫu sau ít nhất 24 giờ kể từ lúc lưu' });
+        if (!['stored', 'investigating'].includes(sample.status)) {
+            return res.status(409).json({ message: 'Mẫu này không còn ở trạng thái đang lưu hoặc đang niêm phong kiểm tra' });
         }
-        sample.status = 'disposed_normal';
-        sample.disposedAt = new Date();
-        sample.disposedBy = req.user._id;
-        sample.disposedByName = req.user.profile?.fullName || req.user.username;
-        if (notes) sample.notes = (sample.notes ? sample.notes + ' | ' : '') + notes;
+        if (!['disposed_normal', 'sent_to_lab', 'investigating'].includes(status)) {
+            return res.status(400).json({ message: 'Trạng thái xử lý mẫu không hợp lệ' });
+        }
+        // Quy định VSATTP Mầm non: Hủy mẫu thường bắt buộc đủ >= 24h; nhưng khi nghi ngờ sự cố ATTP được niêm phong gửi xét nghiệm ngay
+        if (status === 'disposed_normal' && Date.now() - new Date(sample.storedAt).getTime() < 24 * 60 * 60 * 1000) {
+            return res.status(409).json({ message: 'Chỉ được hủy mẫu bình thường sau ít nhất 24 giờ kể từ lúc lưu' });
+        }
+        sample.status = status;
+        if (status === 'disposed_normal' || status === 'sent_to_lab') {
+            sample.disposedAt = new Date();
+            sample.disposedBy = req.user._id;
+            sample.disposedByName = req.user.profile?.fullName || req.user.username;
+        }
+        if (notes) sample.notes = (sample.notes ? sample.notes + ' | ' : '') + String(notes).trim();
 
         await sample.save();
-        res.json({ success: true, message: 'Đã xử lý hủy mẫu lưu an toàn sau 24h', data: sample });
+        const statusMsg = status === 'sent_to_lab'
+            ? 'Đã ghi nhận bàn giao mẫu đi kiểm nghiệm VSATTP'
+            : status === 'investigating'
+                ? 'Đã niêm phong mẫu lưu để phục vụ kiểm tra sự cố'
+                : 'Đã xử lý hủy mẫu lưu an toàn sau 24h';
+        res.json({ success: true, message: statusMsg, data: sample });
     } catch (err) {
-        res.status(400).json({ message: 'Không thể hủy mẫu thức ăn' });
+        res.status(400).json({ message: 'Không thể cập nhật trạng thái mẫu thức ăn' });
     }
 };
 

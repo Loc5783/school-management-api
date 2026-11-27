@@ -601,6 +601,7 @@ const createPickupRecord = async (req, res) => {
     const tenantId = resolveRequestTenantId(req);
     const student = await loadStudent(studentId, tenantFilter);
     if (!await accessStudent(req.user, student, req) || !isParent(req.user)) throw fail('Bạn chỉ được đăng ký đón cho con đã liên kết', 403);
+    if (student.status !== 'enrolled') throw fail('Chỉ có thể đăng ký đón cho học sinh đang theo học', 409);
     const picker = student.authorizedPickers?.find((item) => String(item._id) === String(pickerId) && item.isActive !== false);
     if (!picker) throw fail('Người này không còn trong danh sách được phép đón trẻ');
     const [existing, alreadyDeparted] = await Promise.all([
@@ -765,10 +766,18 @@ const confirmPickupRecord = async (req, res) => {
       if (record.picker.vehiclePlate && vehicleCompared !== true) throw fail('Vui lòng đối chiếu phương tiện và biển số trước khi bàn giao');
       const departure = await StudentGateEvent.findOne({ ...tenantFilter, studentId: record.studentId, gateDate: record.pickupDate, direction: 'departure' }).session(session);
       if (departure) throw fail('Học sinh đã được ghi nhận rời trường trong ngày này', 409);
+      const { start, end } = getWorkDateRange(record.pickupDate, DEFAULT_SCHOOL_TIMEZONE);
+      const todayAtt = await StudentAttendance.findOne({
+        ...tenantFilter,
+        studentId: record.studentId,
+        $or: [{ attendanceDateKey: record.pickupDate }, { attendDate: { $gte: start, $lt: end } }]
+      }).select('status').session(session);
+      if (todayAtt && ['absent', 'absent_permission'].includes(todayAtt.status) && req.body?.forceAbsentHandover !== true) {
+        throw fail('Học sinh đang được điểm danh Vắng mặt hôm nay. Vui lòng kiểm tra lại điểm danh hoặc xác nhận bàn giao ngoại lệ.', 409);
+      }
       record.status = 'confirmed'; record.confirmedBy = req.user._id; record.confirmedByName = actorName(req.user); record.confirmedAt = new Date(); record.confirmationNote = String(confirmationNote).trim(); record.photoCompared = photoCompared === true; record.vehicleCompared = vehicleCompared === true;
       await record.save(sessionOpt);
       await StudentGateEvent.create([{ ...(tenantId ? { tenantId } : {}), studentId: record.studentId, studentName: record.studentName, studentCode: student.studentCode, classroomId: record.classroomId, className: record.className, gateDate: record.pickupDate, direction: 'departure', occurredAt: record.confirmedAt, method: 'pickup', note: record.confirmationNote, pickupRecordId: record._id, recordedBy: req.user._id, recordedByName: actorName(req.user) }], sessionOpt);
-      const { start, end } = getWorkDateRange(record.pickupDate, DEFAULT_SCHOOL_TIMEZONE);
       await StudentAttendance.updateOne(
         {
           ...tenantFilter,

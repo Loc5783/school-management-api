@@ -330,6 +330,7 @@ export default function NutritionManagement() {
   });
   const sessionRole = getSessionRole();
   const isTeacher = sessionRole === 'teacher';
+  const isParent = sessionRole === 'parent';
   const canManageMenuContent = ['admin', 'chef'].includes(sessionRole);
   const canReconcileInventory = getSessionRole() === 'admin';
   const canApproveKitchenRequest = ['admin', 'principal', 'accountant'].includes(getSessionRole());
@@ -342,7 +343,7 @@ export default function NutritionManagement() {
   const [classrooms, setClassrooms] = useState([]);
   const [classroomLoadError, setClassroomLoadError] = useState('');
   const [selectedClassId, setSelectedClassId] = useState('');
-  const [selectedWeekStart] = useState(() => getMonday());
+  const [selectedWeekStart, setSelectedWeekStart] = useState(() => getMonday());
   const [currentMenu, setCurrentMenu] = useState(null);
   const [archivedMenus, setArchivedMenus] = useState([]);
   const [selectedArchivedMenu, setSelectedArchivedMenu] = useState(null);
@@ -1070,7 +1071,9 @@ export default function NutritionManagement() {
 
       {/* Tabs Navigation */}
       <div className="flex gap-1 border-b border-gray-200 mb-6 overflow-x-auto">
-        {(isTeacher ? [
+        {(isParent ? [
+          { key: 'menus', label: 'Thực Đơn Tuần Của Bé', icon: 'menu' }
+        ] : isTeacher ? [
           { key: 'menus', label: 'Thực Đơn Theo Lớp', icon: 'menu' },
           { key: 'servings', label: 'Xác Nhận Suất Ăn', icon: 'attendance' }
         ] : sessionRole === 'principal' ? [
@@ -1085,6 +1088,7 @@ export default function NutritionManagement() {
           { key: 'inventory', label: 'Kho Thực Phẩm & Date', icon: 'grid' },
           ...(canReconcileInventory ? [{ key: 'inventoryAudit', label: 'Kiểm Kê Kho', icon: 'grid' }] : []),
           { key: 'dailyKitchenReport', label: 'Suất Ăn & Báo Cáo Kho', icon: 'chart' },
+          { key: 'equipment', label: 'Thiết Bị Bếp & Đề Xuất', icon: 'settings' },
           ...(canViewFinance ? [{ key: 'finance', label: 'Tài Chính & Suất Ăn', icon: 'money' }] : [])
         ]).map((tab) => (
           <button
@@ -1131,6 +1135,51 @@ export default function NutritionManagement() {
                     </option>
                   ))}
                 </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">TUẦN ÁP DỤNG THỰC ĐƠN</label>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    style={{ minHeight: '34px', padding: '0 10px', fontSize: '12px' }}
+                    onClick={() => {
+                      const prev = new Date(`${selectedWeekStart}T12:00:00`);
+                      prev.setDate(prev.getDate() - 7);
+                      setSelectedWeekStart(getMonday(prev));
+                    }}
+                  >
+                    ← Tuần trước
+                  </button>
+                  <input
+                    type="date"
+                    value={selectedWeekStart}
+                    onChange={(e) => {
+                      if (e.target.value) setSelectedWeekStart(getMonday(new Date(`${e.target.value}T12:00:00`)));
+                    }}
+                    className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm bg-white"
+                  />
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    style={{ minHeight: '34px', padding: '0 10px', fontSize: '12px' }}
+                    onClick={() => setSelectedWeekStart(getMonday())}
+                  >
+                    Tuần này
+                  </button>
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    style={{ minHeight: '34px', padding: '0 10px', fontSize: '12px' }}
+                    onClick={() => {
+                      const next = new Date(`${selectedWeekStart}T12:00:00`);
+                      next.setDate(next.getDate() + 7);
+                      setSelectedWeekStart(getMonday(next));
+                    }}
+                  >
+                    Tuần tới →
+                  </button>
+                </div>
               </div>
 
             </div>

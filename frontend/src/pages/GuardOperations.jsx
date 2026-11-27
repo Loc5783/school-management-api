@@ -32,12 +32,13 @@ export default function GuardOperations() {
 
   const allowedTabs = useMemo(() => [
     'overview',
-    ...(isManager ? ['gate'] : []),
+    'gate',
     'visitors',
     'incidents',
     'handover',
+    'deliveries',
     'emergency',
-    ...(isManager ? ['deliveries', 'reports'] : [])
+    ...(isManager ? ['reports'] : [])
   ], [isManager]);
 
   const activeTab = allowedTabs.includes(currentTabParam) ? currentTabParam : 'overview';

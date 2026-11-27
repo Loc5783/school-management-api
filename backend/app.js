@@ -2,7 +2,12 @@ const express = require('express');
 const cors = require('cors');
 const { attachFrontendStatic, isSameHostOrigin } = require('./src/utils/staticFrontendMiddleware');
 const { attachSwaggerDocs } = require('./src/docs/swaggerSetup');
-const { applySecurityMiddleware, globalErrorHandler } = require('./src/middlewares/securityAndErrorMiddleware');
+const {
+    applySecurityMiddleware,
+    requestPayloadSanitizer,
+    globalErrorHandler
+} = require('./src/middlewares/securityAndErrorMiddleware');
+const { apiGeneralLimiter } = require('./src/saas/middlewares/rateLimiter');
 
 const authRoutes = require('./src/routes/authRoutes');
 const classroomRoutes = require('./src/routes/classroomRoutes');
@@ -69,6 +74,8 @@ const createApp = () => {
     // Tăng giới hạn JSON/urlencoded lên 15MB (giống JussStudio/BE); multipart/form-data từ máy chấm công sẽ đi thẳng vào express.raw() của route /webhook
     app.use(express.json({ limit: '15mb' }));
     app.use(express.urlencoded({ extended: true, limit: '15mb' }));
+    app.use(requestPayloadSanitizer);
+    app.use('/api', apiGeneralLimiter);
 
     app.use('/api/webhooks/timekeeping', timekeepingWebhookRoutes);
     app.use('/api/auth', authRoutes);

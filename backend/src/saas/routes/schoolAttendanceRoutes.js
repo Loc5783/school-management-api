@@ -3,6 +3,7 @@ const router = express.Router();
 const schoolAuthMiddleware = require('../middlewares/schoolAuthMiddleware');
 const roleCheck = require('../../middlewares/roleCheck');
 const webhookTestAuth = require('../../middlewares/webhookTestAuth');
+const { deviceIngestLimiter } = require('../middlewares/rateLimiter');
 const {
   createAttendance,
   automaticCheckIn,
@@ -35,14 +36,14 @@ router.use((req, res, next) => {
 });
 
 // Route nhận Webhook từ máy chấm công Hikvision (cấu trúc đồng bộ với JussStudio/BE: /api/attendance/webhook)
-// Sử dụng express.raw cục bộ riêng cho route /webhook để lấy toàn bộ dữ liệu gốc (Buffer tối đa 50MB)
-const rawWebhookBody = express.raw({ type: '*/*', limit: '50mb' });
+// Giới hạn gói raw tối đa 10MB kèm rate-limiter để chống tấn công tràn bộ nhớ; API đọc logs bắt buộc JWT của trường
+const rawWebhookBody = express.raw({ type: '*/*', limit: '10mb' });
 
-router.get('/webhook', webhookTestAuth, pingWebhook);
-router.get('/webhook/logs', webhookTestAuth, getWebhookLogs);
-router.get('/webhook/logs/:id', webhookTestAuth, getWebhookLogById);
-router.post('/webhook', webhookTestAuth, rawWebhookBody, handleWebhook);
-router.post('/webhook/:schoolCode', webhookTestAuth, rawWebhookBody, handleWebhook);
+router.get('/webhook', deviceIngestLimiter, webhookTestAuth, pingWebhook);
+router.get('/webhook/logs', schoolAuthMiddleware, roleCheck(['admin', 'principal', 'hr']), getWebhookLogs);
+router.get('/webhook/logs/:id', schoolAuthMiddleware, roleCheck(['admin', 'principal', 'hr']), getWebhookLogById);
+router.post('/webhook', deviceIngestLimiter, webhookTestAuth, rawWebhookBody, handleWebhook);
+router.post('/webhook/:schoolCode', deviceIngestLimiter, webhookTestAuth, rawWebhookBody, handleWebhook);
 
 // Guard against route parameter shadowing on :id, :studentId, and :classroomId:
 // If parameter matches a reserved sub-path / action (e.g. 'bulk', 'check-in', 'export', 'template', 'webhook'),
