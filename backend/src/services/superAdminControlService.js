@@ -16,6 +16,7 @@ const os = require('os');
 const mongoose = require('mongoose');
 const Tenant = require('../models/zone1_system/Tenant');
 const User = require('../models/zone1_system/User');
+const Notification = require('../models/zone1_system/Notification');
 const PlatformAdmin = require('../models/zone1_system/PlatformAdmin');
 const PlatformAuditLog = require('../models/zone1_system/PlatformAuditLog');
 const AuditLog = require('../models/zone1_system/AuditLog');
@@ -65,18 +66,19 @@ let cachedDashboardAt = 0;
 const DEFAULT_SYSTEM_SETTINGS = {
   key: 'GLOBAL_CONFIG',
   branding: {
-    systemName: 'Hệ thống Giáo dục Mầm non Hoa Nắng',
-    supportEmail: 'admin@hoanang.edu.vn',
+    systemName: 'Nền tảng Quản lý Mầm non Hoa Nắng SaaS',
+    supportEmail: 'support@hoanang.edu.vn',
     supportHotline: '1900 6868'
   },
   systemBanner: {
     enabled: false,
     level: 'info',
-    message: ''
+    message: '',
+    targetSchoolCodes: []
   },
   maintenanceMode: {
     enabled: false,
-    message: 'Hệ thống đang bảo trì nâng cấp định kỳ. Vui lòng quay lại sau ít phút.'
+    message: 'Hệ thống máy chủ đang bảo trì nâng cấp định kỳ. Vui lòng quay lại sau ít phút.'
   },
   preschoolStandards: {
     defaultSchoolYear: '2026-2027',
@@ -86,7 +88,8 @@ const DEFAULT_SYSTEM_SETTINGS = {
     referenceCaloriesPerDay: 1250,
     foodSampleRetentionHours: 24,
     defaultMaxCampusesPerSchool: 10,
-    defaultMaxStudentsPerSchool: 800
+    defaultMaxStudentsPerSchool: 800,
+    defaultMaxStaffPerSchool: 200
   },
   securityPolicy: {
     sessionTimeoutHours: 8,
@@ -212,6 +215,15 @@ const updateSystemSettings = async (payload = {}, actor) => {
     if (payload.systemBanner.message != null) {
       systemBanner.message = String(payload.systemBanner.message).trim().slice(0, 500);
     }
+    if (Array.isArray(payload.systemBanner.targetSchoolCodes)) {
+      systemBanner.targetSchoolCodes = [
+        ...new Set(
+          payload.systemBanner.targetSchoolCodes
+            .map((c) => String(c || '').trim().toUpperCase())
+            .filter(Boolean)
+        )
+      ];
+    }
     if (systemBanner.enabled && !systemBanner.message) {
       throw Object.assign(new Error('Vui lòng nhập nội dung thông báo trước khi bật System Banner'), { statusCode: 422 });
     }
@@ -283,6 +295,13 @@ const updateSystemSettings = async (payload = {}, actor) => {
         throw Object.assign(new Error('Hạn mức học sinh mặc định phải từ 10 đến 20.000'), { statusCode: 422 });
       }
       preschoolStandards.defaultMaxStudentsPerSchool = ms;
+    }
+    if (ps.defaultMaxStaffPerSchool != null) {
+      const mst = Number(ps.defaultMaxStaffPerSchool);
+      if (!Number.isInteger(mst) || mst < 5 || mst > 5000) {
+        throw Object.assign(new Error('Hạn mức nhân sự mặc định phải từ 5 đến 5.000'), { statusCode: 422 });
+      }
+      preschoolStandards.defaultMaxStaffPerSchool = mst;
     }
   }
 
@@ -687,6 +706,7 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
           _id: '$tenantId',
           totalEvents: { $sum: 1 },
           processedEvents: { $sum: { $cond: [{ $eq: ['$processingStatus', 'PROCESSED'] }, 1, 0] } },
+          failedEvents: { $sum: { $cond: [{ $eq: ['$processingStatus', 'FAILED'] }, 1, 0] } },
           lastWebhookAt: { $max: '$createdAt' }
         }
       }
@@ -810,38 +830,21 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
       : 0;
     const outstandingDebt = Math.max(0, fin.totalBilled - fin.totalCollected);
 
+    // NOTE: SuperAdmin chỉ là đơn vị phân phối & cấp phép phần mềm xuống các trường,
+    // TUYỆT ĐỐI KHÔNG trộn lẫn thông báo nghiệp vụ hằng ngày của nội bộ trường (như chưa điểm danh HS,
+    // lưu mẫu thức ăn bếp hay phản hồi phụ huynh) lên cảnh báo của SuperAdmin.
+    // Chỉ cảnh báo các vấn đề cấp Nền tảng SaaS: Hạn mức gói cấp phép (Quota), Thiếu tài khoản Admin bàn giao, Lỗi tích hợp Webhook.
     if (t.status === 'active') {
-      if (!isWeekend && stu.strictlyEnrolledCount > 0 && attToday.totalRecorded === 0) {
+      const activeAdmins = admins.filter((a) => a.status === 'active');
+      if (activeAdmins.length === 0) {
         alerts.push({
           severity: 'warning',
-          category: 'attendance',
+          category: 'licensing',
           schoolId: t._id,
           schoolCode: t.code,
           schoolName: t.name,
-          title: 'Chưa ghi nhận điểm danh học sinh hôm nay',
-          detail: `Trường có ${stu.strictlyEnrolledCount} học sinh đang học nhưng chưa phát sinh bản ghi điểm danh ngày ${todayKey}.`
-        });
-      }
-      if (smp.alertSampleCount > 0) {
-        alerts.push({
-          severity: 'critical',
-          category: 'food_safety',
-          schoolId: t._id,
-          schoolCode: t.code,
-          schoolName: t.name,
-          title: 'Cảnh báo mẫu lưu thức ăn đang kiểm tra / gửi xét nghiệm',
-          detail: `Đang có ${smp.alertSampleCount} mẫu lưu thức ăn ở trạng thái kiểm tra sự cố ATTP.`
-        });
-      }
-      if (openFeedbackCount > 0) {
-        alerts.push({
-          severity: 'info',
-          category: 'feedback',
-          schoolId: t._id,
-          schoolCode: t.code,
-          schoolName: t.name,
-          title: 'Phản hồi phụ huynh chờ xử lý',
-          detail: `Có ${openFeedbackCount} ý kiến / kiến nghị từ phụ huynh đang chờ nhà trường phản hồi.`
+          title: 'Trường chưa có tài khoản Admin hoạt động',
+          detail: 'Đơn vị trường đang mở nhưng chưa có tài khoản Admin active để quản trị nội bộ.'
         });
       }
       if (stu.enrolledCount >= Math.round(quotas.maxStudents * 0.9)) {
@@ -851,8 +854,30 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
           schoolId: t._id,
           schoolCode: t.code,
           schoolName: t.name,
-          title: 'Sắp chạm hạn mức học sinh của trường',
-          detail: `Đang có ${stu.enrolledCount}/${quotas.maxStudents} học sinh (${Math.round((stu.enrolledCount / quotas.maxStudents) * 100)}% hạn mức).`
+          title: 'Sắp chạm hạn mức Học sinh của gói cấp phép',
+          detail: `Đang sử dụng ${stu.enrolledCount}/${quotas.maxStudents} học sinh (${Math.round((stu.enrolledCount / quotas.maxStudents) * 100)}% hạn mức gói).`
+        });
+      }
+      if (mergedCampusNames.length >= quotas.maxCampuses && quotas.maxCampuses > 1) {
+        alerts.push({
+          severity: 'info',
+          category: 'quota',
+          schoolId: t._id,
+          schoolCode: t.code,
+          schoolName: t.name,
+          title: 'Đã sử dụng hết hạn mức số Phân hiệu được cấp',
+          detail: `Đang mở ${mergedCampusNames.length}/${quotas.maxCampuses} phân hiệu theo gói phần mềm.`
+        });
+      }
+      if ((whStat.failedEvents || 0) > 0) {
+        alerts.push({
+          severity: 'critical',
+          category: 'webhook_integration',
+          schoolId: t._id,
+          schoolCode: t.code,
+          schoolName: t.name,
+          title: 'Phát sinh gói tin máy chấm công lỗi kỹ thuật (Webhook FAILED)',
+          detail: `Có ${whStat.failedEvents} gói tin đẩy từ thiết bị vào /api/attendance/webhook/${t.code} gặp lỗi xử lý.`
         });
       }
     }
@@ -937,6 +962,20 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
     };
   });
 
+  if ((systemHealth.memory?.systemUsedPercent || 0) > 88 || systemHealth.status !== 'healthy') {
+    alerts.unshift({
+      severity: 'critical',
+      category: 'infrastructure',
+      schoolId: null,
+      schoolCode: 'PLATFORM',
+      schoolName: 'Hạ tầng Máy chủ SaaS',
+      title: systemHealth.status !== 'healthy'
+        ? 'Kết nối Cơ sở dữ liệu trung tâm đang suy giảm'
+        : `Bộ nhớ RAM máy chủ đạt mức cao (${systemHealth.memory?.systemUsedPercent}%)`,
+      detail: 'SuperAdmin cần kiểm tra tài nguyên hạ tầng máy chủ phân phối phần mềm.'
+    });
+  }
+
   const summary = schools.reduce(
     (acc, item) => {
       acc.totalSchools += 1;
@@ -945,10 +984,13 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
       acc.totalCampuses += item.campusCount;
       acc.totalClassrooms += item.classCount;
       acc.totalCapacity += item.totalCapacity;
+      acc.totalStudentQuota += item.quotas?.maxStudents || 0;
       acc.totalStudents += item.studentCount;
       acc.totalStaff += item.staffCount;
       acc.totalStaffPresentToday += item.staffPresentToday;
       acc.totalActiveAccounts += item.accountStats.activeAccounts;
+      acc.totalWebhookEvents += item.webhook?.totalEvents || 0;
+      acc.totalDevices += item.webhook?.devicesCount || 0;
       acc.todayStudentRecorded += item.attendance.todayRecorded;
       acc.todayStudentPresent += item.attendance.todayPresent;
       acc.totalBilled += item.finance.totalBilled;
@@ -966,10 +1008,13 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
       totalCampuses: 0,
       totalClassrooms: 0,
       totalCapacity: 0,
+      totalStudentQuota: 0,
       totalStudents: 0,
       totalStaff: 0,
       totalStaffPresentToday: 0,
       totalActiveAccounts: 0,
+      totalWebhookEvents: 0,
+      totalDevices: 0,
       superAdminCount,
       todayStudentRecorded: 0,
       todayStudentPresent: 0,
@@ -981,6 +1026,10 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
       totalFoodSampleAlerts: 0
     }
   );
+
+  summary.overallStudentQuotaPercent = summary.totalStudentQuota > 0
+    ? Math.min(100, Math.round((summary.totalStudents / summary.totalStudentQuota) * 100))
+    : 0;
 
   summary.overallOccupancyPercent = summary.totalCapacity > 0
     ? Math.min(100, Math.round((summary.totalStudents / summary.totalCapacity) * 100))
@@ -1671,6 +1720,110 @@ const listSchoolOperationalLogs = async (query = {}) => {
   };
 };
 
+/**
+ * Gửi thông báo Hệ thống / Cấp phép / Bảo trì từ SuperAdmin xuống ĐÚNG trường được chọn
+ * (hoặc toàn bộ các trường đang sử dụng nếu SuperAdmin chủ động chọn `targetScope = 'all'`).
+ * Đảm bảo thông báo của trường nào CHỈ gửi vào `tenantId` của trường đó, tuyệt đối không lộ sang trường khác.
+ *
+ * @param {object} payload
+ * @param {'single'|'all'} [payload.targetScope]
+ * @param {string} [payload.schoolId]
+ * @param {string[]} [payload.recipientRoles]
+ * @param {string} payload.title
+ * @param {string} payload.message
+ * @param {'info'|'warning'|'success'} [payload.type]
+ * @param {{ _id: any, username: string }} actor
+ */
+const dispatchPlatformNotificationToSchools = async (payload = {}, actor) => {
+  const targetScope = payload.targetScope === 'all' ? 'all' : 'single';
+  const cleanTitle = String(payload.title || '').trim();
+  const cleanMessage = String(payload.message || '').trim();
+  const notifType = ['info', 'warning', 'success', 'system'].includes(payload.type) ? payload.type : 'system';
+
+  if (cleanTitle.length < 3 || cleanTitle.length > 160) {
+    throw Object.assign(new Error('Tiêu đề thông báo phải từ 3 đến 160 ký tự'), { statusCode: 422 });
+  }
+  if (cleanMessage.length < 5 || cleanMessage.length > 1500) {
+    throw Object.assign(new Error('Nội dung thông báo phải từ 5 đến 1.500 ký tự'), { statusCode: 422 });
+  }
+
+  let targetTenants = [];
+  if (targetScope === 'single') {
+    const rawSchoolId = String(payload.schoolId || '').trim();
+    if (!mongoose.Types.ObjectId.isValid(rawSchoolId)) {
+      throw Object.assign(new Error('Vui lòng chọn đơn vị trường cần gửi thông báo'), { statusCode: 400 });
+    }
+    const tenant = await Tenant.findById(rawSchoolId).select('_id code name status').lean();
+    if (!tenant) {
+      throw Object.assign(new Error('Không tìm thấy trường học cần gửi thông báo'), { statusCode: 404 });
+    }
+    targetTenants = [tenant];
+  } else {
+    targetTenants = await Tenant.find({ status: 'active' }).select('_id code name status').lean();
+  }
+
+  if (!targetTenants.length) {
+    throw Object.assign(new Error('Chưa có trường học đang hoạt động để nhận thông báo'), { statusCode: 422 });
+  }
+
+  const allowedRoles = ['admin', 'principal', 'teacher', 'accountant', 'hr', 'chef', 'guard'];
+  const requestedRoles = Array.isArray(payload.recipientRoles)
+    ? payload.recipientRoles.filter((r) => allowedRoles.includes(r))
+    : [];
+  const targetRoles = requestedRoles.length > 0 ? requestedRoles : ['admin', 'principal'];
+
+  const tenantIds = targetTenants.map((t) => t._id);
+  const recipients = await User.find({
+    tenantId: { $in: tenantIds },
+    role: { $in: targetRoles },
+    status: 'active'
+  })
+    .select('_id tenantId role')
+    .lean();
+
+  if (recipients.length > 0) {
+    await Notification.insertMany(
+      recipients.map((rec) => ({
+        tenantId: rec.tenantId,
+        recipientId: rec._id,
+        title: `[Hệ thống Phần mềm] ${cleanTitle}`,
+        message: cleanMessage,
+        type: notifType === 'warning' ? 'warning' : 'system',
+        link: rec.role === 'admin' ? '/campuses' : '/dashboard',
+        metadata: {
+          source: 'platform_distributor',
+          priority: notifType === 'warning' ? 'high' : 'normal',
+          dispatchedBy: actor?.username || 'superadmin'
+        }
+      }))
+    );
+  }
+
+  if (actor?._id) {
+    await PlatformAuditLog.create({
+      actorId: actor._id,
+      actorUsername: actor.username || 'superadmin',
+      action: 'DISPATCH_SCHOOL_NOTIFICATION',
+      targetType: targetScope === 'single' ? 'tenant' : 'all_tenants',
+      targetId: targetScope === 'single' ? String(targetTenants[0]._id) : 'ALL_ACTIVE_SCHOOLS',
+      details: {
+        code: targetScope === 'single' ? targetTenants[0].code : `ALL (${targetTenants.length})`,
+        name: targetScope === 'single' ? targetTenants[0].name : 'Toàn bộ các trường đang sử dụng',
+        recipientCount: recipients.length,
+        roles: targetRoles,
+        title: cleanTitle
+      }
+    });
+  }
+
+  return {
+    targetScope,
+    schoolCount: targetTenants.length,
+    recipientCount: recipients.length,
+    schools: targetTenants.map((t) => ({ _id: t._id, code: t.code, name: t.name }))
+  };
+};
+
 module.exports = {
   ALL_MODULE_DEFINITIONS,
   ALL_ENABLED_MODULES,
@@ -1685,6 +1838,7 @@ module.exports = {
   getPlatformDashboardAndSchools,
   getSchoolDetailedReport,
   listPlatformAuditLogs,
-  listSchoolOperationalLogs
+  listSchoolOperationalLogs,
+  dispatchPlatformNotificationToSchools
 };
 

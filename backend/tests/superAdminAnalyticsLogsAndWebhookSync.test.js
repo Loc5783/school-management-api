@@ -14,6 +14,7 @@ const AttendanceRecord = require('../src/models/zone2_hr/AttendanceRecord');
 const TuitionFee = require('../src/models/zone4_finance/TuitionFee');
 
 describe('E2E: SuperAdmin -> School Admin -> Staff Roles + Webhook /:schoolCode + Analytics & School Logs', () => {
+  jest.setTimeout(30000);
   let replSet;
   let saasApp;
 
@@ -275,5 +276,125 @@ describe('E2E: SuperAdmin -> School Admin -> Staff Roles + Webhook /:schoolCode 
       .set('Authorization', `Bearer ${superToken}`);
     expect(schoolAWebhookLogs.status).toBe(200);
     expect(schoolAWebhookLogs.body.data.length).toBe(3);
+  });
+
+  test('Cách ly tuyệt đối Thông báo: Cảnh báo vận hành trường không đẩy lên SuperAdmin; thông báo của trường nào CHỈ gửi cho đúng trường đó', async () => {
+    await ensureDefaultAdminAccount({ useLegacyApp: false });
+    const superLogin = await request(saasApp)
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: '123456' });
+    const superToken = superLogin.body.token;
+
+    // Tạo Trường A và Trường B
+    const resA = await request(saasApp)
+      .post('/api/multi-school/schools')
+      .set('Authorization', `Bearer ${superToken}`)
+      .send({
+        code: 'TRUONG-A',
+        name: 'Trường Mầm non Ánh Dương A',
+        adminUsername: 'admin_a',
+        adminPassword: 'PasswordA1!'
+      });
+    const schoolAId = resA.body.data.school._id;
+
+    const resB = await request(saasApp)
+      .post('/api/multi-school/schools')
+      .set('Authorization', `Bearer ${superToken}`)
+      .send({
+        code: 'TRUONG-B',
+        name: 'Trường Mầm non Bình Minh B',
+        adminUsername: 'admin_b',
+        adminPassword: 'PasswordB1!'
+      });
+    const schoolBId = resB.body.data.school._id;
+
+    // Trường A có học sinh đang theo học nhưng CHƯA điểm danh hôm nay
+    const clsA = await Classroom.create({
+      tenantId: schoolAId,
+      name: 'Lá 1',
+      ageGroup: '4-5',
+      schoolYear: '2026-2027',
+      campus: 'Cơ sở chính',
+      maxSize: 25,
+      status: 'active'
+    });
+    await Student.create({
+      tenantId: schoolAId,
+      studentCode: 'HS-2026-000999',
+      fullName: 'Bé Trần Bảo Ngọc',
+      birthDate: new Date('2021-08-12'),
+      gender: 'female',
+      classroomId: clsA._id,
+      className: clsA.name,
+      status: 'enrolled'
+    });
+
+    // 1. Kiểm tra Dashboard của SuperAdmin: KHÔNG BAO GIỜ chứa cảnh báo điểm danh nội bộ của Trường A
+    const superDash = await request(saasApp)
+      .get('/api/multi-school/schools')
+      .set('Authorization', `Bearer ${superToken}`);
+    expect(superDash.status).toBe(200);
+    const leakedAttendanceAlert = (superDash.body.data.alerts || []).find(
+      (al) => al.category === 'attendance' || al.category === 'food_safety' || al.category === 'feedback'
+    );
+    expect(leakedAttendanceAlert).toBeUndefined();
+
+    // 2. Đăng nhập Admin Trường A và Admin Trường B
+    const loginA = await request(saasApp)
+      .post('/api/auth/login')
+      .send({ username: 'admin_a', password: 'PasswordA1!' });
+    const tokenA = loginA.body.token;
+
+    const loginB = await request(saasApp)
+      .post('/api/auth/login')
+      .send({ username: 'admin_b', password: 'PasswordB1!' });
+    const tokenB = loginB.body.token;
+
+    // 3. SuperAdmin gửi thông báo hệ thống CHỈ dành riêng cho Trường A
+    const dispatchRes = await request(saasApp)
+      .post('/api/multi-school/notifications/dispatch')
+      .set('Authorization', `Bearer ${superToken}`)
+      .send({
+        targetScope: 'single',
+        schoolId: String(schoolAId),
+        type: 'system',
+        title: 'Đã nâng hạn mức gói phần mềm cho Trường Ánh Dương A',
+        message: 'Hệ thống vừa nâng hạn mức học sinh tối đa của trường lên 1.200 học sinh.'
+      });
+    expect(dispatchRes.status).toBe(201);
+
+    // 4. SuperAdmin bật System Banner CHỈ chỉ định cho TRUONG-A
+    const bannerSave = await request(saasApp)
+      .put('/api/multi-school/settings')
+      .set('Authorization', `Bearer ${superToken}`)
+      .send({
+        systemBanner: {
+          enabled: true,
+          level: 'info',
+          message: 'Thông báo bảo trì riêng cổng dữ liệu Trường A',
+          targetSchoolCodes: ['TRUONG-A']
+        }
+      });
+    expect(bannerSave.status).toBe(200);
+
+    const metaForA = await request(saasApp).get('/api/multi-school/public-meta').query({ schoolCode: 'TRUONG-A' });
+    const metaForB = await request(saasApp).get('/api/multi-school/public-meta').query({ schoolCode: 'TRUONG-B' });
+    expect(metaForA.body.data.systemBanner.enabled).toBe(true);
+    expect(metaForB.body.data.systemBanner.enabled).toBe(false);
+
+    // 5. Chuông thông báo của Trường A nhận đầy đủ thông báo riêng của Trường A; Trường B tuyệt đối KHÔNG thấy thông báo nào của Trường A
+    const notifA = await request(saasApp)
+      .get('/api/notifications')
+      .set('Authorization', `Bearer ${tokenA}`);
+    expect(notifA.status).toBe(200);
+    expect(notifA.body.data.some((n) => n.title.includes('Trường Ánh Dương A'))).toBe(true);
+
+    const notifB = await request(saasApp)
+      .get('/api/notifications')
+      .set('Authorization', `Bearer ${tokenB}`);
+    expect(notifB.status).toBe(200);
+    expect(notifB.body.data.some((n) => n.title.includes('Trường Ánh Dương A'))).toBe(false);
+    expect(notifB.body.data.some((n) => String(n.tenantId) === String(schoolAId))).toBe(false);
+    expect(schoolBId).toBeDefined();
   });
 });

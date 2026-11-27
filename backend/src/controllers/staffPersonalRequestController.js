@@ -8,6 +8,7 @@ const Handover = require('../models/zone2_hr/StaffHandover');
 const Notification = require('../models/zone1_system/Notification');
 const { fail, text, checkId, inTransaction, audit } = require('../services/credentialService');
 const { createDateTime, getWorkDate } = require('../utils/dateHelpers');
+const { buildTenantFilter } = require('../services/tenantFilterService');
 const { PROFILE_FIELDS, SENSITIVE_FIELDS, ACCOUNT_FIELDS, OPEN_STATUSES, actorName, profileValues, normalizeChanges, certificateSnapshot, getSelfEmployee, requestActions, notifyManagers, saveRequest, createTimesheetFeedback } = require('../services/staffPersonalRequestService');
 
 const TYPES = ['profile_change', 'employment_certificate', 'timesheet_feedback', 'payroll_feedback'];
@@ -34,18 +35,20 @@ const periodOf = (value) => {
 const canView = (request, user) => String(request.userId?._id || request.userId) === String(user._id) || ['admin', 'principal', 'hr'].includes(user.role) || (user.role === 'accountant' && request.type === 'payroll_feedback');
 
 const context = handle(async (req, res) => {
+  const tenantFilter = buildTenantFilter(req);
   const employee = await getSelfEmployee(req.user);
   const period = req.query.period ? periodOf(req.query.period) : null;
   const [payrolls, timesheets] = await Promise.all([
-    Payroll.find({ employeeId: employee._id, status: { $in: ['confirmed', 'paid'] }, ...(period || {}) }).sort({ year: -1, month: -1 }).limit(24).select('year month status grossSalary netSalary actualWorkDays __v').lean(),
-    Timesheet.find({ userId: req.user._id, ...(period ? { period: req.query.period } : {}) }).sort({ period: -1 }).limit(24).select('period revision status totalWorkdays __v').lean()
+    Payroll.find({ ...tenantFilter, employeeId: employee._id, status: { $in: ['confirmed', 'paid'] }, ...(period || {}) }).sort({ year: -1, month: -1 }).limit(24).select('year month status grossSalary netSalary actualWorkDays __v').lean(),
+    Timesheet.find({ ...tenantFilter, userId: req.user._id, ...(period ? { period: req.query.period } : {}) }).sort({ period: -1 }).limit(24).select('period revision status totalWorkdays __v').lean()
   ]);
   res.json({ data: { employee: { _id: employee._id, fullName: employee.fullName, employeeCode: employee.employeeCode, position: employee.position, startDate: employee.startDate }, profile: profileValues(employee), fieldLabels: PROFILE_FIELDS, payrolls, timesheets } });
 });
 const list = (own) => handle(async (req, res) => {
   const page = Number(req.query.page || 1);
   if (!Number.isSafeInteger(page) || page < 1 || page > 100000) throw fail('Số trang không hợp lệ.');
-  const filter = own ? { userId: req.user._id } : req.user.role === 'accountant' ? { type: 'payroll_feedback' } : {};
+  const tenantFilter = buildTenantFilter(req);
+  const filter = own ? { userId: req.user._id, ...tenantFilter } : req.user.role === 'accountant' ? { type: 'payroll_feedback', ...tenantFilter } : { ...tenantFilter };
   if (req.query.type && req.query.type !== 'all') {
     if (!TYPES.includes(req.query.type)) throw fail('Loại yêu cầu không hợp lệ.');
     if (!own && req.user.role === 'accountant' && req.query.type !== 'payroll_feedback') throw fail('Kế toán chỉ xử lý phản hồi phiếu lương.', 403);
@@ -67,9 +70,13 @@ const list = (own) => handle(async (req, res) => {
 });
 const detail = handle(async (req, res) => {
   checkId(req.params.id);
-  const item = await Request.findById(req.params.id).select('-accountBefore').lean();
+  const tenantFilter = buildTenantFilter(req);
+  const item = await Request.findOne({ _id: req.params.id, ...tenantFilter }).select('-accountBefore').lean();
   if (!item || !canView(item, req.user)) throw fail('Không tìm thấy yêu cầu được phép xem.', 404);
-  const [account, employee] = await Promise.all([User.findById(item.userId).select('role profile.fullName').lean(), Employee.findById(item.employeeId).select('employeeCode fullName position startDate status contractType').lean()]);
+  const [account, employee] = await Promise.all([
+    User.findOne({ _id: item.userId, ...tenantFilter }).select('role profile.fullName').lean(),
+    Employee.findOne({ _id: item.employeeId, ...tenantFilter }).select('employeeCode fullName position startDate status contractType').lean()
+  ]);
   if (String(item.userId) === String(req.user._id) && item.status !== 'approved') item.certificate = null;
   res.json({ data: { ...item, accountRole: account?.role, allowedActions: requestActions(item, req.user, account?.role),
     preparationSnapshot: item.type === 'employment_certificate' && employee && account ? certificateSnapshot(employee, account) : null } });
@@ -159,12 +166,14 @@ const processRequest = handle(async (req, res) => {
   if (!['start', 'prepare', 'approve', 'reject', 'resolve'].includes(action)) throw fail('Hành động xử lý không hợp lệ.');
   const response = text(req.body.response || '', 2000, 'Phản hồi', ['reject', 'resolve'].includes(action));
   if (['reject', 'resolve'].includes(action) && response.length < 5) throw fail('Cần giải thích kết quả xử lý ít nhất 5 ký tự.');
+  const tenantFilter = buildTenantFilter(req);
+  const tenantId = req.tenantId || req.user?.tenantId || null;
   const data = await inTransaction(async (session) => {
     const actor = await activeActor(req.user, session);
-    const item = await Request.findById(req.params.id).session(session);
+    const item = await Request.findOne({ _id: req.params.id, ...tenantFilter }).session(session);
     if (!item) throw fail('Không tìm thấy yêu cầu.', 404);
     versionOf(item, req.body.version);
-    const account = await User.findById(item.userId).session(session);
+    const account = await User.findOne({ _id: item.userId, ...tenantFilter }).session(session);
     if (!requestActions(item, actor, account?.role).includes(action)) throw fail('Bạn không có quyền xử lý bước này hoặc yêu cầu đã có kết quả. Không được tự duyệt yêu cầu của mình.', 403);
     const previousStatus = item.status;
     if (action === 'start') item.status = 'in_review';
@@ -193,10 +202,40 @@ const processRequest = handle(async (req, res) => {
     item.reviewedBy = actor._id; item.reviewedByName = actorName(actor); item.reviewedAt = new Date();
     item.events.push({ action, actorId: actor._id, actorName: actorName(actor), note: item.response }); await item.save({ session });
     await audit(actor, 'STAFF_PERSONAL_REQUEST_PROCESSED', 'StaffPersonalRequest', item._id, { status: previousStatus }, { status: item.status, action, fields: item.changes.map((change) => change.field), documentNumber: item.certificate?.documentNumber || null }, session, item.response);
-    if (account?.status === 'active') await Notification.create([{ recipientId: account._id, title: `Yêu cầu của bạn ${item.status === 'approved' ? 'đã được duyệt' : item.status === 'resolved' ? 'đã có kết quả' : item.status === 'rejected' ? 'đã bị từ chối' : 'đang được xử lý'}`, message: `${item.subject}: ${item.response}`, type: item.status === 'rejected' ? 'warning' : 'info', link: `/my-requests?request=${item._id}`, createdBy: actor._id, metadata: { personalRequestId: item._id } }], { session });
+    const notifTenantId = tenantId || item.tenantId || null;
+    if (account?.status === 'active') {
+      await Notification.create([{
+        ...(notifTenantId ? { tenantId: notifTenantId } : {}),
+        recipientId: account._id,
+        title: `Yêu cầu của bạn ${item.status === 'approved' ? 'đã được duyệt' : item.status === 'resolved' ? 'đã có kết quả' : item.status === 'rejected' ? 'đã bị từ chối' : 'đang được xử lý'}`,
+        message: `${item.subject}: ${item.response}`,
+        type: item.status === 'rejected' ? 'warning' : 'info',
+        link: `/my-requests?request=${item._id}`,
+        createdBy: actor._id,
+        metadata: { personalRequestId: item._id }
+      }], { session });
+    }
     if (action === 'prepare') {
-      const approvers = await User.find({ role: { $in: ['admin', 'principal'] }, status: 'active', _id: { $nin: [actor._id, item.userId] } }).select('_id').session(session).lean();
-      if (approvers.length) await Notification.insertMany(approvers.map((approver) => ({ recipientId: approver._id, title: 'Xác nhận công tác chờ phê duyệt', message: `${item.employeeName} · Số ${item.certificate.documentNumber}`, type: 'warning', link: `/hr?tab=requests&request=${item._id}`, createdBy: actor._id })), { session });
+      const approvers = await User.find({
+        ...tenantFilter,
+        role: { $in: ['admin', 'principal'] },
+        status: 'active',
+        _id: { $nin: [actor._id, item.userId] }
+      }).select('_id').session(session).lean();
+      if (approvers.length) {
+        await Notification.insertMany(
+          approvers.map((approver) => ({
+            ...(notifTenantId ? { tenantId: notifTenantId } : {}),
+            recipientId: approver._id,
+            title: 'Xác nhận công tác chờ phê duyệt',
+            message: `${item.employeeName} · Số ${item.certificate.documentNumber}`,
+            type: 'warning',
+            link: `/hr?tab=requests&request=${item._id}`,
+            createdBy: actor._id
+          })),
+          { session }
+        );
+      }
     }
     return item;
   });

@@ -9,11 +9,12 @@ import {
 const PLATFORM_ACTION_LABELS = {
   CREATE_SCHOOL_WITH_ADMIN: 'Khởi tạo trường học mới & Account Admin riêng',
   UPDATE_SCHOOL_CONFIG: 'Cập nhật cấu hình / Phân hệ / Mật khẩu trường',
-  ENTER_SCHOOL_WORKSPACE: 'Truy cập điều hành không gian trường',
-  UPDATE_GLOBAL_SYSTEM_SETTINGS: 'Cập nhật Cấu hình Chung Hệ thống',
+  ENTER_SCHOOL_WORKSPACE: 'Truy cập hỗ trợ kỹ thuật không gian trường',
+  UPDATE_GLOBAL_SYSTEM_SETTINGS: 'Cập nhật Cấu hình Nền tảng SaaS',
+  DISPATCH_SCHOOL_NOTIFICATION: 'Gửi thông báo hệ thống tới trường',
   UPDATE_SUPERADMIN_CREDENTIALS: 'Đổi thông tin bảo mật SuperAdmin',
   CREATE_TENANT: 'Tạo đơn vị trường (API Platform)',
-  UPDATE_TENANT_STATUS: 'Đổi trạng thái hoạt động trường'
+  UPDATE_TENANT_STATUS: 'Đổi trạng thái cấp phép trường'
 };
 
 const SCHOOL_ACTION_LABELS = {

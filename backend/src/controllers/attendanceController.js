@@ -640,6 +640,46 @@ const createLeaveRequest = async (req, res) => {
             endDate: end,
             reason: reason.trim()
         });
+
+        // Gửi thông báo CHỈ tới Giáo viên phụ trách lớp & Ban Giám hiệu trong phạm vi đúng trường này (tenantId)
+        try {
+            const clsDoc = student.classroomId
+                ? await Classroom.findOne({ _id: student.classroomId, ...tenantFilter })
+                    .select('homeroomTeacherId teachers')
+                    .lean()
+                : null;
+            const classTeacherIds = [
+                clsDoc?.homeroomTeacherId,
+                ...((clsDoc?.teachers || []).map((t) => t.teacherId))
+            ].filter(Boolean);
+
+            const managers = await User.find({
+                ...tenantFilter,
+                $or: [
+                    { role: { $in: ['admin', 'principal'] }, status: 'active' },
+                    ...(classTeacherIds.length ? [{ _id: { $in: classTeacherIds }, status: 'active' }] : [])
+                ]
+            }).select('_id role').lean();
+
+            if (managers.length > 0) {
+                const notifTenantId = tenantContext.tenantId || student.tenantId || null;
+                await Notification.insertMany(
+                    managers.map((recipient) => ({
+                        ...(notifTenantId ? { tenantId: notifTenantId } : {}),
+                        recipientId: recipient._id,
+                        title: `Đơn xin nghỉ mới: ${student.fullName}`,
+                        message: `Phụ huynh xin nghỉ cho bé ${student.fullName} (${start} → ${end}): ${reason.trim().slice(0, 120)}`,
+                        type: 'leave_request',
+                        link: '/attendance/leaves',
+                        createdBy: req.user._id,
+                        metadata: { leaveRequestId: request._id, studentId: student._id }
+                    }))
+                );
+            }
+        } catch (notifErr) {
+            console.error('Không thể gửi thông báo đơn xin nghỉ tới giáo viên/nhà trường:', notifErr.message);
+        }
+
         return res.status(201).json({ success: true, message: 'Đã gửi đơn xin nghỉ đến nhà trường', data: request });
     } catch (err) {
         if (err.statusCode) {

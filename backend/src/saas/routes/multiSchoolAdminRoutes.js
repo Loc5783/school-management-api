@@ -18,6 +18,7 @@ const {
   updateSystemSettingsHandler,
   listPlatformAuditLogsHandler,
   listSchoolOperationalLogsHandler,
+  dispatchSchoolNotificationHandler,
   testSchoolWebhookBySuperAdmin,
   createSchoolWithAdmin,
   updateSchoolAndAdmin,
@@ -40,5 +41,6 @@ router.get('/settings', getSystemSettingsHandler);
 router.put('/settings', requirePlatformRole(['platform_lead']), updateSystemSettingsHandler);
 router.get('/audit-logs', listPlatformAuditLogsHandler);
 router.get('/school-logs', listSchoolOperationalLogsHandler);
+router.post('/notifications/dispatch', requirePlatformRole(['platform_lead']), dispatchSchoolNotificationHandler);
 
 module.exports = router;

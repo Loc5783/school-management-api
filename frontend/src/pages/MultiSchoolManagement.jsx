@@ -12,7 +12,8 @@ import {
   createSchoolWithAdmin,
   updateSchoolAndAdmin,
   enterSchoolWorkspace,
-  testSuperAdminSchoolWebhook
+  testSuperAdminSchoolWebhook,
+  dispatchSuperAdminNotification
 } from '../api/multiSchool';
 import { getStoredSuperAdminUser, getStoredUser } from '../utils/storage';
 import './MultiSchoolManagement.css';
@@ -162,6 +163,18 @@ export default function MultiSchoolManagement() {
   const [webhookTesting, setWebhookTesting] = useState(false);
   const [webhookTestResult, setWebhookTestResult] = useState(null);
 
+  // Modal Gửi Thông báo Hệ thống / Cấp phép xuống đúng Trường được chọn
+  const [showDispatchModal, setShowDispatchModal] = useState(false);
+  const [dispatchForm, setDispatchForm] = useState({
+    targetScope: 'single',
+    schoolId: '',
+    type: 'system',
+    title: '',
+    message: ''
+  });
+  const [dispatching, setDispatching] = useState(false);
+  const [dispatchError, setDispatchError] = useState('');
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -213,7 +226,7 @@ export default function MultiSchoolManagement() {
   };
 
   useEffect(() => {
-    if (!showCreateModal && !editingSchool && !webhookTestSchool) return undefined;
+    if (!showCreateModal && !editingSchool && !webhookTestSchool && !showDispatchModal) return undefined;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const onKeyDown = (e) => {
@@ -221,6 +234,7 @@ export default function MultiSchoolManagement() {
         if (showCreateModal && !creating) setShowCreateModal(false);
         if (editingSchool && !savingEdit) setEditingSchool(null);
         if (webhookTestSchool && !webhookTesting) setWebhookTestSchool(null);
+        if (showDispatchModal && !dispatching) setShowDispatchModal(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -228,7 +242,41 @@ export default function MultiSchoolManagement() {
       document.body.style.overflow = prevOverflow;
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [showCreateModal, editingSchool, webhookTestSchool, creating, savingEdit, webhookTesting]);
+  }, [showCreateModal, editingSchool, webhookTestSchool, showDispatchModal, creating, savingEdit, webhookTesting, dispatching]);
+
+  const openDispatchNotificationModal = (school = null) => {
+    setDispatchError('');
+    setDispatchForm({
+      targetScope: 'single',
+      schoolId: school?._id || schools[0]?._id || '',
+      type: 'system',
+      title: '',
+      message: ''
+    });
+    setShowDispatchModal(true);
+  };
+
+  const handleDispatchNotification = async (e) => {
+    e.preventDefault();
+    if (dispatching) return;
+    setDispatching(true);
+    setDispatchError('');
+    try {
+      const res = await dispatchSuperAdminNotification({
+        targetScope: dispatchForm.targetScope,
+        schoolId: dispatchForm.targetScope === 'single' ? dispatchForm.schoolId : undefined,
+        type: dispatchForm.type,
+        title: dispatchForm.title.trim(),
+        message: dispatchForm.message.trim()
+      });
+      setShowDispatchModal(false);
+      setNotice({ type: 'success', text: res.data?.message || 'Đã gửi thông báo hệ thống tới trường thành công.' });
+    } catch (err) {
+      setDispatchError(err.response?.data?.message || 'Không thể gửi thông báo tới trường.');
+    } finally {
+      setDispatching(false);
+    }
+  };
 
   const copyText = async (key, text) => {
     try {
@@ -508,24 +556,24 @@ export default function MultiSchoolManagement() {
 
   const sectionTitleMap = {
     overview: {
-      title: 'Dashboard Tổng quan, Kinh tế & Hỗ trợ Nhanh Các Trường',
-      subtitle: 'Biểu đồ thu–chi toàn chuỗi, giám sát sức khỏe máy chủ, cấp tài khoản Admin và hỗ trợ trực tiếp từng trường.'
+      title: 'Trung tâm Phân phối Phần mềm, Kinh tế & Hỗ trợ Các Trường',
+      subtitle: 'Cấp phép đơn vị trường sử dụng phần mềm, giám sát hạ tầng máy chủ, biểu đồ kinh tế và hỗ trợ kỹ thuật (mọi cảnh báo vận hành hằng ngày được gửi riêng về đúng từng trường).'
     },
     analytics: {
-      title: 'Báo cáo Thống kê Mức độ Sử dụng & Biểu đồ So sánh Các Trường',
-      subtitle: 'Đo lường chi tiết cách từng trường khai thác Điểm danh, Học phí, Thực đơn, Tài khoản nhân sự và Webhook chấm công.'
+      title: 'Báo cáo Thống kê Mức độ Sử dụng Phần mềm & Biểu đồ Các Trường',
+      subtitle: 'Đo lường chi tiết cách từng trường khai thác gói tính năng, hạn mức Quota, tài khoản người dùng và đồng bộ Webhook.'
     },
     schools: {
-      title: 'Quản lý Đơn vị Trường, Cấp Account Admin & Webhook',
-      subtitle: 'Cấp tài khoản Admin riêng để trường tự tạo Giám đốc, Giáo viên, Đầu bếp... và đồng bộ máy chấm công qua đuôi /mã-trường.'
+      title: 'Cấp phép Đơn vị Trường, Tài khoản Admin & Webhook',
+      subtitle: 'Phân phối gói phân hệ phần mềm và cấp tài khoản Admin riêng cho từng trường tự tạo Giám đốc, Giáo viên, Đầu bếp...'
     },
     audit: {
       title: 'Nhật ký Hoạt động Từng Trường, Webhook & Bảo mật',
-      subtitle: 'Tra cứu chi tiết nhật ký nghiệp vụ nội bộ của từng trường, lịch sử gói tin máy chấm công và kiểm toán SuperAdmin.'
+      subtitle: 'Tra cứu chi tiết nhật ký sử dụng nội bộ của từng trường, lịch sử gói tin máy chấm công và kiểm toán cấp nền tảng.'
     },
     settings: {
-      title: 'Cấu hình Chung Toàn Hệ thống (Global Settings)',
-      subtitle: 'Thiết lập thương hiệu chuỗi, System Banner toàn trường, chuẩn nghiệp vụ Mầm non và chính sách bảo mật.'
+      title: 'Cấu hình Nền tảng Phân phối Phần mềm SaaS',
+      subtitle: 'Thiết lập thông tin đơn vị cung cấp phần mềm, thông báo bảo trì theo trường, hạn mức gói mặc định và chính sách bảo mật hạ tầng.'
     }
   };
 
@@ -648,8 +696,13 @@ export default function MultiSchoolManagement() {
             <button type="button" className="button button-secondary" onClick={load} disabled={loading}>
               <Icon name="refresh" size={15} /> Làm mới số liệu
             </button>
+            {schools.length > 0 && (
+              <button type="button" className="button button-secondary" onClick={() => openDispatchNotificationModal(schools[0])}>
+                <Icon name="bell" size={15} /> Gửi thông báo tới trường
+              </button>
+            )}
             <button type="button" className="button button-primary" onClick={openCreateModal}>
-              <Icon name="plus" size={16} /> Tạo trường mới & Cấp Account
+              <Icon name="plus" size={16} /> Cấp phép trường mới & Account
             </button>
           </div>
         </header>
@@ -732,10 +785,10 @@ export default function MultiSchoolManagement() {
                 <article className="superadmin-kpi-card">
                   <span className="superadmin-kpi-icon blue"><Icon name="shield" size={21} /></span>
                   <div className="superadmin-kpi-body">
-                    <small>SỐ TRƯỜNG ĐANG HOẠT ĐỘNG</small>
+                    <small>ĐƠN VỊ TRƯỜNG ĐƯỢC CẤP PHÉP</small>
                     <strong>{summary.activeSchools} / {summary.totalSchools} trường</strong>
                     <span className="superadmin-kpi-sub">
-                      {summary.totalCampuses} phân hiệu · {summary.suspendedSchools || 0} tạm ngưng
+                      {summary.totalCampuses} phân hiệu · {summary.suspendedSchools || 0} tạm khóa
                     </span>
                   </div>
                 </article>
@@ -743,34 +796,10 @@ export default function MultiSchoolManagement() {
                 <article className="superadmin-kpi-card">
                   <span className="superadmin-kpi-icon purple"><Icon name="students" size={21} /></span>
                   <div className="superadmin-kpi-body">
-                    <small>QUY MÔ HỌC SINH & LẤP ĐẦY LỚP</small>
-                    <strong>{summary.totalStudents} học sinh</strong>
+                    <small>SỬ DỤNG HẠN MỨC GÓI (QUOTA HS)</small>
+                    <strong>{summary.totalStudents} / {summary.totalStudentQuota || 800} HS</strong>
                     <span className="superadmin-kpi-sub">
-                      {summary.totalClassrooms} lớp · Lấp đầy {summary.overallOccupancyPercent}% sức chứa
-                    </span>
-                  </div>
-                </article>
-
-                <article className="superadmin-kpi-card">
-                  <span className="superadmin-kpi-icon green"><Icon name="attendance" size={21} /></span>
-                  <div className="superadmin-kpi-body">
-                    <small>CHUYÊN CẦN TOÀN CHUỖI HÔM NAY</small>
-                    <strong>
-                      {summary.todayStudentRecorded > 0 ? `${summary.overallAttendanceTodayPercent}%` : 'Chưa điểm danh'}
-                    </strong>
-                    <span className="superadmin-kpi-sub">
-                      HS có mặt: {summary.todayStudentPresent}/{summary.todayStudentRecorded} · NS: {summary.totalStaffPresentToday}/{summary.totalStaff}
-                    </span>
-                  </div>
-                </article>
-
-                <article className="superadmin-kpi-card">
-                  <span className="superadmin-kpi-icon amber"><Icon name="money" size={21} /></span>
-                  <div className="superadmin-kpi-body">
-                    <small>THỰC THU HỌC PHÍ TOÀN HỆ THỐNG</small>
-                    <strong>{formatCurrency(summary.totalCollected)}</strong>
-                    <span className="superadmin-kpi-sub">
-                      Đạt {summary.overallCollectionRatePercent}% · Nợ đọng: {formatCurrency(summary.totalOutstandingDebt)}
+                      {summary.totalClassrooms} lớp · Đạt {summary.overallStudentQuotaPercent || 0}% tổng hạn mức cấp
                     </span>
                   </div>
                 </article>
@@ -778,10 +807,32 @@ export default function MultiSchoolManagement() {
                 <article className="superadmin-kpi-card">
                   <span className="superadmin-kpi-icon teal"><Icon name="users" size={21} /></span>
                   <div className="superadmin-kpi-body">
-                    <small>TÀI KHOẢN & NHÂN SỰ ACTIVE</small>
+                    <small>TÀI KHOẢN SỬ DỤNG PHẦN MỀM</small>
                     <strong>{summary.totalActiveAccounts} tài khoản</strong>
                     <span className="superadmin-kpi-sub">
-                      {summary.totalStaff} hồ sơ nhân sự các trường
+                      {summary.totalStaff} nhân sự nội bộ tại các trường
+                    </span>
+                  </div>
+                </article>
+
+                <article className="superadmin-kpi-card">
+                  <span className="superadmin-kpi-icon amber"><Icon name="money" size={21} /></span>
+                  <div className="superadmin-kpi-body">
+                    <small>THỰC THU TRÊN NỀN TẢNG</small>
+                    <strong>{formatCurrency(summary.totalCollected)}</strong>
+                    <span className="superadmin-kpi-sub">
+                      Đạt {summary.overallCollectionRatePercent}% · Dư nợ: {formatCurrency(summary.totalOutstandingDebt)}
+                    </span>
+                  </div>
+                </article>
+
+                <article className="superadmin-kpi-card">
+                  <span className="superadmin-kpi-icon green"><Icon name="clock" size={21} /></span>
+                  <div className="superadmin-kpi-body">
+                    <small>ĐỒNG BỘ WEBHOOK PHẦN CỨNG</small>
+                    <strong>{summary.totalWebhookEvents || 0} lượt đẩy</strong>
+                    <span className="superadmin-kpi-sub">
+                      {summary.totalDevices || 0} máy chấm công kết nối theo mã trường
                     </span>
                   </div>
                 </article>
@@ -791,10 +842,10 @@ export default function MultiSchoolManagement() {
                     <Icon name={alerts.length > 0 ? 'alertCircle' : 'check'} size={21} />
                   </span>
                   <div className="superadmin-kpi-body">
-                    <small>CẢNH BÁO AN TOÀN & VẬN HÀNH</small>
-                    <strong>{alerts.length} cảnh báo</strong>
+                    <small>CẢNH BÁO CẤP PHÉP & HẠ TẦNG</small>
+                    <strong>{alerts.length} lưu ý kỹ thuật</strong>
                     <span className="superadmin-kpi-sub">
-                      Mẫu lưu bếp cảnh báo: {summary.totalFoodSampleAlerts || 0} · Phản hồi PH: {summary.totalOpenFeedback || 0}
+                      Chỉ báo Quota gói, lỗi Webhook & sức khỏe Server
                     </span>
                   </div>
                 </article>
@@ -871,6 +922,9 @@ export default function MultiSchoolManagement() {
                           <div className="classroom-actions" style={{ flexWrap: 'wrap', marginTop: 'auto' }}>
                             <button type="button" className="button button-secondary" onClick={() => openEditModal(s)}>
                               Cấp / Đổi MK Admin
+                            </button>
+                            <button type="button" className="button button-secondary" onClick={() => openDispatchNotificationModal(s)}>
+                              Gửi thông báo riêng
                             </button>
                             <button
                               type="button"
@@ -966,33 +1020,38 @@ export default function MultiSchoolManagement() {
                   )}
                 </section>
 
-                {/* KHỐI CẢNH BÁO AN TOÀN MẦM NON */}
+                {/* KHỐI GIÁM SÁT HẠN MỨC CẤP PHÉP & KỸ THUẬT NỀN TẢNG */}
                 <section className="content-card" style={{ padding: '20px 22px' }}>
-                  <p className="card-kicker">GIÁM SÁT AN TOÀN & CHẤT LƯỢNG DỊCH VỤ</p>
-                  <h2 style={{ margin: '2px 0 0' }}>Cảnh báo các trường cần SuperAdmin lưu ý ({alerts.length})</h2>
+                  <p className="card-kicker">GIÁM SÁT CẤP PHÉP GÓI PHẦN MỀM & TÍCH HỢP KỸ THUẬT</p>
+                  <h2 style={{ margin: '2px 0 4px' }}>Lưu ý Hạ tầng & Hạn mức Quota ({alerts.length})</h2>
+                  <p style={{ margin: '0 0 10px', fontSize: 12.5, color: '#64748b' }}>
+                    Các thông báo vận hành nội bộ (như nhắc điểm danh học sinh, bếp ăn, phản hồi phụ huynh) được gửi trực tiếp vào chuông thông báo của riêng từng trường sử dụng.
+                  </p>
 
                   {alerts.length === 0 ? (
-                    <div style={{ padding: '32px 12px', textAlign: 'center', color: '#15803d', fontWeight: 600 }}>
-                      ✓ Toàn bộ các trường đang vận hành bình thường, không có cảnh báo tồn đọng.
+                    <div style={{ padding: '26px 12px', textAlign: 'center', color: '#15803d', fontWeight: 600, background: '#f0fdf4', borderRadius: 12, border: '1px solid #bbf7d0' }}>
+                      ✓ Hạ tầng phân phối phần mềm, hạn mức Quota và kết nối Webhook của tất cả các trường đều hoạt động ổn định.
                     </div>
                   ) : (
                     <div className="superadmin-alert-list">
                       {alerts.map((al, idx) => (
-                        <div key={`${al.schoolId}-${al.category}-${idx}`} className={`superadmin-alert-item ${al.severity}`}>
+                        <div key={`${al.schoolId || 'sys'}-${al.category}-${idx}`} className={`superadmin-alert-item ${al.severity}`}>
                           <div>
                             <strong style={{ display: 'block', fontSize: '13.5px', color: '#0f172a' }}>
                               [{al.schoolCode}] {al.title}
                             </strong>
                             <small style={{ color: '#475569' }}>{al.detail}</small>
                           </div>
-                          <button
-                            type="button"
-                            className="button button-secondary"
-                            style={{ whiteSpace: 'nowrap', padding: '6px 11px', fontSize: '12px' }}
-                            onClick={() => setReportSchoolId(al.schoolId)}
-                          >
-                            Xem báo cáo
-                          </button>
+                          {al.schoolId && (
+                            <button
+                              type="button"
+                              className="button button-secondary"
+                              style={{ whiteSpace: 'nowrap', padding: '6px 11px', fontSize: '12px' }}
+                              onClick={() => openEditModal({ _id: al.schoolId })}
+                            >
+                              Cấu hình gói
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -1296,12 +1355,13 @@ export default function MultiSchoolManagement() {
           )}
 
           {/* ================================================================
-              MỤC 5: CẤU HÌNH CHUNG HỆ THỐNG (GLOBAL SETTINGS)
+              MỤC 5: CẤU HÌNH NỀN TẢNG PHÂN PHỐI PHẦN MỀM (PLATFORM SETTINGS)
              ================================================================ */}
           {activeSection === 'settings' && (
             <SuperAdminSettingsPanel
               key={systemSettings?.updatedAt || 'global-settings'}
               initialSettings={systemSettings}
+              schools={schools}
               onSaved={(nextSettings) => {
                 if (nextSettings) setSystemSettings(nextSettings);
                 void load();
@@ -1310,6 +1370,123 @@ export default function MultiSchoolManagement() {
           )}
         </div>
       </main>
+
+      {/* MODAL GỬI THÔNG BÁO HỆ THỐNG ĐÍCH DANH CHO TỪNG TRƯỜNG SỬ DỤNG */}
+      {showDispatchModal && createPortal(
+        <div
+          className="account-modal-backdrop"
+          role="presentation"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !dispatching) setShowDispatchModal(false);
+          }}
+        >
+          <form
+            className="account-modal-card student-form"
+            style={{ width: 'min(640px, 96vw)' }}
+            autoComplete="off"
+            onSubmit={handleDispatchNotification}
+          >
+            <div className="account-modal-header">
+              <div>
+                <p className="card-kicker">THÔNG BÁO TỪ ĐƠN VỊ CUNG CẤP PHẦN MỀM XUỐNG TRƯỜNG</p>
+                <h2>Gửi thông báo tới trường sử dụng</h2>
+              </div>
+              <button
+                type="button"
+                className="button button-secondary modal-close-btn"
+                disabled={dispatching}
+                onClick={() => setShowDispatchModal(false)}
+              >
+                <Icon name="close" size={18} />
+              </button>
+            </div>
+
+            <p style={{ margin: '0 0 14px', fontSize: 13, color: '#475569', lineHeight: 1.55 }}>
+              Thông báo của trường nào sẽ <strong>chỉ gửi vào Chuông thông báo nội bộ của đúng trường đó</strong> (dành cho Admin &amp; Ban Giám hiệu của trường nhận), tuyệt đối không hiển thị sang các trường khác.
+            </p>
+
+            {dispatchError && (
+              <div className="account-modal-error" role="alert">
+                <Icon name="alertCircle" size={16} />
+                <span>{dispatchError}</span>
+              </div>
+            )}
+
+            <div className="student-form-grid">
+              <label>
+                Phạm vi gửi thông báo
+                <select
+                  value={dispatchForm.targetScope}
+                  onChange={(e) => setDispatchForm({ ...dispatchForm, targetScope: e.target.value })}
+                >
+                  <option value="single">Chỉ gửi riêng cho 1 trường được chọn</option>
+                  <option value="all">Thông báo bảo trì / nâng cấp chung tất cả trường</option>
+                </select>
+              </label>
+
+              <label>
+                Loại thông báo
+                <select
+                  value={dispatchForm.type}
+                  onChange={(e) => setDispatchForm({ ...dispatchForm, type: e.target.value })}
+                >
+                  <option value="system">Thông báo cấp phép / nâng cấp tính năng</option>
+                  <option value="warning">Lưu ý hạn mức gói / bảo trì kỹ thuật</option>
+                </select>
+              </label>
+
+              {dispatchForm.targetScope === 'single' && (
+                <label className="form-wide">
+                  Chọn đơn vị trường nhận thông báo *
+                  <select
+                    required
+                    value={dispatchForm.schoolId}
+                    onChange={(e) => setDispatchForm({ ...dispatchForm, schoolId: e.target.value })}
+                  >
+                    {schools.map((s) => (
+                      <option key={s._id} value={s._id}>
+                        [{s.code}] {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              <label className="form-wide">
+                Tiêu đề thông báo *
+                <input
+                  required
+                  maxLength={160}
+                  placeholder="VD: Thông báo nâng hạn mức học sinh / Cập nhật phân hệ mới"
+                  value={dispatchForm.title}
+                  onChange={(e) => setDispatchForm({ ...dispatchForm, title: e.target.value })}
+                />
+              </label>
+
+              <label className="form-wide">
+                Nội dung chi tiết gửi Ban Quản trị trường *
+                <textarea
+                  required
+                  maxLength={1500}
+                  placeholder="Nhập nội dung thông báo dành riêng cho trường..."
+                  value={dispatchForm.message}
+                  onChange={(e) => setDispatchForm({ ...dispatchForm, message: e.target.value })}
+                />
+              </label>
+            </div>
+
+            <div className="account-modal-actions">
+              <button type="button" className="button button-secondary" disabled={dispatching} onClick={() => setShowDispatchModal(false)}>
+                Hủy
+              </button>
+              <button type="submit" className="button button-primary" disabled={dispatching}>
+                <Icon name="send" size={15} /> {dispatching ? 'Đang gửi...' : 'Gửi thông báo xuống trường'}
+              </button>
+            </div>
+          </form>
+        </div>,
+        document.body
+      )}
 
       {/* MODAL XEM BÁO CÁO CHI TIẾT 360° TỪNG TRƯỜNG */}
       {reportSchoolId && (

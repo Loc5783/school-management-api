@@ -52,6 +52,11 @@ const SystemSettingSchema = new mongoose.Schema(
         trim: true,
         maxlength: 500,
         default: ''
+      },
+      // Để trống = gửi tới tất cả trường đang sử dụng; có mã trường = CHỈ hiển thị cho các trường được chỉ định
+      targetSchoolCodes: {
+        type: [String],
+        default: []
       }
     },
     maintenanceMode: {
@@ -106,8 +111,14 @@ const SystemSettingSchema = new mongoose.Schema(
       defaultMaxStudentsPerSchool: {
         type: Number,
         min: 10,
-        max: 10000,
+        max: 20000,
         default: 800
+      },
+      defaultMaxStaffPerSchool: {
+        type: Number,
+        min: 5,
+        max: 5000,
+        default: 200
       }
     },
     securityPolicy: {

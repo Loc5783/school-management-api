@@ -8,6 +8,7 @@ const StaffShift = require('../models/zone2_hr/StaffShift');
 const Notification = require('../models/zone1_system/Notification');
 const { getWorkDate, addWorkDays, isValidWorkDate, isValidTime } = require('../utils/dateHelpers');
 const { fail, checkId, text, inTransaction, audit } = require('../services/credentialService');
+const { buildTenantFilter } = require('../services/tenantFilterService');
 
 const handle = (fn) => async (req, res) => {
   try { await fn(req, res); } catch (error) {
@@ -45,17 +46,18 @@ const getDashboard = handle(async (req, res) => {
   const needPage = Math.max(1, Number(req.query.needPage) || 1);
   const applicantPage = Math.max(1, Number(req.query.applicantPage) || 1);
   if (!Number.isInteger(needPage) || !Number.isInteger(applicantPage)) throw fail('Số trang không hợp lệ');
-  const needFilter = req.query.needStatus && ['open', 'filled', 'closed'].includes(req.query.needStatus) ? { status: req.query.needStatus } : {};
-  const applicantFilter = {};
+  const tenantFilter = buildTenantFilter(req);
+  const needFilter = req.query.needStatus && ['open', 'filled', 'closed'].includes(req.query.needStatus) ? { status: req.query.needStatus, ...tenantFilter } : { ...tenantFilter };
+  const applicantFilter = { ...tenantFilter };
   if (req.query.needId) { checkId(req.query.needId); applicantFilter.needId = req.query.needId; }
   if (req.query.applicantStatus && ['applied', 'interviewing', 'recommended', 'approved', 'rejected', 'declined'].includes(req.query.applicantStatus)) applicantFilter.status = req.query.applicantStatus;
   const [needs, needCount, applicants, applicantCount, openNeeds, classrooms, allNeeds, recommendedCount, approved] = await Promise.all([
     Need.find(needFilter).sort({ createdAt: -1 }).skip((needPage - 1) * 10).limit(10).lean(), Need.countDocuments(needFilter),
     Applicant.find(applicantFilter).populate('needId', 'title position classroomName shift status targetStartDate').sort({ createdAt: -1 }).skip((applicantPage - 1) * 10).limit(10).lean(), Applicant.countDocuments(applicantFilter),
-    Need.find({ status: 'open' }).select('title position classroomName headcount approvedCount').sort({ createdAt: -1 }).lean(),
-    Classroom.find({ status: 'active' }).select('name schoolYear requiredTeachers').sort({ name: 1 }).lean(),
-    Need.countDocuments({ status: 'open' }), Applicant.countDocuments({ status: 'recommended' }),
-    Applicant.find({ status: 'approved', employeeId: null }).select('onboardingTasks proposedStartDate').lean()
+    Need.find({ status: 'open', ...tenantFilter }).select('title position classroomName headcount approvedCount').sort({ createdAt: -1 }).lean(),
+    Classroom.find({ status: 'active', ...tenantFilter }).select('name schoolYear requiredTeachers').sort({ name: 1 }).lean(),
+    Need.countDocuments({ status: 'open', ...tenantFilter }), Applicant.countDocuments({ status: 'recommended', ...tenantFilter }),
+    Applicant.find({ status: 'approved', employeeId: null, ...tenantFilter }).select('onboardingTasks proposedStartDate').lean()
   ]);
   const outstandingTasks = approved.reduce((sum, item) => sum + item.onboardingTasks.filter((task) => task.mandatory && !task.completedAt).length, 0);
   res.json({ data: { needs, applicants, openNeeds, classrooms,
@@ -172,18 +174,38 @@ const recommendApplicant = handle(async (req, res) => {
   const startDate = req.body.proposedStartDate;
   if (!isValidWorkDate(startDate) || startDate <= getWorkDate()) throw fail('Ngày dự kiến đi làm phải sau hôm nay');
   const reason = text(req.body.reason, 1000, 'Đề xuất nhận việc', true);
+  const tenantFilter = buildTenantFilter(req);
+  const tenantId = req.tenantId || req.user?.tenantId || null;
   const data = await inTransaction(async (session) => {
-    const applicant = await Applicant.findById(req.params.id).session(session);
+    const applicant = await Applicant.findOne({ _id: req.params.id, ...tenantFilter }).session(session);
     if (!applicant) throw fail('Không tìm thấy ứng viên', 404);
     versionOf(applicant, req.body.version);
-    const need = await Need.findOne({ _id: applicant.needId, status: 'open' }).session(session);
+    const need = await Need.findOne({ _id: applicant.needId, status: 'open', ...tenantFilter }).session(session);
     if (!need) throw fail('Nhu cầu tuyển đã hết chỗ hoặc đã đóng', 409);
     if (!['applied', 'interviewing', 'recommended'].includes(applicant.status) || !applicant.interviews.some((i) => i.outcome === 'passed')) throw fail('Chỉ đề xuất ứng viên có ít nhất một buổi phỏng vấn đạt');
     const previous = { status: applicant.status, proposedStartDate: applicant.proposedStartDate, decisionReason: applicant.decisionReason };
     applicant.set({ status: 'recommended', proposedStartDate: startDate, decisionReason: reason }); await applicant.save({ session });
     await audit(req.user, 'APPLICANT_RECOMMENDED', 'JobApplicant', applicant._id, previous, { status: 'recommended', proposedStartDate: startDate, reason: reason.slice(0, 500) }, session);
-    const managers = await User.find({ role: { $in: ['admin', 'principal'] }, status: 'active' }).select('_id').session(session).lean();
-    if (managers.length) await Notification.insertMany(managers.map((manager) => ({ recipientId: manager._id, title: 'Ứng viên chờ quyết định nhận việc', message: `${applicant.fullName} · ${need.title}`, type: 'info', link: '/hr?tab=recruitment', createdBy: req.user._id, metadata: { applicantId: applicant._id } })), { session });
+    const managers = await User.find({
+      ...tenantFilter,
+      role: { $in: ['admin', 'principal'] },
+      status: 'active'
+    }).select('_id').session(session).lean();
+    if (managers.length) {
+      await Notification.insertMany(
+        managers.map((manager) => ({
+          ...(tenantId ? { tenantId } : {}),
+          recipientId: manager._id,
+          title: 'Ứng viên chờ quyết định nhận việc',
+          message: `${applicant.fullName} · ${need.title}`,
+          type: 'info',
+          link: '/hr?tab=recruitment',
+          createdBy: req.user._id,
+          metadata: { applicantId: applicant._id }
+        })),
+        { session }
+      );
+    }
     return applicant;
   });
   res.json({ message: 'Đã chuyển đề xuất cho hiệu trưởng', data });

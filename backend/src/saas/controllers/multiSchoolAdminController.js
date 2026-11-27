@@ -27,7 +27,8 @@ const {
   getPlatformDashboardAndSchools,
   getSchoolDetailedReport,
   listPlatformAuditLogs,
-  listSchoolOperationalLogs
+  listSchoolOperationalLogs,
+  dispatchPlatformNotificationToSchools
 } = require('../../services/superAdminControlService');
 const { simulateSchoolWebhookEvent } = require('../../services/timekeepingWebhookService');
 const { generatePlatformAdminToken, generateSchoolUserToken } = require('../utils/saasJwt');
@@ -62,16 +63,29 @@ const parseQuotasInput = (rawQuotas, defaultStandards = {}) => {
 };
 
 /**
- * API công khai nhẹ trả về Thương hiệu, System Banner & Chế độ bảo trì cho toàn hệ thống.
+ * API công khai nhẹ trả về Thương hiệu, System Banner (lọc đúng mã trường nếu có chỉ định) & Chế độ bảo trì.
  */
 const getPublicSystemMeta = async (req, res) => {
   try {
     const settings = await getSystemSettings();
+    const rawSchoolCode = String(req.query?.schoolCode || '').trim().toUpperCase();
+    const targetCodes = Array.isArray(settings.systemBanner?.targetSchoolCodes)
+      ? settings.systemBanner.targetSchoolCodes
+      : [];
+
+    // Nếu Banner chỉ định danh sách trường cụ thể -> chỉ hiển thị cho đúng trường đó, không phát sang trường khác
+    let bannerForSchool = settings.systemBanner;
+    if (targetCodes.length > 0) {
+      if (!rawSchoolCode || !targetCodes.includes(rawSchoolCode)) {
+        bannerForSchool = { enabled: false, level: 'info', message: '', targetSchoolCodes: [] };
+      }
+    }
+
     return res.status(200).json({
       success: true,
       data: {
         branding: settings.branding,
-        systemBanner: settings.systemBanner,
+        systemBanner: bannerForSchool,
         maintenanceMode: settings.maintenanceMode,
         preschoolStandards: settings.preschoolStandards
       }
@@ -80,7 +94,7 @@ const getPublicSystemMeta = async (req, res) => {
     return res.status(200).json({
       success: true,
       data: {
-        branding: { systemName: 'Hệ thống Giáo dục Mầm non Hoa Nắng' },
+        branding: { systemName: 'Nền tảng Quản lý Mầm non Hoa Nắng SaaS' },
         systemBanner: { enabled: false, level: 'info', message: '' },
         maintenanceMode: { enabled: false, message: '' },
         preschoolStandards: { defaultSchoolYear: '2026-2027' }
@@ -369,6 +383,28 @@ const listSchoolOperationalLogsHandler = async (req, res) => {
     return res.status(err.statusCode || 500).json({
       success: false,
       message: err.message || 'Không thể tải nhật ký hoạt động của trường'
+    });
+  }
+};
+
+/**
+ * SuperAdmin gửi thông báo Hệ thống / Cấp phép / Kỹ thuật tới riêng 1 trường cụ thể (hoặc tất cả trường đang hoạt động).
+ */
+const dispatchSchoolNotificationHandler = async (req, res) => {
+  try {
+    const out = await dispatchPlatformNotificationToSchools(req.body || {}, req.platformAdmin);
+    const targetDesc = out.targetScope === 'single'
+      ? `trường ${out.schools[0]?.name} (${out.schools[0]?.code})`
+      : `${out.schoolCount} trường đang hoạt động`;
+    return res.status(201).json({
+      success: true,
+      message: `Đã gửi thông báo hệ thống tới ${out.recipientCount} tài khoản quản lý của ${targetDesc}.`,
+      data: out
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.message || 'Không thể gửi thông báo tới trường'
     });
   }
 };
@@ -910,6 +946,7 @@ module.exports = {
   updateSystemSettingsHandler,
   listPlatformAuditLogsHandler,
   listSchoolOperationalLogsHandler,
+  dispatchSchoolNotificationHandler,
   testSchoolWebhookBySuperAdmin,
   createSchoolWithAdmin,
   updateSchoolAndAdmin,

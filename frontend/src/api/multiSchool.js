@@ -5,8 +5,11 @@ const superAdminHeaders = () => {
   return superToken ? { Authorization: `Bearer ${superToken}` } : {};
 };
 
-// API công khai nhẹ cho toàn hệ thống (System Banner, Thương hiệu & Tham số chuẩn)
-export const getPublicSystemMeta = () => api.get('/multi-school/public-meta');
+// API công khai nhẹ cho toàn hệ thống (System Banner lọc đúng theo mã trường nếu có, Thương hiệu & Tham số chuẩn)
+export const getPublicSystemMeta = (schoolCode) =>
+  api.get('/multi-school/public-meta', {
+    params: schoolCode ? { schoolCode } : undefined
+  });
 
 // API dành cho Admin Tổng Hệ thống Đa Trường (SuperAdmin)
 export const loginSuperAdmin = (data) => api.post('/multi-school/login', data);
@@ -22,6 +25,7 @@ export const updateSuperAdminSystemSettings = (data) => api.put('/multi-school/s
 export const getSuperAdminAuditLogs = (params = {}) => api.get('/multi-school/audit-logs', { params, headers: superAdminHeaders() });
 export const getSuperAdminSchoolLogs = (params = {}) => api.get('/multi-school/school-logs', { params, headers: superAdminHeaders() });
 export const testSuperAdminSchoolWebhook = (id, data) => api.post(`/multi-school/schools/${id}/test-webhook`, data, { headers: superAdminHeaders() });
+export const dispatchSuperAdminNotification = (data) => api.post('/multi-school/notifications/dispatch', data, { headers: superAdminHeaders() });
 
 // API quản lý Phân hiệu / Cơ sở trong phạm vi từng trường (Admin trường)
 export const getSchoolCampuses = () => api.get('/system/campuses');

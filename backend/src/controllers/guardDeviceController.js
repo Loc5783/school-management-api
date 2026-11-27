@@ -150,8 +150,27 @@ const ingestEvent = async (req, res) => {
     const event = await GuardDeviceEvent.create({ deviceId: device._id, externalEventId: trim(externalEventId, 120), eventType, identifier: eventType === 'plate' ? normalizePlate(identifier) : eventType === 'card' ? trim(identifier, 120).toUpperCase() : trim(identifier, 120), confidence, snapshotUrl: safeSnapshot(snapshotUrl), description: trim(description, 500), occurredAt: eventTime, ...match });
     await GuardDevice.updateOne({ _id: device._id }, { $set: { lastSeenAt: new Date() } });
     if (event.status === 'alert') {
-      const recipients = await User.find({ role: { $in: ['guard', 'admin', 'principal'] }, status: 'active' }).select('_id').lean();
-      if (recipients.length) await Notification.insertMany(recipients.map((recipient) => ({ recipientId: recipient._id, title: `Cảnh báo cổng: ${device.name}`, message: event.reason, type: 'warning', link: '/guard', metadata: { guardDeviceEventId: event._id, priority: 'high' } })));
+      const deviceScope = device.tenantId
+        ? { tenantId: device.tenantId }
+        : { tenantId: { $in: [null, undefined] } };
+      const recipients = await User.find({
+        ...deviceScope,
+        role: { $in: ['guard', 'admin', 'principal'] },
+        status: 'active'
+      }).select('_id').lean();
+      if (recipients.length) {
+        await Notification.insertMany(
+          recipients.map((recipient) => ({
+            ...(device.tenantId ? { tenantId: device.tenantId } : {}),
+            recipientId: recipient._id,
+            title: `Cảnh báo cổng: ${device.name}`,
+            message: event.reason,
+            type: 'warning',
+            link: '/guard',
+            metadata: { guardDeviceEventId: event._id, priority: 'high' }
+          }))
+        );
+      }
     }
     return res.status(201).json({ success: true, data: { id: event._id, status: event.status, reason: event.reason } });
   } catch (error) {

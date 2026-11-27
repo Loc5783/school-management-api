@@ -484,18 +484,19 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
 
   useEffect(() => {
     let cancelled = false;
-    getPublicSystemMeta()
+    const currentSchoolCode = tenant?.code || user?.schoolCode || '';
+    getPublicSystemMeta(currentSchoolCode)
       .then((res) => {
         const banner = res.data?.data?.systemBanner;
-        if (!cancelled && banner?.enabled && banner?.message) {
-          setSystemBanner(banner);
+        if (!cancelled) {
+          setSystemBanner(banner?.enabled && banner?.message ? banner : null);
         }
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [tenant?.code, user?.schoolCode]);
   const slotContextValue = useMemo(
     () => (isPersistentLayout ? { titleSlot, subtitleSlot, actionsSlot } : null),
     [isPersistentLayout, titleSlot, subtitleSlot, actionsSlot]
@@ -1251,7 +1252,37 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
               </button>
               {showNotifications && (
                 <div className="notification-popover">
-                  <div><strong>Thông báo</strong>{totalUnread > 0 && <span>{totalUnread} chưa đọc</span>}</div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                    <strong>Thông báo nhà trường</strong>
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                      {totalUnread > 0 && <span>{totalUnread} chưa đọc</span>}
+                      {unreadCount > 0 && (
+                        <button
+                          type="button"
+                          style={{
+                            border: 'none',
+                            background: 'transparent',
+                            color: '#2563eb',
+                            fontSize: 11,
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            padding: 0
+                          }}
+                          onClick={async () => {
+                            try {
+                              await api.patch('/notifications/read-all');
+                              setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+                              setUnreadCount(0);
+                            } catch {
+                              // Bỏ qua nếu lỗi mạng tạm thời
+                            }
+                          }}
+                        >
+                          Đọc tất cả
+                        </button>
+                      )}
+                    </div>
+                  </div>
                   {chatUnread.data.length > 0 && (
                     <>
                       <div className="notification-group-label">TIN NHẮN</div>

@@ -5,6 +5,7 @@ const StudentAttendance = require('../models/zone3_school/StudentAttendance');
 const TuitionFee = require('../models/zone4_finance/TuitionFee');
 const Payment = require('../models/zone4_finance/Payment');
 const { getStaffingSnapshot } = require('../services/staffingService');
+const { collectSchoolOperationalAlerts } = require('../services/schoolOperationalNotificationService');
 const { canAccessClassroom, getTeacherClassroomIds } = require('../services/schoolDataAccessService');
 const { isValidObjectId } = require('../utils/idValidation');
 const { buildTenantFilter } = require('../services/tenantFilterService');
@@ -84,6 +85,12 @@ const getDashboardStats = async (req, res) => {
             catch (error) { staffingError = true; console.error('Không thể tính phân công nhân sự:', error); }
         }
 
+        const operationalAlerts = await collectSchoolOperationalAlerts({
+            tenantId,
+            user: req.user,
+            req
+        }).catch(() => []);
+
         res.json({
             message: 'Lấy thống kê tổng quan thành công',
             data: {
@@ -96,6 +103,7 @@ const getDashboardStats = async (req, res) => {
                     attendedToday,
                     attendanceRate: totalStudents > 0 ? Math.round((attendedToday / totalStudents) * 100) : 0
                 },
+                operationalAlerts,
                 recentAttendance,
                 recentAttendancePagination: {
                     page,

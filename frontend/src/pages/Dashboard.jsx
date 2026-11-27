@@ -72,6 +72,7 @@ export default function Dashboard() {
 
   const summary = data?.summary || {};
   const staffing = data?.staffing;
+  const operationalAlerts = Array.isArray(data?.operationalAlerts) ? data.operationalAlerts : [];
   const principalWorkItems = [
     { key: 'payroll', label: 'Bảng lương kỳ này', detail: 'Đã đối soát, chờ duyệt', to: '/payroll?tab=approvals', icon: 'money', tone: 'blue' },
     { key: 'leave', label: 'Đơn nghỉ nhân sự', detail: 'Chờ người phụ trách xử lý', to: '/hr?tab=leave', icon: 'calendar', tone: 'orange' },
@@ -153,6 +154,58 @@ export default function Dashboard() {
   return (
     <AppShell {...headerProps}>
       {error && <div className="notice notice-warning"><span>!</span>{error}</div>}
+
+      {operationalAlerts.length > 0 && (
+        <section
+          className="content-card"
+          aria-label="Nhắc việc và thông báo vận hành trong ngày của trường"
+          style={{
+            padding: '16px 20px',
+            marginBottom: '18px',
+            border: '1px solid #fde68a',
+            background: 'linear-gradient(135deg, #fffbeb, #ffffff)'
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 8, flexWrap: 'wrap' }}>
+            <div>
+              <p className="card-kicker" style={{ color: '#b45309', marginBottom: 2 }}>
+                THÔNG BÁO & NHẮC VIỆC NỘI BỘ TRƯỜNG HÔM NAY ({operationalAlerts.length})
+              </p>
+              <h2 style={{ margin: 0, fontSize: 16, color: '#0f172a' }}>
+                Các đầu việc cần nhà trường xử lý trong ngày
+              </h2>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gap: 10 }}>
+            {operationalAlerts.map((al) => (
+              <div
+                key={al.key}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  flexWrap: 'wrap',
+                  padding: '11px 14px',
+                  borderRadius: 12,
+                  background: al.severity === 'critical' ? '#fff1f2' : '#ffffff',
+                  border: `1px solid ${al.severity === 'critical' ? '#fecdd3' : '#fde68a'}`
+                }}
+              >
+                <div style={{ flex: '1 1 320px' }}>
+                  <strong style={{ display: 'block', fontSize: 13.5, color: '#0f172a' }}>{al.title}</strong>
+                  <small style={{ color: '#475569', fontSize: 12.5 }}>{al.message}</small>
+                </div>
+                {al.link && (
+                  <Link className="button button-primary" to={al.link}>
+                    Mở xử lý ngay <Icon name="chevronRight" size={15} />
+                  </Link>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {!isTeacher && (
         <section className="content-card" aria-label="Quy trình bắt đầu nhanh 4 bước" style={{ padding: '18px 22px', marginBottom: '18px' }}>

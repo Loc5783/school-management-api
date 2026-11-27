@@ -37,7 +37,7 @@ const sendScopedCredentialReminderForTenant = async (tenantId) => {
     const deduplicationKey = `hr-credentials:${tenantId || 'legacy'}:${today}:${manager._id}`;
     try {
       await Notification.updateOne(
-        { deduplicationKey },
+        { deduplicationKey, ...(tenantId ? { tenantId } : { tenantId: null }) },
         {
           $setOnInsert: {
             ...(tenantId ? { tenantId } : {}),
@@ -77,7 +77,7 @@ const sendScopedCredentialReminderForTenant = async (tenantId) => {
     const deduplicationKey = `hr-my-credentials:${tenantId || 'legacy'}:${today}:${employee.userId}`;
     try {
       await Notification.updateOne(
-        { deduplicationKey },
+        { deduplicationKey, ...(tenantId ? { tenantId } : { tenantId: null }) },
         {
           $setOnInsert: {
             ...(tenantId ? { tenantId } : {}),

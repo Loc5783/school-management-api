@@ -1,5 +1,6 @@
 const ParentFeedback = require('../models/zone3_school/ParentFeedback');
 const Student = require('../models/zone3_school/Student');
+const User = require('../models/zone1_system/User');
 const Notification = require('../models/zone1_system/Notification');
 const { canAccessStudent, isParent } = require('../services/studentAccessService');
 const { buildTenantFilter, resolveTenantContext } = require('../services/tenantFilterService');
@@ -23,6 +24,32 @@ const createFeedback = async (req, res) => {
     if (!student) throw fail('Không tìm thấy học sinh', 404);
     if (!isParent(req.user) || !canAccessStudent(req.user, student, req)) throw fail('Bạn chỉ được gửi phản hồi liên quan đến con đã liên kết', 403);
     const item = await ParentFeedback.create({ ...(tenantId ? { tenantId } : {}), studentId: student._id, studentName: student.fullName, classroomId: student.classroomId, className: student.className || '', parentId: req.user._id, parentName: actorName(req.user), category, subject: subject.trim(), message: message.trim() });
+
+    // Gửi thông báo nội bộ CHỈ cho Ban Quản lý (Admin & Hiệu trưởng) của đúng trường này (tenantId)
+    try {
+      const schoolManagers = await User.find({
+        ...tenantFilter,
+        role: { $in: ['admin', 'principal'] },
+        status: 'active'
+      }).select('_id role').lean();
+      if (schoolManagers.length > 0) {
+        await Notification.insertMany(
+          schoolManagers.map((mgr) => ({
+            ...(tenantId ? { tenantId } : {}),
+            recipientId: mgr._id,
+            title: `Phản hồi mới từ phụ huynh bé ${student.fullName}`,
+            message: `${subject.trim()}: ${message.trim().slice(0, 140)}`,
+            type: 'info',
+            link: mgr.role === 'principal' ? '/parent-feedback' : '/parent-feedback',
+            createdBy: req.user._id,
+            metadata: { feedbackId: item._id, studentId: student._id }
+          }))
+        );
+      }
+    } catch (notifErr) {
+      console.error('Không thể gửi chuông thông báo phản hồi phụ huynh:', notifErr.message);
+    }
+
     return res.status(201).json({ success: true, message: 'Đã gửi phản hồi riêng tới ban quản lý nhà trường.', data: item });
   } catch (error) { return res.status(error.status || 500).json({ success: false, message: error.message || 'Không thể gửi phản hồi' }); }
 };

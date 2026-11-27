@@ -34,8 +34,15 @@ const normalizeChanges = (body, employee) => {
   return changes;
 };
 const certificateSnapshot = (employee, user) => ({ employeeId: String(employee._id), employeeCode: employee.employeeCode, fullName: employee.fullName, position: employee.position, role: user.role, startDate: employee.startDate ? getWorkDate(employee.startDate) : null, status: employee.status, contractType: employee.contractType || null });
+const buildUserTenantScope = (user) => (
+  user?.tenantId ? { tenantId: user.tenantId } : { tenantId: { $in: [null, undefined] } }
+);
 const getSelfEmployee = async (user, session) => {
-  const employee = await Employee.findOne({ userId: user._id, status: { $in: ['active', 'on_leave'] } }).session(session || null);
+  const employee = await Employee.findOne({
+    ...buildUserTenantScope(user),
+    userId: user._id,
+    status: { $in: ['active', 'on_leave'] }
+  }).session(session || null);
   if (!employee) throw fail('Tài khoản chưa có hồ sơ nhân sự đang làm việc. Hãy liên hệ HR.', 404);
   return employee;
 };
@@ -51,19 +58,50 @@ const requestActions = (request, user, accountRole) => {
 };
 const notifyManagers = async (request, user, session, cancelled = false) => {
   const roles = request.type === 'payroll_feedback' ? ['admin', 'principal', 'hr', 'accountant'] : ['admin', 'principal', 'hr'];
-  const managers = await User.find({ role: { $in: roles }, status: 'active', _id: { $ne: user._id } }).select('_id').session(session).lean();
-  if (managers.length) await Notification.insertMany(managers.map((manager) => ({ recipientId: manager._id, title: cancelled ? 'Nhân viên đã rút yêu cầu' : `Yêu cầu ${names[request.type].toLowerCase()} mới`,
-    message: `${request.employeeName} · ${request.employeeCode}: ${request.subject}`, type: cancelled ? 'info' : 'warning', link: `/hr?tab=requests&request=${request._id}`, createdBy: user._id, metadata: { personalRequestId: request._id } })), { session });
+  const tenantId = request.tenantId || user?.tenantId || null;
+  const tenantScope = tenantId ? { tenantId } : { tenantId: { $in: [null, undefined] } };
+  const managers = await User.find({
+    ...tenantScope,
+    role: { $in: roles },
+    status: 'active',
+    _id: { $ne: user._id }
+  }).select('_id').session(session).lean();
+  if (managers.length) {
+    await Notification.insertMany(
+      managers.map((manager) => ({
+        ...(tenantId ? { tenantId } : {}),
+        recipientId: manager._id,
+        title: cancelled ? 'Nhân viên đã rút yêu cầu' : `Yêu cầu ${names[request.type].toLowerCase()} mới`,
+        message: `${request.employeeName} · ${request.employeeCode}: ${request.subject}`,
+        type: cancelled ? 'info' : 'warning',
+        link: `/hr?tab=requests&request=${request._id}`,
+        createdBy: user._id,
+        metadata: { personalRequestId: request._id }
+      })),
+      { session }
+    );
+  }
 };
 const saveRequest = async (data, user, session) => {
-  const [request] = await Request.create([{ ...data, userId: user._id, events: [{ action: 'created', actorId: user._id, actorName: actorName(user), note: 'Đã gửi yêu cầu' }] }], { session });
+  const tenantId = user?.tenantId || data?.tenantId || null;
+  const [request] = await Request.create([{
+    ...(tenantId ? { tenantId } : {}),
+    ...data,
+    userId: user._id,
+    events: [{ action: 'created', actorId: user._id, actorName: actorName(user), note: 'Đã gửi yêu cầu' }]
+  }], { session });
   await audit(user, 'STAFF_PERSONAL_REQUEST_CREATED', 'StaffPersonalRequest', request._id, {}, { type: request.type, status: request.status, fields: request.changes.map((change) => change.field), referenceId: request.referenceId }, session);
   await notifyManagers(request, user, session);
   return request;
 };
 const createTimesheetFeedback = async ({ sheet, user, note, previous, subject, requestId }, session) => {
   const openKey = `timesheet:${sheet._id}:${sheet.revision}`;
-  const existing = await Request.findOne({ userId: user._id, openKey, status: { $in: OPEN_STATUSES } }).session(session);
+  const existing = await Request.findOne({
+    ...buildUserTenantScope(user),
+    userId: user._id,
+    openKey,
+    status: { $in: OPEN_STATUSES }
+  }).session(session);
   if (existing) throw fail('Bảng công này đã có phản hồi đang xử lý. Hãy theo dõi tại Yêu cầu của tôi.', 409);
   const employee = await getSelfEmployee(user, session);
   return saveRequest({ employeeId: employee._id, employeeName: employee.fullName, employeeCode: employee.employeeCode, type: 'timesheet_feedback', subject: subject || `Sai lệch bảng công ${sheet.period}`, message: note,
