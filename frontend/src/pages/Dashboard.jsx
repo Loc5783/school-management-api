@@ -79,9 +79,45 @@ export default function Dashboard() {
     { key: 'profileChanges', label: 'Cập nhật hồ sơ học sinh', detail: 'Thay đổi nhạy cảm chờ duyệt', to: '/student-profile-change-requests', icon: 'card', tone: 'blue' },
     { key: 'parentFeedback', label: 'Ý kiến phụ huynh', detail: 'Chờ tiếp nhận', to: '/parent-feedback', icon: 'chat', tone: 'violet' },
   ];
+
+  const quickSetupSteps = [
+    {
+      step: 'Bước 1',
+      title: 'Tạo Phân hiệu & Lớp học',
+      desc: `${summary.totalClassrooms || 0} lớp đang hoạt động`,
+      to: '/classrooms',
+      tone: 'orange',
+      icon: 'classes'
+    },
+    {
+      step: 'Bước 2',
+      title: 'Thêm Giáo viên & Cấp TK',
+      desc: `${summary.totalStaff ?? summary.totalTeachers ?? 0} nhân sự (1 bước gộp)`,
+      to: '/hr',
+      tone: 'violet',
+      icon: 'users'
+    },
+    {
+      step: 'Bước 3',
+      title: 'Nhập Excel Học sinh',
+      desc: 'Tự tạo TK Phụ huynh theo SĐT',
+      to: '/students',
+      tone: 'blue',
+      icon: 'students'
+    },
+    {
+      step: 'Bước 4',
+      title: 'Điểm danh & Thu Học phí',
+      desc: 'Tự trừ tiền ăn nghỉ có phép',
+      to: ['admin', 'accountant', 'principal'].includes(role) ? '/finance?tab=create' : '/attendance',
+      tone: 'green',
+      icon: 'money'
+    }
+  ];
+
   const cards = isTeacher ? [
     { label: 'Học sinh lớp tôi', value: summary.totalStudents || 0, note: 'Đang theo học', icon: 'students', tone: 'blue', to: '/students', detailLabel: 'Xem học sinh được phân công' },
-    { label: 'Lớp được phân công', value: summary.totalClassrooms || 0, note: 'Đang hoạt động', icon: 'classes', tone: 'orange', to: '/attendance', detailLabel: 'Điểm danh lớp được phân công' },
+    { label: 'Lớp được phân công', value: summary.totalClassrooms || 0, note: 'Đang hoạt động', icon: 'classes', tone: 'orange', to: '/attendance', detailLabel: 'Điểm danh & Trả trẻ ngay' },
     { label: 'Có mặt hôm nay', value: summary.attendedToday || 0, note: 'Theo điểm danh của lớp', icon: 'attendance', tone: 'green', to: '/attendance', detailLabel: 'Điểm danh lớp' },
   ] : [
     { label: 'Tổng số học sinh', value: summary.totalStudents || 0, note: 'Đang theo học', icon: 'students', tone: 'blue', to: '/students', detailLabel: 'Xem danh sách học sinh' },
@@ -89,6 +125,7 @@ export default function Dashboard() {
     { label: 'Lớp học hoạt động', value: summary.totalClassrooms || 0, note: 'Trong năm học này', icon: 'classes', tone: 'orange', to: '/classrooms', detailLabel: 'Xem danh sách lớp học' },
     { label: 'Doanh thu hôm nay', value: formatMoney(summary.todayRevenue), note: 'Cập nhật trong ngày', icon: 'money', tone: 'green', to: '/finance', detailLabel: 'Xem giao dịch tài chính' },
   ];
+
   const attendance = data?.recentAttendance || [];
   const attendancePagination = data?.recentAttendancePagination || {};
   const attendanceOverview = data?.attendanceSummary || {};
@@ -115,23 +152,203 @@ export default function Dashboard() {
   return (
     <AppShell {...headerProps}>
       {error && <div className="notice notice-warning"><span>!</span>{error}</div>}
-      {isPrincipal && <section className="content-card" aria-label="Công việc cần hiệu trưởng xem xét"><div className="card-heading"><div><p className="card-kicker">ĐIỀU HÀNH NHÀ TRƯỜNG</p><h2>Việc cần xem xét</h2><p>Số lượng đang chờ xử lý trên toàn trường. Chọn một mục để mở đúng quy trình.</p></div></div>{principalWorkError && <div className="notice notice-warning" role="alert">{principalWorkError}</div>}<div className="principal-action-grid">{principalWorkItems.map((item) => <Link className="quick-action" to={item.to} key={item.key}><span className={`quick-icon ${item.tone}`}><Icon name={item.icon} /></span><span><strong>{item.label}</strong><small>{item.detail}</small></span><b className="principal-work-count" aria-label={`${principalWork?.[item.key] ?? 'Đang tải'} việc`}>{principalWork ? principalWork[item.key] : '—'}</b><Icon name="chevronRight" size={18} /></Link>)}</div></section>}
+
+      {!isTeacher && (
+        <section className="content-card" aria-label="Quy trình bắt đầu nhanh 4 bước" style={{ padding: '18px 22px', marginBottom: '18px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+            <div>
+              <p className="card-kicker" style={{ marginBottom: '2px' }}>BẮT ĐẦU SỬ DỤNG NHANH</p>
+              <h2 style={{ margin: 0, fontSize: '17px' }}>Quy trình vận hành chuẩn cho nhà trường (Nhìn vào dùng ngay)</h2>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '12px' }}>
+            {quickSetupSteps.map((item) => (
+              <Link
+                key={item.step}
+                to={item.to}
+                className="quick-action"
+                style={{ margin: 0, padding: '12px 14px', border: '1px solid #e2e8f0', borderRadius: '14px', background: '#f8fafc' }}
+              >
+                <span className={`quick-icon ${item.tone}`}><Icon name={item.icon} /></span>
+                <span>
+                  <small style={{ fontWeight: 700, color: '#2563eb', textTransform: 'uppercase', fontSize: '11px' }}>{item.step}</small>
+                  <strong style={{ display: 'block' }}>{item.title}</strong>
+                  <small>{item.desc}</small>
+                </span>
+                <Icon name="chevronRight" size={16} />
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {isPrincipal && (
+        <section className="content-card" aria-label="Công việc cần hiệu trưởng xem xét">
+          <div className="card-heading">
+            <div>
+              <p className="card-kicker">ĐIỀU HÀNH NHÀ TRƯỜNG</p>
+              <h2>Việc cần xem xét</h2>
+              <p>Số lượng đang chờ xử lý trên toàn trường. Chọn một mục để mở đúng quy trình.</p>
+            </div>
+          </div>
+          {principalWorkError && <div className="notice notice-warning" role="alert">{principalWorkError}</div>}
+          <div className="principal-action-grid">
+            {principalWorkItems.map((item) => (
+              <Link className="quick-action" to={item.to} key={item.key}>
+                <span className={`quick-icon ${item.tone}`}><Icon name={item.icon} /></span>
+                <span><strong>{item.label}</strong><small>{item.detail}</small></span>
+                <b className="principal-work-count" aria-label={`${principalWork?.[item.key] ?? 'Đang tải'} việc`}>
+                  {principalWork ? principalWork[item.key] : '—'}
+                </b>
+                <Icon name="chevronRight" size={18} />
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
       <section className="stat-grid" aria-label="Chỉ số tổng quan">
-        {cards.map((card) => <Link className="stat-card stat-card-link" to={card.to} key={card.label} aria-label={card.detailLabel}><div className={`stat-icon ${card.tone}`}><Icon name={card.icon} size={23} /></div><div><p>{card.label}</p><strong>{card.value}</strong><small>{card.note}</small><span className="stat-card-link-hint">{card.detailLabel}<Icon name="chevronRight" size={14} /></span></div></Link>)}
+        {cards.map((card) => (
+          <Link className="stat-card stat-card-link" to={card.to} key={card.label} aria-label={card.detailLabel}>
+            <div className={`stat-icon ${card.tone}`}><Icon name={card.icon} size={23} /></div>
+            <div>
+              <p>{card.label}</p>
+              <strong>{card.value}</strong>
+              <small>{card.note}</small>
+              <span className="stat-card-link-hint">{card.detailLabel}<Icon name="chevronRight" size={14} /></span>
+            </div>
+          </Link>
+        ))}
       </section>
-      {!isTeacher && data?.staffingError && <div className="notice notice-warning">Chưa thể kiểm tra tình trạng thiếu giáo viên. Vui lòng mở phần phân công để kiểm tra lại.</div>}
-      {!isTeacher && staffing && <section className={`content-card dashboard-staffing-alert ${staffing.missingTeacherTotal ? 'has-shortage' : ''}`}><div><p className="card-kicker">PHÂN CÔNG HÔM NAY · {staffing.date}</p><h2>{staffing.missingTeacherTotal ? `Thiếu ${staffing.missingTeacherTotal} giáo viên tại ${staffing.teacherShortages.length} lớp` : 'Các lớp đủ giáo viên theo định mức'}</h2>{staffing.uncoveredShifts > 0 && <p>Còn {staffing.uncoveredShifts} ca bếp/bảo vệ chưa có người trực hoặc người thay.</p>}</div><div className="dashboard-staffing-list">{staffing.teacherShortages.map((item) => <span key={item._id}><strong>{item.name}</strong> · thiếu {item.missingTeachers} người ({item.presentTeachers}/{item.requiredTeachers})</span>)}</div><Link className="button button-secondary" to="/hr?tab=staffing">Xem phân công</Link></section>}
+
+      {!isTeacher && data?.staffingError && (
+        <div className="notice notice-warning">Chưa thể kiểm tra tình trạng thiếu giáo viên. Vui lòng mở phần phân công để kiểm tra lại.</div>
+      )}
+
+      {!isTeacher && staffing && (
+        <section className={`content-card dashboard-staffing-alert ${staffing.missingTeacherTotal ? 'has-shortage' : ''}`}>
+          <div>
+            <p className="card-kicker">PHÂN CÔNG HÔM NAY · {staffing.date}</p>
+            <h2>{staffing.missingTeacherTotal ? `Thiếu ${staffing.missingTeacherTotal} giáo viên tại ${staffing.teacherShortages.length} lớp` : 'Các lớp đủ giáo viên theo định mức'}</h2>
+            {staffing.uncoveredShifts > 0 && <p>Còn {staffing.uncoveredShifts} ca bếp/bảo vệ chưa có người trực hoặc người thay.</p>}
+          </div>
+          <div className="dashboard-staffing-list">
+            {staffing.teacherShortages.map((item) => (
+              <span key={item._id}><strong>{item.name}</strong> · thiếu {item.missingTeachers} người ({item.presentTeachers}/{item.requiredTeachers})</span>
+            ))}
+          </div>
+          <Link className="button button-secondary" to="/hr?tab=staffing">Xem phân công</Link>
+        </section>
+      )}
+
       <section className="dashboard-grid">
         <article className="content-card attendance-card">
-          <div className="card-heading"><div><p className="card-kicker">THEO DÕI HÀNG NGÀY</p><h2>Điểm danh gần đây</h2></div><Link to="/attendance" className="text-link">Xem tất cả <Icon name="chevronRight" size={16} /></Link></div>
+          <div className="card-heading">
+            <div><p className="card-kicker">THEO DÕI HÀNG NGÀY</p><h2>Điểm danh gần đây</h2></div>
+            <Link to="/attendance" className="text-link">Xem tất cả <Icon name="chevronRight" size={16} /></Link>
+          </div>
           <section className="attendance-chart-section" aria-label="Biểu đồ tình hình điểm danh gần đây">
-            <div className="attendance-chart-copy"><p>PHÂN BỐ ĐIỂM DANH</p><h3>Tình hình điểm danh hôm nay</h3><span>{attendanceTotal ? `Tổng ${attendanceTotal} lượt điểm danh hôm nay` : 'Chưa có lượt điểm danh để tổng hợp'}</span></div>
-            <div className="attendance-donut" style={{ '--attendance-chart': attendanceChart }}><div><strong>{presentRate}%</strong><small>Có mặt</small></div></div>
-            <ul className="attendance-chart-legend">{attendanceBreakdown.map((entry) => <li key={entry.key}><i style={{ background: entry.color }} /><span>{entry.label}</span><b>{entry.count}</b></li>)}</ul>
+            <div className="attendance-chart-copy">
+              <p>PHÂN BỐ ĐIỂM DANH</p>
+              <h3>Tình hình điểm danh hôm nay</h3>
+              <span>{attendanceTotal ? `Tổng ${attendanceTotal} lượt điểm danh hôm nay` : 'Chưa có lượt điểm danh để tổng hợp'}</span>
+            </div>
+            <div className="attendance-donut" style={{ '--attendance-chart': attendanceChart }}>
+              <div><strong>{presentRate}%</strong><small>Có mặt</small></div>
+            </div>
+            <ul className="attendance-chart-legend">
+              {attendanceBreakdown.map((entry) => (
+                <li key={entry.key}><i style={{ background: entry.color }} /><span>{entry.label}</span><b>{entry.count}</b></li>
+              ))}
+            </ul>
           </section>
-          {attendance.length ? <><div className="table-wrap"><table className="data-table"><thead><tr><th>Học sinh</th><th>Trạng thái</th><th>Thời gian đến</th></tr></thead><tbody>{attendance.map((item, index) => <tr key={item._id || index}><td><span className="student-avatar">{item.studentName?.charAt(0) || 'H'}</span>{item.studentName || 'Học sinh'}</td><td><span className={`status-badge ${item.status || 'present'}`}><i />{statusLabel[item.status] || 'Có mặt'}</span></td><td>{item.checkInTime ? new Date(item.checkInTime).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—'}</td></tr>)}</tbody></table></div>{totalAttendancePages > 1 && <nav className="dashboard-pagination" aria-label="Phân trang điểm danh gần đây"><span>Trang {attendancePage}/{totalAttendancePages} · {attendanceTotal} lượt</span><div><button type="button" onClick={() => setAttendancePage((page) => Math.max(1, page - 1))} disabled={attendancePage === 1}>Trước</button><button type="button" onClick={() => setAttendancePage((page) => Math.min(totalAttendancePages, page + 1))} disabled={attendancePage === totalAttendancePages}>Sau <Icon name="chevronRight" size={14} /></button></div></nav>}</> : <div className="empty-state"><span className="empty-icon"><Icon name="attendance" /></span><strong>Chưa có dữ liệu điểm danh</strong><p>Bắt đầu điểm danh để theo dõi tình hình đến lớp hôm nay.</p><Link to="/attendance" className="button button-secondary">Chọn lớp điểm danh</Link></div>}
+          {attendance.length ? (
+            <>
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead><tr><th>Học sinh</th><th>Trạng thái</th><th>Thời gian đến</th></tr></thead>
+                  <tbody>
+                    {attendance.map((item, index) => (
+                      <tr key={item._id || index}>
+                        <td><span className="student-avatar">{item.studentName?.charAt(0) || 'H'}</span>{item.studentName || 'Học sinh'}</td>
+                        <td><span className={`status-badge ${item.status || 'present'}`}><i />{statusLabel[item.status] || 'Có mặt'}</span></td>
+                        <td>{item.checkInTime ? new Date(item.checkInTime).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {totalAttendancePages > 1 && (
+                <nav className="dashboard-pagination" aria-label="Phân trang điểm danh gần đây">
+                  <span>Trang {attendancePage}/{totalAttendancePages} · {attendanceTotal} lượt</span>
+                  <div>
+                    <button type="button" onClick={() => setAttendancePage((page) => Math.max(1, page - 1))} disabled={attendancePage === 1}>Trước</button>
+                    <button type="button" onClick={() => setAttendancePage((page) => Math.min(totalAttendancePages, page + 1))} disabled={attendancePage === totalAttendancePages}>Sau <Icon name="chevronRight" size={14} /></button>
+                  </div>
+                </nav>
+              )}
+            </>
+          ) : (
+            <div className="empty-state">
+              <span className="empty-icon"><Icon name="attendance" /></span>
+              <strong>Chưa có dữ liệu điểm danh</strong>
+              <p>Bắt đầu điểm danh để theo dõi tình hình đến lớp hôm nay.</p>
+              <Link to="/attendance" className="button button-secondary">Chọn lớp điểm danh</Link>
+            </div>
+          )}
         </article>
-        <aside className="quick-panel"><p className="card-kicker">TRUY CẬP NHANH</p><h2>Công việc hôm nay</h2><Link to="/attendance" className="quick-action"><span className="quick-icon blue"><Icon name="attendance" /></span><span><strong>Điểm danh lớp</strong><small>Ghi nhận có mặt, vắng, đi muộn</small></span><Icon name="chevronRight" size={18} /></Link>{isTeacher ? <><Link to="/attendance/leave-requests" className="quick-action"><span className="quick-icon orange"><Icon name="attendance" /></span><span><strong>Đơn nghỉ lớp tôi</strong><small>Theo dõi đơn phụ huynh đã gửi</small></span><Icon name="chevronRight" size={18} /></Link><Link to="/nutrition" className="quick-action"><span className="quick-icon violet"><Icon name="utensils" /></span><span><strong>Thực đơn & lưu ý ăn uống</strong><small>Xem thực đơn và cảnh báo của lớp</small></span><Icon name="chevronRight" size={18} /></Link><Link to="/messages" className="quick-action"><span className="quick-icon blue"><Icon name="chat" /></span><span><strong>Trao đổi phụ huynh</strong><small>Tin nhắn theo từng học sinh</small></span><Icon name="chevronRight" size={18} /></Link></> : <><Link to="/students" className="quick-action"><span className="quick-icon orange"><Icon name="students" /></span><span><strong>Hồ sơ học sinh</strong><small>Danh sách và tiếp nhận học sinh</small></span><Icon name="chevronRight" size={18} /></Link><Link to="/pickups" className="quick-action"><span className="quick-icon green"><Icon name="users" /></span><span><strong>Sổ đón trả trẻ</strong><small>Quét mã QR và xác thực người đón</small></span><Icon name="chevronRight" size={18} /></Link><Link to="/nutrition" className="quick-action"><span className="quick-icon amber"><Icon name="utensils" /></span><span><strong>Bếp ăn & Dinh dưỡng</strong><small>Thực đơn tuần và an toàn thực phẩm</small></span><Icon name="chevronRight" size={18} /></Link><Link to="/reports" className="quick-action"><span className="quick-icon violet"><Icon name="chart" /></span><span><strong>Xem báo cáo</strong><small>Chuyên cần, dinh dưỡng & vận hành</small></span><Icon name="chevronRight" size={18} /></Link></>}</aside>
+
+        <aside className="quick-panel">
+          <p className="card-kicker">TRUY CẬP NHANH</p>
+          <h2>Công việc hôm nay</h2>
+          <Link to="/attendance" className="quick-action">
+            <span className="quick-icon blue"><Icon name="attendance" /></span>
+            <span><strong>Điểm danh & Trả trẻ</strong><small>Ghi nhận có mặt sáng & trả trẻ chiều</small></span>
+            <Icon name="chevronRight" size={18} />
+          </Link>
+          {isTeacher ? (
+            <>
+              <Link to="/attendance/leave-requests" className="quick-action">
+                <span className="quick-icon orange"><Icon name="attendance" /></span>
+                <span><strong>Đơn nghỉ lớp tôi</strong><small>Theo dõi đơn phụ huynh đã gửi</small></span>
+                <Icon name="chevronRight" size={18} />
+              </Link>
+              <Link to="/nutrition" className="quick-action">
+                <span className="quick-icon violet"><Icon name="utensils" /></span>
+                <span><strong>Thực đơn & lưu ý ăn uống</strong><small>Xem thực đơn và cảnh báo của lớp</small></span>
+                <Icon name="chevronRight" size={18} />
+              </Link>
+              <Link to="/messages" className="quick-action">
+                <span className="quick-icon blue"><Icon name="chat" /></span>
+                <span><strong>Trao đổi phụ huynh</strong><small>Tin nhắn theo từng học sinh</small></span>
+                <Icon name="chevronRight" size={18} />
+              </Link>
+            </>
+          ) : (
+            <>
+              <Link to="/students" className="quick-action">
+                <span className="quick-icon orange"><Icon name="students" /></span>
+                <span><strong>Hồ sơ học sinh</strong><small>Danh sách và nhập Excel tự tạo TK PH</small></span>
+                <Icon name="chevronRight" size={18} />
+              </Link>
+              <Link to="/pickups" className="quick-action">
+                <span className="quick-icon green"><Icon name="users" /></span>
+                <span><strong>Sổ đón trả trẻ</strong><small>Trả trẻ 1 chạm tại lớp & xác thực OTP</small></span>
+                <Icon name="chevronRight" size={18} />
+              </Link>
+              <Link to="/nutrition" className="quick-action">
+                <span className="quick-icon amber"><Icon name="utensils" /></span>
+                <span><strong>Bếp ăn & Dinh dưỡng</strong><small>Thực đơn tuần và an toàn thực phẩm</small></span>
+                <Icon name="chevronRight" size={18} />
+              </Link>
+              <Link to="/reports" className="quick-action">
+                <span className="quick-icon violet"><Icon name="chart" /></span>
+                <span><strong>Xem báo cáo</strong><small>Chuyên cần, dinh dưỡng & vận hành</small></span>
+                <Icon name="chevronRight" size={18} />
+              </Link>
+            </>
+          )}
+        </aside>
       </section>
     </AppShell>
   );

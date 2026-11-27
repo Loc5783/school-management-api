@@ -8,6 +8,7 @@ import {
   updateSchoolAndAdmin,
   enterSchoolWorkspace
 } from '../api/multiSchool';
+import { getStoredSuperAdminUser, getStoredUser } from '../utils/storage';
 
 const emptyCreateForm = {
   code: '',
@@ -23,7 +24,7 @@ const emptyCreateForm = {
 
 export default function MultiSchoolManagement() {
   const navigate = useNavigate();
-  const superUser = JSON.parse(localStorage.getItem('superadmin_user') || localStorage.getItem('user') || '{}');
+  const superUser = getStoredSuperAdminUser() || getStoredUser();
 
   const [summary, setSummary] = useState({
     totalSchools: 0,
@@ -87,6 +88,23 @@ export default function MultiSchoolManagement() {
     navigate('/login');
   };
 
+  useEffect(() => {
+    if (!showCreateModal && !editingSchool) return undefined;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (showCreateModal && !creating) setShowCreateModal(false);
+        if (editingSchool && !savingEdit) setEditingSchool(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [showCreateModal, editingSchool, creating, savingEdit]);
+
   const handleCreateSchool = async (e) => {
     e.preventDefault();
     if (creating) return;
@@ -97,7 +115,10 @@ export default function MultiSchoolManagement() {
         .split(/[,;\n]/)
         .map((s) => s.trim())
         .filter(Boolean)
-        .map((cName, idx) => ({ code: idx === 0 ? 'CS-CHINH' : `PH-${idx + 1}`, name: cName }));
+        .map((cName, idx) => ({
+          ...(cName.toLowerCase() === 'cơ sở chính' ? { code: 'CS-CHINH' } : { code: `PH-${idx + 1}` }),
+          name: cName
+        }));
 
       const res = await createSchoolWithAdmin({
         code: createForm.code.trim().toUpperCase(),

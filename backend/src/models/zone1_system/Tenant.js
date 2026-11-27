@@ -50,6 +50,8 @@ const TenantSchema = new mongoose.Schema({
     code: { type: String, trim: true, uppercase: true },
     name: { type: String, trim: true, required: true },
     address: { type: String, trim: true, default: '' },
+    phone: { type: String, trim: true, default: '' },
+    managerName: { type: String, trim: true, default: '' },
     isActive: { type: Boolean, default: true }
   }],
   config: {

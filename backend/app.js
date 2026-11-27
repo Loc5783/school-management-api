@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { attachFrontendStatic, isSameHostOrigin } = require('./src/utils/staticFrontendMiddleware');
+const { attachSwaggerDocs } = require('./src/docs/swaggerSetup');
 const { applySecurityMiddleware, globalErrorHandler } = require('./src/middlewares/securityAndErrorMiddleware');
 
 const authRoutes = require('./src/routes/authRoutes');
@@ -94,6 +95,9 @@ const createApp = () => {
     app.get('/api/health', (req, res) => {
         res.status(200).json({ status: 'OK', message: 'Server đang chạy!' });
     });
+
+    // Tài liệu kỹ thuật tương tác Swagger UI (/api-docs, /api/docs) & Từ điển Database (/api/docs/database)
+    attachSwaggerDocs(app);
 
     // Đảm bảo đường dẫn /api/* không tồn tại luôn trả JSON 404 thay vì rơi vào SPA Fallback
     app.use('/api', (req, res) => {

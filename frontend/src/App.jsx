@@ -41,20 +41,21 @@ import StaffSettings from './pages/StaffSettings';
 import MyStaffing from './pages/MyStaffing';
 import InternalNotices from './pages/InternalNotices';
 import TeacherLeavePage from './pages/TeacherLeavePage';
+import { getStoredSuperAdminUser, getStoredUser } from './utils/storage';
 
 function ProtectedRoute({ children }) {
   return localStorage.getItem('token') ? children : <Navigate to="/login" replace />;
 }
 
 function ParentRoute({ children }) {
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const user = getStoredUser();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
   return user.role === 'parent' ? children : <Navigate to="/dashboard" replace />;
 }
 
 function SuperAdminRoute({ children }) {
   const superToken = localStorage.getItem('superadmin_token') || localStorage.getItem('token');
-  const user = JSON.parse(localStorage.getItem('superadmin_user') || localStorage.getItem('user') || '{}');
+  const user = getStoredSuperAdminUser() || getStoredUser();
   if (!superToken) return <Navigate to="/login" replace />;
   if (user.role !== 'superadmin' && !localStorage.getItem('superadmin_token')) {
     return <Navigate to="/dashboard" replace />;
@@ -63,7 +64,7 @@ function SuperAdminRoute({ children }) {
 }
 
 function DashboardRoute({ children }) {
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const user = getStoredUser();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
   if (user.role === 'superadmin') return <Navigate to="/multi-school" replace />;
   if (user.role === 'guard') return <Navigate to="/guard" replace />;
@@ -72,7 +73,7 @@ function DashboardRoute({ children }) {
 }
 
 function StudentManagementRoute({ children }) {
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const user = getStoredUser();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
   // Hồ sơ của con được hiển thị qua ParentPortal; không cho phụ huynh hoặc bảo vệ dùng
   // giao diện quản trị/danh sách học sinh dù họ tự nhập URL.
@@ -82,13 +83,13 @@ function StudentManagementRoute({ children }) {
 }
 
 function ChatRoute({ children }) {
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const user = getStoredUser();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
   return ['parent', 'teacher'].includes(user.role) ? children : <Navigate to="/dashboard" replace />;
 }
 
 function PickupRoute({ children }) {
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const user = getStoredUser();
   const location = useLocation();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
   if (user.role === 'guard') return <Navigate to="/guard" replace />;
@@ -108,32 +109,32 @@ function PickupRoute({ children }) {
 }
 
 function StaffRoute({ children }) {
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const user = getStoredUser();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
   return ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'].includes(user.role) ? children : <Navigate to="/dashboard" replace />;
 }
 
 function ClassroomRoute({ children }) {
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const user = getStoredUser();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
   return ['admin', 'principal'].includes(user.role) ? children : <Navigate to="/dashboard" replace />;
 }
 
 function TeacherRoute({ children }) {
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const user = getStoredUser();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
   return user.role === 'teacher' ? children : <Navigate to="/dashboard" replace />;
 }
 
 function RoleRoute({ roles, children }) {
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const user = getStoredUser();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
   if (user.role === 'guard' && !roles.includes('guard')) return <Navigate to="/guard" replace />;
   return roles.includes(user.role) ? children : <Navigate to="/dashboard" replace />;
 }
 
 function ProfileRequestsRoute({ children }) {
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const user = getStoredUser();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
   if (user.role === 'admin') return <Navigate to="/accounts?tab=profile-requests" replace />;
   if (user.role === 'principal') return children;
@@ -141,7 +142,7 @@ function ProfileRequestsRoute({ children }) {
 }
 
 function ParentFeedbackRoute({ children }) {
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const user = getStoredUser();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
   if (user.role === 'admin') return <Navigate to="/staff-settings?tab=parent-feedback" replace />;
   if (user.role === 'principal') return children;

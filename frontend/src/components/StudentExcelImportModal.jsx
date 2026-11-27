@@ -296,6 +296,15 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
                 Đã thêm thành công <strong>{successResult.data?.length || 0}</strong> học sinh{' '}
                 {isMultiMode ? 'vào các lớp tương ứng theo file tổng.' : <>vào lớp <strong>{currentClass?.name || 'đã chọn'}</strong>.</>}
               </p>
+              {successResult.parentSyncStats && (successResult.parentSyncStats.createdCount > 0 || successResult.parentSyncStats.linkedCount > 0) && (
+                <div className="timekeeping-notice success" style={{ marginBottom: '12px', textAlign: 'left' }}>
+                  <Icon name="check" size={16} />
+                  <span>
+                    Đã tự động cấp mới <strong>{successResult.parentSyncStats.createdCount}</strong> tài khoản Phụ huynh (Tên ĐN = SĐT, mật khẩu mặc định <strong>123456</strong>)
+                    {successResult.parentSyncStats.linkedCount > 0 ? ` và liên kết chung ${successResult.parentSyncStats.linkedCount} tài khoản anh/chị/em cùng SĐT.` : '.'}
+                  </span>
+                </div>
+              )}
               <div className="success-students-list" style={{ width: '100%' }}>
                 <div className="table-wrap">
                   <table className="data-table">
@@ -402,7 +411,7 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
                       {downloading ? 'Đang tải mẫu...' : 'Tải file Excel mẫu (.xlsx)'}
                     </button>
                     <small className="field-hint">
-                      Có sẵn cột Lớp (dropdown lớp của trường), Mã ID, Mã định danh và thông tin 2 Phụ huynh.
+                      Có sẵn cột Lớp (dropdown lớp của trường), Mã ID, Mã định danh và 2 Phụ huynh (hệ thống tự tạo tài khoản Phụ huynh theo SĐT với mật khẩu mặc định 123456).
                     </small>
                   </div>
                 </div>

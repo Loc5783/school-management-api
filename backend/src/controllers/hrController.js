@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
 const Employee = require('../models/zone2_hr/Employee');
 const StaffHandover = require('../models/zone2_hr/StaffHandover');
 const Department = require('../models/zone2_hr/Department');
@@ -17,6 +18,7 @@ const { getStaffingSnapshot } = require('../services/staffingService');
 const { REVIEW_MONTHLY_SALARY_BELOW, isUnverifiedLowMonthlySalary } = require('../services/salaryPolicy');
 const { lockOpenPeriod } = require('../services/accountingPeriodService');
 const { assertPersonCodeAvailable, generateNextPersonCode, normalizePersonCode } = require('../services/personCodeService');
+const { runSafeTransaction } = require('../utils/safeTransaction');
 const {
     buildTenantFilter,
     assertTenantContext,
@@ -72,16 +74,8 @@ const payrollRoleFromPosition = (position) => ({
     accountant: 'accountant', chef: 'chef', security: 'guard', hr: 'hr'
 }[position] || 'teacher');
 
-const runHrTransaction = async (operation) => {
-    const topology = await mongoose.connection.db.admin().command({ hello: 1 });
-    if (!topology.setName && topology.msg !== 'isdbgrid' && process.env.ALLOW_STANDALONE_MONGODB !== 'true') throw httpError('MongoDB phải chạy Replica Set để liên kết tài khoản và hồ sơ nhân sự an toàn', 503);
-    const session = await mongoose.startSession();
-    try {
-        let result;
-        await session.withTransaction(async () => { result = await operation(session); });
-        return result;
-    } finally { await session.endSession(); }
-};
+const runHrTransaction = async (operation) =>
+    runSafeTransaction(operation, 'MongoDB phải chạy Replica Set để liên kết tài khoản và hồ sơ nhân sự an toàn');
 
 const resolveDepartment = async (departmentId, session, tenantFilter = {}) => {
     if (!departmentId) return { departmentId: undefined, departmentName: '' };
@@ -353,10 +347,11 @@ const getEmployees = async (req, res) => {
             filter.departmentId = departmentId;
         }
         if (search) {
+            const escapedSearch = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             filter.$or = [
-                { fullName: { $regex: search, $options: 'i' } },
-                { employeeCode: { $regex: search, $options: 'i' } },
-                { phone: { $regex: search, $options: 'i' } }
+                { fullName: { $regex: escapedSearch, $options: 'i' } },
+                { employeeCode: { $regex: escapedSearch, $options: 'i' } },
+                { phone: { $regex: escapedSearch, $options: 'i' } }
             ];
         }
         const employees = await Employee.find(filter)
@@ -439,7 +434,70 @@ const createEmployee = async (req, res) => {
             if (!currentActor) {
                 throw httpError('Tài khoản thực hiện không còn quyền hoặc đã bị khóa/hạ quyền', 403);
             }
-            const linkedUser = await resolveStaffAccount(requestedUserId, null, session, tenantFilter);
+            let linkedUser = await resolveStaffAccount(requestedUserId, null, session, tenantFilter);
+
+            // Hỗ trợ luồng 1 bước: Tạo đồng thời Tài khoản đăng nhập & Hồ sơ Nhân sự ngay trong cùng 1 form
+            if (!linkedUser && req.body?.createAccount === true) {
+                const cleanUsername = String(req.body.accountUsername || '').trim();
+                const cleanPassword = String(req.body.accountPassword || '123456');
+                const requestedAccountRole = String(req.body.accountRole || data.payrollRole || 'teacher').trim();
+                const allowedAccountRoles = ['principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'];
+
+                if (!cleanUsername || cleanUsername.length < 3 || cleanUsername.length > 50 || /\s/.test(cleanUsername)) {
+                    throw httpError('Tên đăng nhập phải từ 3–50 ký tự và không chứa khoảng trắng', 422);
+                }
+                if (cleanPassword.length < 6) {
+                    throw httpError('Mật khẩu tài khoản phải có ít nhất 6 ký tự', 422);
+                }
+                if (!allowedAccountRoles.includes(requestedAccountRole)) {
+                    throw httpError('Vai trò tài khoản đăng nhập không hợp lệ', 422);
+                }
+                if (currentActor.role === 'hr' && requestedAccountRole === 'principal') {
+                    throw httpError('Nhân sự (HR) không có quyền tạo tài khoản Hiệu trưởng', 403);
+                }
+
+                const dupUser = await User.exists({ username: cleanUsername, ...tenantFilter }).session(session);
+                if (dupUser) {
+                    throw httpError(`Tên đăng nhập "@${cleanUsername}" đã tồn tại trong trường`, 409);
+                }
+
+                const passwordHash = await bcrypt.hash(cleanPassword, 10);
+                [linkedUser] = await User.create(
+                    [
+                        {
+                            tenantId: tenantContext.tenantId || null,
+                            username: cleanUsername,
+                            passwordHash,
+                            role: requestedAccountRole,
+                            permissions: [],
+                            profile: {
+                                fullName: String(data.fullName || cleanUsername).trim(),
+                                phone: String(data.phone || '').trim(),
+                                email: String(data.email || '').trim().toLowerCase()
+                            },
+                            status: 'active',
+                            authVersion: 0
+                        }
+                    ],
+                    { session }
+                );
+
+                await AuditLog.create(
+                    [
+                        {
+                            ...(tenantContext.tenantId ? { tenantId: tenantContext.tenantId } : {}),
+                            actorId: currentActor._id,
+                            actorUsername: currentActor.username,
+                            action: 'INTERNAL_ACCOUNT_CREATED',
+                            targetType: 'User',
+                            targetId: linkedUser._id,
+                            after: { username: linkedUser.username, role: linkedUser.role, status: 'active' }
+                        }
+                    ],
+                    { session }
+                );
+            }
+
             const rawCode = String(data.employeeCode || linkedUser?.employeeInfo?.employeeId || '').trim();
             data.employeeCode = rawCode
                 ? await assertPersonCodeAvailable({ code: rawCode, tenantId: tenantContext.tenantId || null, excludeUserId: linkedUser?._id || null, session })

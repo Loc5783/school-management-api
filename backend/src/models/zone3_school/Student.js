@@ -172,7 +172,7 @@ const StudentSchema = new mongoose.Schema({
             measuredAt: { type: Date, default: Date.now },
             weightKg: { type: Number, required: true, min: 1, max: 120 },
             heightCm: { type: Number, required: true, min: 30, max: 200 },
-            bmi: { type: Number, min: 5, max: 60 },
+            bmi: { type: Number, min: 1, max: 120 },
             nutritionStatus: { type: String, trim: true, maxlength: 80, default: 'Bình thường' },
             note: { type: String, trim: true, maxlength: 500, default: '' },
             recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

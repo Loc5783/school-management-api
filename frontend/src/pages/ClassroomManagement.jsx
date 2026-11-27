@@ -4,6 +4,8 @@ import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
 import { archiveClassroom, assignHomeroomTeacher, createClassroom, listClassrooms, updateClassroom } from '../api/classrooms';
 import { getStaffAccounts } from '../api/hr';
+import { getSchoolCampuses } from '../api/multiSchool';
+import { getStoredUser } from '../utils/storage';
 
 const DEFAULT_CAMPUS = 'Cơ sở chính';
 
@@ -33,9 +35,10 @@ const blank = {
 };
 
 export default function ClassroomManagement() {
-  const role = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const role = getStoredUser().role;
   const canManage = role === 'admin';
   const [items, setItems] = useState([]);
+  const [declaredCampuses, setDeclaredCampuses] = useState([]);
   const [form, setForm] = useState(blank);
   const [editingId, setEditingId] = useState(null);
   const [showForm, setShowForm] = useState(false);
@@ -53,11 +56,13 @@ export default function ClassroomManagement() {
     setLoading(true);
     setError('');
     try {
-      const [response, staffResponse] = await Promise.all([
+      const [response, staffResponse, campusResponse] = await Promise.all([
         listClassrooms(showArchived),
-        canManage ? getStaffAccounts() : Promise.resolve({ data: { data: [] } })
+        canManage ? getStaffAccounts() : Promise.resolve({ data: { data: [] } }),
+        getSchoolCampuses().catch(() => ({ data: { data: { campuses: [] } } }))
       ]);
       setItems(response.data.data || []);
+      setDeclaredCampuses(campusResponse.data?.data?.campuses || []);
       setTeacherAccounts((staffResponse.data.data || []).filter((account) => account.role === 'teacher' && account.status === 'active'));
     } catch (err) {
       setError(err.response?.data?.message || 'Không thể tải danh sách lớp.');
@@ -70,11 +75,14 @@ export default function ClassroomManagement() {
 
   const campusOptions = useMemo(() => {
     const unique = new Set([DEFAULT_CAMPUS]);
+    declaredCampuses.forEach((c) => {
+      if (c?.name?.trim() && c.isActive !== false) unique.add(c.name.trim());
+    });
     items.forEach((item) => {
       if (item.campus?.trim()) unique.add(item.campus.trim());
     });
     return [...unique];
-  }, [items]);
+  }, [items, declaredCampuses]);
 
   const filteredItems = useMemo(() => {
     if (selectedCampus === 'all') return items;
@@ -136,6 +144,12 @@ export default function ClassroomManagement() {
 
   const submit = async (event) => {
     event.preventDefault();
+    if (saving) return;
+    const yrMatch = String(form.schoolYear || '').trim().match(/^(\d{4})-(\d{4})$/);
+    if (!yrMatch || Number(yrMatch[2]) !== Number(yrMatch[1]) + 1) {
+      setError('Năm học phải theo dạng YYYY-YYYY liên tiếp (ví dụ: 2026-2027).');
+      return;
+    }
     setSaving(true);
     setError('');
     try {
@@ -174,7 +188,7 @@ export default function ClassroomManagement() {
 
   const submitTeacherAssignment = async (event) => {
     event.preventDefault();
-    if (!teacherAssignment) return;
+    if (!teacherAssignment || assigningTeacher) return;
     setAssigningTeacher(true);
     setError('');
     try {

@@ -10,6 +10,7 @@ import {
   deleteCampus,
   updateCurrentSchoolInfo
 } from '../api/multiSchool';
+import { getStoredTenant, getStoredUser } from '../utils/storage';
 
 const emptyCampusForm = {
   code: '',
@@ -21,13 +22,14 @@ const emptyCampusForm = {
 };
 
 export default function SchoolCampusManagement() {
-  const userRole = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const userRole = getStoredUser().role;
   const isAdmin = userRole === 'admin';
 
   const [school, setSchool] = useState(null);
   const [campuses, setCampuses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState(null);
+  const [deletingCode, setDeletingCode] = useState('');
 
   const [showCampusModal, setShowCampusModal] = useState(false);
   const [editingCampus, setEditingCampus] = useState(null);
@@ -38,6 +40,7 @@ export default function SchoolCampusManagement() {
   const [showSchoolModal, setShowSchoolModal] = useState(false);
   const [schoolForm, setSchoolForm] = useState({ name: '', organizationCode: '', contactEmail: '' });
   const [savingSchool, setSavingSchool] = useState(false);
+  const [schoolError, setSchoolError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -105,18 +108,40 @@ export default function SchoolCampusManagement() {
     }
   };
 
+  useEffect(() => {
+    if (!showCampusModal && !showSchoolModal) return undefined;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (showCampusModal && !savingCampus) setShowCampusModal(false);
+        if (showSchoolModal && !savingSchool) setShowSchoolModal(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [showCampusModal, showSchoolModal, savingCampus, savingSchool]);
+
   const handleDeleteCampus = async (campus) => {
+    if (deletingCode) return;
     if (!window.confirm(`Xóa phân hiệu "${campus.name}" khỏi danh sách cơ sở của trường?`)) return;
+    setDeletingCode(campus.code);
     try {
       await deleteCampus(campus.code);
       await load();
       setNotice({ type: 'success', text: `Đã xóa phân hiệu "${campus.name}".` });
     } catch (err) {
       setNotice({ type: 'error', text: err.response?.data?.message || 'Không thể xóa phân hiệu này.' });
+    } finally {
+      setDeletingCode('');
     }
   };
 
   const openEditSchool = () => {
+    setSchoolError('');
     setSchoolForm({
       name: school?.name || '',
       organizationCode: school?.organizationCode || '',
@@ -129,20 +154,22 @@ export default function SchoolCampusManagement() {
     e.preventDefault();
     if (savingSchool) return;
     setSavingSchool(true);
+    setSchoolError('');
     try {
       const res = await updateCurrentSchoolInfo(schoolForm);
       const updated = res.data?.data;
       if (updated) {
-        const storedTenant = JSON.parse(localStorage.getItem('tenant') || 'null');
+        const storedTenant = getStoredTenant();
         if (storedTenant) {
           localStorage.setItem('tenant', JSON.stringify({ ...storedTenant, name: updated.name }));
+          window.dispatchEvent(new Event('tenant-updated'));
         }
       }
       setShowSchoolModal(false);
       await load();
       setNotice({ type: 'success', text: 'Đã cập nhật thông tin định danh của trường.' });
     } catch (err) {
-      setNotice({ type: 'error', text: err.response?.data?.message || 'Không thể cập nhật thông tin trường.' });
+      setSchoolError(err.response?.data?.message || 'Không thể cập nhật thông tin trường.');
     } finally {
       setSavingSchool(false);
     }
@@ -283,8 +310,13 @@ export default function SchoolCampusManagement() {
                                 Sửa
                               </button>
                               {c.code !== 'CS-CHINH' && (
-                                <button type="button" className="button button-danger" onClick={() => handleDeleteCampus(c)}>
-                                  Xóa
+                                <button
+                                  type="button"
+                                  className="button button-danger"
+                                  disabled={Boolean(deletingCode)}
+                                  onClick={() => handleDeleteCampus(c)}
+                                >
+                                  {deletingCode === c.code ? 'Đang xóa...' : 'Xóa'}
                                 </button>
                               )}
                             </>
@@ -401,6 +433,7 @@ export default function SchoolCampusManagement() {
                   Đóng
                 </button>
               </div>
+              {schoolError && <div className="form-error" role="alert">{schoolError}</div>}
               <div className="student-form-grid">
                 <label className="form-wide">
                   Tên trường hiển thị *

@@ -44,14 +44,12 @@ PickupRecordSchema.index({ requesterId: 1, pickupDate: -1 });
 // Multi-tenant compound unique index
 PickupRecordSchema.index({ tenantId: 1, pickupCode: 1 }, {
   unique: true,
-  sparse: true,
-  partialFilterExpression: { tenantId: { $type: 'objectId' } }
+  partialFilterExpression: { tenantId: { $type: 'objectId' }, pickupCode: { $type: 'string' } }
 });
 // Legacy unique index
 PickupRecordSchema.index({ pickupCode: 1 }, {
   unique: true,
-  sparse: true,
-  partialFilterExpression: { tenantId: null }
+  partialFilterExpression: { tenantId: null, pickupCode: { $type: 'string' } }
 });
 
 PickupRecordSchema.index({ tenantId: 1, studentId: 1, pickupDate: 1, status: 1 });

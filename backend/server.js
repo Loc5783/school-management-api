@@ -59,6 +59,7 @@ const startServer = async () => {
   const httpServer = app.listen(PORT, HOST, () => {
     console.log(`🚀 Server (${useLegacyApp ? 'Legacy' : 'SaaS Multi-Tenant'}) đang chạy:`);
     console.log(`   ➜ Local  : http://localhost:${PORT}`);
+    console.log(`   ➜ Swagger: http://localhost:${PORT}/api-docs`);
     if (lanIp) {
       console.log(`   ➜ LAN    : http://${lanIp}:${PORT}`);
       console.log(`   ➜ Webhook: http://${lanIp}:${PORT}/api/attendance/webhook`);

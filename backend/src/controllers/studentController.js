@@ -10,6 +10,7 @@ const { buildTenantFilter, applyTenantFilter, assertTenantContext } = require('.
 const { canAccessClassroom, getTeacherClassroomIds, hasSchoolWideReadAccess } = require('../services/schoolDataAccessService');
 const { STUDENT_STATUSES, isClassroomCountedStatus, canTransitionStudentStatus, generateStudentCode, runStudentTransaction, serializeStudent } = require('../services/studentCoreService');
 const { assertPersonCodeAvailable } = require('../services/personCodeService');
+const { buildAuthorizedPickersFromParents, normalizeParentPhoneUsername, syncParentAccountsForStudents } = require('../services/parentAutoAccountService');
 const { isValidWorkDate, getWorkDate } = require('../utils/dateHelpers');
 
 const ADMIN_MUTABLE = ['studentCode', 'identityCode', 'healthInsuranceCode', 'bloodType', 'vaccinations', 'growthRecords', 'fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'notes', 'classroomId', 'schoolYear', 'parents', 'authorizedPickers', 'allergies', 'disease', 'emergencyContact', 'admissionDate'];
@@ -30,6 +31,13 @@ const assertTeacherAllowedFields = (body, creating = false) => {
 const actorName = (user) => user?.fullName || user?.profile?.fullName || user?.username || 'Hệ thống';
 const httpError = (message, statusCode) => Object.assign(new Error(message), { statusCode });
 const respondError = (res, err, fallback = 'Lỗi server') => {
+    if (err.name === 'ValidationError') {
+        const firstMsg = Object.values(err.errors || {})[0]?.message;
+        return res.status(422).json({ success: false, message: firstMsg || 'Dữ liệu hồ sơ học sinh không hợp lệ' });
+    }
+    if (err.name === 'CastError') {
+        return res.status(400).json({ success: false, message: 'Định dạng mã định danh hoặc dữ liệu đầu vào không hợp lệ' });
+    }
     const field = Object.keys(err.keyPattern || {})[0];
     const duplicateMessages = { studentCode: 'Mã học sinh đã tồn tại', attendanceCardId: 'Mã thẻ điểm danh đã tồn tại', faceProfileId: 'Mã hồ sơ khuôn mặt đã tồn tại' };
     return res.status(err.statusCode || (err.code === 11000 ? 409 : 500)).json({ success: false, message: err.code === 11000 ? (duplicateMessages[field] || 'Dữ liệu trùng lặp') : (err.message || fallback) });
@@ -62,7 +70,21 @@ const validatePayload = (data, creating = false) => {
     }
     for (const contact of [...(data.parents || []), data.emergencyContact || {}]) {
         if (contact.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.email)) throw httpError('Email không hợp lệ', 422);
-        if (contact.phone && !/^(0|\+84)\d{9,10}$/.test(String(contact.phone).replace(/[.\s-]/g, ''))) throw httpError('Số điện thoại không hợp lệ', 422);
+        if (contact.phone) {
+            const normalizedPhone = normalizeParentPhoneUsername(contact.phone) || String(contact.phone).replace(/[.\s()-]/g, '').trim();
+            if (!/^(0|\+84)\d{9,10}$/.test(normalizedPhone)) throw httpError('Số điện thoại không hợp lệ', 422);
+            contact.phone = normalizedPhone;
+        }
+    }
+    if (Array.isArray(data.parents)) {
+        for (const p of data.parents) {
+            if (!String(p?.fullName || '').trim() || !String(p?.phone || '').trim()) {
+                throw httpError('Thông tin phụ huynh cần có đầy đủ cả Họ tên và Số điện thoại', 422);
+            }
+            if (p.relationship && !['father', 'mother', 'guardian'].includes(p.relationship)) {
+                p.relationship = 'guardian';
+            }
+        }
     }
     if (data.authorizedPickers != null) {
         if (!Array.isArray(data.authorizedPickers) || data.authorizedPickers.length > 10) throw httpError('Danh sách người được phép đón phải có tối đa 10 người', 422);
@@ -128,6 +150,7 @@ const createStudent = async (req, res) => {
 
             const studentPayload = {
                 ...data,
+                authorizedPickers: buildAuthorizedPickersFromParents(data.parents, data.authorizedPickers),
                 fullName: data.fullName.trim(),
                 classroomId: classroom._id,
                 className: classroom.name,
@@ -141,6 +164,7 @@ const createStudent = async (req, res) => {
             };
             if (tenantId) studentPayload.tenantId = tenantId;
             const created = (await Student.create([studentPayload], { session }))[0];
+            await syncParentAccountsForStudents({ students: [created], tenantId: tenantId || null, session });
             if (isClassroomCountedStatus(status) && !await adjustHeadcount(classroom._id, 1, session)) throw httpError('Không thể cập nhật sĩ số lớp', 409);
             await audit(req, 'STUDENT_CREATED', created, {}, { studentCode: created.studentCode, status }, session);
             return created;
@@ -229,7 +253,13 @@ const updateStudent = async (req, res) => {
                     session
                 });
             }
+            if (Array.isArray(updates.parents) && updates.parents.length > 0 && !Object.hasOwn(updates, 'authorizedPickers')) {
+                updates.authorizedPickers = buildAuthorizedPickersFromParents(updates.parents, current.authorizedPickers || []);
+            }
             const updated = await Student.findOneAndUpdate({ _id: current._id, ...tenantFilter }, { $set: updates }, { returnDocument: 'after', runValidators: true, session });
+            if (Array.isArray(updates.parents) && updates.parents.length > 0) {
+                await syncParentAccountsForStudents({ students: [updated], tenantId, session });
+            }
             if (target && String(current.classroomId) !== String(target._id) && isClassroomCountedStatus(current.status)) {
                 if (!await adjustHeadcount(current.classroomId, -1, session) || !await adjustHeadcount(target._id, 1, session)) throw httpError('Không thể cập nhật sĩ số lớp', 409);
             }
@@ -358,6 +388,7 @@ const downloadExcelTemplate = async (req, res) => {
         res.end();
     } catch (err) {
         console.error('Lỗi tạo file Excel mẫu:', err);
+        if (res.headersSent) return;
         return res.status(500).json({ success: false, message: 'Không thể tạo file Excel mẫu' });
     }
 };
@@ -838,6 +869,7 @@ const confirmExcelImport = async (req, res) => {
                     birthPlace: data.birthPlace,
                     notes: data.notes,
                     parents: data.parents,
+                    authorizedPickers: buildAuthorizedPickersFromParents(data.parents, []),
                     emergencyContact: data.emergencyContact,
                     allergies: data.allergies,
                     disease: data.disease,
@@ -862,6 +894,11 @@ const confirmExcelImport = async (req, res) => {
             }
 
             const createdStudents = await Student.insertMany(docsToInsert, { session, ordered: true });
+            const parentSyncStats = await syncParentAccountsForStudents({
+                students: createdStudents,
+                tenantId: tenantId || null,
+                session
+            });
 
             // Ghi nhật ký kiểm toán hàng loạt (đính kèm sẵn actorName & actorRole để tránh truy vấn lặp User)
             const auditEntries = createdStudents.map((created) => ({
@@ -904,9 +941,14 @@ const confirmExcelImport = async (req, res) => {
                 ? `${incomingByClass.size} lớp (${[...incomingByClass.values()].map((c) => `${c.className}: +${c.total}`).join(', ')})`
                 : `lớp ${selectedClassroom.name}`;
 
+            const parentAccountNote = (parentSyncStats.createdCount > 0 || parentSyncStats.linkedCount > 0)
+                ? ` (Đã tự động cấp ${parentSyncStats.createdCount} tài khoản phụ huynh mới & liên kết ${parentSyncStats.linkedCount} tài khoản hiện có theo SĐT)`
+                : '';
+
             const responsePayload = {
                 success: true,
-                message: `Nhập thành công ${createdStudents.length} học sinh vào ${summaryLabel}.`,
+                message: `Nhập thành công ${createdStudents.length} học sinh vào ${summaryLabel}${parentAccountNote}.`,
+                parentSyncStats,
                 data: serialized
             };
 

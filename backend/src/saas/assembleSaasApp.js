@@ -3,6 +3,7 @@
 const express = require('express');
 const cors = require('cors');
 const { attachFrontendStatic, isSameHostOrigin } = require('../utils/staticFrontendMiddleware');
+const { attachSwaggerDocs } = require('../docs/swaggerSetup');
 const { applySecurityMiddleware, globalErrorHandler } = require('../middlewares/securityAndErrorMiddleware');
 const { tenantFeatureGate } = require('./middlewares/tenantFeatureGate');
 const schoolAuthRoutes = require('./routes/schoolAuthRoutes');
@@ -95,6 +96,9 @@ const assembleSaasApp = (options = {}) => {
   };
   app.get('/api/health', healthHandler);
   app.get('/api/v1/health', healthHandler);
+
+  // Tài liệu kỹ thuật tương tác Swagger UI (/api-docs, /api/docs) & Từ điển Database (/api/docs/database)
+  attachSwaggerDocs(app);
 
   // SaaS School Auth (both /api/v1/auth and /api/auth)
   app.use('/api/v1/auth', schoolAuthRoutes);

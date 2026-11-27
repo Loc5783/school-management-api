@@ -1,6 +1,8 @@
 const ExcelJS = require('exceljs');
 const crypto = require('crypto');
 const Student = require('../models/zone3_school/Student');
+const Employee = require('../models/zone2_hr/Employee');
+const User = require('../models/zone1_system/User');
 const { getTeacherClassroomIds } = require('../services/schoolDataAccessService');
 const { buildTenantFilter } = require('../services/tenantFilterService');
 
@@ -368,6 +370,20 @@ const pickString = (item, primaryKey, rawKey = '') => {
   return '';
 };
 
+const normalizeExcelPhone = (rawVal) => {
+  if (!rawVal) return '';
+  let cleaned = String(rawVal).replace(/[.\s()-]/g, '').trim();
+  if (cleaned.startsWith('+84')) {
+    cleaned = `0${cleaned.slice(3)}`;
+  } else if (cleaned.startsWith('84') && cleaned.length >= 11) {
+    cleaned = `0${cleaned.slice(2)}`;
+  } else if (/^[35789]\d{8}$/.test(cleaned)) {
+    // Khôi phục số 0 đầu bị Excel cắt mất khi gõ vào ô Number
+    cleaned = `0${cleaned}`;
+  }
+  return cleaned;
+};
+
 /**
  * Kiểm tra tính hợp lệ nghiêm ngặt của 1 dòng dữ liệu học sinh (dùng chung cho cả Preview & Confirm).
  */
@@ -388,14 +404,14 @@ const validateStudentRowStrict = (item, rowNumber, _now = new Date(), is1904 = f
   const allergiesText = pickString(item, 'allergiesText', 'rawAllergiesText');
   const diseaseText = pickString(item, 'diseaseText', 'rawDiseaseText');
 
-  // Tương thích ngược với các cột đơn contactName / contactPhone cũ
+  // Tương thích ngược với các cột đơn contactName / contactPhone cũ + tự khôi phục số 0 đầu bị mất trong Excel
   const parent1Name = pickString(item, 'parent1Name', 'rawParent1Name') || pickString(item, 'contactName', 'rawContactName');
-  const parent1Phone = (pickString(item, 'parent1Phone', 'rawParent1Phone') || pickString(item, 'contactPhone', 'rawContactPhone')).replace(/[.\s-]/g, '');
+  const parent1Phone = normalizeExcelPhone(pickString(item, 'parent1Phone', 'rawParent1Phone') || pickString(item, 'contactPhone', 'rawContactPhone'));
   const parent1Email = pickString(item, 'parent1Email', 'rawParent1Email').toLowerCase();
   const parent1RelRaw = pickString(item, 'parent1Relationship', 'rawParent1Relationship');
 
   const parent2Name = pickString(item, 'parent2Name', 'rawParent2Name');
-  const parent2Phone = pickString(item, 'parent2Phone', 'rawParent2Phone').replace(/[.\s-]/g, '');
+  const parent2Phone = normalizeExcelPhone(pickString(item, 'parent2Phone', 'rawParent2Phone'));
   const parent2Email = pickString(item, 'parent2Email', 'rawParent2Email').toLowerCase();
   const parent2RelRaw = pickString(item, 'parent2Relationship', 'rawParent2Relationship');
 
@@ -1020,20 +1036,40 @@ const parseAndValidateExcelBuffer = async (buffer, classroomId, user, options = 
   const validCandidates = validatedRows.filter((r) => r.isValid);
 
   if (validCandidates.length > 0) {
-    const fullNames = [...new Set(validCandidates.map((r) => r.fullName))];
+    const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const uniqueLowerNames = [...new Set(validCandidates.map((r) => r.fullName.toLowerCase()))];
     const manualCodes = [...new Set(validCandidates.map((r) => r.studentCode).filter(Boolean))];
-    const orConditions = [{ fullName: { $in: fullNames } }];
+    const nameRegexes = uniqueLowerNames.map((n) => new RegExp(`^${escapeRegex(n)}$`, 'i'));
+    const orConditions = [{ fullName: { $in: nameRegexes } }];
     if (manualCodes.length > 0) {
       orConditions.push({ studentCode: { $in: manualCodes } });
     }
 
-    const existingStudents = await Student.find({
-      ...tenantFilter,
-      $or: orConditions
-    }).select('fullName birthDate gender classroomId className studentCode status').lean();
+    const [existingStudents, conflictingEmployees, conflictingUsers] = await Promise.all([
+      Student.find({
+        ...tenantFilter,
+        $or: orConditions
+      }).select('fullName birthDate gender classroomId className studentCode status').lean(),
+      manualCodes.length > 0
+        ? Employee.find({ ...tenantFilter, employeeCode: { $in: manualCodes } }).select('employeeCode fullName').lean()
+        : Promise.resolve([]),
+      manualCodes.length > 0
+        ? User.find({ ...tenantFilter, 'employeeInfo.employeeId': { $in: manualCodes } }).select('employeeInfo.employeeId username').lean()
+        : Promise.resolve([])
+    ]);
+
+    const staffUsedCodes = new Set([
+      ...conflictingEmployees.map((e) => String(e.employeeCode || '').toUpperCase()),
+      ...conflictingUsers.map((u) => String(u.employeeInfo?.employeeId || '').toUpperCase())
+    ]);
 
     for (const row of validCandidates) {
       if (row.studentCode) {
+        if (staffUsedCodes.has(row.studentCode)) {
+          row.isValid = false;
+          row.errors.push(`Mã ID "${row.studentCode}" đã được cấp cho nhân sự trong trường. Vui lòng chọn mã khác hoặc để trống tự sinh`);
+          continue;
+        }
         const codeConflict = existingStudents.find((s) => String(s.studentCode || '').toUpperCase() === row.studentCode);
         if (codeConflict) {
           row.isValid = false;

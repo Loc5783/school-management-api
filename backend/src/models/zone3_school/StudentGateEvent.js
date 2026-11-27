@@ -24,14 +24,12 @@ StudentGateEventSchema.index({ gateDate: 1, occurredAt: -1 });
 // Multi-tenant clientEventId unique index
 StudentGateEventSchema.index({ tenantId: 1, clientEventId: 1 }, {
   unique: true,
-  sparse: true,
-  partialFilterExpression: { tenantId: { $type: 'objectId' } }
+  partialFilterExpression: { tenantId: { $type: 'objectId' }, clientEventId: { $type: 'string' } }
 });
 // Legacy unique index
 StudentGateEventSchema.index({ clientEventId: 1 }, {
   unique: true,
-  sparse: true,
-  partialFilterExpression: { tenantId: null }
+  partialFilterExpression: { tenantId: null, clientEventId: { $type: 'string' } }
 });
 
 StudentGateEventSchema.index({ tenantId: 1, studentId: 1, gateDate: 1, direction: 1 });

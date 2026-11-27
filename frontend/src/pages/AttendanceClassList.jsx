@@ -1,20 +1,53 @@
 import { useEffect, useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import api from '../api/axiosConfig';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
+import { getStoredUser } from '../utils/storage';
 
 export default function AttendanceClassList() {
   const [classrooms, setClassrooms] = useState([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
   const location = useLocation();
-  const role = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const navigate = useNavigate();
+  const role = getStoredUser().role;
 
   useEffect(() => {
-    api.get('/classrooms').then((res) => setClassrooms(res.data.data || [])).catch(console.error).finally(() => setLoading(false));
-  }, []);
-  const visibleClasses = classrooms.filter((item) => `${item.name} ${item.fullName || ''}`.toLowerCase().includes(query.toLowerCase()));
+    let active = true;
+    const searchParams = new URLSearchParams(location.search);
+    const forceShowList = searchParams.get('list') === '1';
+
+    api.get('/classrooms')
+      .then((res) => {
+        if (!active) return;
+        const list = res.data.data || [];
+        // Nếu Giáo viên chủ nhiệm chỉ phụ trách đúng 1 lớp (và không bấm nút "Danh sách lớp"), tự mở thẳng lớp đó
+        if (role === 'teacher' && list.length === 1 && list[0]?._id && !forceShowList) {
+          navigate(`/attendance/class/${list[0]._id}${location.search}`, { replace: true });
+          return;
+        }
+        setClassrooms(list);
+      })
+      .catch(console.error)
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [role, navigate, location.search]);
+
+  const cleanClassSearch = (() => {
+    const sp = new URLSearchParams(location.search);
+    sp.delete('list');
+    const qs = sp.toString();
+    return qs ? `?${qs}` : '';
+  })();
+
+  const visibleClasses = classrooms.filter((item) =>
+    `${item.name} ${item.fullName || ''}`.toLowerCase().includes(query.toLowerCase())
+  );
 
   return (
     <AppShell title="Điểm danh" subtitle="Ghi nhận theo lớp, theo dõi lịch sử và báo cáo vắng mặt.">
@@ -46,7 +79,7 @@ export default function AttendanceClassList() {
         ) : visibleClasses.length ? (
           <div className="class-grid">
             {visibleClasses.map((cls, index) => (
-              <Link key={cls._id} to={`/attendance/class/${cls._id}${location.search}`} className="class-card">
+              <Link key={cls._id} to={`/attendance/class/${cls._id}${cleanClassSearch}`} className="class-card">
                 <span className={`class-symbol symbol-${index % 4}`}>{cls.name?.charAt(0) || 'L'}</span>
                 <div className="class-info">
                   <h3>{cls.name}</h3>

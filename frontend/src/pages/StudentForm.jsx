@@ -85,11 +85,19 @@ export default function StudentForm() {
   const navigate = useNavigate();
   const [form, setForm] = useState(empty);
   const [classes, setClasses] = useState([]);
+  const [loadingInitial, setLoadingInitial] = useState(Boolean(id));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [showExcelModal, setShowExcelModal] = useState(false);
+  const [excelImported, setExcelImported] = useState(false);
   const editing = Boolean(id);
-  const role = JSON.parse(localStorage.getItem("user") || "{}").role;
+  const role = (() => {
+    try {
+      return JSON.parse(localStorage.getItem("user") || "{}")?.role || "";
+    } catch {
+      return "";
+    }
+  })();
   const manager = ["admin", "principal"].includes(role);
 
   useEffect(() => {
@@ -139,7 +147,8 @@ export default function StudentForm() {
           emergencyPhone: data.emergencyContact?.phone || p1.phone || "",
         }));
       })
-      .catch(() => setError("Không thể tải dữ liệu biểu mẫu."));
+      .catch(() => setError("Không thể tải dữ liệu biểu mẫu."))
+      .finally(() => setLoadingInitial(false));
   }, [id, editing]);
 
   const set = (key, value) => setForm((old) => ({ ...old, [key]: value }));
@@ -152,6 +161,22 @@ export default function StudentForm() {
     }));
   const submit = async (event) => {
     event.preventDefault();
+    if (saving || loadingInitial) return;
+
+    // Ngăn chặn mất dữ liệu phụ huynh âm thầm nếu người dùng chỉ điền Tên mà quên SĐT (hoặc ngược lại)
+    if (manager || !editing) {
+      const p1HasAny = Boolean(form.parent1Name.trim() || form.parent1Phone.trim() || form.parent1Email.trim());
+      if (p1HasAny && (!form.parent1Name.trim() || !form.parent1Phone.trim())) {
+        setError("Phụ huynh 1: Vui lòng nhập đầy đủ cả Họ tên và Số điện thoại (hoặc để trống cả hai).");
+        return;
+      }
+      const p2HasAny = Boolean(form.parent2Name.trim() || form.parent2Phone.trim() || form.parent2Email.trim());
+      if (p2HasAny && (!form.parent2Name.trim() || !form.parent2Phone.trim())) {
+        setError("Phụ huynh 2: Vui lòng nhập đầy đủ cả Họ tên và Số điện thoại (hoặc để trống cả hai).");
+        return;
+      }
+    }
+
     setSaving(true);
     setError("");
     try {
@@ -578,20 +603,26 @@ export default function StudentForm() {
           >
             Hủy
           </button>
-          <button className="button button-primary" disabled={saving}>
-            {saving ? "Đang lưu..." : "Lưu hồ sơ"}
+          <button className="button button-primary" disabled={saving || loadingInitial}>
+            {loadingInitial ? "Đang tải hồ sơ..." : saving ? "Đang lưu..." : "Lưu hồ sơ"}
           </button>
         </div>
       </form>
       {showExcelModal && (
         <StudentExcelImportModal
           isOpen={showExcelModal}
-          onClose={() => setShowExcelModal(false)}
+          onClose={() => {
+            setShowExcelModal(false);
+            if (excelImported) {
+              setExcelImported(false);
+              navigate("/students");
+            }
+          }}
           defaultClassroomId={form.classroomId}
           classrooms={classes}
-          onSuccess={(result) => {
-            setShowExcelModal(false);
-            navigate(`/students?classroomId=${result.classroom?._id || form.classroomId || ''}`);
+          onSuccess={() => {
+            // Giữ modal mở để người dùng đọc kết quả nhập + thống kê tài khoản Phụ huynh tự tạo
+            setExcelImported(true);
           }}
         />
       )}

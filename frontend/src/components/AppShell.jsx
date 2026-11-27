@@ -577,6 +577,13 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
       }
     };
     fetchUser();
+    const syncStoredTenant = () => {
+      setTenant(readStoredJson('tenant'));
+    };
+    window.addEventListener('tenant-updated', syncStoredTenant);
+    return () => {
+      window.removeEventListener('tenant-updated', syncStoredTenant);
+    };
   }, []);
 
   useEffect(() => {

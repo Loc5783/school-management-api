@@ -824,5 +824,479 @@ describe('QA & Security Evaluation Fixes — Full Replica Set Verification (phas
     expect(overviewRes.status).toBe(200);
     expect(overviewRes.body.data.summary.totalSchools).toBeGreaterThanOrEqual(3);
   });
+
+  test('10. Real-World Workflows Phase 3: Tạo nhân sự 1 bước, Tự cấp TK Phụ huynh gom anh chị em, Trả trẻ 1 chạm tại lớp & Khấu trừ tiền ăn tùy chỉnh', async () => {
+    const Notification = require('../../src/models/zone1_system/Notification');
+    const PickupRecord = require('../../src/models/zone3_school/PickupRecord');
+    const StudentGateEvent = require('../../src/models/zone3_school/StudentGateEvent');
+    await Promise.all([PickupRecord.syncIndexes(), StudentGateEvent.syncIndexes(), Notification.syncIndexes()]);
+
+    // 10.1 Tạo lớp mới + Tạo Giáo viên & Cấp Tài khoản đăng nhập trong 1 bước duy nhất
+    const classCreateRes = await request(app)
+      .post('/api/classrooms')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({
+        name: 'LA-THUCTE-10',
+        fullName: 'Lớp Lá Thực Tế 10',
+        ageGroup: '5-6',
+        schoolYear: '2026-2027',
+        maxSize: 25
+      });
+    expect(classCreateRes.status).toBe(201);
+    const realClassId = classCreateRes.body.data._id;
+
+    const createTeacherOneStep = await request(app)
+      .post('/api/hr/employees')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({
+        createAccount: true,
+        accountUsername: 'gv.thucte10',
+        accountPassword: '123456',
+        accountRole: 'teacher',
+        fullName: 'Cô Giáo Thực Tế 10',
+        phone: '0977888999',
+        email: 'gv.thucte10@hoanang.edu.vn',
+        position: 'teacher',
+        payrollRole: 'teacher',
+        salaryConfig: { baseSalary: 9500000, standardWorkDays: 26 }
+      });
+    expect(createTeacherOneStep.status).toBe(201);
+    expect(createTeacherOneStep.body.data.userId).toBeTruthy();
+
+    const teacherLoginRes = await request(app)
+      .post('/api/auth/login')
+      .send({ schoolCode: 'HOANANG-A', username: 'gv.thucte10', password: '123456' });
+    expect(teacherLoginRes.status).toBe(200);
+    const tokenTeacher10 = teacherLoginRes.body.token;
+    const teacherUserId = teacherLoginRes.body.user._id || teacherLoginRes.body.user.id;
+
+    await Classroom.findByIdAndUpdate(realClassId, { homeroomTeacherId: teacherUserId });
+
+    // 10.2 Thêm 2 anh chị em ruột chung SĐT Bố & Mẹ -> Tự cấp TK Phụ huynh cho cả Bố & Mẹ + Gom chung 2 con + Tự điền authorizedPickers
+    const sharedParents = [
+      { fullName: 'Nguyễn Văn Hùng', phone: '0911222333', email: 'hung.bo@gmail.com', relationship: 'father', isEmergencyContact: true },
+      { fullName: 'Lê Thị Mai', phone: '0944555666', email: 'mai.me@gmail.com', relationship: 'mother', isEmergencyContact: false }
+    ];
+
+    const sib1Res = await request(app)
+      .post('/api/students')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({
+        fullName: 'Bé Nguyễn An Nhiên',
+        birthDate: '2021-04-10',
+        gender: 'female',
+        classroomId: realClassId,
+        parents: sharedParents
+      });
+    expect(sib1Res.status).toBe(201);
+    const sib1 = sib1Res.body.data;
+    expect(sib1.authorizedPickers.length).toBeGreaterThanOrEqual(2);
+
+    const sib2Res = await request(app)
+      .post('/api/students')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({
+        fullName: 'Bé Nguyễn Bảo Khang',
+        birthDate: '2021-11-20',
+        gender: 'male',
+        classroomId: realClassId,
+        parents: sharedParents
+      });
+    expect(sib2Res.status).toBe(201);
+    const sib2 = sib2Res.body.data;
+
+    const dadLogin = await request(app)
+      .post('/api/auth/login')
+      .send({ schoolCode: 'HOANANG-A', username: '0911222333', password: '123456' });
+    expect(dadLogin.status).toBe(200);
+    expect(dadLogin.body.user.role).toBe('parent');
+
+    const momLogin = await request(app)
+      .post('/api/auth/login')
+      .send({ schoolCode: 'HOANANG-A', username: '0944555666', password: '123456' });
+    expect(momLogin.status).toBe(200);
+    expect(momLogin.body.user.role).toBe('parent');
+
+    const momChildrenRes = await request(app)
+      .get('/api/students')
+      .set('Authorization', `Bearer ${momLogin.body.token}`);
+    expect(momChildrenRes.status).toBe(200);
+    expect(momChildrenRes.body.data.map((s) => s.fullName).sort()).toEqual([
+      'Bé Nguyễn An Nhiên',
+      'Bé Nguyễn Bảo Khang'
+    ]);
+
+    // 10.3 Cô giáo điểm danh sáng & Trả trẻ 1 chạm buổi chiều ngay tại lớp (không cần PH đặt lịch trước)
+    const todayStr = getWorkDate();
+    await StudentAttendance.create({
+      tenantId: tenantA._id,
+      studentId: sib1._id,
+      studentName: sib1.fullName,
+      classroomId: realClassId,
+      className: 'LA-THUCTE-10',
+      attendDate: startOfWorkDate(todayStr),
+      attendanceDateKey: todayStr,
+      status: 'present',
+      checkInTime: new Date(),
+      recordedBy: teacherUserId,
+      recordedByName: 'Cô Giáo Thực Tế 10'
+    });
+
+    const rosterBefore = await request(app)
+      .get(`/api/pickups/class-roster/${realClassId}`)
+      .query({ pickupDate: todayStr })
+      .set('Authorization', `Bearer ${tokenTeacher10}`);
+    expect(rosterBefore.status).toBe(200);
+    expect(rosterBefore.body.data.summary.presentCount).toBe(1);
+    const sib1Roster = rosterBefore.body.data.roster.find((r) => String(r.studentId) === String(sib1._id));
+    expect(sib1Roster.isPresentToday).toBe(true);
+    expect(sib1Roster.departed).toBe(false);
+    const momOption = sib1Roster.pickerOptions.find((opt) => opt.fullName === 'Lê Thị Mai');
+    expect(momOption).toBeTruthy();
+
+    const handoverRes = await request(app)
+      .post('/api/pickups/direct-handover')
+      .set('Authorization', `Bearer ${tokenTeacher10}`)
+      .send({
+        studentId: sib1._id,
+        pickupDate: todayStr,
+        pickerKey: momOption.key,
+        pickerId: momOption.pickerId,
+        note: 'Mẹ đón trực tiếp tại cửa lớp'
+      });
+    expect(handoverRes.status).toBe(201);
+    expect(handoverRes.body.data.status).toBe('confirmed');
+    expect(handoverRes.body.data.picker.fullName).toBe('Lê Thị Mai');
+
+    const rosterAfter = await request(app)
+      .get(`/api/pickups/class-roster/${realClassId}`)
+      .query({ pickupDate: todayStr })
+      .set('Authorization', `Bearer ${tokenTeacher10}`);
+    expect(rosterAfter.status).toBe(200);
+    expect(rosterAfter.body.data.summary.departedCount).toBe(1);
+    const sib1After = rosterAfter.body.data.roster.find((r) => String(r.studentId) === String(sib1._id));
+    expect(sib1After.departed).toBe(true);
+    expect(sib1After.departedPickerName).toBe('Lê Thị Mai');
+
+    const mongoose = require('mongoose');
+    const parentNotifs = await Notification.find({
+      tenantId: tenantA._id,
+      'metadata.pickupRecordId': new mongoose.Types.ObjectId(String(handoverRes.body.data._id))
+    }).lean();
+    expect(parentNotifs).toHaveLength(2);
+
+    // 10.4 Lập học phí đầu tháng 11-2026: tự trừ ngày nghỉ có phép tháng 10-2026 theo đơn giá tùy chỉnh + sửa tay từng bé
+    for (const d of ['2026-10-05', '2026-10-06', '2026-10-07']) {
+      await StudentAttendance.create({
+        tenantId: tenantA._id,
+        studentId: sib1._id,
+        studentName: sib1.fullName,
+        classroomId: realClassId,
+        className: 'LA-THUCTE-10',
+        attendDate: startOfWorkDate(d),
+        attendanceDateKey: d,
+        status: 'absent_permission',
+        recordedBy: teacherUserId,
+        recordedByName: 'Cô Giáo Thực Tế 10'
+      });
+    }
+    await StudentAttendance.create({
+      tenantId: tenantA._id,
+      studentId: sib2._id,
+      studentName: sib2.fullName,
+      classroomId: realClassId,
+      className: 'LA-THUCTE-10',
+      attendDate: startOfWorkDate('2026-10-12'),
+      attendanceDateKey: '2026-10-12',
+      status: 'absent_permission',
+      recordedBy: teacherUserId,
+      recordedByName: 'Cô Giáo Thực Tế 10'
+    });
+
+    const previewRes = await request(app)
+      .post('/api/finance/tuition/bulk/preview')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({
+        classroomId: realClassId,
+        period: '11-2026',
+        tuitionBase: 1500000,
+        mealFee: 880000,
+        busFee: 0,
+        extraFee: 0,
+        discount: 0,
+        dueDate: '2026-11-10',
+        deductPriorMeal: true,
+        creditPeriod: '10-2026',
+        dailyMealCreditRate: 45000
+      });
+    expect(previewRes.status).toBe(200);
+    expect(previewRes.body.data.dailyMealCreditRate).toBe(45000);
+    const cred1 = previewRes.body.data.studentCredits.find((c) => String(c.studentId) === String(sib1._id));
+    const cred2 = previewRes.body.data.studentCredits.find((c) => String(c.studentId) === String(sib2._id));
+    expect(cred1.absentDays).toBe(3);
+    expect(cred1.appliedDeduction).toBe(135000);
+    expect(cred1.finalTotal).toBe(2245000);
+    expect(cred2.absentDays).toBe(1);
+    expect(cred2.appliedDeduction).toBe(45000);
+
+    const bulkCreateRes = await request(app)
+      .post('/api/finance/tuition/bulk')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({
+        classroomId: realClassId,
+        period: '11-2026',
+        tuitionBase: 1500000,
+        mealFee: 880000,
+        busFee: 0,
+        extraFee: 0,
+        discount: 0,
+        dueDate: '2026-11-10',
+        deductPriorMeal: true,
+        creditPeriod: '10-2026',
+        dailyMealCreditRate: 45000,
+        studentCreditOverrides: {
+          [String(sib2._id)]: 50000
+        }
+      });
+    expect(bulkCreateRes.status).toBe(201);
+    const inv1 = bulkCreateRes.body.data.find((inv) => String(inv.studentId) === String(sib1._id));
+    const inv2 = bulkCreateRes.body.data.find((inv) => String(inv.studentId) === String(sib2._id));
+    expect(inv1.discount).toBe(135000);
+    expect(inv1.totalAmount).toBe(2245000);
+    expect(inv2.discount).toBe(50000);
+    expect(inv2.totalAmount).toBe(2330000);
+  });
+
+  test('11. Exception & Edge-Case Hardening: Excel mất số 0 đầu SĐT, giữ SĐT/Người phụ trách Phân hiệu, Hoàn tác trả trẻ nhầm & Ràng buộc Lớp/Đa trường', async () => {
+    const ExcelJS = require('exceljs');
+    const todayStr = getWorkDate();
+
+    // 11.1 Kiểm tra tìm kiếm nhân sự có ký tự đặc biệt Regex (+84, ngoặc tròn) không bị lỗi 500
+    const regexSearchHr = await request(app)
+      .get('/api/hr/employees')
+      .query({ search: '+84(097)[test]' })
+      .set('Authorization', `Bearer ${tokenAdminA}`);
+    expect(regexSearchHr.status).toBe(200);
+
+    // 11.2 Lưu & sửa Phân hiệu giữ nguyên SĐT + Người phụ trách trên Tenant.campuses + hỗ trợ tên phân hiệu 1 ký tự
+    const addShortCampus = await request(app)
+      .post('/api/system/campuses')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({
+        name: 'A',
+        address: 'Số 10 Cầu Giấy',
+        phone: '0909111222',
+        managerName: 'Cô Phạm Thu Thủy'
+      });
+    expect(addShortCampus.status).toBe(201);
+    expect(addShortCampus.body.data.code).toBe('CS-A');
+
+    const campusesAfterSave = await request(app)
+      .get('/api/system/campuses')
+      .set('Authorization', `Bearer ${tokenAdminA}`);
+    expect(campusesAfterSave.status).toBe(200);
+    const savedShort = campusesAfterSave.body.data.campuses.find((c) => c.code === 'CS-A');
+    expect(savedShort.phone).toBe('0909111222');
+    expect(savedShort.managerName).toBe('Cô Phạm Thu Thủy');
+
+    // 11.3 Nhập Excel khi ô SĐT bị Excel cắt mất số 0 đầu (918765432 -> 0918765432) & bắt trùng mã nhân sự ngay ở Preview
+    const existingEmp = await Employee.findOne({ tenantId: tenantA._id }).lean();
+    const targetCls = await Classroom.findOne({ tenantId: tenantA._id, name: 'LA-THUCTE-10' }).lean();
+
+    const tplRes = await request(app)
+      .get('/api/students/excel/template')
+      .buffer(true)
+      .parse((res, cb) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => cb(null, Buffer.concat(chunks)));
+      })
+      .set('Authorization', `Bearer ${tokenAdminA}`);
+    expect(tplRes.status).toBe(200);
+
+    const wbErr = new ExcelJS.Workbook();
+    await wbErr.xlsx.load(tplRes.body);
+    const sheetErr = wbErr.getWorksheet('Danh sách học sinh');
+    sheetErr.addRow([
+      'LA-THUCTE-10',
+      existingEmp.employeeCode, // cố tình trùng mã nhân sự!
+      '',
+      'Bé Trùng Mã NV',
+      '10/05/2021',
+      'Nam',
+      '01/09/2026',
+      'Phụ Huynh Test',
+      918765432,
+      '',
+      'Bố'
+    ]);
+    const errBuf = Buffer.from(await wbErr.xlsx.writeBuffer());
+    const previewCollision = await request(app)
+      .post('/api/students/excel/preview')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .field('classroomId', String(targetCls._id))
+      .attach('file', errBuf, 'collision.xlsx');
+    expect(previewCollision.status).toBe(200);
+    expect(previewCollision.body.data.canImport).toBe(false);
+    expect(previewCollision.body.data.rows[0].errors.join(' ')).toContain('nhân sự');
+
+    // Bây giờ nhập dòng hợp lệ có SĐT kiểu số mất số 0 đầu (918765432)
+    const wbOk = new ExcelJS.Workbook();
+    await wbOk.xlsx.load(tplRes.body);
+    const sheetOk = wbOk.getWorksheet('Danh sách học sinh');
+    sheetOk.addRow([
+      'LA-THUCTE-10',
+      '',
+      '',
+      'Bé Hoàng Gia Phúc',
+      '12/06/2021',
+      'Nam',
+      '01/09/2026',
+      'Hoàng Văn Long',
+      918765432, // 9 chữ số bị mất số 0 đầu
+      '',
+      'Bố'
+    ]);
+    const okBuf = Buffer.from(await wbOk.xlsx.writeBuffer());
+    const previewOk = await request(app)
+      .post('/api/students/excel/preview')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .field('classroomId', String(targetCls._id))
+      .attach('file', okBuf, 'no_zero_phone.xlsx');
+    expect(previewOk.status).toBe(200);
+    expect(previewOk.body.data.canImport).toBe(true);
+    expect(previewOk.body.data.rows[0].parent1Phone).toBe('0918765432');
+
+    const confirmOk = await request(app)
+      .post('/api/students/excel/confirm')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .set('Idempotency-Key', `idem-edge-${Date.now()}`)
+      .send({
+        classroomId: String(targetCls._id),
+        students: previewOk.body.data.rows
+      });
+    expect(confirmOk.status).toBe(201);
+    const importedChild = confirmOk.body.data[0];
+
+    // Bố đăng nhập được ngay bằng SĐT đã khôi phục số 0 ('0918765432' / '123456')
+    const restoredParentLogin = await request(app)
+      .post('/api/auth/login')
+      .send({ schoolCode: 'HOANANG-A', username: '0918765432', password: '123456' });
+    expect(restoredParentLogin.status).toBe(200);
+
+    // 11.4 API lấy lớp đón trả trẻ + Hoàn tác trả trẻ nhầm (Undo Handover) rồi chọn lại người đón khác
+    const teacherLogin = await request(app)
+      .post('/api/auth/login')
+      .send({ schoolCode: 'HOANANG-A', username: 'gv.thucte10', password: '123456' });
+    const tokenTeacher = teacherLogin.body.token;
+
+    const pickupClassesRes = await request(app)
+      .get('/api/pickups/classrooms')
+      .set('Authorization', `Bearer ${tokenTeacher}`);
+    expect(pickupClassesRes.status).toBe(200);
+    expect(pickupClassesRes.body.data).toHaveLength(1);
+
+    const mistakenHandover = await request(app)
+      .post('/api/pickups/direct-handover')
+      .set('Authorization', `Bearer ${tokenTeacher}`)
+      .send({
+        studentId: importedChild._id,
+        pickupDate: todayStr,
+        pickerFullName: 'Bấm Nhầm Người',
+        pickerRelationship: 'Chú'
+      });
+    expect(mistakenHandover.status).toBe(201);
+
+    const undoRes = await request(app)
+      .post(`/api/pickups/${mistakenHandover.body.data._id}/undo-handover`)
+      .set('Authorization', `Bearer ${tokenTeacher}`)
+      .send({ reason: 'Cô bấm nhầm dòng học sinh' });
+    expect(undoRes.status).toBe(200);
+
+    // Sau khi hoàn tác, bé trở về trạng thái chưa đón (departed = false) và có thể trả trẻ lại cho đúng Bố
+    const reHandover = await request(app)
+      .post('/api/pickups/direct-handover')
+      .set('Authorization', `Bearer ${tokenTeacher}`)
+      .send({
+        studentId: importedChild._id,
+        pickupDate: todayStr,
+        pickerFullName: 'Hoàng Văn Long',
+        pickerRelationship: 'Bố'
+      });
+    expect(reHandover.status).toBe(201);
+    expect(reHandover.body.data.picker.fullName).toBe('Hoàng Văn Long');
+
+    // 11.5 Ràng buộc sửa lớp học: chặn năm học sai (2026-2099), chặn hạ maxSize < sĩ số hiện tại, đồng bộ đổi tên lớp sang Student
+    const badYearRes = await request(app)
+      .put(`/api/classrooms/${targetCls._id}`)
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({ schoolYear: '2026-2099' });
+    expect(badYearRes.status).toBe(422);
+
+    const shrinkMaxRes = await request(app)
+      .put(`/api/classrooms/${targetCls._id}`)
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({ maxSize: 1 });
+    expect(shrinkMaxRes.status).toBe(422);
+
+    const renameClassRes = await request(app)
+      .put(`/api/classrooms/${targetCls._id}`)
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({ name: 'LA-THUCTE-10-MOI' });
+    expect(renameClassRes.status).toBe(200);
+    const updatedStudent = await Student.findById(importedChild._id).lean();
+    expect(updatedStudent.className).toBe('LA-THUCTE-10-MOI');
+  });
+
+  test('12. Swagger / OpenAPI 3.0.3 & Database Dictionary: Đầy đủ 7 Zones Database, kiểu trả về API và không đứt gãy $ref', async () => {
+    // 12.1 Giao diện Swagger UI hoạt động tại cả /api-docs/ và /api/docs/
+    const uiRes1 = await request(app).get('/api-docs/');
+    expect(uiRes1.status).toBe(200);
+    expect(uiRes1.headers['content-type']).toContain('text/html');
+    expect(uiRes1.text).toContain('Tài liệu API & Database');
+
+    const uiRes2 = await request(app).get('/api/docs/');
+    expect(uiRes2.status).toBe(200);
+    expect(uiRes2.headers['content-type']).toContain('text/html');
+
+    // 12.2 Đặc tả JSON OpenAPI 3.0.3 chi tiết và toàn bộ $ref đều trỏ tới Schema hợp lệ
+    const specRes = await request(app).get('/api-docs.json');
+    expect(specRes.status).toBe(200);
+    const spec = specRes.body;
+    expect(spec.openapi).toBe('3.0.3');
+    expect(spec.tags.length).toBeGreaterThanOrEqual(15);
+
+    const schemas = spec.components?.schemas || {};
+    expect(schemas.DB_Tenant).toBeDefined();
+    expect(schemas.DB_Tenant.properties.campuses.items.properties.managerName.type).toBe('string');
+    expect(schemas.DB_Student).toBeDefined();
+    expect(schemas.DB_Student.properties.vaccinations.type).toBe('array');
+    expect(schemas.DB_Student.properties.growthRecords.type).toBe('array');
+    expect(schemas.DB_Employee).toBeDefined();
+    expect(schemas.DB_TuitionFee).toBeDefined();
+    expect(schemas.DB_PickupRecord).toBeDefined();
+    expect(schemas.DB_User.properties.passwordHash.writeOnly).toBe(true);
+
+    // Đệ quy kiểm tra mọi tham chiếu $ref trong toàn bộ paths & schemas đều tồn tại 100%
+    const collectRefs = (node, list = []) => {
+      if (!node || typeof node !== 'object') return list;
+      if (typeof node.$ref === 'string') list.push(node.$ref);
+      for (const val of Object.values(node)) collectRefs(val, list);
+      return list;
+    };
+    const allRefs = collectRefs(spec);
+    expect(allRefs.length).toBeGreaterThan(30);
+    for (const ref of allRefs) {
+      const schemaName = ref.replace('#/components/schemas/', '');
+      expect(schemas[schemaName]).toBeDefined();
+    }
+
+    // 12.3 Từ điển Cơ sở dữ liệu 7 Phân vùng (/api/docs/database)
+    const dbDictRes = await request(app).get('/api/docs/database');
+    expect(dbDictRes.status).toBe(200);
+    expect(dbDictRes.body.success).toBe(true);
+    expect(dbDictRes.body.totalZones).toBe(7);
+    expect(dbDictRes.body.totalCollections).toBeGreaterThanOrEqual(70);
+  });
 });
 

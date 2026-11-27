@@ -58,31 +58,45 @@ const validateInvoiceInput = ({ period, tuitionBase, mealFee, busFee, extraFee, 
 const STANDARD_MEAL_DAYS_PER_MONTH = 22;
 
 /**
- * Tính khấu trừ tiền ăn bán trú tự động từ số ngày nghỉ có phép (`absent_permission`) của tháng liền trước.
- * Áp dụng đúng quy tắc: đầu kỳ thu theo định mức, sang kỳ sau khấu trừ lại số ngày nghỉ có phép của kỳ trước.
- *
- * @param {import('mongoose').Types.ObjectId[]} studentIds
- * @param {string} period - Chuỗi kỳ thu `MM-YYYY`
- * @param {number} baseMealFee - Định mức tiền ăn của kỳ hiện tại
- * @param {Record<string, any>} tenantFilter
- * @returns {Promise<{ prevPeriodLabel: string, byStudentId: Map<string, { absentDays: number, deduction: number }> }>}
+ * Tính khấu trừ tiền ăn bán trú tự động từ số ngày nghỉ có phép (`absent_permission`) của tháng đối chiếu (mặc định tháng liền trước).
+ * Hỗ trợ Kế toán cấu hình:
+ * - `deductPriorMeal` (bật/tắt khấu trừ tự động, mặc định `true`)
+ * - `creditPeriod` (`MM-YYYY`, mặc định tháng liền trước của kỳ thu)
+ * - `dailyMealCreditRate` (đơn giá hoàn trả tiền ăn / ngày nghỉ có phép, mặc định `baseMealFee / 22`)
  */
-const computePriorMonthMealCredits = async (studentIds, period, baseMealFee, tenantFilter) => {
+const computePriorMonthMealCredits = async (studentIds, period, baseMealFee, tenantFilter, options = {}) => {
     const byStudentId = new Map();
-    if (!studentIds?.length || !(baseMealFee > 0) || !PERIOD_PATTERN.test(String(period || ''))) {
-        return { prevPeriodLabel: '', byStudentId };
+    const { deductPriorMeal = true, creditPeriod = '', dailyMealCreditRate } = options || {};
+
+    if (deductPriorMeal === false || !studentIds?.length || !(baseMealFee > 0) || !PERIOD_PATTERN.test(String(period || ''))) {
+        return { prevPeriodLabel: '', dailyMealRate: 0, byStudentId };
     }
 
-    const [mmStr, yyyyStr] = String(period).split('-');
-    const month = Number(mmStr);
-    const year = Number(yyyyStr);
-    const prevMonth = month === 1 ? 12 : month - 1;
-    const prevYear = month === 1 ? year - 1 : year;
-    const prevPeriodLabel = `${String(prevMonth).padStart(2, '0')}-${prevYear}`;
+    let targetMonth;
+    let targetYear;
+    if (creditPeriod && PERIOD_PATTERN.test(String(creditPeriod).trim())) {
+        const [cMm, cYyyy] = String(creditPeriod).trim().split('-');
+        targetMonth = Number(cMm);
+        targetYear = Number(cYyyy);
+    } else {
+        const [mmStr, yyyyStr] = String(period).split('-');
+        const month = Number(mmStr);
+        const year = Number(yyyyStr);
+        targetMonth = month === 1 ? 12 : month - 1;
+        targetYear = month === 1 ? year - 1 : year;
+    }
 
-    const prevStart = startOfWorkDate(`${prevYear}-${String(prevMonth).padStart(2, '0')}-01`);
-    const prevEnd = startOfWorkDate(`${year}-${String(month).padStart(2, '0')}-01`);
-    const dailyMealRate = Math.round(baseMealFee / STANDARD_MEAL_DAYS_PER_MONTH);
+    const prevPeriodLabel = `${String(targetMonth).padStart(2, '0')}-${targetYear}`;
+    const nextOfTargetMonth = targetMonth === 12 ? 1 : targetMonth + 1;
+    const nextOfTargetYear = targetMonth === 12 ? targetYear + 1 : targetYear;
+
+    const prevStart = startOfWorkDate(`${targetYear}-${String(targetMonth).padStart(2, '0')}-01`);
+    const prevEnd = startOfWorkDate(`${nextOfTargetYear}-${String(nextOfTargetMonth).padStart(2, '0')}-01`);
+
+    const customRate = Number(dailyMealCreditRate);
+    const dailyMealRate = Number.isFinite(customRate) && customRate > 0
+        ? Math.round(customRate)
+        : Math.round(baseMealFee / STANDARD_MEAL_DAYS_PER_MONTH);
 
     const rows = await StudentAttendance.aggregate([
         {
@@ -109,7 +123,24 @@ const computePriorMonthMealCredits = async (studentIds, period, baseMealFee, ten
         }
     }
 
-    return { prevPeriodLabel, byStudentId };
+    return { prevPeriodLabel, dailyMealRate, byStudentId };
+};
+
+const resolveStudentCreditWithOverride = (studentId, creditMap, overrides = null, maxDeductionCap = Infinity) => {
+    const sid = String(studentId);
+    const autoCredit = creditMap.get(sid) || null;
+    if (overrides && typeof overrides === 'object' && Object.hasOwn(overrides, sid)) {
+        const rawOverride = Number(overrides[sid]);
+        if (Number.isFinite(rawOverride) && rawOverride >= 0) {
+            const applied = Math.min(maxDeductionCap, Math.round(rawOverride));
+            return {
+                absentDays: autoCredit?.absentDays || 0,
+                deduction: applied,
+                isOverridden: true
+            };
+        }
+    }
+    return autoCredit;
 };
 
 const applyStudentMealCreditToInput = (input, baseNote, creditInfo, prevPeriodLabel) => {
@@ -346,7 +377,23 @@ const createBulkTuitionFees = async (req, res) => {
         const resolvedTenant = resolveTenantContext(req);
         const tenantId = resolvedTenant.isValid && resolvedTenant.isSaaS ? resolvedTenant.tenantId : null;
 
-        const { classroomId, applyToAll = false, period, tuitionBase, mealFee, busFee, extraFee, discount, dueDate, note, additionalItems } = req.body;
+        const {
+            classroomId,
+            applyToAll = false,
+            period,
+            tuitionBase,
+            mealFee,
+            busFee,
+            extraFee,
+            discount,
+            dueDate,
+            note,
+            additionalItems,
+            deductPriorMeal = true,
+            creditPeriod = '',
+            dailyMealCreditRate,
+            studentCreditOverrides = null
+        } = req.body;
         const input = validateInvoiceInput({ period, tuitionBase, mealFee, busFee, extraFee, discount, dueDate, additionalItems });
 
         if (!applyToAll && !isValidObjectId(classroomId)) {
@@ -372,12 +419,13 @@ const createBulkTuitionFees = async (req, res) => {
         }).select('studentName className');
         if (existed.length) return res.status(409).json({ message: `${applyToAll ? 'Các lớp đã chọn' : 'Lớp'} đã có ${existed.length} hóa đơn kỳ ${period}. Không lập chồng hóa đơn.`, data: existed });
 
-        // Tự động khấu trừ tiền ăn những ngày nghỉ có phép của tháng trước cho toàn bộ danh sách học sinh (1 câu aggregate duy nhất)
+        // Tự động khấu trừ tiền ăn những ngày nghỉ có phép của kỳ đối chiếu cho toàn bộ danh sách học sinh (1 câu aggregate duy nhất)
         const { prevPeriodLabel, byStudentId: creditByStudent } = await computePriorMonthMealCredits(
             students.map((student) => student._id),
             period,
             input.mealFee,
-            tenantFilter
+            tenantFilter,
+            { deductPriorMeal, creditPeriod, dailyMealCreditRate }
         );
 
         const result = await runStudentTransaction(async (session) => {
@@ -389,11 +437,17 @@ const createBulkTuitionFees = async (req, res) => {
             }
             await lockOpenPeriod(fromPeriod(period), session, req);
             const fees = students.map((student) => {
+                const effectiveCredit = resolveStudentCreditWithOverride(
+                    student._id,
+                    creditByStudent,
+                    studentCreditOverrides,
+                    input.totalAmount
+                );
                 const resolvedStudentInput = applyStudentMealCreditToInput(
                     input,
                     note,
-                    creditByStudent.get(String(student._id)),
-                    prevPeriodLabel
+                    effectiveCredit,
+                    prevPeriodLabel || creditPeriod || period
                 );
                 return {
                     ...(tenantId ? { tenantId } : { tenantId: null }),
@@ -424,7 +478,15 @@ const previewBulkTuitionFees = async (req, res) => {
         assertTenantContext(req);
         const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
 
-        const { classroomId, applyToAll = false, period } = req.body;
+        const {
+            classroomId,
+            applyToAll = false,
+            period,
+            deductPriorMeal = true,
+            creditPeriod = '',
+            dailyMealCreditRate,
+            studentCreditOverrides = null
+        } = req.body;
         const input = validateInvoiceInput(req.body);
         if (!applyToAll && !isValidObjectId(classroomId)) return res.status(400).json({ message: 'Vui lòng chọn lớp hợp lệ' });
         const classrooms = applyToAll
@@ -432,7 +494,11 @@ const previewBulkTuitionFees = async (req, res) => {
             : [await Classroom.findOne({ _id: classroomId, status: 'active', ...tenantFilter }).select('_id name').lean()];
         if (!classrooms.length || classrooms.some((item) => !item)) return res.status(404).json({ message: 'Không tìm thấy lớp đang hoạt động' });
         const classIds = classrooms.map((item) => item._id);
-        const students = await Student.find({ classroomId: { $in: classIds }, status: 'enrolled', ...tenantFilter }).select('_id classroomId').lean();
+        const classNameMap = new Map(classrooms.map((c) => [String(c._id), c.name]));
+        const students = await Student.find({ classroomId: { $in: classIds }, status: 'enrolled', ...tenantFilter })
+            .select('_id fullName className classroomId')
+            .sort({ className: 1, fullName: 1 })
+            .lean();
         const existing = await TuitionFee.find({
             studentId: { $in: students.map((item) => item._id) },
             period,
@@ -440,33 +506,70 @@ const previewBulkTuitionFees = async (req, res) => {
             ...tenantFilter
         }).select('studentId').lean();
         const existingIds = new Set(existing.map((item) => String(item.studentId)));
-        const { prevPeriodLabel, byStudentId: creditByStudent } = await computePriorMonthMealCredits(
+        const { prevPeriodLabel, dailyMealRate, byStudentId: creditByStudent } = await computePriorMonthMealCredits(
             students.map((item) => item._id),
             period,
             input.mealFee,
-            tenantFilter
+            tenantFilter,
+            { deductPriorMeal, creditPeriod, dailyMealCreditRate }
         );
         let netTotalAmount = 0;
         let totalMealCreditDeduction = 0;
         let mealCreditStudents = 0;
+        const studentCredits = [];
+
         for (const student of students) {
-            const credit = creditByStudent.get(String(student._id));
-            const studentTotal = credit ? Math.max(0, input.totalAmount - credit.deduction) : input.totalAmount;
+            const autoCredit = creditByStudent.get(String(student._id));
+            const effectiveCredit = resolveStudentCreditWithOverride(
+                student._id,
+                creditByStudent,
+                studentCreditOverrides,
+                input.totalAmount
+            );
+            const appliedDeduction = effectiveCredit?.deduction || 0;
+            const studentTotal = Math.max(0, input.totalAmount - appliedDeduction);
             netTotalAmount += studentTotal;
-            if (credit?.deduction > 0) {
-                totalMealCreditDeduction += credit.deduction;
+            if (appliedDeduction > 0) {
+                totalMealCreditDeduction += appliedDeduction;
                 mealCreditStudents += 1;
             }
+            studentCredits.push({
+                studentId: student._id,
+                fullName: student.fullName,
+                className: classNameMap.get(String(student.classroomId)) || student.className || '',
+                absentDays: autoCredit?.absentDays || 0,
+                suggestedDeduction: autoCredit?.deduction || 0,
+                appliedDeduction,
+                finalTotal: studentTotal
+            });
         }
         const byClass = classrooms.map((item) => {
             const classStudents = students.filter((student) => String(student.classroomId) === String(item._id));
-            return { classroomId: item._id, name: item.name, studentCount: classStudents.length,
-                existingCount: classStudents.filter((student) => existingIds.has(String(student._id))).length };
+            return {
+                classroomId: item._id,
+                name: item.name,
+                studentCount: classStudents.length,
+                existingCount: classStudents.filter((student) => existingIds.has(String(student._id))).length
+            };
         });
-        return res.json({ success: true, data: { period, dueDate: input.dueDate, perStudent: input.totalAmount,
-            studentCount: students.length, existingCount: existingIds.size, totalAmount: netTotalAmount,
-            mealCreditPeriod: prevPeriodLabel, mealCreditStudents, totalMealCreditDeduction, byClass,
-            canCreate: students.length > 0 && existingIds.size === 0 } });
+        return res.json({
+            success: true,
+            data: {
+                period,
+                dueDate: input.dueDate,
+                perStudent: input.totalAmount,
+                studentCount: students.length,
+                existingCount: existingIds.size,
+                totalAmount: netTotalAmount,
+                mealCreditPeriod: prevPeriodLabel,
+                dailyMealCreditRate: dailyMealRate,
+                mealCreditStudents,
+                totalMealCreditDeduction,
+                studentCredits,
+                byClass,
+                canCreate: students.length > 0 && existingIds.size === 0
+            }
+        });
     } catch (error) { return res.status(error.statusCode || 500).json({ message: error.statusCode ? error.message : 'Không thể xem trước hóa đơn' }); }
 };
 

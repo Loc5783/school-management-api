@@ -77,7 +77,22 @@ const payrollRoleFromAccountRole = (role) => ({
   hr: 'hr'
 }[role] || 'teacher');
 
+const defaultPositionByAccountRole = (accountRole) => ({
+  admin: 'principal',
+  principal: 'principal',
+  teacher: 'teacher',
+  accountant: 'accountant',
+  chef: 'chef',
+  guard: 'security',
+  hr: 'hr'
+}[accountRole] || 'teacher');
+
 const emptyEmployeeForm = {
+  accountMode: 'create_new',
+  accountUsername: '',
+  accountPassword: '123456',
+  accountRole: 'teacher',
+  usernameTouched: false,
   userId: '',
   employeeCode: '',
   fullName: '',
@@ -239,9 +254,28 @@ export default function EmployeeManagement() {
         setFormError('Hãy xác nhận rõ đây là lương theo tháng, hoặc đổi sang nhập tiền một công.');
         return;
       }
+      const isCreatingAccountInline = !editingEmployee && form.accountMode === 'create_new';
+      if (isCreatingAccountInline) {
+        if (!String(form.accountUsername || '').trim() || /\s/.test(String(form.accountUsername || '').trim())) {
+          setFormError('Tên đăng nhập phải từ 3 ký tự trở lên và không chứa khoảng trắng.');
+          return;
+        }
+        if (String(form.accountPassword || '').length < 6) {
+          setFormError('Mật khẩu tài khoản khởi tạo phải từ 6 ký tự trở lên.');
+          return;
+        }
+      }
       const payload = {
         ...form,
-        userId: form.userId || '',
+        userId: form.accountMode === 'link_existing' || editingEmployee ? (form.userId || '') : '',
+        ...(isCreatingAccountInline
+          ? {
+              createAccount: true,
+              accountUsername: String(form.accountUsername || '').trim(),
+              accountPassword: String(form.accountPassword || '123456'),
+              accountRole: form.accountRole || 'teacher'
+            }
+          : {}),
         salaryConfig: {
           ...(editingEmployee?.salaryConfig || {}),
           baseSalary: monthlySalary,
@@ -258,7 +292,11 @@ export default function EmployeeManagement() {
       await load();
       setNotice({
         type: 'success',
-        text: editingEmployee ? 'Đã cập nhật hồ sơ và liên kết tài khoản nhân sự.' : 'Đã tạo hồ sơ nhân sự mới thành công.'
+        text: editingEmployee
+          ? 'Đã cập nhật hồ sơ và liên kết tài khoản nhân sự.'
+          : isCreatingAccountInline
+            ? `Đã tạo đồng thời hồ sơ nhân sự và tài khoản đăng nhập @${String(form.accountUsername).trim()} thành công.`
+            : 'Đã tạo hồ sơ nhân sự mới thành công.'
       });
     } catch (err) {
       setFormError(err.response?.data?.message || 'Không thể lưu hồ sơ nhân viên.');
@@ -273,6 +311,11 @@ export default function EmployeeManagement() {
     const linkedAccount = account || staffAccounts.find((item) => String(item._id) === String(populatedAccount?._id || employee?.userId)) || populatedAccount;
     setEditingEmployee(employee);
     setForm({
+      accountMode: employee || linkedAccount ? 'link_existing' : 'create_new',
+      accountUsername: '',
+      accountPassword: '123456',
+      accountRole: 'teacher',
+      usernameTouched: false,
       userId: String(linkedAccount?._id || employee?.userId?._id || employee?.userId || ''),
       employeeCode: employee?.employeeCode || linkedAccount?.employeeInfo?.employeeId || '',
       fullName: employee?.fullName || linkedAccount?.profile?.fullName || '',
@@ -778,25 +821,104 @@ export default function EmployeeManagement() {
               </button>
             </div>
             <p className="department-form-note">
-              Nhóm tính lương là trường bắt buộc để tổng hợp bảng lương. Khi liên kết tài khoản, vai trò lương tự động đồng bộ theo quyền đăng nhập của nhân viên.
+              {editingEmployee
+                ? 'Nhóm tính lương là trường bắt buộc để tổng hợp bảng lương. Khi liên kết tài khoản, vai trò lương tự động đồng bộ theo quyền đăng nhập của nhân viên.'
+                : 'Tạo gọn trong 1 bước: Hệ thống khởi tạo đồng thời Hồ sơ nhân sự và Tài khoản đăng nhập để giáo viên/nhân viên vào làm việc được ngay.'}
             </p>
             <div className="student-form-grid">
-              <label className="form-wide">
-                Tài khoản đăng nhập
-                <select value={form.userId} onChange={(e) => chooseStaffAccount(e.target.value)}>
-                  <option value="">Chưa liên kết tài khoản</option>
-                  {staffAccounts.map((account) => {
-                    const unavailable = Boolean(account.employeeProfile && String(account.employeeProfile._id) !== String(editingEmployee?._id));
-                    return (
-                      <option key={account._id} value={account._id} disabled={unavailable}>
-                        {account.profile?.fullName || account.username} · @{account.username} · {roleText[account.role] || account.role}
-                        {unavailable ? ' (đã gán)' : ''}
-                      </option>
-                    );
-                  })}
-                </select>
-                <small>Liên kết đúng tài khoản để đồng bộ chấm công và bảng lương. Mỗi tài khoản chỉ thuộc 1 hồ sơ.</small>
-              </label>
+              {!editingEmployee && (
+                <label className="form-wide">
+                  Phương thức cấp tài khoản đăng nhập
+                  <select
+                    value={form.accountMode}
+                    onChange={(e) => {
+                      const nextMode = e.target.value;
+                      setForm((prev) => ({
+                        ...prev,
+                        accountMode: nextMode,
+                        userId: nextMode === 'link_existing' ? prev.userId : '',
+                        ...(nextMode === 'create_new'
+                          ? {
+                              payrollRole: payrollRoleFromAccountRole(prev.accountRole),
+                              position: defaultPositionByAccountRole(prev.accountRole)
+                            }
+                          : {})
+                      }));
+                    }}
+                  >
+                    <option value="create_new">Tạo mới đồng thời Hồ sơ & Tài khoản đăng nhập (Khuyên dùng)</option>
+                    <option value="link_existing">Gắn với tài khoản nội bộ đã tạo trước đó</option>
+                    <option value="none">Chỉ lưu hồ sơ nhân sự (chưa cấp tài khoản đăng nhập)</option>
+                  </select>
+                </label>
+              )}
+
+              {!editingEmployee && form.accountMode === 'create_new' && (
+                <>
+                  <label>
+                    Vai trò đăng nhập *
+                    <select
+                      value={form.accountRole}
+                      onChange={(e) => {
+                        const nextRole = e.target.value;
+                        setForm((prev) => ({
+                          ...prev,
+                          accountRole: nextRole,
+                          payrollRole: payrollRoleFromAccountRole(nextRole),
+                          position: defaultPositionByAccountRole(nextRole)
+                        }));
+                      }}
+                    >
+                      <option value="teacher">Giáo viên</option>
+                      <option value="accountant">Kế toán</option>
+                      <option value="chef">Nhân viên bếp</option>
+                      <option value="guard">Bảo vệ</option>
+                      <option value="hr">Nhân sự (HR)</option>
+                      {role === 'admin' && <option value="principal">Hiệu trưởng</option>}
+                    </select>
+                  </label>
+                  <label>
+                    Tên đăng nhập *
+                    <input
+                      value={form.accountUsername}
+                      onChange={(e) => setForm({ ...form, accountUsername: e.target.value.trim(), usernameTouched: true })}
+                      placeholder="Tự điền theo SĐT hoặc nhập VD: gv.hoa"
+                      required
+                    />
+                    <small>Nhân viên dùng tên này để đăng nhập vào hệ thống.</small>
+                  </label>
+                  <label className="form-wide">
+                    Mật khẩu khởi tạo *
+                    <input
+                      type="text"
+                      value={form.accountPassword}
+                      onChange={(e) => setForm({ ...form, accountPassword: e.target.value })}
+                      placeholder="Mặc định: 123456"
+                      required
+                    />
+                    <small>Mật khẩu mặc định là 123456 (nhân viên có thể tự đổi sau khi đăng nhập).</small>
+                  </label>
+                </>
+              )}
+
+              {(editingEmployee || form.accountMode === 'link_existing') && (
+                <label className="form-wide">
+                  Tài khoản đăng nhập
+                  <select value={form.userId} onChange={(e) => chooseStaffAccount(e.target.value)}>
+                    <option value="">Chưa liên kết tài khoản</option>
+                    {staffAccounts.map((account) => {
+                      const unavailable = Boolean(account.employeeProfile && String(account.employeeProfile._id) !== String(editingEmployee?._id));
+                      return (
+                        <option key={account._id} value={account._id} disabled={unavailable}>
+                          {account.profile?.fullName || account.username} · @{account.username} · {roleText[account.role] || account.role}
+                          {unavailable ? ' (đã gán)' : ''}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  <small>Liên kết đúng tài khoản để đồng bộ chấm công và bảng lương. Mỗi tài khoản chỉ thuộc 1 hồ sơ.</small>
+                </label>
+              )}
               <label>
                 Mã nhân viên / Mã chấm công
                 <input
@@ -818,7 +940,17 @@ export default function EmployeeManagement() {
                 Số điện thoại *
                 <input
                   value={form.phone}
-                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  onChange={(e) => {
+                    const nextPhone = e.target.value;
+                    const normalizedDigits = nextPhone.replace(/\D/g, '');
+                    setForm((prev) => ({
+                      ...prev,
+                      phone: nextPhone,
+                      ...(!editingEmployee && prev.accountMode === 'create_new' && !prev.usernameTouched
+                        ? { accountUsername: normalizedDigits }
+                        : {})
+                    }));
+                  }}
                   placeholder="VD: 0901 234 567"
                   required
                 />
@@ -837,7 +969,7 @@ export default function EmployeeManagement() {
                 <select
                   value={form.payrollRole}
                   onChange={(e) => setForm({ ...form, payrollRole: e.target.value })}
-                  disabled={Boolean(form.userId)}
+                  disabled={Boolean(form.userId) || (!editingEmployee && form.accountMode === 'create_new')}
                 >
                   <option value="principal">Ban giám hiệu</option>
                   <option value="teacher">Giáo viên</option>
@@ -846,7 +978,7 @@ export default function EmployeeManagement() {
                   <option value="guard">Bảo vệ</option>
                   <option value="hr">Nhân sự (HR)</option>
                 </select>
-                <small>{form.userId ? 'Lấy tự động theo vai trò tài khoản liên kết.' : 'Chọn nhóm để tổng hợp lương.'}</small>
+                <small>{form.userId || (!editingEmployee && form.accountMode === 'create_new') ? 'Đồng bộ tự động theo vai trò đăng nhập.' : 'Chọn nhóm để tổng hợp lương.'}</small>
               </label>
               <label>
                 Chức danh chi tiết

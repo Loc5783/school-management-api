@@ -41,7 +41,8 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.9.3",
     "multer": "^2.4.0",
-    "node-cron": "^4.6.0"
+    "node-cron": "^4.6.0",
+    "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
     "jest": "^30.5.0",

@@ -30,7 +30,7 @@ export default function AttendanceDetail() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [query, setQuery] = useState('');
-  const [notice, setNotice] = useState('');
+  const [notice, setNotice] = useState(null); // { type: 'success' | 'error', text: string }
   const [page, setPage] = useState(1);
 
   // Single Source of Truth từ URL: đồng bộ 2 chiều hoàn toàn tự nhiên khi Back/Forward
@@ -40,7 +40,7 @@ export default function AttendanceDetail() {
     let active = true;
     const load = async () => {
       setLoading(true);
-      setNotice('');
+      setNotice(null);
       try {
         const [studentRes, attendanceRes] = await Promise.all([
           api.get('/students', { params: { classroomId, status: 'enrolled', limit: 100 } }),
@@ -55,7 +55,9 @@ export default function AttendanceDetail() {
         setStudents(list);
         setAttendanceMap(map);
       } catch (err) {
-        if (active) setNotice(err.response?.data?.message || 'Không thể tải dữ liệu điểm danh.');
+        if (active) {
+          setNotice({ type: 'error', text: err.response?.data?.message || 'Không thể tải dữ liệu điểm danh.' });
+        }
       } finally {
         if (active) setLoading(false);
       }
@@ -114,6 +116,7 @@ export default function AttendanceDetail() {
   };
 
   const handleSubmit = async () => {
+    if (saving) return;
     const presentStudents = students.filter((s) => attendanceMap[s._id]?.status === 'present');
     const absentStudents = students.filter((s) => {
       const st = attendanceMap[s._id]?.status;
@@ -133,7 +136,7 @@ export default function AttendanceDetail() {
     const updates = [];
     students.forEach((student) => {
       const record = attendanceMap[student._id];
-      if (!record?.status) return; // Không lưu học sinh chưa điểm danh
+      if (!record?.status) return;
       if (record._id) {
         updates.push({ id: record._id, status: record.status, note: record.note || '' });
       } else {
@@ -142,12 +145,12 @@ export default function AttendanceDetail() {
     });
 
     if (!records.length && !updates.length) {
-      setNotice('Chưa có học sinh nào được chọn điểm danh để lưu.');
+      setNotice({ type: 'error', text: 'Chưa có học sinh nào được chọn điểm danh để lưu.' });
       return;
     }
 
     setSaving(true);
-    setNotice('');
+    setNotice(null);
     try {
       if (records.length) {
         await api.post('/attendance/bulk', { classroomId, attendDate, records });
@@ -157,18 +160,24 @@ export default function AttendanceDetail() {
           updates.map((item) => api.put(`/attendance/${item.id}`, { status: item.status, note: item.note }))
         );
       }
-      setNotice(`Đã lưu điểm danh thành công (${presentStudents.length} có mặt, ${absentStudents.length} vắng, ${lateStudents.length} muộn).`);
-
-      // Tải lại dữ liệu điểm danh mới nhất
-      const attendanceRes = await api.get(`/attendance/class/${classroomId}`, { params: { date: attendDate } });
-      const map = {};
-      (attendanceRes.data.data || []).forEach((record) => {
-        map[String(record.studentId)] = record;
+      setNotice({
+        type: 'success',
+        text: `Đã lưu điểm danh thành công (${presentStudents.length} có mặt, ${absentStudents.length} vắng, ${lateStudents.length} muộn).`
       });
-      setAttendanceMap(map);
     } catch (err) {
-      setNotice(err.response?.data?.message || 'Lưu điểm danh chưa thành công.');
+      setNotice({ type: 'error', text: err.response?.data?.message || 'Lưu điểm danh chưa thành công.' });
     } finally {
+      // Luôn đồng bộ lại _id từ máy chủ ngay cả khi 1 thao tác phụ gặp lỗi giữa chừng
+      try {
+        const attendanceRes = await api.get(`/attendance/class/${classroomId}`, { params: { date: attendDate } });
+        const map = {};
+        (attendanceRes.data.data || []).forEach((record) => {
+          map[String(record.studentId)] = record;
+        });
+        setAttendanceMap(map);
+      } catch {
+        // Giữ nguyên state hiện tại nếu mất mạng
+      }
       setSaving(false);
     }
   };
@@ -215,8 +224,8 @@ export default function AttendanceDetail() {
       subtitle="Tiếp nhận học sinh đến lớp (đón trẻ) và xác minh bàn giao khi ra về (trả trẻ)."
     >
       {notice && (
-        <div className={`timekeeping-notice ${notice.startsWith('Đã ') ? 'success' : 'error'}`}>
-          {notice}
+        <div className={`timekeeping-notice ${notice.type === 'success' ? 'success' : 'error'}`}>
+          {notice.text}
         </div>
       )}
 
@@ -245,7 +254,7 @@ export default function AttendanceDetail() {
       </div>
 
       <div className="attendance-topline">
-        <button className="back-link" onClick={() => navigate(`/attendance${urlDate ? `?date=${urlDate}` : ''}`)}>
+        <button className="back-link" onClick={() => navigate(`/attendance?list=1${urlDate ? `&date=${urlDate}` : ''}`)}>
           <Icon name="arrowLeft" size={18} />
           Danh sách lớp
         </button>

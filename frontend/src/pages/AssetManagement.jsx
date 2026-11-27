@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
+import { getStoredUser } from '../utils/storage';
 import {
   addAssetMaintenance,
   approveProcurementRequest,
@@ -45,11 +47,12 @@ const requestStatus = (status) => ({
 }[status] || [status || 'Chờ phê duyệt', 'neutral']);
 
 export default function AssetManagement() {
-  const role = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const role = getStoredUser().role;
   const canManageAssets = role === 'admin';
   const canReviewRequests = ['admin', 'principal'].includes(role);
   const [activeTab, setActiveTab] = useState(canManageAssets ? 'assets' : 'requests');
   const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState(null);
   const [assets, setAssets] = useState([]);
   const [requests, setRequests] = useState([]);
@@ -95,7 +98,6 @@ export default function AssetManagement() {
     }
   }, [canManageAssets]);
 
-  // Initial request intentionally starts after the page mounts.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -124,76 +126,102 @@ export default function AssetManagement() {
 
   const handleCreateAsset = async (event) => {
     event.preventDefault();
+    if (submitting) return;
+    setSubmitting(true);
     try {
       let itemId = newAssetForm.itemId;
       if (!itemId) {
         const itemRes = await createProcurementItem({
-          name: newAssetForm.name, category: newAssetForm.category, unit: 'cái', defaultUnitPrice: newAssetForm.originalCost
+          name: newAssetForm.name.trim(),
+          category: newAssetForm.category,
+          unit: 'cái',
+          defaultUnitPrice: newAssetForm.originalCost
         });
         itemId = itemRes.data.data._id;
+        // Lưu tạm itemId phòng khi createAsset lỗi và người dùng bấm lưu lại -> không sinh thêm ItemMaster mồ côi
+        setNewAssetForm((prev) => ({ ...prev, itemId }));
       }
       await createAsset({ ...newAssetForm, itemId });
       setShowAssetModal(false);
       setNewAssetForm({ itemId: '', name: '', category: 'equipment', originalCost: 5000000, location: '', serialNumber: '' });
       feedback('success', 'Đã ghi nhận tài sản mới vào danh mục.');
-      loadData();
+      await loadData();
     } catch (err) {
       feedback('error', err.response?.data?.message || 'Không thể thêm tài sản.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const handleMaintenance = async (event) => {
     event.preventDefault();
+    if (submitting || !selectedAsset) return;
+    setSubmitting(true);
     try {
       await addAssetMaintenance(selectedAsset._id, maintenanceForm);
       setShowMaintenanceModal(false);
       setSelectedAsset(null);
       setMaintenanceForm({ description: '', cost: 0, contractor: '', note: '' });
       feedback('success', 'Đã lưu nhật ký bảo trì thiết bị.');
-      loadData();
+      await loadData();
     } catch (err) {
       feedback('error', err.response?.data?.message || 'Không thể ghi nhận bảo trì.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const handleLiquidate = async (assetId) => {
+    if (submitting) return;
     const reason = window.prompt('Nhập lý do thanh lý tài sản:');
     if (!reason?.trim()) return;
+    setSubmitting(true);
     try {
       await liquidateAsset(assetId, { liquidationValue: 0, reason: reason.trim(), note: 'Thanh lý theo biên bản nhà trường' });
       feedback('success', 'Tài sản đã được chuyển sang trạng thái thanh lý.');
-      loadData();
+      await loadData();
     } catch (err) {
       feedback('error', err.response?.data?.message || 'Không thể thanh lý tài sản.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const handleCreateRequest = async (event) => {
     event.preventDefault();
+    if (submitting) return;
+    setSubmitting(true);
     try {
       await createProcurementRequest(newRequestForm);
       setShowRequestModal(false);
       setNewRequestForm({ reason: '', category: 'equipment', urgency: 'normal', items: [{ itemName: '', quantity: 1, unit: 'cái', estimatedPrice: 0 }] });
       feedback('success', 'Đề xuất đã được gửi để chờ phê duyệt.');
-      loadData();
+      await loadData();
     } catch (err) {
       feedback('error', err.response?.data?.message || 'Không thể gửi đề xuất mua sắm.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const reviewRequest = async (id, approved) => {
+    if (submitting) return;
+    setSubmitting(true);
     try {
       await approveProcurementRequest(id, approved
         ? { level: 2, status: 'approved' }
         : { status: 'rejected', rejectionReason: 'Chưa phù hợp với nhu cầu hoặc ngân sách hiện tại.' });
       feedback('success', approved ? 'Đã duyệt đề xuất mua sắm.' : 'Đã từ chối đề xuất mua sắm.');
-      loadData();
+      await loadData();
     } catch (err) {
       feedback('error', err.response?.data?.message || 'Không thể xử lý đề xuất.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const openOrderModal = async (request) => {
+    if (submitting) return;
     try {
       const supplierRes = await getProcurementSuppliers();
       const activeSuppliers = supplierRes.data.data || [];
@@ -208,31 +236,50 @@ export default function AssetManagement() {
         items: (request.items || []).map((item) => ({ itemId: item.itemId || '', itemName: item.itemName || '', quantity: Number(item.quantity || 1), unit: item.unit || 'cái', unitPrice: Number(item.estimatedPrice || 0) }))
       });
       setShowOrderModal(true);
-    } catch (err) { feedback('error', err.response?.data?.message || 'Không thể tải nhà cung cấp để lập đơn hàng.'); }
+    } catch (err) {
+      feedback('error', err.response?.data?.message || 'Không thể tải nhà cung cấp để lập đơn hàng.');
+    }
   };
 
   const handleCreateOrder = async (event) => {
     event.preventDefault();
+    if (submitting || !orderDraft) return;
+    setSubmitting(true);
     try {
       const selectedSupplier = suppliers.find((supplier) => supplier.name.trim().toLocaleLowerCase('vi-VN') === String(orderDraft.supplierName || '').trim().toLocaleLowerCase('vi-VN'));
       await createPurchaseOrder({ ...orderDraft, supplierId: selectedSupplier?._id || '' });
-      setShowOrderModal(false); setOrderDraft(null); setActiveTab('orders');
+      setShowOrderModal(false);
+      setOrderDraft(null);
+      setActiveTab('orders');
       feedback('success', 'Đã tạo đơn đặt hàng và chuyển đề xuất sang trạng thái đã mua.');
-      loadData();
-    } catch (err) { feedback('error', err.response?.data?.message || 'Không thể tạo đơn đặt hàng.'); }
+      await loadData();
+    } catch (err) {
+      feedback('error', err.response?.data?.message || 'Không thể tạo đơn đặt hàng.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const updateOrderStatus = async (order, status) => {
+    if (submitting) return;
     const label = status === 'delivered' ? 'đã giao' : 'đã hủy';
     if (!window.confirm(`Xác nhận chuyển đơn ${order.orderCode || ''} sang “${label}”?`)) return;
+    setSubmitting(true);
     try {
       await updatePurchaseOrderStatus(order._id, { status });
-      feedback('success', `Đã cập nhật đơn hàng thành ${label}.`); loadData();
-    } catch (err) { feedback('error', err.response?.data?.message || 'Không thể cập nhật trạng thái đơn hàng.'); }
+      feedback('success', `Đã cập nhật đơn hàng thành ${label}.`);
+      await loadData();
+    } catch (err) {
+      feedback('error', err.response?.data?.message || 'Không thể cập nhật trạng thái đơn hàng.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleUpdateOrderDetails = async (event) => {
     event.preventDefault();
+    if (submitting || !editingOrder) return;
+    setSubmitting(true);
     try {
       await updatePurchaseOrderDetails(editingOrder._id, {
         expectedDelivery: editingOrder.expectedDelivery,
@@ -240,9 +287,11 @@ export default function AssetManagement() {
       });
       setEditingOrder(null);
       feedback('success', 'Đã cập nhật ngày giao dự kiến.');
-      loadData();
+      await loadData();
     } catch (err) {
       feedback('error', err.response?.data?.message || 'Không thể cập nhật ngày giao.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -258,16 +307,16 @@ export default function AssetManagement() {
       subtitle="Quản lý tài sản, bảo trì, đề xuất và tiến độ mua sắm của nhà trường"
       actions={(
         <div className="toolbar-buttons">
-          <button type="button" className="button button-secondary" onClick={loadData} disabled={loading}>
+          <button type="button" className="button button-secondary" onClick={loadData} disabled={loading || submitting}>
             <Icon name="refresh" size={15} /> Làm mới
           </button>
           {activeTab === 'requests' && (
-            <button type="button" className="button button-primary" onClick={() => setShowRequestModal(true)}>
+            <button type="button" className="button button-primary" onClick={() => setShowRequestModal(true)} disabled={submitting}>
               <Icon name="plus" size={16} /> Tạo đề xuất
             </button>
           )}
           {activeTab === 'assets' && canManageAssets && (
-            <button type="button" className="button button-primary" onClick={() => setShowAssetModal(true)}>
+            <button type="button" className="button button-primary" onClick={() => setShowAssetModal(true)} disabled={submitting}>
               <Icon name="plus" size={16} /> Thêm tài sản
             </button>
           )}
@@ -296,29 +345,131 @@ export default function AssetManagement() {
         {loading ? <section className="asset-panel asset-loading"><span className="loading-orb" /> Đang cập nhật dữ liệu vận hành...</section> : <>
           {activeTab === 'assets' && <section className="asset-panel">
             <div className="asset-panel-head"><div><p className="card-kicker">DANH MỤC TRUNG TÂM</p><h2>Tài sản & thiết bị</h2><p>Mỗi tài sản có vị trí sử dụng, trạng thái và nhật ký bảo trì riêng.</p></div><span className="history-count">{assets.length} tài sản</span></div>
-            {assets.length ? <div className="asset-table-wrap"><table className="asset-table"><thead><tr><th>TÀI SẢN</th><th>VỊ TRÍ SỬ DỤNG</th><th>NGUYÊN GIÁ</th><th>TRẠNG THÁI</th><th>BẢO TRÌ</th><th>THAO TÁC</th></tr></thead><tbody>{assets.map((asset) => { const [label, tone] = assetStatus(asset.status); return <tr key={asset._id}><td><strong>{asset.name}</strong><small>{asset.serialNumber ? `S/N: ${asset.serialNumber}` : `Nhóm: ${asset.category || 'Chưa phân loại'}`}</small></td><td><span className="asset-location">{asset.location || 'Chưa xếp vị trí'}</span></td><td><b>{money(asset.originalCost)}</b></td><td><span className={`asset-badge ${tone}`}>{label}</span></td><td><span className="maintenance-count"><b>{asset.maintenanceHistory?.length || 0}</b> lần ghi nhận</span></td><td><div className="asset-row-actions">{asset.status !== 'liquidated' && <><button onClick={() => { setSelectedAsset(asset); setShowMaintenanceModal(true); }}>Bảo trì</button><button className="danger" onClick={() => handleLiquidate(asset._id)}>Thanh lý</button></>}</div></td></tr>; })}</tbody></table></div> : <EmptyState icon="classes" title="Chưa có tài sản nào trong danh mục" text="Hãy bắt đầu bằng các tài sản đang có: điều hòa, bàn ghế, đồ chơi, thiết bị bếp hoặc máy tính." action="Thêm tài sản đầu tiên" onAction={() => setShowAssetModal(true)} />}
+            {assets.length ? <div className="asset-table-wrap"><table className="asset-table"><thead><tr><th>TÀI SẢN</th><th>VỊ TRÍ SỬ DỤNG</th><th>NGUYÊN GIÁ</th><th>TRẠNG THÁI</th><th>BẢO TRÌ</th><th>THAO TÁC</th></tr></thead><tbody>{assets.map((asset) => { const [label, tone] = assetStatus(asset.status); return <tr key={asset._id}><td><strong>{asset.name}</strong><small>{asset.serialNumber ? `S/N: ${asset.serialNumber}` : `Nhóm: ${asset.category || 'Chưa phân loại'}`}</small></td><td><span className="asset-location">{asset.location || 'Chưa xếp vị trí'}</span></td><td><b>{money(asset.originalCost)}</b></td><td><span className={`asset-badge ${tone}`}>{label}</span></td><td><span className="maintenance-count"><b>{asset.maintenanceHistory?.length || 0}</b> lần ghi nhận</span></td><td><div className="asset-row-actions">{asset.status !== 'liquidated' && <><button disabled={submitting} onClick={() => { setSelectedAsset(asset); setShowMaintenanceModal(true); }}>Bảo trì</button><button className="danger" disabled={submitting} onClick={() => handleLiquidate(asset._id)}>Thanh lý</button></>}</div></td></tr>; })}</tbody></table></div> : <EmptyState icon="classes" title="Chưa có tài sản nào trong danh mục" text="Hãy bắt đầu bằng các tài sản đang có: điều hòa, bàn ghế, đồ chơi, thiết bị bếp hoặc máy tính." action="Thêm tài sản đầu tiên" onAction={() => setShowAssetModal(true)} />}
           </section>}
 
           {activeTab === 'requests' && <section className="asset-panel">
             <div className="asset-panel-head"><div><p className="card-kicker">QUY TRÌNH MUA SẮM</p><h2>Đề xuất cần xử lý</h2><p>Ghi nhận nhu cầu, ước tính ngân sách và theo dõi trạng thái phê duyệt.</p></div><span className="history-count">{requests.length} đề xuất</span></div>
-            {requests.length ? <div className="request-board">{requestColumns.map((column) => <section className={`request-column ${column.tone}`} key={column.key}><header><div><span className="request-column-dot" /><h3>{column.label}</h3></div><b>{column.total}</b><p>{column.description}</p></header><div className="request-column-list">{column.items.length ? column.items.map((request) => <RequestCard key={request._id} request={request} canReview={canReviewRequests} canManage={canManageAssets} onReview={reviewRequest} onCreateOrder={openOrderModal} />) : <div className="request-column-empty">Chưa có đề xuất</div>}</div>{column.totalPages > 1 && <nav className="request-column-pagination"><button type="button" disabled={column.page <= 1} onClick={() => changeRequestPage(column.key, column.page - 1)}>‹</button><span>{column.page}/{column.totalPages}</span><button type="button" disabled={column.page >= column.totalPages} onClick={() => changeRequestPage(column.key, column.page + 1)}>›</button></nav>}</section>)}</div> : <EmptyState icon="grid" title="Chưa có đề xuất mua sắm" text="Giáo viên hoặc bộ phận có thể tạo đề xuất; quản lý sẽ xem ngân sách và phê duyệt tại đây." action="Tạo đề xuất" onAction={() => setShowRequestModal(true)} />}
+            {requests.length ? <div className="request-board">{requestColumns.map((column) => <section className={`request-column ${column.tone}`} key={column.key}><header><div><span className="request-column-dot" /><h3>{column.label}</h3></div><b>{column.total}</b><p>{column.description}</p></header><div className="request-column-list">{column.items.length ? column.items.map((request) => <RequestCard key={request._id} request={request} canReview={canReviewRequests} canManage={canManageAssets} submitting={submitting} onReview={reviewRequest} onCreateOrder={openOrderModal} />) : <div className="request-column-empty">Chưa có đề xuất</div>}</div>{column.totalPages > 1 && <nav className="request-column-pagination"><button type="button" disabled={column.page <= 1} onClick={() => changeRequestPage(column.key, column.page - 1)}>‹</button><span>{column.page}/{column.totalPages}</span><button type="button" disabled={column.page >= column.totalPages} onClick={() => changeRequestPage(column.key, column.page + 1)}>›</button></nav>}</section>)}</div> : <EmptyState icon="grid" title="Chưa có đề xuất mua sắm" text="Giáo viên hoặc bộ phận có thể tạo đề xuất; quản lý sẽ xem ngân sách và phê duyệt tại đây." action="Tạo đề xuất" onAction={() => setShowRequestModal(true)} />}
           </section>}
 
           {activeTab === 'orders' && <section className="asset-panel">
             <div className="asset-panel-head"><div><p className="card-kicker">THEO DÕI MUA HÀNG</p><h2>Đơn đặt hàng</h2><p>Các đơn đã được tạo từ đề xuất mua sắm được phê duyệt.</p></div><span className="history-count">{orders.length} đơn hàng</span></div>
-            {orders.length ? <div className="order-grid">{orders.map((order) => { const delivery = deliveryDateState(order.expectedDelivery); return <article key={order._id} className={`order-card ${delivery.invalid && order.status === 'ordered' ? 'has-invalid-date' : ''}`}><div><span className="order-icon"><Icon name="money" size={18} /></span><small>MÃ ĐƠN HÀNG</small><h3>{order.orderCode || `Đơn #${String(order._id).slice(-6).toUpperCase()}`}</h3><p>{order.supplierName || 'Chưa xác định nhà cung cấp'}</p></div><span className={`asset-badge ${order.status === 'delivered' ? 'success' : order.status === 'cancelled' ? 'danger' : 'info'}`}>{order.status === 'ordered' ? 'Đã đặt' : order.status === 'delivered' ? 'Đã giao' : order.status === 'cancelled' ? 'Đã hủy' : 'Chờ đặt'}</span><dl><div><dt>Ngày lập</dt><dd>{new Date(order.createdAt).toLocaleDateString('vi-VN')}</dd></div><div><dt>Dự kiến giao</dt><dd className={delivery.invalid ? 'invalid-date' : ''}>{delivery.label}</dd></div><div><dt>Tổng giá trị</dt><dd>{money(order.totalAmount)}</dd></div></dl>{canManageAssets && order.status === 'ordered' && <div className="order-card-actions"><button className="button button-secondary" onClick={() => setEditingOrder({ ...order, expectedDelivery: delivery.invalid ? dateInputValue(new Date(Date.now() + 7 * 86400000)) : dateInputValue(new Date(order.expectedDelivery)) })}>Sửa ngày giao</button><button className="button order-cancel-button" onClick={() => updateOrderStatus(order, 'cancelled')}>Hủy đơn</button><button className="button button-primary" onClick={() => updateOrderStatus(order, 'delivered')}>Xác nhận đã giao</button></div>}</article>; })}</div> : <EmptyState icon="money" title="Chưa có đơn đặt hàng" text="Sau khi duyệt đề xuất, mở đề xuất đó và chọn “Tạo đơn đặt hàng” để chuyển sang bước mua hàng." />}
+            {orders.length ? <div className="order-grid">{orders.map((order) => { const delivery = deliveryDateState(order.expectedDelivery); return <article key={order._id} className={`order-card ${delivery.invalid && order.status === 'ordered' ? 'has-invalid-date' : ''}`}><div><span className="order-icon"><Icon name="money" size={18} /></span><small>MÃ ĐƠN HÀNG</small><h3>{order.orderCode || `Đơn #${String(order._id).slice(-6).toUpperCase()}`}</h3><p>{order.supplierName || 'Chưa xác định nhà cung cấp'}</p></div><span className={`asset-badge ${order.status === 'delivered' ? 'success' : order.status === 'cancelled' ? 'danger' : 'info'}`}>{order.status === 'ordered' ? 'Đã đặt' : order.status === 'delivered' ? 'Đã giao' : order.status === 'cancelled' ? 'Đã hủy' : 'Chờ đặt'}</span><dl><div><dt>Ngày lập</dt><dd>{new Date(order.createdAt).toLocaleDateString('vi-VN')}</dd></div><div><dt>Dự kiến giao</dt><dd className={delivery.invalid ? 'invalid-date' : ''}>{delivery.label}</dd></div><div><dt>Tổng giá trị</dt><dd>{money(order.totalAmount)}</dd></div></dl>{canManageAssets && order.status === 'ordered' && <div className="order-card-actions"><button className="button button-secondary" disabled={submitting} onClick={() => setEditingOrder({ ...order, expectedDelivery: delivery.invalid ? dateInputValue(new Date(Date.now() + 7 * 86400000)) : dateInputValue(new Date(order.expectedDelivery)) })}>Sửa ngày giao</button><button className="button order-cancel-button" disabled={submitting} onClick={() => updateOrderStatus(order, 'cancelled')}>Hủy đơn</button><button className="button button-primary" disabled={submitting} onClick={() => updateOrderStatus(order, 'delivered')}>Xác nhận đã giao</button></div>}</article>; })}</div> : <EmptyState icon="money" title="Chưa có đơn đặt hàng" text="Sau khi duyệt đề xuất, mở đề xuất đó và chọn “Tạo đơn đặt hàng” để chuyển sang bước mua hàng." />}
           </section>}
         </>}
       </section>
 
-      {showAssetModal && <Modal title="Ghi nhận tài sản mới" subtitle="Tạo hồ sơ để quản lý vị trí, giá trị và lịch sử sử dụng."><form className="asset-form" onSubmit={handleCreateAsset}><Field label="Tên tài sản" hint="Ví dụ: Máy điều hòa Daikin 1.5 HP"><input value={newAssetForm.name} onChange={(e) => setNewAssetForm({ ...newAssetForm, name: e.target.value })} required /></Field><div className="asset-form-grid"><Field label="Phân loại"><select value={newAssetForm.category} onChange={(e) => setNewAssetForm({ ...newAssetForm, category: e.target.value })}><option value="equipment">Thiết bị</option><option value="furniture">Nội thất</option><option value="toy">Đồ chơi</option><option value="it">Công nghệ</option><option value="stationery">Văn phòng phẩm</option></select></Field><Field label="Vị trí sử dụng" hint="Ví dụ: Lớp MGL 5-6, Bếp, Phòng y tế"><input value={newAssetForm.location} onChange={(e) => setNewAssetForm({ ...newAssetForm, location: e.target.value })} required /></Field><Field label="Nguyên giá (VNĐ)"><input type="number" min="0" value={newAssetForm.originalCost} onChange={(e) => setNewAssetForm({ ...newAssetForm, originalCost: Number(e.target.value) })} required /></Field><Field label="Số serial / mã nhận diện" hint="Không bắt buộc"><input value={newAssetForm.serialNumber} onChange={(e) => setNewAssetForm({ ...newAssetForm, serialNumber: e.target.value })} /></Field></div><ModalActions onCancel={() => setShowAssetModal(false)} submit="Lưu tài sản" /></form></Modal>}
+      {showAssetModal && (
+        <Modal title="Ghi nhận tài sản mới" subtitle="Tạo hồ sơ để quản lý vị trí, giá trị và lịch sử sử dụng." onClose={() => { if (!submitting) setShowAssetModal(false); }}>
+          <form className="asset-form" onSubmit={handleCreateAsset}>
+            <Field label="Tên tài sản" hint="Ví dụ: Máy điều hòa Daikin 1.5 HP">
+              <input value={newAssetForm.name} onChange={(e) => setNewAssetForm({ ...newAssetForm, name: e.target.value, itemId: '' })} required />
+            </Field>
+            <div className="asset-form-grid">
+              <Field label="Phân loại">
+                <select value={newAssetForm.category} onChange={(e) => setNewAssetForm({ ...newAssetForm, category: e.target.value, itemId: '' })}>
+                  <option value="equipment">Thiết bị</option>
+                  <option value="furniture">Nội thất</option>
+                  <option value="toy">Đồ chơi</option>
+                  <option value="it">Công nghệ</option>
+                  <option value="stationery">Văn phòng phẩm</option>
+                </select>
+              </Field>
+              <Field label="Vị trí sử dụng" hint="Ví dụ: Lớp MGL 5-6, Bếp, Phòng y tế">
+                <input value={newAssetForm.location} onChange={(e) => setNewAssetForm({ ...newAssetForm, location: e.target.value })} required />
+              </Field>
+              <Field label="Nguyên giá (VNĐ)">
+                <input type="number" min="0" value={newAssetForm.originalCost} onChange={(e) => setNewAssetForm({ ...newAssetForm, originalCost: Number(e.target.value) })} required />
+              </Field>
+              <Field label="Số serial / mã nhận diện" hint="Không bắt buộc">
+                <input value={newAssetForm.serialNumber} onChange={(e) => setNewAssetForm({ ...newAssetForm, serialNumber: e.target.value })} />
+              </Field>
+            </div>
+            <ModalActions onCancel={() => setShowAssetModal(false)} submitting={submitting} submit="Lưu tài sản" />
+          </form>
+        </Modal>
+      )}
 
-      {showMaintenanceModal && selectedAsset && <Modal title="Ghi nhận bảo trì" subtitle={`${selectedAsset.name} · ${selectedAsset.location || 'Chưa xếp vị trí'}`}><form className="asset-form" onSubmit={handleMaintenance}><Field label="Nội dung bảo trì / sửa chữa" hint="Nêu rõ lỗi, hạng mục đã xử lý hoặc công việc cần thực hiện"><textarea rows="3" value={maintenanceForm.description} onChange={(e) => setMaintenanceForm({ ...maintenanceForm, description: e.target.value })} required /></Field><div className="asset-form-grid"><Field label="Chi phí (VNĐ)"><input type="number" min="0" value={maintenanceForm.cost} onChange={(e) => setMaintenanceForm({ ...maintenanceForm, cost: Number(e.target.value) })} /></Field><Field label="Đơn vị thực hiện" hint="Tên nhà cung cấp / người sửa chữa"><input value={maintenanceForm.contractor} onChange={(e) => setMaintenanceForm({ ...maintenanceForm, contractor: e.target.value })} /></Field></div><Field label="Ghi chú" hint="Không bắt buộc"><input value={maintenanceForm.note} onChange={(e) => setMaintenanceForm({ ...maintenanceForm, note: e.target.value })} /></Field><ModalActions onCancel={() => setShowMaintenanceModal(false)} submit="Lưu nhật ký" /></form></Modal>}
+      {showMaintenanceModal && selectedAsset && (
+        <Modal title="Ghi nhận bảo trì" subtitle={`${selectedAsset.name} · ${selectedAsset.location || 'Chưa xếp vị trí'}`} onClose={() => { if (!submitting) setShowMaintenanceModal(false); }}>
+          <form className="asset-form" onSubmit={handleMaintenance}>
+            <Field label="Nội dung bảo trì / sửa chữa" hint="Nêu rõ lỗi, hạng mục đã xử lý hoặc công việc cần thực hiện">
+              <textarea rows="3" value={maintenanceForm.description} onChange={(e) => setMaintenanceForm({ ...maintenanceForm, description: e.target.value })} required />
+            </Field>
+            <div className="asset-form-grid">
+              <Field label="Chi phí (VNĐ)"><input type="number" min="0" value={maintenanceForm.cost} onChange={(e) => setMaintenanceForm({ ...maintenanceForm, cost: Number(e.target.value) })} /></Field>
+              <Field label="Đơn vị thực hiện" hint="Tên nhà cung cấp / người sửa chữa"><input value={maintenanceForm.contractor} onChange={(e) => setMaintenanceForm({ ...maintenanceForm, contractor: e.target.value })} /></Field>
+            </div>
+            <Field label="Ghi chú" hint="Không bắt buộc"><input value={maintenanceForm.note} onChange={(e) => setMaintenanceForm({ ...maintenanceForm, note: e.target.value })} /></Field>
+            <ModalActions onCancel={() => setShowMaintenanceModal(false)} submitting={submitting} submit="Lưu nhật ký" />
+          </form>
+        </Modal>
+      )}
 
-      {showRequestModal && <Modal title="Tạo đề xuất mua sắm" subtitle="Nêu rõ nhu cầu để người duyệt có đủ thông tin quyết định."><form className="asset-form" onSubmit={handleCreateRequest}><Field label="Mục đích / lý do mua sắm" hint="Ví dụ: Bổ sung ghế ngồi cho lớp MGL 5-6"><input value={newRequestForm.reason} onChange={(e) => setNewRequestForm({ ...newRequestForm, reason: e.target.value })} required /></Field><div className="asset-form-grid"><Field label="Mức độ xử lý"><select value={newRequestForm.urgency} onChange={(e) => setNewRequestForm({ ...newRequestForm, urgency: e.target.value })}><option value="normal">Bình thường</option><option value="urgent">Cần gấp</option><option value="critical">Khẩn cấp</option></select></Field><Field label="Nhóm mua sắm"><select value={newRequestForm.category} onChange={(e) => setNewRequestForm({ ...newRequestForm, category: e.target.value })}><option value="equipment">Thiết bị</option><option value="furniture">Nội thất</option><option value="toy">Đồ chơi</option><option value="it">Công nghệ</option></select></Field></div><div className="asset-form-grid"><Field label="Mặt hàng cần mua" hint="Tên mặt hàng hoặc thiết bị"><input value={newRequestForm.items[0].itemName} onChange={(e) => setNewRequestForm({ ...newRequestForm, items: [{ ...newRequestForm.items[0], itemName: e.target.value }] })} required /></Field><Field label="Số lượng"><input type="number" min="1" value={newRequestForm.items[0].quantity} onChange={(e) => setNewRequestForm({ ...newRequestForm, items: [{ ...newRequestForm.items[0], quantity: Number(e.target.value) }] })} required /></Field><Field label="Đơn vị tính"><input value={newRequestForm.items[0].unit} onChange={(e) => setNewRequestForm({ ...newRequestForm, items: [{ ...newRequestForm.items[0], unit: e.target.value }] })} required /></Field><Field label="Đơn giá dự kiến (VNĐ)"><input type="number" min="0" value={newRequestForm.items[0].estimatedPrice} onChange={(e) => setNewRequestForm({ ...newRequestForm, items: [{ ...newRequestForm.items[0], estimatedPrice: Number(e.target.value) }] })} /></Field></div><ModalActions onCancel={() => setShowRequestModal(false)} submit="Gửi đề xuất" /></form></Modal>}
+      {showRequestModal && (
+        <Modal title="Tạo đề xuất mua sắm" subtitle="Nêu rõ nhu cầu để người duyệt có đủ thông tin quyết định." onClose={() => { if (!submitting) setShowRequestModal(false); }}>
+          <form className="asset-form" onSubmit={handleCreateRequest}>
+            <Field label="Mục đích / lý do mua sắm" hint="Ví dụ: Bổ sung ghế ngồi cho lớp MGL 5-6"><input value={newRequestForm.reason} onChange={(e) => setNewRequestForm({ ...newRequestForm, reason: e.target.value })} required /></Field>
+            <div className="asset-form-grid">
+              <Field label="Mức độ xử lý">
+                <select value={newRequestForm.urgency} onChange={(e) => setNewRequestForm({ ...newRequestForm, urgency: e.target.value })}>
+                  <option value="normal">Bình thường</option><option value="urgent">Cần gấp</option><option value="critical">Khẩn cấp</option>
+                </select>
+              </Field>
+              <Field label="Nhóm mua sắm">
+                <select value={newRequestForm.category} onChange={(e) => setNewRequestForm({ ...newRequestForm, category: e.target.value })}>
+                  <option value="equipment">Thiết bị</option><option value="furniture">Nội thất</option><option value="toy">Đồ chơi</option><option value="it">Công nghệ</option>
+                </select>
+              </Field>
+            </div>
+            <div className="asset-form-grid">
+              <Field label="Mặt hàng cần mua" hint="Tên mặt hàng hoặc thiết bị"><input value={newRequestForm.items[0].itemName} onChange={(e) => setNewRequestForm({ ...newRequestForm, items: [{ ...newRequestForm.items[0], itemName: e.target.value }] })} required /></Field>
+              <Field label="Số lượng"><input type="number" min="1" value={newRequestForm.items[0].quantity} onChange={(e) => setNewRequestForm({ ...newRequestForm, items: [{ ...newRequestForm.items[0], quantity: Number(e.target.value) }] })} required /></Field>
+              <Field label="Đơn vị tính"><input value={newRequestForm.items[0].unit} onChange={(e) => setNewRequestForm({ ...newRequestForm, items: [{ ...newRequestForm.items[0], unit: e.target.value }] })} required /></Field>
+              <Field label="Đơn giá dự kiến (VNĐ)"><input type="number" min="0" value={newRequestForm.items[0].estimatedPrice} onChange={(e) => setNewRequestForm({ ...newRequestForm, items: [{ ...newRequestForm.items[0], estimatedPrice: Number(e.target.value) }] })} /></Field>
+            </div>
+            <ModalActions onCancel={() => setShowRequestModal(false)} submitting={submitting} submit="Gửi đề xuất" />
+          </form>
+        </Modal>
+      )}
 
-      {showOrderModal && orderDraft && <Modal title="Tạo đơn đặt hàng" subtitle={`Đề xuất: ${orderDraft.requestReason}. Xác nhận này ghi nhận nhà trường đã đặt mua với nhà cung cấp.`}><form className="asset-form" onSubmit={handleCreateOrder}><Field label="Nhà cung cấp" hint="Chọn gợi ý đã lưu hoặc nhập trực tiếp tên nhà cung cấp mới"><input list="procurement-suppliers" value={orderDraft.supplierName} onChange={(event) => setOrderDraft({ ...orderDraft, supplierName: event.target.value })} placeholder="Ví dụ: Công ty Thiết bị Mầm Non An Phát" maxLength="160" required /><datalist id="procurement-suppliers">{suppliers.map((supplier) => <option key={supplier._id} value={supplier.name}>{supplier.phone ? `${supplier.code || ''} · ${supplier.phone}` : ''}</option>)}</datalist></Field><div className="asset-form-grid"><Field label="Ngày dự kiến giao" hint="Không được trước hôm nay hoặc quá 2 năm"><input type="date" min={dateInputValue()} value={orderDraft.expectedDelivery} onChange={(event) => setOrderDraft({ ...orderDraft, expectedDelivery: event.target.value })} required /></Field><Field label="Ghi chú đặt hàng" hint="Không bắt buộc"><input value={orderDraft.note} maxLength="500" onChange={(event) => setOrderDraft({ ...orderDraft, note: event.target.value })} placeholder="Ví dụ: Giao trong giờ hành chính" /></Field></div><div className="asset-order-items"><strong>Hạng mục đặt hàng</strong>{orderDraft.items.map((item, index) => <div className="asset-form-grid" key={`${item.itemName}-${index}`}><Field label="Mặt hàng"><input value={item.itemName} onChange={(event) => setOrderDraft({ ...orderDraft, items: orderDraft.items.map((entry, itemIndex) => itemIndex === index ? { ...entry, itemName: event.target.value } : entry) })} required /></Field><Field label="Số lượng"><input type="number" min="1" max="100000" step="1" value={item.quantity} onChange={(event) => setOrderDraft({ ...orderDraft, items: orderDraft.items.map((entry, itemIndex) => itemIndex === index ? { ...entry, quantity: Number(event.target.value) } : entry) })} required /></Field><Field label="Đơn giá chốt (VNĐ)"><input type="number" min="0" max="100000000000" value={item.unitPrice} onChange={(event) => setOrderDraft({ ...orderDraft, items: orderDraft.items.map((entry, itemIndex) => itemIndex === index ? { ...entry, unitPrice: Number(event.target.value) } : entry) })} required /></Field></div>)}</div><div className="order-total-preview"><span>Tổng giá trị đơn hàng</span><strong>{money(orderDraft.items.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0))}</strong></div><ModalActions onCancel={() => { setShowOrderModal(false); setOrderDraft(null); }} submit="Xác nhận đã đặt hàng" /></form></Modal>}
-      {editingOrder && <Modal title="Cập nhật ngày giao" subtitle={`${editingOrder.orderCode} · ${editingOrder.supplierName}`}><form className="asset-form" onSubmit={handleUpdateOrderDetails}><Field label="Ngày dự kiến giao" hint="Dùng để nhà trường theo dõi đơn đang chờ"><input type="date" min={dateInputValue()} value={editingOrder.expectedDelivery} onChange={(event) => setEditingOrder({ ...editingOrder, expectedDelivery: event.target.value })} required /></Field><Field label="Ghi chú" hint="Không bắt buộc"><textarea rows="3" maxLength="500" value={editingOrder.note || ''} onChange={(event) => setEditingOrder({ ...editingOrder, note: event.target.value })} /></Field><ModalActions onCancel={() => setEditingOrder(null)} submit="Lưu ngày giao" /></form></Modal>}
+      {showOrderModal && orderDraft && (
+        <Modal title="Tạo đơn đặt hàng" subtitle={`Đề xuất: ${orderDraft.requestReason}. Xác nhận này ghi nhận nhà trường đã đặt mua với nhà cung cấp.`} onClose={() => { if (!submitting) { setShowOrderModal(false); setOrderDraft(null); } }}>
+          <form className="asset-form" onSubmit={handleCreateOrder}>
+            <Field label="Nhà cung cấp" hint="Chọn gợi ý đã lưu hoặc nhập trực tiếp tên nhà cung cấp mới">
+              <input list="procurement-suppliers" value={orderDraft.supplierName} onChange={(event) => setOrderDraft({ ...orderDraft, supplierName: event.target.value })} placeholder="Ví dụ: Công ty Thiết bị Mầm Non An Phát" maxLength="160" required />
+              <datalist id="procurement-suppliers">{suppliers.map((supplier) => <option key={supplier._id} value={supplier.name}>{supplier.phone ? `${supplier.code || ''} · ${supplier.phone}` : ''}</option>)}</datalist>
+            </Field>
+            <div className="asset-form-grid">
+              <Field label="Ngày dự kiến giao" hint="Không được trước hôm nay hoặc quá 2 năm"><input type="date" min={dateInputValue()} value={orderDraft.expectedDelivery} onChange={(event) => setOrderDraft({ ...orderDraft, expectedDelivery: event.target.value })} required /></Field>
+              <Field label="Ghi chú đặt hàng" hint="Không bắt buộc"><input value={orderDraft.note} maxLength="500" onChange={(event) => setOrderDraft({ ...orderDraft, note: event.target.value })} placeholder="Ví dụ: Giao trong giờ hành chính" /></Field>
+            </div>
+            <div className="asset-order-items">
+              <strong>Hạng mục đặt hàng</strong>
+              {orderDraft.items.map((item, index) => (
+                <div className="asset-form-grid" key={`${item.itemName}-${index}`}>
+                  <Field label="Mặt hàng"><input value={item.itemName} onChange={(event) => setOrderDraft({ ...orderDraft, items: orderDraft.items.map((entry, itemIndex) => itemIndex === index ? { ...entry, itemName: event.target.value } : entry) })} required /></Field>
+                  <Field label="Số lượng"><input type="number" min="1" max="100000" step="1" value={item.quantity} onChange={(event) => setOrderDraft({ ...orderDraft, items: orderDraft.items.map((entry, itemIndex) => itemIndex === index ? { ...entry, quantity: Number(event.target.value) } : entry) })} required /></Field>
+                  <Field label="Đơn giá chốt (VNĐ)"><input type="number" min="0" max="100000000000" value={item.unitPrice} onChange={(event) => setOrderDraft({ ...orderDraft, items: orderDraft.items.map((entry, itemIndex) => itemIndex === index ? { ...entry, unitPrice: Number(event.target.value) } : entry) })} required /></Field>
+                </div>
+              ))}
+            </div>
+            <div className="order-total-preview"><span>Tổng giá trị đơn hàng</span><strong>{money(orderDraft.items.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0))}</strong></div>
+            <ModalActions onCancel={() => { setShowOrderModal(false); setOrderDraft(null); }} submitting={submitting} submit="Xác nhận đã đặt hàng" />
+          </form>
+        </Modal>
+      )}
+
+      {editingOrder && (
+        <Modal title="Cập nhật ngày giao" subtitle={`${editingOrder.orderCode} · ${editingOrder.supplierName}`} onClose={() => { if (!submitting) setEditingOrder(null); }}>
+          <form className="asset-form" onSubmit={handleUpdateOrderDetails}>
+            <Field label="Ngày dự kiến giao" hint="Dùng để nhà trường theo dõi đơn đang chờ"><input type="date" min={dateInputValue()} value={editingOrder.expectedDelivery} onChange={(event) => setEditingOrder({ ...editingOrder, expectedDelivery: event.target.value })} required /></Field>
+            <Field label="Ghi chú" hint="Không bắt buộc"><textarea rows="3" maxLength="500" value={editingOrder.note || ''} onChange={(event) => setEditingOrder({ ...editingOrder, note: event.target.value })} /></Field>
+            <ModalActions onCancel={() => setEditingOrder(null)} submitting={submitting} submit="Lưu ngày giao" />
+          </form>
+        </Modal>
+      )}
     </AppShell>
   );
 }
@@ -327,7 +478,7 @@ function EmptyState({ icon, title, text, action, onAction }) {
   return <div className="asset-empty"><span><Icon name={icon} size={26} /></span><h3>{title}</h3><p>{text}</p>{action && <button className="button button-primary" onClick={onAction}><Icon name="plus" size={15} /> {action}</button>}</div>;
 }
 
-function RequestCard({ request, canReview, canManage, onReview, onCreateOrder }) {
+function RequestCard({ request, canReview, canManage, submitting, onReview, onCreateOrder }) {
   const [label, tone] = requestStatus(request.status);
   const estimate = request.items?.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.estimatedPrice || 0), 0);
   const itemText = request.items?.map((item) => {
@@ -335,17 +486,71 @@ function RequestCard({ request, canReview, canManage, onReview, onCreateOrder })
     return `${item.itemName || 'Mặt hàng'} × ${item.quantity || 0} ${unit}`;
   }).join(' · ') || 'Chưa có hạng mục';
 
-  return <article className="request-card"><div className="request-card-main"><span className={`asset-badge ${tone}`}>{label}</span><h3>{request.reason}</h3><p>{itemText}</p><small>Người đề xuất: <b>{request.requesterName || 'Chưa cập nhật'}</b></small><small>Lập ngày {new Date(request.createdAt).toLocaleDateString('vi-VN')}</small></div><div className="request-card-side"><span>ƯỚC TÍNH</span><strong>{money(request.totalEstimatedCost || estimate)}</strong>{request.status === 'pending' && (canReview ? <div><button className="button button-primary" onClick={() => onReview(request._id, true)}>Duyệt</button><button className="button button-secondary" onClick={() => onReview(request._id, false)}>Từ chối</button></div> : <small className="request-waiting-note">Chờ phê duyệt</small>)}{request.status === 'approved_l2' && canManage && <button className="button button-primary" onClick={() => onCreateOrder(request)}><Icon name="money" size={14} />Tạo đơn</button>}{request.status === 'approved_l2' && !canManage && <small className="request-waiting-note">Chờ lập đơn hàng</small>}</div></article>;
+  return (
+    <article className="request-card">
+      <div className="request-card-main">
+        <span className={`asset-badge ${tone}`}>{label}</span>
+        <h3>{request.reason}</h3>
+        <p>{itemText}</p>
+        <small>Người đề xuất: <b>{request.requesterName || 'Chưa cập nhật'}</b></small>
+        <small>Lập ngày {new Date(request.createdAt).toLocaleDateString('vi-VN')}</small>
+      </div>
+      <div className="request-card-side">
+        <span>ƯỚC TÍNH</span>
+        <strong>{money(request.totalEstimatedCost || estimate)}</strong>
+        {request.status === 'pending' && (canReview ? (
+          <div>
+            <button className="button button-primary" disabled={submitting} onClick={() => onReview(request._id, true)}>Duyệt</button>
+            <button className="button button-secondary" disabled={submitting} onClick={() => onReview(request._id, false)}>Từ chối</button>
+          </div>
+        ) : <small className="request-waiting-note">Chờ phê duyệt</small>)}
+        {request.status === 'approved_l2' && canManage && <button className="button button-primary" disabled={submitting} onClick={() => onCreateOrder(request)}><Icon name="money" size={14} />Tạo đơn</button>}
+        {request.status === 'approved_l2' && !canManage && <small className="request-waiting-note">Chờ lập đơn hàng</small>}
+      </div>
+    </article>
+  );
 }
 
 function Field({ label, hint, children }) {
   return <label className="asset-field"><span>{label}</span>{children}{hint && <small>{hint}</small>}</label>;
 }
 
-function Modal({ title, subtitle, children }) {
-  return <div className="asset-modal-backdrop"><section className="asset-modal"><header><div><p className="card-kicker">CƠ SỞ VẬT CHẤT</p><h2>{title}</h2><p>{subtitle}</p></div></header>{children}</section></div>;
+function Modal({ title, subtitle, onClose, children }) {
+  useEffect(() => {
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const handleKey = (e) => {
+      if (e.key === 'Escape' && onClose) onClose();
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener('keydown', handleKey);
+    };
+  }, [onClose]);
+
+  return createPortal(
+    <div className="asset-modal-backdrop" role="presentation" onClick={(e) => { if (e.target === e.currentTarget && onClose) onClose(); }}>
+      <section className="asset-modal" role="dialog" aria-modal="true">
+        <header>
+          <div>
+            <p className="card-kicker">CƠ SỞ VẬT CHẤT</p>
+            <h2>{title}</h2>
+            <p>{subtitle}</p>
+          </div>
+        </header>
+        {children}
+      </section>
+    </div>,
+    document.body
+  );
 }
 
-function ModalActions({ onCancel, submit }) {
-  return <div className="asset-modal-actions"><button type="button" className="button button-secondary" onClick={onCancel}>Hủy</button><button className="button button-primary">{submit}</button></div>;
+function ModalActions({ onCancel, submitting, submit }) {
+  return (
+    <div className="asset-modal-actions">
+      <button type="button" className="button button-secondary" disabled={submitting} onClick={onCancel}>Hủy</button>
+      <button type="submit" className="button button-primary" disabled={submitting}>{submitting ? 'Đang lưu...' : submit}</button>
+    </div>
+  );
 }

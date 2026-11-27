@@ -1,5 +1,6 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 import { useEffect, useMemo, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
@@ -463,7 +464,7 @@ export default function PayrollManagement() {
         )}
 
         {/* Modal: Adjustments */}
-        {adjustingPayroll && (
+        {adjustingPayroll && createPortal(
           <div className="modal-backdrop">
             <form className="content-card student-form hr-modal" onSubmit={saveAdjustment}>
               <div className="card-heading">
@@ -537,11 +538,12 @@ export default function PayrollManagement() {
                 {canReview && <button type="submit" className="button button-primary">Lưu điều chỉnh</button>}
               </div>
             </form>
-          </div>
+          </div>,
+          document.body
         )}
 
         {/* Modal: Pay Salary */}
-        {payingPayroll && (
+        {payingPayroll && createPortal(
           <div className="modal-backdrop">
             <form className="content-card student-form hr-modal" onSubmit={submitPayPayroll}>
               <div className="card-heading">
@@ -595,11 +597,12 @@ export default function PayrollManagement() {
                 </button>
               </div>
             </form>
-          </div>
+          </div>,
+          document.body
         )}
 
         {/* Modal: Reopen Payroll */}
-        {reopeningPayroll && (
+        {reopeningPayroll && createPortal(
           <div className="modal-backdrop">
             <form className="content-card student-form hr-modal" onSubmit={submitReopen}>
               <div className="card-heading">
@@ -628,7 +631,8 @@ export default function PayrollManagement() {
                 <button type="submit" className="button button-danger">Xác nhận mở lại</button>
               </div>
             </form>
-          </div>
+          </div>,
+          document.body
         )}
       </section>
     </AppShell>

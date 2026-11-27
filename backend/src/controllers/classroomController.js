@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const Classroom = require('../models/zone3_school/Classroom');
 const Student = require('../models/zone3_school/Student');
+const StudentAttendance = require('../models/zone3_school/StudentAttendance');
 const User = require('../models/zone1_system/User');
 const {
   applyClassroomListScope,
@@ -12,6 +13,7 @@ const { buildTenantFilter } = require('../services/tenantFilterService');
 const Employee = require('../models/zone2_hr/Employee');
 const StaffHandover = require('../models/zone2_hr/StaffHandover');
 const credentialService = require('../services/credentialService');
+const { runSafeTransaction } = require('../utils/safeTransaction');
 
 const editableFields = ['name', 'fullName', 'campus', 'subject', 'ageGroup', 'maxSize', 'schoolYear'];
 const VALID_AGE_GROUPS = ['6-12m', '1-2', '2-3', '3-4', '4-5', '5-6'];
@@ -25,11 +27,26 @@ const validate = (data) => {
   if (!String(data.name || '').trim()) throw error('Tên lớp học là bắt buộc', 422);
   if (!VALID_AGE_GROUPS.includes(data.ageGroup)) throw error('Độ tuổi lớp không hợp lệ', 422);
   if (!Number.isInteger(Number(data.maxSize)) || Number(data.maxSize) < 1 || Number(data.maxSize) > 60) throw error('Sĩ số tối đa phải từ 1 đến 60', 422);
-  if (!/^\d{4}-\d{4}$/.test(String(data.schoolYear || ''))) throw error('Năm học phải theo dạng YYYY-YYYY', 422);
+  const yearMatch = String(data.schoolYear || '').trim().match(/^(\d{4})-(\d{4})$/);
+  if (!yearMatch || Number(yearMatch[2]) !== Number(yearMatch[1]) + 1) {
+    throw error('Năm học phải theo dạng YYYY-YYYY liên tiếp (ví dụ: 2026-2027)', 422);
+  }
   if (String(data.subject || '').trim().length > 120) throw error('Môn học không được vượt quá 120 ký tự', 422);
   if (String(data.campus || '').trim().length > 120) throw error('Tên phân hiệu / cơ sở không được vượt quá 120 ký tự', 422);
 };
-const respond = (res, err) => res.status(err.statusCode || 500).json({ success: false, message: err.message || 'Lỗi server' });
+const respond = (res, err) => {
+  if (err.name === 'ValidationError') {
+    const firstMsg = Object.values(err.errors || {})[0]?.message;
+    return res.status(422).json({ success: false, message: firstMsg || 'Dữ liệu lớp học không hợp lệ' });
+  }
+  if (err.name === 'CastError') {
+    return res.status(400).json({ success: false, message: 'ID hoặc định dạng dữ liệu không hợp lệ' });
+  }
+  if (err.code === 11000) {
+    return res.status(409).json({ success: false, message: 'Thông tin lớp học hoặc phân công giáo viên bị trùng lặp' });
+  }
+  return res.status(err.statusCode || 500).json({ success: false, message: err.message || 'Lỗi server' });
+};
 const ensureHomeroomAssignmentIndex = (tenantId = null) => {
   if (!homeroomIndexPromise) {
     if (tenantId) {
@@ -113,6 +130,7 @@ const updateClassroom = async (req, res) => {
     if (!isId(req.params.id)) throw error('ID lớp học không hợp lệ', 400);
     const tenantFilter = buildTenantFilter(req);
     const current = await Classroom.findOne({ _id: req.params.id, ...tenantFilter }); if (!current) throw error('Không tìm thấy lớp học', 404);
+    if (current.status === 'archived') throw error('Không thể chỉnh sửa lớp học đã lưu trữ', 409);
     const resolvedCampus = Object.hasOwn(req.body, 'campus')
       ? (String(req.body.campus || '').trim() || DEFAULT_CAMPUS)
       : (current.campus || DEFAULT_CAMPUS);
@@ -126,13 +144,23 @@ const updateClassroom = async (req, res) => {
       schoolYear: req.body.schoolYear || current.schoolYear
     };
     validate(data);
+    const currentHeadcount = Number(current.statistics?.currentStudents || 0);
+    if (Number(data.maxSize) < currentHeadcount) {
+      throw error(`Sĩ số tối đa (${data.maxSize}) không được nhỏ hơn số học sinh đang theo học trong lớp (${currentHeadcount})`, 422);
+    }
     const duplicateCampusCondition = resolvedCampus === DEFAULT_CAMPUS
       ? { $or: [{ campus: DEFAULT_CAMPUS }, { campus: { $exists: false } }, { campus: '' }] }
       : { campus: resolvedCampus };
     if (await Classroom.exists({ _id: { $ne: current._id }, name: data.name, schoolYear: data.schoolYear, status: 'active', ...duplicateCampusCondition, ...tenantFilter })) {
       throw error('Tên lớp đã tồn tại trong cùng phân hiệu và năm học này', 409);
     }
-    const classroom = await Classroom.findOneAndUpdate({ _id: current._id, ...tenantFilter }, { $set: data }, { new: true, runValidators: true });
+    const classroom = await Classroom.findOneAndUpdate({ _id: current._id, ...tenantFilter }, { $set: data }, { returnDocument: 'after', runValidators: true });
+    if (current.name !== data.name) {
+      await Promise.all([
+        Student.updateMany({ ...tenantFilter, classroomId: current._id }, { $set: { className: data.name } }),
+        StudentAttendance.updateMany({ ...tenantFilter, classroomId: current._id }, { $set: { className: data.name } })
+      ]);
+    }
     res.json({ success: true, message: 'Cập nhật lớp học thành công', data: classroom });
   } catch (err) { console.error(err); respond(res, err); }
 };
@@ -145,117 +173,112 @@ const assignHomeroomTeacher = async (req, res) => {
     const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
     if (!isId(req.params.id)) throw error('ID lớp học không hợp lệ', 400);
 
-    const session = await mongoose.startSession();
-    try {
-      let savedClassroom;
-      await session.withTransaction(async () => {
-        // 1. Re-verify actor in transaction: must be active, within tenant, and have role in ['admin', 'hr']
-        const currentActor = await User.findOne({
-          _id: req.user._id,
-          role: { $in: ['admin', 'hr'] },
-          status: 'active',
-          ...tenantFilter
+    const savedClassroom = await runSafeTransaction(async (session) => {
+      const sessionOpt = session ? { session } : undefined;
+      // 1. Re-verify actor in transaction: must be active, within tenant, and have role in ['admin', 'hr']
+      const currentActor = await User.findOne({
+        _id: req.user._id,
+        role: { $in: ['admin', 'hr'] },
+        status: 'active',
+        ...tenantFilter
+      }).session(session);
+      if (!currentActor) {
+        throw error('Tài khoản thực hiện thao tác không còn quyền quản lý lớp học hoặc đã bị khóa/hạ quyền', 403);
+      }
+
+      const classroom = await Classroom.findOne({ _id: req.params.id, ...tenantFilter }).session(session);
+      if (!classroom) throw error('Không tìm thấy lớp học', 404);
+      if (classroom.status !== 'active') throw error('Không thể phân công giáo viên cho lớp đã lưu trữ', 409);
+
+      const before = classroom.toObject();
+      const teacherId = req.body?.teacherId;
+      if (teacherId !== null && teacherId !== undefined && teacherId !== '') {
+        if (!isId(teacherId)) throw error('ID giáo viên không hợp lệ', 400);
+
+        // 2. Atomic conditional touch on teacher User coordinates with concurrent role updates
+        const teacher = await User.findOneAndUpdate(
+          { _id: teacherId, role: 'teacher', status: 'active', ...tenantFilter },
+          { $inc: { assignmentVersion: 1 } },
+          { ...(session ? { session } : {}), returnDocument: 'after' }
+        ).select('profile.fullName username');
+
+        if (!teacher) throw error('Chỉ có thể chọn tài khoản giáo viên đang hoạt động', 422);
+
+        // 3. Re-verify linked Employee inside session with tenant scope
+        const unscopedEmp = await Employee.findOne({ userId: teacher._id }).select('_id tenantId status').session(session);
+        if (unscopedEmp) {
+          const isSaaS = Boolean(req.tenantId);
+          let sameTenant = false;
+          if (isSaaS) {
+            sameTenant = Boolean(unscopedEmp.tenantId && String(unscopedEmp.tenantId) === String(req.tenantId));
+          } else {
+            sameTenant = unscopedEmp.tenantId === null || unscopedEmp.tenantId === undefined;
+          }
+          if (!sameTenant) {
+            throw error('Phát hiện liên kết hồ sơ nhân sự ngoại lai không hợp lệ', 409);
+          }
+        }
+
+        const employee = await Employee.findOne({ userId: teacher._id, ...tenantFilter }).session(session);
+        if (!employee || employee.status === 'resigned') {
+          throw error('Chỉ phân công giáo viên đang làm việc và có tài khoản hợp lệ', 422);
+        }
+
+        // 4. Business guards consistent with assignClassroomStaff
+        const hasResignationHandover = await StaffHandover.exists({
+          employeeId: employee._id,
+          kind: 'resignation',
+          status: 'scheduled'
         }).session(session);
-        if (!currentActor) {
-          throw error('Tài khoản thực hiện thao tác không còn quyền quản lý lớp học hoặc đã bị khóa/hạ quyền', 403);
+        if (hasResignationHandover) {
+          throw error('Giáo viên đã hẹn nghỉ việc. Không thể phân công chủ nhiệm.', 409);
         }
 
-        const classroom = await Classroom.findOne({ _id: req.params.id, ...tenantFilter }).session(session);
-        if (!classroom) throw error('Không tìm thấy lớp học', 404);
-        if (classroom.status !== 'active') throw error('Không thể phân công giáo viên cho lớp đã lưu trữ', 409);
+        const alreadyHomeroom = await Classroom.findOne({
+          _id: { $ne: classroom._id },
+          schoolYear: classroom.schoolYear,
+          status: 'active',
+          homeroomTeacherId: teacher._id,
+          ...tenantFilter
+        }).session(session).select('name');
+        if (alreadyHomeroom) throw error(`Giáo viên này đang là chủ nhiệm lớp ${alreadyHomeroom.name} trong năm học ${classroom.schoolYear}`, 409);
 
-        const before = classroom.toObject();
-        const teacherId = req.body?.teacherId;
-        if (teacherId !== null && teacherId !== undefined && teacherId !== '') {
-          if (!isId(teacherId)) throw error('ID giáo viên không hợp lệ', 400);
-
-          // 2. Atomic conditional touch on teacher User coordinates with concurrent role updates
-          const teacher = await User.findOneAndUpdate(
-            { _id: teacherId, role: 'teacher', status: 'active', ...tenantFilter },
-            { $inc: { assignmentVersion: 1 } },
-            { session, new: true }
-          ).select('profile.fullName username');
-
-          if (!teacher) throw error('Chỉ có thể chọn tài khoản giáo viên đang hoạt động', 422);
-
-          // 3. Re-verify linked Employee inside session with tenant scope
-          const unscopedEmp = await Employee.findOne({ userId: teacher._id }).select('_id tenantId status').session(session);
-          if (unscopedEmp) {
-            const isSaaS = Boolean(req.tenantId);
-            let sameTenant = false;
-            if (isSaaS) {
-              sameTenant = Boolean(unscopedEmp.tenantId && String(unscopedEmp.tenantId) === String(req.tenantId));
-            } else {
-              sameTenant = unscopedEmp.tenantId === null || unscopedEmp.tenantId === undefined;
-            }
-            if (!sameTenant) {
-              throw error('Phát hiện liên kết hồ sơ nhân sự ngoại lai không hợp lệ', 409);
-            }
-          }
-
-          const employee = await Employee.findOne({ userId: teacher._id, ...tenantFilter }).session(session);
-          if (!employee || employee.status === 'resigned') {
-            throw error('Chỉ phân công giáo viên đang làm việc và có tài khoản hợp lệ', 422);
-          }
-
-          // 4. Business guards consistent with assignClassroomStaff
-          const hasResignationHandover = await StaffHandover.exists({
-            employeeId: employee._id,
-            kind: 'resignation',
-            status: 'scheduled'
-          }).session(session);
-          if (hasResignationHandover) {
-            throw error('Giáo viên đã hẹn nghỉ việc. Không thể phân công chủ nhiệm.', 409);
-          }
-
-          const alreadyHomeroom = await Classroom.findOne({
-            _id: { $ne: classroom._id },
-            schoolYear: classroom.schoolYear,
-            status: 'active',
-            homeroomTeacherId: teacher._id,
-            ...tenantFilter
-          }).session(session).select('name');
-          if (alreadyHomeroom) throw error(`Giáo viên này đang là chủ nhiệm lớp ${alreadyHomeroom.name} trong năm học ${classroom.schoolYear}`, 409);
-
-          classroom.teachers = (classroom.teachers || []).filter((assignment) =>
-            assignment.role !== 'homeroom' && String(assignment.teacherId) !== String(teacher._id)
-          );
-          classroom.teachers.push({
-            teacherId: teacher._id,
-            teacherName: teacher.profile?.fullName || teacher.username,
-            role: 'homeroom',
-            assignedAt: new Date()
-          });
-          classroom.homeroomTeacherId = teacher._id;
-        } else {
-          classroom.teachers = (classroom.teachers || []).filter((assignment) => assignment.role !== 'homeroom');
-          classroom.homeroomTeacherId = null;
-        }
-
-        await classroom.save({ session });
-
-        // 5. Audit log inside the SAME transaction session (audit failure will rollback Classroom & assignmentVersion)
-        await credentialService.audit(
-          currentActor,
-          'CLASSROOM_STAFF_ASSIGNED',
-          'Classroom',
-          classroom._id,
-          before,
-          classroom.toObject(),
-          session
+        classroom.teachers = (classroom.teachers || []).filter((assignment) =>
+          assignment.role !== 'homeroom' && String(assignment.teacherId) !== String(teacher._id)
         );
+        classroom.teachers.push({
+          teacherId: teacher._id,
+          teacherName: teacher.profile?.fullName || teacher.username,
+          role: 'homeroom',
+          assignedAt: new Date()
+        });
+        classroom.homeroomTeacherId = teacher._id;
+      } else {
+        classroom.teachers = (classroom.teachers || []).filter((assignment) => assignment.role !== 'homeroom');
+        classroom.homeroomTeacherId = null;
+      }
 
-        savedClassroom = classroom;
-      });
+      await classroom.save(sessionOpt);
 
-      res.json({
-        success: true,
-        message: req.body?.teacherId ? 'Đã phân công giáo viên chủ nhiệm.' : 'Đã bỏ phân công giáo viên chủ nhiệm.',
-        data: savedClassroom
-      });
-    } finally {
-      await session.endSession();
-    }
+      // 5. Audit log inside the SAME transaction session
+      await credentialService.audit(
+        currentActor,
+        'CLASSROOM_STAFF_ASSIGNED',
+        'Classroom',
+        classroom._id,
+        before,
+        classroom.toObject(),
+        session
+      );
+
+      return classroom;
+    });
+
+    res.json({
+      success: true,
+      message: req.body?.teacherId ? 'Đã phân công giáo viên chủ nhiệm.' : 'Đã bỏ phân công giáo viên chủ nhiệm.',
+      data: savedClassroom
+    });
   } catch (err) {
     if (err.name === 'InvalidTenantContextError' || err.statusCode === 403) {
       return res.status(err.statusCode || 403).json({ success: false, message: err.message });

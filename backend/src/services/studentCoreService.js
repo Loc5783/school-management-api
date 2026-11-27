@@ -1,6 +1,7 @@
 const StudentCodeCounter = require('../models/zone3_school/StudentCodeCounter');
 const mongoose = require('mongoose');
 const { generateNextPersonCode } = require('./personCodeService');
+const { runSafeTransaction } = require('../utils/safeTransaction');
 
 const STUDENT_STATUSES = Object.freeze([
     'pending_admission', 'enrolled', 'temporarily_absent', 'withdrawn', 'transferred', 'graduated'
@@ -32,20 +33,8 @@ const generateStudentCode = async (date = new Date(), session = null, tenantId =
     return generateNextPersonCode({ tenantId, session });
 };
 
-const runStudentTransaction = async (operation) => {
-    const topology = await mongoose.connection.db.admin().command({ hello: 1 });
-    if (!topology.setName && topology.msg !== 'isdbgrid' && process.env.ALLOW_STANDALONE_MONGODB !== 'true') {
-        const error = new Error('MongoDB phải chạy Replica Set hoặc sharded cluster để cập nhật học sinh an toàn');
-        error.statusCode = 503;
-        throw error;
-    }
-    const session = await mongoose.startSession();
-    try {
-        let result;
-        await session.withTransaction(async () => { result = await operation(session); });
-        return result;
-    } finally { await session.endSession(); }
-};
+const runStudentTransaction = async (operation) =>
+    runSafeTransaction(operation, 'MongoDB phải chạy Replica Set hoặc sharded cluster để cập nhật học sinh an toàn');
 
 const serializeStudent = (student, role, mode = 'detail') => {
     const raw = typeof student.toObject === 'function' ? student.toObject() : student;

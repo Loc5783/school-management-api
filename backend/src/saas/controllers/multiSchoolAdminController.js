@@ -25,6 +25,7 @@ const Student = require('../../models/zone3_school/Student');
 const Employee = require('../../models/zone2_hr/Employee');
 const { ensureAllPermissions } = require('../../services/defaultAdminBootstrapService');
 const { generatePlatformAdminToken, generateSchoolUserToken } = require('../utils/saasJwt');
+const { runSafeTransaction } = require('../../utils/safeTransaction');
 
 const TENANT_CODE_REGEX = /^[A-Z0-9_-]{3,20}$/;
 const BCRYPT_SALT_ROUNDS = 10;
@@ -225,7 +226,6 @@ const listAllSchoolsOverview = async (req, res) => {
  * Tạo mới một Trường học kèm khởi tạo tự động 1 Tài khoản Admin riêng cho trường đó và danh mục Phân hiệu ban đầu.
  */
 const createSchoolWithAdmin = async (req, res) => {
-  const session = await mongoose.startSession();
   try {
     const {
       code,
@@ -268,30 +268,43 @@ const createSchoolWithAdmin = async (req, res) => {
         message: 'Mật khẩu tài khoản Admin trường phải từ 6 ký tự trở lên'
       });
     }
+    const cleanEmail = String(contactEmail || '').trim().toLowerCase();
+    if (cleanEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(422).json({
+        success: false,
+        message: 'Email liên hệ của trường không đúng định dạng'
+      });
+    }
 
     const permissionIds = await ensureAllPermissions();
     const passwordHash = await bcrypt.hash(cleanAdminPass, BCRYPT_SALT_ROUNDS);
 
-    // Chuẩn bị danh sách phân hiệu ban đầu (luôn có ít nhất Cơ sở chính)
-    const parsedCampuses = Array.isArray(initialCampuses)
-      ? initialCampuses
-          .map((item, idx) => {
-            const cName = typeof item === 'string' ? item.trim() : String(item?.name || '').trim();
-            if (!cName) return null;
-            const cCode = (typeof item === 'object' && item?.code)
-              ? String(item.code).trim().toUpperCase()
-              : `CS-${idx + 1}`;
-            return {
-              code: cCode,
-              name: cName,
-              address: (typeof item === 'object' && item?.address) ? String(item.address).trim() : '',
-              phone: (typeof item === 'object' && item?.phone) ? String(item.phone).trim() : '',
-              managerName: (typeof item === 'object' && item?.managerName) ? String(item.managerName).trim() : '',
-              isActive: true
-            };
-          })
-          .filter(Boolean)
-      : [];
+    // Chuẩn bị danh sách phân hiệu ban đầu không trùng mã/tên
+    const seenNames = new Set();
+    const seenCodes = new Set();
+    const parsedCampuses = [];
+    if (Array.isArray(initialCampuses)) {
+      initialCampuses.forEach((item, idx) => {
+        const cName = typeof item === 'string' ? item.trim() : String(item?.name || '').trim();
+        if (!cName || seenNames.has(cName.toLowerCase())) return;
+        seenNames.add(cName.toLowerCase());
+        let cCode = (typeof item === 'object' && item?.code)
+          ? String(item.code).trim().toUpperCase()
+          : (cName.toLowerCase() === 'cơ sở chính' ? 'CS-CHINH' : `PH-${idx + 1}`);
+        while (seenCodes.has(cCode)) {
+          cCode = `${cCode}-${parsedCampuses.length + 1}`;
+        }
+        seenCodes.add(cCode);
+        parsedCampuses.push({
+          code: cCode,
+          name: cName,
+          address: (typeof item === 'object' && item?.address) ? String(item.address).trim() : '',
+          phone: (typeof item === 'object' && item?.phone) ? String(item.phone).trim() : '',
+          managerName: (typeof item === 'object' && item?.managerName) ? String(item.managerName).trim() : '',
+          isActive: true
+        });
+      });
+    }
 
     if (!parsedCampuses.length) {
       parsedCampuses.push({
@@ -304,10 +317,8 @@ const createSchoolWithAdmin = async (req, res) => {
       });
     }
 
-    let createdSchool = null;
-    let createdAdmin = null;
-
-    await session.withTransaction(async () => {
+    const { createdSchool, createdAdmin } = await runSafeTransaction(async (session) => {
+      const sessionOpt = session ? { session } : undefined;
       const existing = await Tenant.findOne({ code: cleanCode }).session(session);
       if (existing) {
         throw Object.assign(new Error(`Mã trường "${cleanCode}" đã tồn tại trên hệ thống`), { statusCode: 409 });
@@ -319,14 +330,14 @@ const createSchoolWithAdmin = async (req, res) => {
             code: cleanCode,
             name: cleanName,
             organizationCode: String(organizationCode || '').trim().toUpperCase().slice(0, 40),
-            contactEmail: String(contactEmail || '').trim().toLowerCase(),
+            contactEmail: cleanEmail,
             campuses: parsedCampuses,
             enabledModules: ALL_ENABLED_MODULES,
             status: 'active',
             authVersion: 0
           }
         ],
-        { session }
+        sessionOpt
       );
 
       const [schoolAdmin] = await User.create(
@@ -340,13 +351,13 @@ const createSchoolWithAdmin = async (req, res) => {
             profile: {
               fullName: String(adminFullName || '').trim() || `Quản trị viên ${cleanName}`,
               phone: String(adminPhone || '').trim(),
-              email: String(contactEmail || '').trim().toLowerCase()
+              email: cleanEmail
             },
             status: 'active',
             authVersion: 0
           }
         ],
-        { session }
+        sessionOpt
       );
 
       await PlatformAuditLog.create(
@@ -365,11 +376,10 @@ const createSchoolWithAdmin = async (req, res) => {
             }
           }
         ],
-        { session }
+        sessionOpt
       );
 
-      createdSchool = tenant;
-      createdAdmin = schoolAdmin;
+      return { createdSchool: tenant, createdAdmin: schoolAdmin };
     });
 
     return res.status(201).json({
@@ -393,16 +403,13 @@ const createSchoolWithAdmin = async (req, res) => {
       success: false,
       message: err.message || 'Không thể tạo trường học mới'
     });
-  } finally {
-    await session.endSession();
   }
 };
 
 /**
- * Cập nhật thông tin trường, trạng thái hoạt động hoặc đặt lại mật khẩu tài khoản Admin riêng của trường.
+ * Cập nhật thông tin trường, trạng thái hoạt động, tên đăng nhập hoặc đặt lại mật khẩu tài khoản Admin riêng của trường.
  */
 const updateSchoolAndAdmin = async (req, res) => {
-  const session = await mongoose.startSession();
   try {
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -411,8 +418,8 @@ const updateSchoolAndAdmin = async (req, res) => {
 
     const { name, organizationCode, contactEmail, status, adminUsername, newAdminPassword } = req.body || {};
 
-    let resultData = null;
-    await session.withTransaction(async () => {
+    const resultData = await runSafeTransaction(async (session) => {
+      const sessionOpt = session ? { session } : undefined;
       const tenant = await Tenant.findById(id).session(session);
       if (!tenant) throw Object.assign(new Error('Không tìm thấy trường học'), { statusCode: 404 });
 
@@ -425,7 +432,11 @@ const updateSchoolAndAdmin = async (req, res) => {
         tenant.organizationCode = String(organizationCode).trim().toUpperCase().slice(0, 40);
       }
       if (contactEmail != null) {
-        tenant.contactEmail = String(contactEmail).trim().toLowerCase();
+        const cleanEmail = String(contactEmail).trim().toLowerCase();
+        if (cleanEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+          throw Object.assign(new Error('Email liên hệ của trường không đúng định dạng'), { statusCode: 422 });
+        }
+        tenant.contactEmail = cleanEmail;
       }
       if (status != null) {
         if (!['active', 'suspended', 'terminated'].includes(status)) {
@@ -436,30 +447,51 @@ const updateSchoolAndAdmin = async (req, res) => {
           tenant.authVersion = (tenant.authVersion || 0) + 1;
         }
       }
-      await tenant.save({ session });
+      await tenant.save(sessionOpt);
 
-      if (newAdminPassword && String(newAdminPassword).trim()) {
-        const cleanPass = String(newAdminPassword).trim();
-        if (cleanPass.length < 6) {
-          throw Object.assign(new Error('Mật khẩu mới của Admin trường phải từ 6 ký tự trở lên'), { statusCode: 422 });
-        }
-        const passwordHash = await bcrypt.hash(cleanPass, BCRYPT_SALT_ROUNDS);
-        const targetAdminQuery = adminUsername
-          ? { tenantId: tenant._id, role: 'admin', username: String(adminUsername).trim() }
-          : { tenantId: tenant._id, role: 'admin' };
-        let adminUser = await User.findOne(targetAdminQuery).session(session);
+      const cleanNextAdminUser = adminUsername != null ? String(adminUsername).trim() : '';
+      const cleanNewPass = newAdminPassword != null ? String(newAdminPassword).trim() : '';
+
+      if (cleanNextAdminUser && (cleanNextAdminUser.length < 3 || cleanNextAdminUser.length > 50 || /\s/.test(cleanNextAdminUser))) {
+        throw Object.assign(new Error('Tên đăng nhập Admin trường phải từ 3–50 ký tự và không chứa khoảng trắng'), { statusCode: 422 });
+      }
+      if (cleanNewPass && cleanNewPass.length < 6) {
+        throw Object.assign(new Error('Mật khẩu mới của Admin trường phải từ 6 ký tự trở lên'), { statusCode: 422 });
+      }
+
+      if (cleanNextAdminUser || cleanNewPass) {
+        let adminUser = await User.findOne({ tenantId: tenant._id, role: 'admin' }).sort({ createdAt: 1 }).session(session);
         if (adminUser) {
-          adminUser.passwordHash = passwordHash;
-          adminUser.status = 'active';
-          adminUser.authVersion = (adminUser.authVersion || 0) + 1;
-          await adminUser.save({ session });
-        } else {
+          if (cleanNextAdminUser && cleanNextAdminUser !== adminUser.username) {
+            const dup = await User.exists({
+              tenantId: tenant._id,
+              username: cleanNextAdminUser,
+              _id: { $ne: adminUser._id }
+            }).session(session);
+            if (dup) {
+              throw Object.assign(new Error(`Tên đăng nhập "@${cleanNextAdminUser}" đã được sử dụng trong trường này`), { statusCode: 409 });
+            }
+            adminUser.username = cleanNextAdminUser;
+          }
+          if (cleanNewPass) {
+            adminUser.passwordHash = await bcrypt.hash(cleanNewPass, BCRYPT_SALT_ROUNDS);
+            adminUser.status = 'active';
+            adminUser.authVersion = (adminUser.authVersion || 0) + 1;
+          }
+          await adminUser.save(sessionOpt);
+        } else if (cleanNewPass) {
+          const targetUsername = cleanNextAdminUser || 'admin';
+          const dup = await User.exists({ tenantId: tenant._id, username: targetUsername }).session(session);
+          if (dup) {
+            throw Object.assign(new Error(`Tên đăng nhập "@${targetUsername}" đã thuộc về nhân sự khác trong trường`), { statusCode: 409 });
+          }
           const permissionIds = await ensureAllPermissions();
-          [adminUser] = await User.create(
+          const passwordHash = await bcrypt.hash(cleanNewPass, BCRYPT_SALT_ROUNDS);
+          await User.create(
             [
               {
                 tenantId: tenant._id,
-                username: String(adminUsername || 'admin').trim(),
+                username: targetUsername,
                 passwordHash,
                 role: 'admin',
                 permissions: permissionIds,
@@ -468,7 +500,7 @@ const updateSchoolAndAdmin = async (req, res) => {
                 authVersion: 0
               }
             ],
-            { session }
+            sessionOpt
           );
         }
       }
@@ -481,13 +513,13 @@ const updateSchoolAndAdmin = async (req, res) => {
             action: 'UPDATE_SCHOOL_CONFIG',
             targetType: 'tenant',
             targetId: String(tenant._id),
-            details: { code: tenant.code, status: tenant.status, passwordReset: Boolean(newAdminPassword) }
+            details: { code: tenant.code, status: tenant.status, passwordReset: Boolean(cleanNewPass) }
           }
         ],
-        { session }
+        sessionOpt
       );
 
-      resultData = tenant;
+      return tenant;
     });
 
     return res.json({
@@ -497,12 +529,13 @@ const updateSchoolAndAdmin = async (req, res) => {
     });
   } catch (err) {
     console.error('Lỗi cập nhật trường học:', err);
+    if (err.code === 11000) {
+      return res.status(409).json({ success: false, message: 'Tên đăng nhập quản trị trường bị trùng lặp' });
+    }
     return res.status(err.statusCode || 500).json({
       success: false,
       message: err.message || 'Không thể cập nhật thông tin trường học'
     });
-  } finally {
-    await session.endSession();
   }
 };
 
@@ -527,20 +560,31 @@ const enterSchoolWorkspace = async (req, res) => {
       });
     }
 
-    let schoolAdmin = await User.findOne({ tenantId: tenant._id, role: 'admin', status: 'active' });
+    let schoolAdmin = await User.findOne({ tenantId: tenant._id, role: 'admin', status: 'active' }).sort({ createdAt: 1 });
     if (!schoolAdmin) {
-      const permissionIds = await ensureAllPermissions();
-      const defaultHash = await bcrypt.hash('123456', BCRYPT_SALT_ROUNDS);
-      schoolAdmin = await User.create({
-        tenantId: tenant._id,
-        username: 'admin',
-        passwordHash: defaultHash,
-        role: 'admin',
-        permissions: permissionIds,
-        profile: { fullName: `Quản trị viên ${tenant.name}` },
-        status: 'active',
-        authVersion: 0
-      });
+      // Nếu tài khoản admin sẵn có đang bị inactive thì kích hoạt lại để SuperAdmin không bị kẹt lỗi trùng username
+      const inactiveAdmin = await User.findOne({ tenantId: tenant._id, role: 'admin' }).sort({ createdAt: 1 });
+      if (inactiveAdmin) {
+        inactiveAdmin.status = 'active';
+        await inactiveAdmin.save();
+        schoolAdmin = inactiveAdmin;
+      } else {
+        const permissionIds = await ensureAllPermissions();
+        const defaultHash = await bcrypt.hash('123456', BCRYPT_SALT_ROUNDS);
+        const fallbackUsername = (await User.exists({ tenantId: tenant._id, username: 'admin' }))
+          ? `admin_${String(tenant.code || 'school').toLowerCase()}`
+          : 'admin';
+        schoolAdmin = await User.create({
+          tenantId: tenant._id,
+          username: fallbackUsername,
+          passwordHash: defaultHash,
+          role: 'admin',
+          permissions: permissionIds,
+          profile: { fullName: `Quản trị viên ${tenant.name}` },
+          status: 'active',
+          authVersion: 0
+        });
+      }
     }
 
     const schoolToken = generateSchoolUserToken(schoolAdmin, tenant, '4h');
