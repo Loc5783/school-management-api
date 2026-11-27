@@ -101,7 +101,12 @@ const attachFrontendStatic = (app) => {
       return next();
     }
 
-    res.setHeader('Cache-Control', 'no-cache');
+    // Chống trình duyệt và CDN/Cloudflare lưu cache trang gốc index.html dẫn tới hiển thị giao diện bản build cũ
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('CDN-Cache-Control', 'no-store');
+    res.setHeader('Cloudflare-CDN-Cache-Control', 'no-store');
     return res.sendFile(indexFilePath);
   });
 

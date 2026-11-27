@@ -41,6 +41,7 @@ services:
       dockerfile: Dockerfile
       target: production
     image: school-management-fullstack:latest
+    pull_policy: build
     container_name: school-backend
     init: true
     restart: unless-stopped

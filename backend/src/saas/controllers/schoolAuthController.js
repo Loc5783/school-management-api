@@ -1,16 +1,19 @@
 'use strict';
 
 /**
- * @fileoverview Bộ điều khiển Xác thực Hợp nhất (Unified SaaS & Multi-School Login).
+ * @fileoverview Bộ điều khiển Xác thực Hợp nhất theo Vai trò (Unified Role-Aware Login).
  *
- * Quy tắc phân luồng đăng nhập thực tế trên 1 màn hình duy nhất:
- * 1. Khi để trống `schoolCode` (Mã trường học trống):
- *    - Ưu tiên xác thực tài khoản **Admin Tổng Đa Trường (`PlatformAdmin`)** -> trả về `isSuperAdmin: true`,
- *      `user.role = 'superadmin'` để Frontend điều hướng thẳng vào Trung tâm Điều hành Đa Trường (`/multi-school`).
- *    - Nếu không phải `PlatformAdmin`, kiểm tra tương thích ngược tài khoản đơn trường Legacy (`tenantId: null`).
- *    - Nếu tài khoản thuộc một trường học cụ thể nhưng người dùng quên nhập Mã trường, trả thông báo hướng dẫn rõ ràng.
+ * Quy tắc tự động nhận diện vai trò trên 1 màn hình đăng nhập duy nhất (không chia tab):
+ * 1. Người dùng chỉ cần nhập `username` + `password` (`schoolCode` là tùy chọn):
+ *    - Nếu khớp tài khoản **Admin Tổng Đa Trường (`PlatformAdmin`)** -> trả về `isSuperAdmin: true`,
+ *      `user.role = 'superadmin'` để Frontend chuyển thẳng vào `/multi-school`.
+ *    - Nếu khớp duy nhất 1 tài khoản trường học (`admin`, `principal`, `teacher`, `accountant`, `hr`, `chef`, `guard`, `parent`) ->
+ *      tự động xác định `tenant` của tài khoản đó và chuyển thẳng vào trang chủ đúng `role`.
+ *    - Chỉ khi trùng cả `username` và `password` ở nhiều trường khác nhau mới yêu cầu nhập thêm `schoolCode` để phân biệt.
  * 2. Khi có nhập `schoolCode` (VD: `HOANANG-A`):
- *    - Xác thực nghiêm ngặt trong phạm vi `tenantId` của trường đó (`User`), cô lập tuyệt đối dữ liệu giữa các trường.
+ *    - Ưu tiên xác thực tài khoản thuộc đúng trường `schoolCode`.
+ *    - Nếu không khớp user trong trường nhưng khớp tài khoản `PlatformAdmin` (trường hợp trình duyệt còn lưu mã trường cũ),
+ *      vẫn tự động đăng nhập đúng vào Admin Tổng (`/multi-school`).
  */
 
 const bcrypt = require('bcryptjs');
@@ -20,6 +23,56 @@ const PlatformAdmin = require('../../models/zone1_system/PlatformAdmin');
 const RevokedSession = require('../../models/zone1_system/RevokedSession');
 const { generateSchoolUserToken, generatePlatformAdminToken } = require('../utils/saasJwt');
 const { isHoneypotTriggered } = require('../../middlewares/botScannerShield');
+
+const buildSuperAdminPayload = (platformAdmin) => ({
+  success: true,
+  message: 'Đăng nhập Quản trị Tổng Hệ thống thành công',
+  isSuperAdmin: true,
+  token: generatePlatformAdminToken(platformAdmin),
+  tenant: null,
+  user: {
+    _id: platformAdmin._id,
+    username: platformAdmin.username,
+    role: 'superadmin',
+    platformRole: platformAdmin.role,
+    profile: {
+      fullName: 'Quản trị Tổng Hệ thống (Đa trường)'
+    }
+  }
+});
+
+const buildSchoolUserPayload = async (user, tenant) => {
+  user.lastLogin = new Date();
+  await user.save();
+
+  const token = generateSchoolUserToken(user, tenant);
+  return {
+    success: true,
+    message: 'Đăng nhập thành công',
+    token,
+    tenant: {
+      _id: tenant._id,
+      id: tenant._id,
+      code: tenant.code,
+      name: tenant.name,
+      status: tenant.status
+    },
+    user: {
+      _id: user._id,
+      username: user.username,
+      role: user.role,
+      profile: user.profile,
+      tenantId: tenant._id,
+      schoolCode: tenant.code
+    }
+  };
+};
+
+const isTenantSuspended = (tenant) =>
+  !tenant || tenant.status === 'suspended' || tenant.status === 'terminated';
+
+const isUserLockedOrExpired = (user, now = new Date()) =>
+  user.status !== 'active' || Boolean(user.accessEndsAt && user.accessEndsAt <= now);
 
 const login = async (req, res) => {
   try {
@@ -41,65 +94,96 @@ const login = async (req, res) => {
     }
 
     const cleanUsername = username.trim();
+    const candidateAdminNames = cleanUsername === cleanUsername.toLowerCase()
+      ? [cleanUsername]
+      : [cleanUsername, cleanUsername.toLowerCase()];
     const hasSchoolCode = typeof schoolCode === 'string' && schoolCode.trim().length > 0;
+    const now = new Date();
 
     // =========================================================================
-    // LUỒNG 1: ĐỂ TRỐNG MÃ TRƯỜNG -> ĐĂNG NHẬP ADMIN TỔNG ĐA TRƯỜNG (HOẶC LEGACY)
+    // LUỒNG 1: KHÔNG NHẬP MÃ TRƯỜNG -> TỰ ĐỘNG NHẬN DIỆN VAI TRÒ & TRƯỜNG HỌC
     // =========================================================================
     if (!hasSchoolCode) {
-      const candidateUsernames = cleanUsername === cleanUsername.toLowerCase()
-        ? [cleanUsername]
-        : [cleanUsername, cleanUsername.toLowerCase()];
-
       // Bước 1A: Kiểm tra tài khoản Quản trị Tổng Đa Trường (PlatformAdmin)
       const platformAdmin = await PlatformAdmin.findOne({
-        username: { $in: candidateUsernames }
+        username: { $in: candidateAdminNames }
       });
 
       if (platformAdmin) {
-        if (platformAdmin.status !== 'active') {
+        const isAdminMatch = await bcrypt.compare(password, platformAdmin.passwordHash);
+        if (isAdminMatch) {
+          if (platformAdmin.status !== 'active') {
+            return res.status(401).json({
+              success: false,
+              code: 'ACCOUNT_LOCKED',
+              message: 'Tài khoản Quản trị Tổng đang bị khóa hoặc tạm ngưng hoạt động'
+            });
+          }
+          return res.status(200).json(buildSuperAdminPayload(platformAdmin));
+        }
+      }
+
+      // Bước 1B: Tự động dò tài khoản thuộc các trường học theo username + password (tránh bắt người dùng nhớ mã trường)
+      const candidateUsers = await User.find({
+        tenantId: { $ne: null },
+        username: cleanUsername
+      }).limit(30);
+
+      if (candidateUsers.length > 0) {
+        const tenantIds = [...new Set(candidateUsers.map((u) => String(u.tenantId)))];
+        const tenants = await Tenant.find({ _id: { $in: tenantIds } }).lean();
+        const tenantMap = new Map(tenants.map((t) => [String(t._id), t]));
+
+        const passwordChecks = await Promise.all(
+          candidateUsers.map(async (u) => ({
+            user: u,
+            tenant: tenantMap.get(String(u.tenantId)) || null,
+            matched: await bcrypt.compare(password, u.passwordHash)
+          }))
+        );
+
+        const matchedEntries = passwordChecks.filter((entry) => entry.matched && entry.tenant);
+        const activeEntries = matchedEntries.filter(
+          (entry) => !isTenantSuspended(entry.tenant) && !isUserLockedOrExpired(entry.user, now)
+        );
+
+        if (activeEntries.length === 1) {
+          const payload = await buildSchoolUserPayload(activeEntries[0].user, activeEntries[0].tenant);
+          return res.status(200).json(payload);
+        }
+
+        if (activeEntries.length > 1) {
+          return res.status(401).json({
+            success: false,
+            code: 'SCHOOL_CODE_REQUIRED',
+            message: 'Tài khoản này trùng ở nhiều trường học. Vui lòng nhập thêm Mã trường học (VD: HOANANG-A) để vào đúng trường.'
+          });
+        }
+
+        if (matchedEntries.length === 1) {
+          if (isTenantSuspended(matchedEntries[0].tenant)) {
+            return res.status(403).json({
+              success: false,
+              code: 'TENANT_SUSPENDED',
+              message: 'Trường học đã bị tạm ngưng hoạt động'
+            });
+          }
           return res.status(401).json({
             success: false,
             code: 'ACCOUNT_LOCKED',
-            message: 'Tài khoản Quản trị Tổng đang bị khóa hoặc tạm ngưng hoạt động'
+            message: 'Tài khoản đã bị vô hiệu hóa, bị khóa hoặc đã hết thời hạn truy cập'
           });
         }
-
-        const isAdminMatch = await bcrypt.compare(password, platformAdmin.passwordHash);
-        if (!isAdminMatch) {
-          return res.status(401).json({
-            success: false,
-            message: 'Mật khẩu tài khoản Admin Tổng không chính xác (nếu đăng nhập tài khoản từng trường, vui lòng nhập Mã trường học)'
-          });
-        }
-
-        const superToken = generatePlatformAdminToken(platformAdmin);
-        return res.status(200).json({
-          success: true,
-          message: 'Đăng nhập Quản trị Tổng Hệ thống thành công',
-          isSuperAdmin: true,
-          token: superToken,
-          tenant: null,
-          user: {
-            _id: platformAdmin._id,
-            username: platformAdmin.username,
-            role: 'superadmin',
-            platformRole: platformAdmin.role,
-            profile: {
-              fullName: 'Quản trị Tổng Hệ thống (Đa trường)'
-            }
-          }
-        });
       }
 
-      // Bước 1B: Tương thích ngược tài khoản đơn trường Legacy (tenantId: null) nếu có
+      // Bước 1C: Tương thích ngược tài khoản đơn trường Legacy (tenantId: null)
       const legacyUser = await User.findOne({
         tenantId: { $in: [null, undefined] },
         username: cleanUsername
       });
 
       if (legacyUser) {
-        if (legacyUser.status !== 'active' || (legacyUser.accessEndsAt && legacyUser.accessEndsAt <= new Date())) {
+        if (isUserLockedOrExpired(legacyUser, now)) {
           return res.status(401).json({
             success: false,
             code: 'ACCOUNT_LOCKED',
@@ -108,60 +192,90 @@ const login = async (req, res) => {
         }
 
         const isLegacyMatch = await bcrypt.compare(password, legacyUser.passwordHash);
-        if (!isLegacyMatch) {
-          return res.status(401).json({
-            success: false,
-            message: 'Thông tin đăng nhập không chính xác'
+        if (isLegacyMatch) {
+          legacyUser.lastLogin = now;
+          await legacyUser.save();
+
+          const { generateToken } = require('../../utils/jwt');
+          const token = generateToken(legacyUser);
+
+          return res.status(200).json({
+            success: true,
+            message: 'Đăng nhập thành công',
+            token,
+            tenant: null,
+            user: {
+              _id: legacyUser._id,
+              username: legacyUser.username,
+              role: legacyUser.role,
+              profile: legacyUser.profile,
+              tenantId: null
+            }
           });
         }
-
-        legacyUser.lastLogin = new Date();
-        await legacyUser.save();
-
-        const { generateToken } = require('../../utils/jwt');
-        const token = generateToken(legacyUser);
-
-        return res.status(200).json({
-          success: true,
-          message: 'Đăng nhập thành công',
-          token,
-          tenant: null,
-          user: {
-            _id: legacyUser._id,
-            username: legacyUser.username,
-            role: legacyUser.role,
-            profile: legacyUser.profile,
-            tenantId: null
-          }
-        });
-      }
-
-      // Bước 1C: Gợi ý rõ nếu người dùng của trường quên điền Mã trường học
-      const existsInSchool = await User.exists({
-        tenantId: { $ne: null },
-        username: cleanUsername
-      });
-
-      if (existsInSchool) {
-        return res.status(401).json({
-          success: false,
-          code: 'SCHOOL_CODE_REQUIRED',
-          message: 'Tài khoản này thuộc một trường học cụ thể. Vui lòng nhập Mã trường học (School Code) để đăng nhập.'
-        });
       }
 
       return res.status(401).json({
         success: false,
-        message: 'Tài khoản Admin Tổng không tồn tại, hoặc bạn chưa nhập Mã trường học để đăng nhập vào trường.'
+        message: 'Tên đăng nhập hoặc mật khẩu không chính xác'
       });
     }
 
     // =========================================================================
-    // LUỒNG 2: CÓ NHẬP MÃ TRƯỜNG -> ĐĂNG NHẬP TÀI KHOẢN RIÊNG CỦA TỪNG TRƯỜNG
+    // LUỒNG 2: CÓ NHẬP MÃ TRƯỜNG -> ƯU TIÊN TRƯỜNG ĐÓ, FALLBACK ADMIN TỔNG NẾU KHỚP
     // =========================================================================
     const cleanSchoolCode = String(schoolCode).trim().toUpperCase();
-
     const tenant = await Tenant.findOne({ code: cleanSchoolCode });
+    let schoolUser = null;
+
+    if (tenant) {
+      schoolUser = await User.findOne({
+        tenantId: tenant._id,
+        username: cleanUsername
+      });
+
+      if (schoolUser) {
+        const isSchoolMatch = await bcrypt.compare(password, schoolUser.passwordHash);
+        if (isSchoolMatch) {
+          if (isTenantSuspended(tenant)) {
+            return res.status(403).json({
+              success: false,
+              code: 'TENANT_SUSPENDED',
+              message: 'Trường học đã bị tạm ngưng hoạt động'
+            });
+          }
+          if (isUserLockedOrExpired(schoolUser, now)) {
+            return res.status(401).json({
+              success: false,
+              code: 'ACCOUNT_LOCKED',
+              message: 'Tài khoản đã bị vô hiệu hóa, bị khóa hoặc đã hết thời hạn truy cập'
+            });
+          }
+
+          const payload = await buildSchoolUserPayload(schoolUser, tenant);
+          return res.status(200).json(payload);
+        }
+      }
+    }
+
+    // Fallback thông minh: nếu trình duyệt còn lưu mã trường cũ nhưng người dùng đăng nhập bằng tài khoản Admin Tổng
+    const platformAdminFallback = await PlatformAdmin.findOne({
+      username: { $in: candidateAdminNames }
+    });
+    if (platformAdminFallback) {
+      const isFallbackAdminMatch = await bcrypt.compare(password, platformAdminFallback.passwordHash);
+      if (isFallbackAdminMatch) {
+        if (platformAdminFallback.status !== 'active') {
+          return res.status(401).json({
+            success: false,
+            code: 'ACCOUNT_LOCKED',
+            message: 'Tài khoản Quản trị Tổng đang bị khóa hoặc tạm ngưng hoạt động'
+          });
+        }
+        return res.status(200).json(buildSuperAdminPayload(platformAdminFallback));
+      }
+    }
+
     if (!tenant) {
       return res.status(401).json({
         success: false,
@@ -169,7 +283,7 @@ const login = async (req, res) => {
       });
     }
 
-    if (tenant.status === 'suspended' || tenant.status === 'terminated') {
+    if (isTenantSuspended(tenant)) {
       return res.status(403).json({
         success: false,
         code: 'TENANT_SUSPENDED',
@@ -177,19 +291,7 @@ const login = async (req, res) => {
       });
     }
 
-    const user = await User.findOne({
-      tenantId: tenant._id,
-      username: cleanUsername
-    });
-
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: 'Thông tin đăng nhập không chính xác'
-      });
-    }
-
-    if (user.status !== 'active' || (user.accessEndsAt && user.accessEndsAt <= new Date())) {
+    if (schoolUser && isUserLockedOrExpired(schoolUser, now)) {
       return res.status(401).json({
         success: false,
         code: 'ACCOUNT_LOCKED',
@@ -197,38 +299,9 @@ const login = async (req, res) => {
       });
     }
 
-    const isMatch = await bcrypt.compare(password, user.passwordHash);
-    if (!isMatch) {
-      return res.status(401).json({
-        success: false,
-        message: 'Thông tin đăng nhập không chính xác'
-      });
-    }
-
-    user.lastLogin = new Date();
-    await user.save();
-
-    const token = generateSchoolUserToken(user, tenant);
-
-    return res.status(200).json({
-      success: true,
-      message: 'Đăng nhập thành công',
-      token,
-      tenant: {
-        _id: tenant._id,
-        id: tenant._id,
-        code: tenant.code,
-        name: tenant.name,
-        status: tenant.status
-      },
-      user: {
-        _id: user._id,
-        username: user.username,
-        role: user.role,
-        profile: user.profile,
-        tenantId: tenant._id,
-        schoolCode: tenant.code
-      }
+    return res.status(401).json({
+      success: false,
+      message: 'Thông tin đăng nhập không chính xác'
     });
   } catch (err) {
     return res.status(500).json({

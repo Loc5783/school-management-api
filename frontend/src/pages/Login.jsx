@@ -1,20 +1,21 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axiosConfig';
 import Icon from '../components/Icon';
 
 export default function Login() {
-  const [schoolCode, setSchoolCode] = useState(() => localStorage.getItem('last_school_code') || '');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [schoolCode, setSchoolCode] = useState('');
+  const [showSchoolCodeField, setShowSchoolCodeField] = useState(false);
   const [hpWebsite, setHpWebsite] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const schoolCodeInputRef = useRef(null);
   const navigate = useNavigate();
 
   const trimmedSchoolCode = schoolCode.trim().toUpperCase();
-  const isSuperAdminFlow = trimmedSchoolCode.length === 0;
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -38,7 +39,7 @@ export default function Login() {
         return;
       }
 
-      // Luồng 1: Mã trường để trống & xác thực thành công Admin Tổng Đa Trường -> Vào thẳng /multi-school
+      // Tự động điều hướng theo đúng vai trò (Role) của tài khoản vừa đăng nhập
       if (res.data.isSuperAdmin || res.data.user?.role === 'superadmin') {
         localStorage.setItem('superadmin_token', res.data.token);
         localStorage.setItem('superadmin_user', JSON.stringify(res.data.user));
@@ -50,13 +51,14 @@ export default function Login() {
         return;
       }
 
-      // Luồng 2: Đăng nhập vào không gian làm việc của một trường cụ thể
       localStorage.removeItem('superadmin_token');
       localStorage.removeItem('superadmin_user');
       localStorage.setItem('token', res.data.token);
       localStorage.setItem('user', JSON.stringify(res.data.user));
-      if (trimmedSchoolCode) {
-        localStorage.setItem('last_school_code', trimmedSchoolCode);
+
+      const resolvedSchoolCode = res.data.tenant?.code || trimmedSchoolCode;
+      if (resolvedSchoolCode) {
+        localStorage.setItem('last_school_code', resolvedSchoolCode);
       }
       if (res.data.tenant) {
         localStorage.setItem('tenant', JSON.stringify(res.data.tenant));
@@ -65,7 +67,9 @@ export default function Login() {
       }
 
       const homeByRole = {
+        admin: '/dashboard',
         principal: '/principal',
+        teacher: '/dashboard',
         parent: '/parent-portal',
         guard: '/guard',
         chef: '/kitchen',
@@ -75,7 +79,11 @@ export default function Login() {
       navigate(homeByRole[res.data.user?.role] || '/dashboard');
     } catch (err) {
       const errCode = err.response?.data?.code;
-      if (errCode === 'ACCOUNT_LOCKED') {
+      if (errCode === 'SCHOOL_CODE_REQUIRED') {
+        setShowSchoolCodeField(true);
+        setError(err.response?.data?.message || 'Tài khoản trùng ở nhiều trường, vui lòng nhập thêm Mã trường học.');
+        setTimeout(() => schoolCodeInputRef.current?.focus(), 60);
+      } else if (errCode === 'ACCOUNT_LOCKED') {
         setError('Tài khoản đã bị tạm khóa hoặc ngưng hoạt động. Vui lòng liên hệ quản trị hệ thống.');
       } else if (errCode === 'TENANT_SUSPENDED') {
         setError('Cơ sở trường học đang tạm ngừng hoạt động. Vui lòng liên hệ quản trị hệ thống.');
@@ -140,7 +148,7 @@ export default function Login() {
 
         <div className="login-highlights">
           <span><b><Icon name="attendance" size={18} /></b>Theo dõi điểm danh tức thời</span>
-          <span><b><Icon name="shield" size={18} /></b>Mỗi trường 1 tài khoản riêng</span>
+          <span><b><Icon name="shield" size={18} /></b>Tự động nhận diện vai trò</span>
           <span><b><Icon name="users" size={18} /></b>Kết nối nhà trường và phụ huynh</span>
         </div>
       </section>
@@ -156,7 +164,7 @@ export default function Login() {
           <p className="eyebrow">CHÀO MỪNG TRỞ LẠI</p>
           <h2>Đăng nhập hệ thống</h2>
           <p className="login-intro">
-            Nhập <strong>Mã trường</strong> để vào trường tương ứng, hoặc <strong>để trống Mã trường</strong> nếu đăng nhập tài khoản Admin Tổng.
+            Nhập tài khoản và mật khẩu — hệ thống tự động nhận diện vai trò và chuyển vào đúng giao diện làm việc.
           </p>
 
           <form onSubmit={handleSubmit} noValidate>
@@ -174,42 +182,6 @@ export default function Login() {
                 />
               </label>
             </div>
-            <label className="login-field">
-              <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                <span>Mã trường học (School Code)</span>
-                <small style={{ fontWeight: 600, fontSize: '11.5px', color: isSuperAdminFlow ? '#b45309' : '#64748b' }}>
-                  {isSuperAdminFlow ? 'Đang để trống (Admin Tổng)' : 'Tài khoản trường'}
-                </small>
-              </span>
-              <span className="login-input-wrap">
-                <Icon name="classes" size={18} />
-                <input
-                  type="text"
-                  autoComplete="organization"
-                  value={schoolCode}
-                  onChange={(event) => {
-                    setSchoolCode(event.target.value.toUpperCase());
-                    if (error) setError('');
-                  }}
-                  placeholder="Để trống nếu là Admin Tổng (VD trường: HOANANG-A)"
-                  spellCheck="false"
-                />
-                {schoolCode && (
-                  <button
-                    type="button"
-                    className="password-toggle"
-                    onClick={() => {
-                      setSchoolCode('');
-                      localStorage.removeItem('last_school_code');
-                      if (error) setError('');
-                    }}
-                    title="Xóa mã trường để đăng nhập Admin Tổng"
-                  >
-                    Xóa
-                  </button>
-                )}
-              </span>
-            </label>
 
             <label className="login-field">
               <span>Tên đăng nhập</span>
@@ -223,7 +195,7 @@ export default function Login() {
                     setUsername(event.target.value);
                     if (error) setError('');
                   }}
-                  placeholder={isSuperAdminFlow ? 'Tài khoản Admin Tổng (VD: admin)' : 'Tên đăng nhập hoặc SĐT phụ huynh'}
+                  placeholder="Tên đăng nhập, email hoặc SĐT phụ huynh"
                   required
                 />
               </span>
@@ -255,13 +227,55 @@ export default function Login() {
               </span>
             </label>
 
+            {showSchoolCodeField && (
+              <label className="login-field">
+                <span>Mã trường học (tùy chọn)</span>
+                <span className="login-input-wrap">
+                  <Icon name="classes" size={18} />
+                  <input
+                    ref={schoolCodeInputRef}
+                    type="text"
+                    autoComplete="organization"
+                    value={schoolCode}
+                    onChange={(event) => {
+                      setSchoolCode(event.target.value.toUpperCase());
+                      if (error) setError('');
+                    }}
+                    placeholder="VD: HOANANG-A (để trống nếu là Admin Tổng)"
+                    spellCheck="false"
+                  />
+                  {schoolCode && (
+                    <button
+                      type="button"
+                      className="password-toggle"
+                      onClick={() => {
+                        setSchoolCode('');
+                        if (error) setError('');
+                      }}
+                    >
+                      Xóa
+                    </button>
+                  )}
+                </span>
+              </label>
+            )}
+
             <div className="login-options">
-              <span className="login-remember-hint">
-                <Icon name="check" size={14} />{' '}
-                {isSuperAdminFlow
-                  ? 'Chế độ Quản trị Tổng Đa Trường'
-                  : `Vào trường ${trimmedSchoolCode} · Tự lưu mã trường`}
-              </span>
+              <button
+                type="button"
+                onClick={() => setShowSchoolCodeField((prev) => !prev)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  padding: 0,
+                  color: '#4f46e5',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+              >
+                {showSchoolCodeField ? 'Ẩn ô Mã trường học' : 'Nhập Mã trường học (nếu trùng tài khoản)'}
+              </button>
               <a href="mailto:admin@hoanang.edu.vn">Cần hỗ trợ?</a>
             </div>
 

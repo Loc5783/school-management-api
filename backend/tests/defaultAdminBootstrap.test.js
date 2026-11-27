@@ -109,6 +109,50 @@ describe('Default Admin Tổng Bootstrap & Unified Login (Auto-create Admin Tổ
     expect(superLoginAgain.status).toBe(200);
     expect(superLoginAgain.body.isSuperAdmin).toBe(true);
     expect(superLoginAgain.body.user.role).toBe('superadmin');
+
+    // 5. KHÔNG cần nhập Mã trường: tài khoản riêng của Trường A (mật khẩu khác Admin Tổng) tự động nhận diện vào thẳng Trường A!
+    const schoolAdminAutoDetectRes = await request(saasApp)
+      .post('/api/auth/login')
+      .send({
+        username: 'admin',
+        password: 'MatKhauTruongA!'
+      });
+    expect(schoolAdminAutoDetectRes.status).toBe(200);
+    expect(schoolAdminAutoDetectRes.body.user.role).toBe('admin');
+    expect(schoolAdminAutoDetectRes.body.tenant.code).toBe('HOANANG-A');
+
+    // 6. Kể cả khi còn lưu Mã trường HOANANG-A, đăng nhập bằng tài khoản Admin Tổng vẫn tự động vào đúng /multi-school (superadmin)
+    const superAdminWithStaleSchoolCodeRes = await request(saasApp)
+      .post('/api/auth/login')
+      .send({
+        schoolCode: 'HOANANG-A',
+        username: 'admin',
+        password: '123456'
+      });
+    expect(superAdminWithStaleSchoolCodeRes.status).toBe(200);
+    expect(superAdminWithStaleSchoolCodeRes.body.isSuperAdmin).toBe(true);
+    expect(superAdminWithStaleSchoolCodeRes.body.user.role).toBe('superadmin');
+
+    // 7. Giáo viên / Phụ huynh / Nhân sự chỉ cần nhập username + password (KHÔNG cần nhập Mã trường) -> Tự động nhận diện đúng trường & role
+    const tenantADoc = await Tenant.findOne({ code: 'HOANANG-A' });
+    await User.create({
+      tenantId: tenantADoc._id,
+      username: 'phungvandung@gmail.com',
+      passwordHash: await bcrypt.hash('GiaoVien123!', 8),
+      role: 'teacher',
+      status: 'active',
+      profile: { fullName: 'Phùng Văn Dũng' }
+    });
+
+    const teacherAutoLoginRes = await request(saasApp)
+      .post('/api/auth/login')
+      .send({
+        username: 'phungvandung@gmail.com',
+        password: 'GiaoVien123!'
+      });
+    expect(teacherAutoLoginRes.status).toBe(200);
+    expect(teacherAutoLoginRes.body.user.role).toBe('teacher');
+    expect(teacherAutoLoginRes.body.tenant.code).toBe('HOANANG-A');
   });
 
   test('Không ghi đè mật khẩu nếu DB đã có tài khoản Admin Tổng từ trước và hỗ trợ Admin Tổng tự đổi mật khẩu', async () => {

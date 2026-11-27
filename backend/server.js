@@ -9,6 +9,9 @@
 require('./src/config/loadEnv');
 
 const os = require('os');
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
 const mongoose = require('mongoose');
 const connectDB = require('./src/config/database');
 const createLegacyApp = require('./app');
@@ -46,7 +49,63 @@ const resolveLanIp = () => {
   return null;
 };
 
+/**
+ * Tự động kiểm tra và biên dịch lại `frontend/dist` khi chạy trực tiếp ngoài Docker (`node server.js` / PM2)
+ * nếu mã nguồn `frontend/src` vừa được cập nhật mới hơn bản build `frontend/dist/index.html` (VD: sau khi `git pull`).
+ * Giúp máy chủ không bao giờ phục vụ nhầm giao diện cũ.
+ */
+const getLatestMtimeMs = (dirPath) => {
+  let latest = 0;
+  if (!fs.existsSync(dirPath)) return latest;
+  const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      const subLatest = getLatestMtimeMs(fullPath);
+      if (subLatest > latest) latest = subLatest;
+    } else {
+      const stat = fs.statSync(fullPath);
+      if (stat.mtimeMs > latest) latest = stat.mtimeMs;
+    }
+  }
+  return latest;
+};
+
+const ensureFreshFrontendBuild = () => {
+  if (
+    process.env.RUNNING_IN_DOCKER === 'true'
+    || process.env.NODE_ENV === 'test'
+    || process.env.SERVE_FRONTEND === 'false'
+    || process.env.AUTO_BUILD_FRONTEND === 'false'
+  ) {
+    return;
+  }
+
+  const frontendDir = path.resolve(__dirname, '../frontend');
+  const frontendPkg = path.join(frontendDir, 'package.json');
+  const frontendSrc = path.join(frontendDir, 'src');
+  const distIndex = path.join(frontendDir, 'dist', 'index.html');
+
+  if (!fs.existsSync(frontendPkg) || !fs.existsSync(frontendSrc)) {
+    return;
+  }
+
+  const distMtime = fs.existsSync(distIndex) ? fs.statSync(distIndex).mtimeMs : 0;
+  const srcMtime = getLatestMtimeMs(frontendSrc);
+
+  if (!distMtime || srcMtime > distMtime) {
+    try {
+      console.log('🔄 Phát hiện giao diện Frontend vừa cập nhật mới — đang tự động build lại frontend/dist...');
+      execSync('npm run build', { cwd: frontendDir, stdio: 'inherit' });
+      console.log('✅ Đã đồng bộ bản build giao diện Frontend mới nhất.');
+    } catch (err) {
+      console.warn('⚠️ Không thể tự động build lại Frontend (tiếp tục dùng bản hiện có):', err.message);
+    }
+  }
+};
+
 const startServer = async () => {
+  ensureFreshFrontendBuild();
   await connectDB();
   if (!useLegacyApp && process.env.ENSURE_SAAS_INDEXES !== 'false') {
     await ensureMultiTenantIndexes(mongoose.connection.db).catch((err) => {
