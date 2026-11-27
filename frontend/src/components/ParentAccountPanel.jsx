@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import AppShell from '../components/AppShell';
-import Icon from '../components/Icon';
-import StudentPagination from '../components/StudentPagination';
+import AppShell from './AppShell';
+import Icon from './Icon';
+import StudentPagination from './StudentPagination';
 import api from '../api/axiosConfig';
 import {
   createParentAccount,

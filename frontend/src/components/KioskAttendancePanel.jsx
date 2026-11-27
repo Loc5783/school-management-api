@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import AppShell from '../components/AppShell';
-import Icon from '../components/Icon';
+import AppShell from './AppShell';
+import Icon from './Icon';
 import { kioskCheckIn } from '../api/timekeeping';
 
 /**

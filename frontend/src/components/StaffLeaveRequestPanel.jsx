@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import Icon from '../components/Icon';
+import Icon from './Icon';
 import { createMyEmployeeLeave, getMyEmployeeLeaves } from '../api/hr';
 
 const statuses = { pending: 'Chờ duyệt', approved: 'Đã duyệt', rejected: 'Từ chối', cancelled: 'Đã hủy' };
