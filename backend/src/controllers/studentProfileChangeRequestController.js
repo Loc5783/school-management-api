@@ -10,12 +10,22 @@ const PARENT_CHANGE_FIELDS = new Set(['fullName', 'birthDate', 'gender', 'addres
 const actorName = (user) => user?.profile?.fullName || user?.username || 'Người dùng';
 const error = (message, status = 400) => Object.assign(new Error(message), { status });
 
+const VALID_BLOOD_TYPES = new Set(['', 'A', 'B', 'AB', 'O', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']);
+
 const cleanChanges = (body = {}) => {
   const changes = Object.fromEntries(Object.entries(body).filter(([key]) => PARENT_CHANGE_FIELDS.has(key)));
   if (!Object.keys(changes).length) throw error('Không có thông tin hồ sơ hợp lệ để gửi duyệt');
   if (changes.fullName != null && (!String(changes.fullName).trim() || String(changes.fullName).trim().length > 120)) throw error('Họ và tên không hợp lệ');
   if (changes.birthDate && (Number.isNaN(new Date(changes.birthDate).getTime()) || new Date(changes.birthDate) > new Date())) throw error('Ngày sinh không hợp lệ');
   if (changes.gender && !['male', 'female'].includes(changes.gender)) throw error('Giới tính không hợp lệ');
+  if (changes.bloodType != null) {
+    const cleanBlood = String(changes.bloodType).trim().toUpperCase();
+    if (!VALID_BLOOD_TYPES.has(cleanBlood)) throw error('Nhóm máu không hợp lệ');
+    changes.bloodType = cleanBlood;
+  }
+  if (changes.healthInsuranceCode != null) {
+    changes.healthInsuranceCode = String(changes.healthInsuranceCode).trim().toUpperCase().slice(0, 30);
+  }
   if (changes.authorizedPickers != null && (!Array.isArray(changes.authorizedPickers) || changes.authorizedPickers.length > 10 || changes.authorizedPickers.some((item) => !String(item?.fullName || '').trim()))) throw error('Danh sách người được phép đón không hợp lệ');
   if (changes.authorizedPickers?.some((item) => (item.photoURL && (!/^https?:\/\//i.test(item.photoURL) || String(item.photoURL).length > 1000)) || String(item.vehicleType || '').length > 80 || String(item.vehiclePlate || '').length > 20)) throw error('Ảnh hoặc thông tin phương tiện người đón không hợp lệ');
   return changes;
@@ -57,6 +67,7 @@ const reviewRequest = async (req, res) => {
     if (decision === 'rejected' && !String(reviewNote).trim()) throw error('Cần nhập lý do từ chối');
     if (!isValidObjectId(req.params.id)) throw error('ID yêu cầu không hợp lệ');
     const tenantFilter = buildTenantFilter(req);
+    const tenantId = req.tenantId || req.user?.tenantId;
     const request = await StudentProfileChangeRequest.findOne({ _id: req.params.id, ...tenantFilter });
     if (!request) throw error('Không tìm thấy yêu cầu', 404);
     if (request.status !== 'pending') throw error('Yêu cầu này đã được xử lý', 409);
@@ -76,7 +87,7 @@ const reviewRequest = async (req, res) => {
     }
     request.status = decision; request.reviewedBy = req.user._id; request.reviewerName = actorName(req.user); request.reviewNote = String(reviewNote).trim(); request.reviewedAt = new Date(); await request.save();
     await writeAudit(req, decision === 'approved' ? 'STUDENT_PROFILE_CHANGE_APPROVED' : 'STUDENT_PROFILE_CHANGE_REJECTED', request, { status: 'pending' }, { status: decision }, request.reviewNote);
-    await Notification.create({ recipientId: request.requesterId, title: `Yêu cầu cập nhật hồ sơ ${decision === 'approved' ? 'đã được duyệt' : 'bị từ chối'}`, message: decision === 'approved' ? `Thông tin của ${request.studentName} đã được cập nhật.` : `Lý do: ${request.reviewNote}`, type: 'info', link: '/parent-portal', createdBy: req.user._id, metadata: { profileChangeRequestId: request._id, studentId: request.studentId } });
+    await Notification.create({ ...(tenantId ? { tenantId } : {}), recipientId: request.requesterId, title: `Yêu cầu cập nhật hồ sơ ${decision === 'approved' ? 'đã được duyệt' : 'bị từ chối'}`, message: decision === 'approved' ? `Thông tin của ${request.studentName} đã được cập nhật.` : `Lý do: ${request.reviewNote}`, type: 'info', link: '/parent-portal', createdBy: req.user._id, metadata: { profileChangeRequestId: request._id, studentId: request.studentId } });
     return res.json({ success: true, message: decision === 'approved' ? 'Đã duyệt và cập nhật hồ sơ học sinh' : 'Đã từ chối yêu cầu cập nhật', data: request });
   } catch (err) { return res.status(err.status || 500).json({ success: false, message: err.message || 'Không thể xử lý yêu cầu' }); }
 };

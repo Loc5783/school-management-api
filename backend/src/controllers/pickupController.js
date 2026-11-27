@@ -372,8 +372,40 @@ const directHandover = async (req, res) => {
         throw fail('Học sinh đã được xác nhận đón về trước đó trong ngày hôm nay', 409);
       }
 
-      // Bước 1: Xác định thông tin người đón từ danh sách Bố/Mẹ/Ủy quyền hoặc nhập tay
+      // Kiểm tra trạng thái điểm danh sáng nay: chặn trả nhầm trẻ đang nghỉ phép/vắng trừ khi giáo viên xác nhận bé có đi học thực tế
+      const { start, end } = getWorkDateRange(pickupDate, DEFAULT_SCHOOL_TIMEZONE);
+      const todayAttendance = await StudentAttendance.findOne({
+        ...tenantFilter,
+        studentId: student._id,
+        $or: [
+          { attendanceDateKey: pickupDate },
+          { attendDate: { $gte: start, $lt: end } }
+        ]
+      })
+        .select('status')
+        .session(session)
+        .lean();
+
+      if (
+        todayAttendance &&
+        ['absent', 'absent_permission', 'absent_no_permission'].includes(todayAttendance.status) &&
+        req.body?.forceAbsentHandover !== true
+      ) {
+        throw fail(
+          'Học sinh đang được điểm danh Vắng mặt / Nghỉ có phép hôm nay. Nếu bé có đến lớp thực tế, vui lòng xác nhận bàn giao.',
+          409
+        );
+      }
+
+      // Bước 1: Xác định thông tin người đón từ danh sách Bố/Mẹ/Ủy quyền, lịch đặt trước hoặc nhập tay
       const options = buildStudentPickerOptions(student);
+      const scheduledRecord = await PickupRecord.findOne({
+        ...tenantFilter,
+        studentId: student._id,
+        pickupDate,
+        status: 'scheduled'
+      }).session(session);
+
       let chosen = null;
       if (pickerId && isValidObjectId(pickerId)) {
         chosen = options.find((opt) => opt.pickerId === String(pickerId)) || null;
@@ -389,6 +421,15 @@ const directHandover = async (req, res) => {
           fullName: cleanName,
           phone: String(pickerPhone || '').trim(),
           relationship: String(pickerRelationship || 'Người thân').trim()
+        };
+      }
+      if (!chosen && scheduledRecord?.picker?.fullName) {
+        chosen = {
+          pickerId: scheduledRecord.picker.pickerId ? String(scheduledRecord.picker.pickerId) : '',
+          fullName: scheduledRecord.picker.fullName,
+          phone: scheduledRecord.picker.phone || '',
+          relationship: scheduledRecord.picker.relationship || 'Phụ huynh',
+          preserveScheduledPicker: true
         };
       }
       if (!chosen && options.length > 0) {
@@ -416,23 +457,18 @@ const directHandover = async (req, res) => {
         .session(session)
         .lean();
 
-      // Bước 3: Nếu phụ huynh đã đặt lịch trước hôm nay thì cập nhật luôn bản ghi đó, ngược lại tạo mới
-      const scheduledRecord = await PickupRecord.findOne({
-        ...tenantFilter,
-        studentId: student._id,
-        pickupDate,
-        status: 'scheduled'
-      }).session(session);
-
+      // Bước 3: Nếu phụ huynh đã đặt lịch trước hôm nay thì cập nhật bản ghi đó (thay mới hoàn toàn picker nếu đổi người đón), ngược lại tạo mới
       let savedRecord = null;
       if (scheduledRecord) {
-        scheduledRecord.picker = {
-          ...scheduledRecord.picker?.toObject?.(),
-          pickerId: scheduledRecord.picker?.pickerId || resolvedPickerObjectId,
-          fullName: chosen.fullName,
-          phone: chosen.phone || scheduledRecord.picker?.phone || '',
-          relationship: chosen.relationship || scheduledRecord.picker?.relationship || ''
-        };
+        if (!chosen.preserveScheduledPicker) {
+          scheduledRecord.authorizationMethod = 'registered';
+          scheduledRecord.picker = {
+            pickerId: resolvedPickerObjectId,
+            fullName: chosen.fullName,
+            phone: chosen.phone || '',
+            relationship: chosen.relationship || 'Phụ huynh'
+          };
+        }
         scheduledRecord.status = 'confirmed';
         scheduledRecord.confirmedBy = req.user._id;
         scheduledRecord.confirmedByName = staffDisplayName;
@@ -497,7 +533,6 @@ const directHandover = async (req, res) => {
         sessionOpt
       );
 
-      const { start, end } = getWorkDateRange(pickupDate, DEFAULT_SCHOOL_TIMEZONE);
       await StudentAttendance.updateOne(
         {
           ...tenantFilter,
@@ -568,8 +603,11 @@ const createPickupRecord = async (req, res) => {
     if (!await accessStudent(req.user, student, req) || !isParent(req.user)) throw fail('Bạn chỉ được đăng ký đón cho con đã liên kết', 403);
     const picker = student.authorizedPickers?.find((item) => String(item._id) === String(pickerId) && item.isActive !== false);
     if (!picker) throw fail('Người này không còn trong danh sách được phép đón trẻ');
-    const existing = await PickupRecord.exists({ ...tenantFilter, studentId: student._id, pickupDate, status: 'scheduled' });
-    if (existing) throw fail('Đã có một yêu cầu đón trẻ đang hiệu lực trong ngày này', 409);
+    const [existing, alreadyDeparted] = await Promise.all([
+      PickupRecord.exists({ ...tenantFilter, studentId: student._id, pickupDate, status: { $in: ['scheduled', 'confirmed'] } }),
+      StudentGateEvent.exists({ ...tenantFilter, studentId: student._id, gateDate: pickupDate, direction: 'departure' })
+    ]);
+    if (existing || alreadyDeparted) throw fail('Học sinh đã có lịch đón đang hiệu lực hoặc đã được đón về trong ngày này', 409);
     const identity = String(picker.identityCard || '');
     const item = await PickupRecord.create({
       ...(tenantId ? { tenantId } : {}),
@@ -616,9 +654,19 @@ const undoHandover = async (req, res) => {
         throw fail('Bản ghi này chưa ở trạng thái đã bàn giao nên không thể hoàn tác', 409);
       }
 
-      record.status = 'cancelled';
-      record.cancelledAt = new Date();
-      record.cancellationReason = reason;
+      // Nếu lịch đón do phụ huynh đặt trước hoặc OTP trong ngày, khôi phục về 'scheduled' để không mất mã QR của phụ huynh
+      const wasPreScheduled = Boolean(record.expectedPickupTime || record.authorizationMethod === 'otp');
+      if (wasPreScheduled) {
+        record.status = 'scheduled';
+        record.confirmedAt = null;
+        record.confirmedBy = null;
+        record.confirmedByName = '';
+        record.confirmationNote = '';
+      } else {
+        record.status = 'cancelled';
+        record.cancelledAt = new Date();
+        record.cancellationReason = reason;
+      }
       await record.save(sessionOpt);
 
       await StudentGateEvent.deleteOne(
@@ -644,6 +692,34 @@ const undoHandover = async (req, res) => {
         { $set: { checkOutTime: null, pickerName: '' } },
         sessionOpt
       );
+
+      // Gửi thông báo đính chính ngay cho phụ huynh để tránh hiểu nhầm bé đã rời trường
+      const tenantId = resolveRequestTenantId(req);
+      const parentUsers = await User.find({
+        ...tenantFilter,
+        role: 'parent',
+        status: 'active',
+        'parentInfo.studentIds': record.studentId
+      })
+        .select('_id')
+        .session(session)
+        .lean();
+
+      if (parentUsers.length > 0) {
+        await Notification.insertMany(
+          parentUsers.map((parentUser) => ({
+            ...(tenantId ? { tenantId } : {}),
+            recipientId: parentUser._id,
+            title: `Đính chính trạng thái đón bé: ${record.studentName}`,
+            message: `Nhà trường vừa hoàn tác thao tác xác nhận trả trẻ nhầm của bé ${record.studentName}. Bé hiện vẫn đang ở lớp an toàn.`,
+            type: 'warning',
+            link: '/pickups',
+            createdBy: req.user._id,
+            metadata: { pickupRecordId: record._id, studentId: record.studentId, undoHandover: true }
+          })),
+          sessionOpt
+        );
+      }
 
       return record;
     });
@@ -692,6 +768,16 @@ const confirmPickupRecord = async (req, res) => {
       record.status = 'confirmed'; record.confirmedBy = req.user._id; record.confirmedByName = actorName(req.user); record.confirmedAt = new Date(); record.confirmationNote = String(confirmationNote).trim(); record.photoCompared = photoCompared === true; record.vehicleCompared = vehicleCompared === true;
       await record.save(sessionOpt);
       await StudentGateEvent.create([{ ...(tenantId ? { tenantId } : {}), studentId: record.studentId, studentName: record.studentName, studentCode: student.studentCode, classroomId: record.classroomId, className: record.className, gateDate: record.pickupDate, direction: 'departure', occurredAt: record.confirmedAt, method: 'pickup', note: record.confirmationNote, pickupRecordId: record._id, recordedBy: req.user._id, recordedByName: actorName(req.user) }], sessionOpt);
+      const { start, end } = getWorkDateRange(record.pickupDate, DEFAULT_SCHOOL_TIMEZONE);
+      await StudentAttendance.updateOne(
+        {
+          ...tenantFilter,
+          studentId: record.studentId,
+          $or: [{ attendanceDateKey: record.pickupDate }, { attendDate: { $gte: start, $lt: end } }]
+        },
+        { $set: { checkOutTime: record.confirmedAt, pickerName: `${record.picker.fullName}${record.picker.relationship ? ` (${record.picker.relationship})` : ''}` } },
+        sessionOpt
+      );
       await Notification.create([{ ...(tenantId ? { tenantId } : {}), recipientId: record.requesterId, title: `Đã xác nhận đón trẻ: ${record.studentName}`, message: `${record.picker.fullName} đã đón ${record.studentName} lúc ${record.confirmedAt.toLocaleTimeString('vi-VN', { timeZone: DEFAULT_SCHOOL_TIMEZONE, hour: '2-digit', minute: '2-digit' })}.`, type: 'info', link: '/pickups', createdBy: req.user._id, metadata: { pickupRecordId: record._id, studentId: record.studentId } }], sessionOpt);
       return { record, repeated: false };
     });

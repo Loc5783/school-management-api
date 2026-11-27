@@ -62,11 +62,13 @@ const toLunchItems = (lunch = {}, collectionKey, legacyKey) => (
  * @param {string|ObjectId} classroomId
  * @param {Array} days - Mảng các ngày trong thực đơn tuần
  */
-const checkAllergyAndDiseaseConflicts = async (classroomId, days = []) => {
+const checkAllergyAndDiseaseConflicts = async (classroomId, days = [], tenantId = null) => {
     if (!classroomId || !days || !days.length) return [];
+    const tenantFilter = tenantId ? { tenantId } : {};
 
     // 1. Lấy danh sách học sinh đang học trong lớp có ghi nhận dị ứng hoặc bệnh lý
     const students = await Student.find({
+        ...tenantFilter,
         classroomId,
         status: 'enrolled'
     }).select('fullName allergies disease');
@@ -96,7 +98,7 @@ const checkAllergyAndDiseaseConflicts = async (classroomId, days = []) => {
     });
 
     if (dishIdSet.size > 0) {
-        const dishes = await Dish.find({ _id: { $in: Array.from(dishIdSet) } }).select('name allergens ingredients');
+        const dishes = await Dish.find({ ...tenantFilter, _id: { $in: Array.from(dishIdSet) } }).select('name allergens ingredients');
         dishes.forEach(d => {
             dishLookupMap[String(d._id)] = d;
         });
@@ -165,6 +167,9 @@ const checkAllergyAndDiseaseConflicts = async (classroomId, days = []) => {
  */
 const calculateDailyServingPlan = async (date, classroomIds = null, tenantId = null) => {
     const targetDate = date ? new Date(date) : new Date();
+    if (Number.isNaN(targetDate.getTime())) {
+        throw Object.assign(new Error('Ngày tra cứu kế hoạch suất ăn không hợp lệ'), { statusCode: 400 });
+    }
     const dateKey = getWorkDate(targetDate, DEFAULT_SCHOOL_TIMEZONE);
     const classroomQuery = { status: 'active' };
     if (tenantId) classroomQuery.tenantId = tenantId;
@@ -244,6 +249,9 @@ const calculateDailyServingPlan = async (date, classroomIds = null, tenantId = n
  */
 const calculateDailyMealReport = async (date, tenantId = null) => {
     const targetDate = date ? new Date(date) : new Date();
+    if (Number.isNaN(targetDate.getTime())) {
+        throw Object.assign(new Error('Ngày báo cáo chi phí bữa ăn không hợp lệ'), { statusCode: 400 });
+    }
     const servingPlan = await calculateDailyServingPlan(targetDate, null, tenantId);
     const { dateKey, totalStudentsPresent, totalRecommendedServings, classBreakdown } = servingPlan;
 
@@ -338,8 +346,14 @@ const cloneWeeklyMenu = async (sourceMenuId, {
         throw new Error(`Đã tồn tại thực đơn tuần ${targetWeekNumber} cho lớp ${targetClassroom.name}`);
     }
 
-    // Tự động quét cảnh báo dị ứng cho lớp mới
-    const allergyWarnings = await checkAllergyAndDiseaseConflicts(targetClassroomId, source.days);
+    const parsedStart = targetStartDate ? new Date(targetStartDate) : new Date(source.startDate);
+    const parsedEnd = targetEndDate ? new Date(targetEndDate) : new Date(source.endDate);
+    if (Number.isNaN(parsedStart.getTime()) || Number.isNaN(parsedEnd.getTime())) {
+        throw Object.assign(new Error('Ngày bắt đầu hoặc kết thúc thực đơn sao chép không hợp lệ'), { statusCode: 400 });
+    }
+
+    // Tự động quét cảnh báo dị ứng cho lớp mới trong đúng phạm vi trường
+    const allergyWarnings = await checkAllergyAndDiseaseConflicts(targetClassroomId, source.days, tenantId);
 
     const newMenu = await Menu.create({
         ...(tenantId ? { tenantId } : {}),
@@ -347,8 +361,8 @@ const cloneWeeklyMenu = async (sourceMenuId, {
         className: targetClassroom.name,
         schoolYear: targetSchoolYear || source.schoolYear,
         weekNumber: targetWeekNumber,
-        startDate: new Date(targetStartDate),
-        endDate: new Date(targetEndDate),
+        startDate: parsedStart,
+        endDate: parsedEnd,
         dietaryType: source.dietaryType,
         medicalNotes: source.medicalNotes || '',
         allergensExcluded: source.allergensExcluded || [],
@@ -387,16 +401,18 @@ const getInventoryAlerts = async (tenantId = null) => {
     }).populate('ingredientId', 'name unit minStockAlert');
 
     // Tồn kho thấp so với minStockAlert
-    const masterIngredients = await IngredientMaster.find({ status: 'active', ...tenantFilter });
+    const [masterIngredients, stockSums] = await Promise.all([
+        IngredientMaster.find({ status: 'active', ...tenantFilter }).lean(),
+        Inventory.aggregate([
+            { $match: { ...tenantFilter, status: { $in: ['available', 'near_expiry'] } } },
+            { $group: { _id: '$ingredientId', totalStock: { $sum: '$quantity' } } }
+        ])
+    ]);
+    const stockMap = new Map(stockSums.map((s) => [String(s._id), s.totalStock || 0]));
     const lowStockAlerts = [];
 
     for (const master of masterIngredients) {
-        const inventories = await Inventory.find({
-            ...tenantFilter,
-            ingredientId: master._id,
-            status: { $in: ['available', 'near_expiry'] }
-        });
-        const totalStock = inventories.reduce((sum, inv) => sum + inv.quantity, 0);
+        const totalStock = stockMap.get(String(master._id)) || 0;
 
         // Hàng đã hết sạch không còn là lô tồn để vận hành. Lịch sử nhập/xuất/hủy
         // vẫn được bảo toàn trong sổ kho; màn cảnh báo chỉ phục vụ các mặt hàng còn tồn.

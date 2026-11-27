@@ -62,6 +62,9 @@ PaymentSchema.index({ invoiceId: 1 });
 PaymentSchema.index({ recordedBy: 1 });
 PaymentSchema.index({ paidAt: 1 });
 PaymentSchema.index({ invoiceId: 1, idempotencyKey: 1 }, { unique: true });
-PaymentSchema.index({ txnRef: 1 }, { unique: true, sparse: true });
+PaymentSchema.index(
+    { tenantId: 1, txnRef: 1 },
+    { unique: true, partialFilterExpression: { txnRef: { $type: 'string' } } }
+);
 
 module.exports = mongoose.model('Payment', PaymentSchema);

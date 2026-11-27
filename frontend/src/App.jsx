@@ -43,10 +43,6 @@ import InternalNotices from './pages/InternalNotices';
 import TeacherLeavePage from './pages/TeacherLeavePage';
 import { getStoredSuperAdminUser, getStoredUser } from './utils/storage';
 
-function ProtectedRoute({ children }) {
-  return localStorage.getItem('token') ? children : <Navigate to="/login" replace />;
-}
-
 function ParentRoute({ children }) {
   const user = getStoredUser();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
@@ -75,8 +71,8 @@ function DashboardRoute({ children }) {
 function StudentManagementRoute({ children }) {
   const user = getStoredUser();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
-  // Hồ sơ của con được hiển thị qua ParentPortal; không cho phụ huynh hoặc bảo vệ dùng
-  // giao diện quản trị/danh sách học sinh dù họ tự nhập URL.
+  // Hồ sơ của con được hiển thị qua ParentPortal; không cho phụ huynh, bảo vệ hoặc superadmin chưa chọn trường vào thẳng
+  if (user.role === 'superadmin') return <Navigate to="/multi-school" replace />;
   if (user.role === 'parent') return <Navigate to="/parent-portal" replace />;
   if (user.role === 'guard') return <Navigate to="/guard" replace />;
   return children;
@@ -186,7 +182,7 @@ function App() {
           />
           <Route
             path="/timekeeping"
-            element={<ProtectedRoute><TimekeepingHub /></ProtectedRoute>}
+            element={<StaffRoute><TimekeepingHub /></StaffRoute>}
           />
           <Route path="/my-leave-requests" element={<StaffRoute><TeacherLeavePage /></StaffRoute>} />
           <Route path="/my-payroll" element={<StaffRoute><MyPayroll /></StaffRoute>} />
@@ -203,7 +199,7 @@ function App() {
           />
           <Route
             path="/nutrition"
-            element={<ProtectedRoute><NutritionManagement /></ProtectedRoute>}
+            element={<RoleRoute roles={['admin', 'principal', 'chef', 'teacher', 'parent']}><NutritionManagement /></RoleRoute>}
           />
           <Route path="/kitchen" element={<RoleRoute roles={['chef', 'admin']}><ChefDashboard /></RoleRoute>} />
           <Route path="/accounting" element={<RoleRoute roles={['accountant']}><AccountantDashboard /></RoleRoute>} />

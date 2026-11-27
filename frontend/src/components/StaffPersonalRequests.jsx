@@ -4,6 +4,7 @@ import { useSearchParams, Link } from 'react-router-dom';
 import Icon from './Icon';
 import { getPersonalRequestContext, getMyPersonalRequests, getStaffPersonalRequests, getPersonalRequest, createPersonalRequest, cancelPersonalRequest, processPersonalRequest } from '../api/hr';
 import './StaffPersonalRequests.css';
+import { generateClientId, getStoredUser } from '../utils/storage';
 
 const TYPES = { profile_change: 'Cập nhật hồ sơ', employment_certificate: 'Xác nhận công tác', timesheet_feedback: 'Phản hồi bảng công', payroll_feedback: 'Phản hồi phiếu lương' };
 const STATUS = { pending: 'Chờ tiếp nhận', in_review: 'Đang xử lý', approved: 'Đã phê duyệt', resolved: 'Đã có kết quả', rejected: 'Đã từ chối', cancelled: 'Đã rút' };
@@ -13,7 +14,7 @@ const ACTIONS = { created: 'Gửi yêu cầu', start: 'Tiếp nhận', prepare: 
 const when = (value) => value ? new Date(value).toLocaleString('vi-VN', { hour12: false, timeZone: 'Asia/Ho_Chi_Minh' }) : '—';
 const money = (value) => `${new Intl.NumberFormat('vi-VN').format(value || 0)} đ`;
 const fieldValue = (field, value) => field === 'gender' ? ({ male: 'Nam', female: 'Nữ' }[value] || 'Chưa có') : value || 'Để trống';
-const blankForm = (type = 'profile_change', referenceId = '') => ({ type, subject: TYPES[type], message: '', profile: null, referenceId, requestId: crypto.randomUUID() });
+const blankForm = (type = 'profile_change', referenceId = '') => ({ type, subject: TYPES[type], message: '', profile: null, referenceId, requestId: generateClientId() });
 
 function RequestDialog({ title, onClose, busy, children }) {
   const dialogRef = useRef(null);
@@ -42,7 +43,7 @@ function RequestDialog({ title, onClose, busy, children }) {
 export default function StaffPersonalRequests({ mode = 'mine' }) {
   const [params] = useSearchParams();
   const manage = mode === 'manage';
-  const role = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const role = getStoredUser().role;
   const [type, setType] = useState(manage && role === 'accountant' ? 'payroll_feedback' : 'all');
   const [status, setStatus] = useState('all');
   const [page, setPage] = useState(1);

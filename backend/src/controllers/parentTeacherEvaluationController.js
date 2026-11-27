@@ -352,28 +352,18 @@ const listEvaluations = async (req, res) => {
   }
 };
 
-const runEvaluationTransaction = async (operation) => {
-  const topology = await mongoose.connection.db.admin().command({ hello: 1 });
-  if (!topology.setName && topology.msg !== 'isdbgrid') {
-    const error = new Error('Hệ thống cơ sở dữ liệu yêu cầu Replica Set để thực hiện giao dịch an toàn');
-    error.statusCode = 503;
-    throw error;
-  }
-  const session = await mongoose.startSession();
-  try {
-    let result;
-    await session.withTransaction(async () => {
-      result = await operation(session);
-    });
-    return result;
-  } finally {
-    await session.endSession();
-  }
-};
+const { runSafeTransaction } = require('../utils/safeTransaction');
+const { buildTenantFilter } = require('../services/tenantFilterService');
+
+const runEvaluationTransaction = (operation) => runSafeTransaction(
+  operation,
+  'Hệ thống cơ sở dữ liệu yêu cầu Replica Set để thực hiện giao dịch an toàn'
+);
 
 const getEvaluationPeriods = async (req, res) => {
   try {
-    const periods = await EvaluationPeriod.find().sort({ schoolYear: -1, startDate: -1 }).lean();
+    const tenantFilter = buildTenantFilter(req);
+    const periods = await EvaluationPeriod.find(tenantFilter).sort({ schoolYear: -1, startDate: -1 }).lean();
     res.json({ data: periods });
   } catch (err) {
     res.status(500).json({ message: 'Không thể tải danh sách kỳ đánh giá.' });
@@ -398,9 +388,12 @@ const createEvaluationPeriod = async (req, res) => {
     }
 
     const AuditLog = require('../models/zone1_system/AuditLog');
+    const tenantFilter = buildTenantFilter(req);
+    const tenantId = req.tenantId || req.user?.tenantId;
 
     const createdPeriod = await runEvaluationTransaction(async (session) => {
-      const existing = await EvaluationPeriod.findOne({ code: cleanCode }).session(session);
+      const sessionOpt = session ? { session } : undefined;
+      const existing = await EvaluationPeriod.findOne({ code: cleanCode, ...tenantFilter }).session(session);
       if (existing) {
         const err = new Error('Mã kỳ đánh giá đã tồn tại');
         err.statusCode = 409;
@@ -408,6 +401,7 @@ const createEvaluationPeriod = async (req, res) => {
       }
 
       const [period] = await EvaluationPeriod.create([{
+        ...(tenantId ? { tenantId } : {}),
         code: cleanCode,
         name: cleanName,
         schoolYear: cleanYear,
@@ -415,16 +409,17 @@ const createEvaluationPeriod = async (req, res) => {
         endDate,
         status: ['open', 'closed'].includes(status) ? status : 'open',
         createdBy: req.user._id
-      }], { session });
+      }], sessionOpt);
 
       await AuditLog.create([{
+        ...(tenantId ? { tenantId } : {}),
         actorId: req.user._id,
         actorUsername: req.user.username || req.user.profile?.fullName || 'system',
         action: 'CREATE_EVALUATION_PERIOD',
         targetType: 'EvaluationPeriod',
         targetId: period._id,
         after: period.toObject()
-      }], { session });
+      }], sessionOpt);
 
       return period;
     });
@@ -457,9 +452,12 @@ const togglePeriodStatus = async (req, res) => {
     }
 
     const AuditLog = require('../models/zone1_system/AuditLog');
+    const tenantFilter = buildTenantFilter(req);
+    const tenantId = req.tenantId || req.user?.tenantId;
 
     const result = await runEvaluationTransaction(async (session) => {
-      const existing = await EvaluationPeriod.findById(id).session(session);
+      const sessionOpt = session ? { session } : undefined;
+      const existing = await EvaluationPeriod.findOne({ _id: id, ...tenantFilter }).session(session);
       if (!existing) {
         const err = new Error('Không tìm thấy kỳ đánh giá');
         err.statusCode = 404;
@@ -470,16 +468,17 @@ const togglePeriodStatus = async (req, res) => {
       }
 
       const updated = await EvaluationPeriod.findOneAndUpdate(
-        { _id: id, status: existing.status },
+        { _id: id, status: existing.status, ...tenantFilter },
         { $set: { status } },
-        { session, new: true }
+        { ...(session ? { session } : {}), new: true }
       );
       if (!updated) {
-        const current = await EvaluationPeriod.findById(id).session(session);
+        const current = await EvaluationPeriod.findOne({ _id: id, ...tenantFilter }).session(session);
         return { unchanged: true, period: current };
       }
 
       await AuditLog.create([{
+        ...(tenantId ? { tenantId } : {}),
         actorId: req.user._id,
         actorUsername: req.user.username || req.user.profile?.fullName || 'system',
         action: status === 'open' ? 'OPEN_EVALUATION_PERIOD' : 'CLOSE_EVALUATION_PERIOD',
@@ -487,7 +486,7 @@ const togglePeriodStatus = async (req, res) => {
         targetId: updated._id,
         before: existing.toObject(),
         after: updated.toObject()
-      }], { session });
+      }], sessionOpt);
 
       return { unchanged: false, period: updated };
     });

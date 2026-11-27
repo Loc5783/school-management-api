@@ -4,11 +4,12 @@ import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
 import ParentFeedbackManagement from './ParentFeedbackManagement';
 import api from '../api/axiosConfig';
+import { clearAuthSession, getStoredUser } from '../utils/storage';
 
 export default function StaffSettings() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const user = getStoredUser();
   const isAdmin = user?.role === 'admin';
 
   const tabParam = searchParams.get('tab');
@@ -34,14 +35,14 @@ export default function StaffSettings() {
   const [saving, setSaving] = useState(false);
 
   const submit = async (event) => {
-    event.preventDefault(); setError('');
+    event.preventDefault();
+    if (saving) return;
+    setError('');
     if (form.newPassword !== form.confirmPassword) { setError('Mật khẩu xác nhận không khớp'); return; }
     setSaving(true);
     try {
       await api.post('/auth/me/password', { currentPassword: form.currentPassword, newPassword: form.newPassword });
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      localStorage.removeItem('tenant');
+      clearAuthSession();
       navigate('/login', { replace: true });
     } catch (requestError) { setError(requestError.response?.data?.message || 'Không thể đổi mật khẩu'); }
     finally { setSaving(false); }

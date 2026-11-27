@@ -76,10 +76,14 @@ const getLunchItems = (lunch = {}, collectionKey, legacyKey) => (
 
 const isSchoolWideNutritionReader = (user) => ['admin', 'principal', 'chef'].includes(user?.role);
 
-const getParentClassroomIds = async (user) => {
+const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const getParentClassroomIds = async (user, req = null) => {
     const studentIds = getLinkedStudentIds(user);
     if (!studentIds.length) return [];
+    const tenantFilter = req ? buildTenantFilter(req) : (user?.tenantId ? { tenantId: user.tenantId } : {});
     const classroomIds = await Student.distinct('classroomId', {
+        ...tenantFilter,
         _id: { $in: studentIds },
         status: 'enrolled',
         classroomId: { $ne: null }
@@ -87,10 +91,10 @@ const getParentClassroomIds = async (user) => {
     return classroomIds.map(String);
 };
 
-const getReadableClassroomIds = async (user) => {
+const getReadableClassroomIds = async (user, req = null) => {
     if (isSchoolWideNutritionReader(user)) return null;
-    if (user?.role === 'teacher') return getTeacherClassroomIds(user);
-    if (user?.role === 'parent') return getParentClassroomIds(user);
+    if (user?.role === 'teacher') return getTeacherClassroomIds(user, req);
+    if (user?.role === 'parent') return getParentClassroomIds(user, req);
     return [];
 };
 
@@ -102,9 +106,9 @@ const assertValidObjectId = (value, label) => {
     }
 };
 
-const assertReadableMenu = async (user, menu) => {
+const assertReadableMenu = async (user, menu, req = null) => {
     if (isSchoolWideNutritionReader(user)) return;
-    const readableClassroomIds = await getReadableClassroomIds(user);
+    const readableClassroomIds = await getReadableClassroomIds(user, req);
     if (!readableClassroomIds.includes(String(menu.classroomId))) {
         const error = new Error('Bạn không có quyền xem thực đơn của lớp này');
         error.statusCode = 403;
@@ -171,8 +175,9 @@ const validatePublishReadiness = (menu) => {
 // khai báo, món chứa dị nguyên đó không được phục vụ cho cả lớp. Không dùng
 // cờ "đã xử lý" để lách chính sách này; suất thay thế là một thực đơn/lớp
 // riêng, không phải cùng thực đơn chung.
-const assertClassroomMenuIsAllergenSafe = async (classroomId, days) => {
-    const conflicts = await checkAllergyAndDiseaseConflicts(classroomId, days);
+const assertClassroomMenuIsAllergenSafe = async (classroomId, days, req = null) => {
+    const tenantId = req?.tenantId || req?.user?.tenantId || null;
+    const conflicts = await checkAllergyAndDiseaseConflicts(classroomId, days, tenantId);
     if (!conflicts.length) return;
 
     const dishes = [...new Set(conflicts.map((conflict) => conflict.dishName).filter(Boolean))];
@@ -189,7 +194,7 @@ const assertClassroomMenuIsAllergenSafe = async (classroomId, days) => {
  * Names, calories and service dates are derived here so a stale browser cannot
  * create a menu that no longer matches the dish catalogue.
  */
-const prepareMenuDays = async (days, startDate) => {
+const prepareMenuDays = async (days, startDate, req = null) => {
     if (!Array.isArray(days) || !days.length) return [];
 
     const seenDays = new Set();
@@ -219,8 +224,9 @@ const prepareMenuDays = async (days, startDate) => {
     const dishConditions = [];
     if (dishIds.size) dishConditions.push({ _id: { $in: [...dishIds] } });
     if (dishNames.size) dishConditions.push({ name: { $in: [...dishNames] } });
+    const tenantFilter = req ? buildTenantFilter(req) : {};
     const dishes = dishConditions.length
-        ? await Dish.find({ status: 'active', $or: dishConditions }).select('name calories')
+        ? await Dish.find({ status: 'active', ...tenantFilter, $or: dishConditions }).select('name calories')
         : [];
     const dishesById = new Map(dishes.map((dish) => [String(dish._id), dish]));
     const dishesByName = new Map(dishes.map((dish) => [dish.name.trim().toLocaleLowerCase('vi-VN'), dish]));
@@ -319,7 +325,7 @@ const getMenuById = async (req, res) => {
         assertValidObjectId(req.params.id, 'ID thực đơn');
         const menu = await Menu.findOne({ _id: req.params.id, ...buildTenantFilter(req) });
         if (!menu) return res.status(404).json({ message: 'Không tìm thấy thực đơn' });
-        await assertReadableMenu(req.user, menu);
+        await assertReadableMenu(req.user, menu, req);
         res.json({ success: true, data: req.user.role === 'parent' ? serializeMenuForParent(menu) : menu });
     } catch (err) {
         res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Lỗi server khi lấy chi tiết thực đơn' });
@@ -331,7 +337,7 @@ const getMenuById = async (req, res) => {
 const getClassroomDietaryAlerts = async (req, res) => {
     try {
         assertValidObjectId(req.params.id, 'ID lớp học');
-        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, req.params.id)) {
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, req.params.id, req)) {
             return res.status(403).json({ message: 'Bạn không có quyền xem cảnh báo dinh dưỡng của lớp này' });
         }
         const classroom = await Classroom.findOne({ _id: req.params.id, ...buildTenantFilter(req) }).select('name');
@@ -386,14 +392,14 @@ const createMenu = async (req, res) => {
 
         const schoolYear = getSchoolYearForDate(startDate);
         const weekNumber = getIsoWeekNumber(startDate);
-        const preparedDays = await prepareMenuDays(days, startDate);
+        const preparedDays = await prepareMenuDays(days, startDate, req);
 
         const existing = await Menu.findOne({ classroomId, schoolYear, weekNumber, ...buildTenantFilter(req) });
         if (existing) {
             return res.status(409).json({ message: `Lớp ${classroom.name} đã có thực đơn cho tuần ${weekNumber}` });
         }
 
-        await assertClassroomMenuIsAllergenSafe(classroomId, preparedDays);
+        await assertClassroomMenuIsAllergenSafe(classroomId, preparedDays, req);
 
         const menu = await Menu.create({
             tenantId: req.tenantId || req.user?.tenantId,
@@ -453,8 +459,8 @@ const updateMenu = async (req, res) => {
 
         if (days) {
             const startDate = getWorkDate(menu.startDate);
-            const preparedDays = await prepareMenuDays(days, startDate);
-            await assertClassroomMenuIsAllergenSafe(menu.classroomId, preparedDays);
+            const preparedDays = await prepareMenuDays(days, startDate, req);
+            await assertClassroomMenuIsAllergenSafe(menu.classroomId, preparedDays, req);
             menu.days = preparedDays;
             menu.allergyWarnings = [];
         }
@@ -595,10 +601,15 @@ const checkAllergiesDryRun = async (req, res) => {
     try {
         const { classroomId, days } = req.body;
         assertValidObjectId(classroomId, 'ID lớp học');
-        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, classroomId)) {
+        const tenantFilter = buildTenantFilter(req);
+        const classroomExists = await Classroom.exists({ _id: classroomId, ...tenantFilter });
+        if (!classroomExists) {
+            return res.status(404).json({ message: 'Không tìm thấy lớp học trong phạm vi trường hiện tại' });
+        }
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, classroomId, req)) {
             return res.status(403).json({ message: 'Bạn không có quyền kiểm tra dị ứng của lớp này' });
         }
-        const warnings = await checkAllergyAndDiseaseConflicts(classroomId, days);
+        const warnings = await checkAllergyAndDiseaseConflicts(classroomId, days, req.tenantId || req.user?.tenantId || null);
         res.json({ success: true, count: warnings.length, warnings });
     } catch (err) {
         res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Không thể kiểm tra xung đột dị ứng' });
@@ -612,9 +623,14 @@ const checkAllergiesDryRun = async (req, res) => {
 const getDishes = async (req, res) => {
     try {
         const { category, search } = req.query;
+        if (search !== undefined && typeof search !== 'string') {
+            return res.status(400).json({ message: 'Từ khóa tìm kiếm món ăn không hợp lệ' });
+        }
         const query = { status: 'active', ...buildTenantFilter(req) };
-        if (category) query.category = category;
-        if (search) query.name = { $regex: search, $options: 'i' };
+        if (category && typeof category === 'string') query.category = category;
+        if (typeof search === 'string' && search.trim()) {
+            query.name = { $regex: escapeRegex(search.trim().slice(0, 120)), $options: 'i' };
+        }
 
         const dishes = await Dish.find(query).sort({ category: 1, name: 1 });
         res.json({ success: true, count: dishes.length, data: dishes });
@@ -869,26 +885,29 @@ const updateIngredient = async (req, res) => {
 
 const deleteIngredient = async (req, res) => {
     try {
-        const ingredient = await IngredientMaster.findOne({ _id: req.params.id, ...buildTenantFilter(req) });
+        assertValidObjectId(req.params.id, 'ID nguyên liệu');
+        const tenantFilter = buildTenantFilter(req);
+        const ingredient = await IngredientMaster.findOne({ _id: req.params.id, ...tenantFilter });
         if (!ingredient) return res.status(404).json({ message: 'Không tìm thấy nguyên liệu' });
 
-        const hasInventoryHistory = await Inventory.exists({ ingredientId: ingredient._id, ...buildTenantFilter(req) })
-            || await InventoryTransaction.exists({ ingredientId: ingredient._id, ...buildTenantFilter(req) });
+        const hasInventoryOrRecipeHistory = await Inventory.exists({ ingredientId: ingredient._id, ...tenantFilter })
+            || await InventoryTransaction.exists({ ingredientId: ingredient._id, ...tenantFilter })
+            || await Dish.exists({ 'ingredients.ingredientId': ingredient._id, ...tenantFilter });
 
-        if (hasInventoryHistory) {
+        if (hasInventoryOrRecipeHistory) {
             ingredient.status = 'inactive';
             await ingredient.save();
             return res.json({
                 success: true,
                 action: 'deactivated',
-                message: 'Nguyên liệu đã phát sinh lịch sử kho nên được ngừng sử dụng để bảo toàn dữ liệu truy xuất.'
+                message: 'Nguyên liệu đang gắn với món ăn hoặc lịch sử kho nên được ngừng sử dụng để bảo toàn dữ liệu truy xuất.'
             });
         }
 
         await ingredient.deleteOne();
         res.json({ success: true, action: 'deleted', message: 'Đã xóa nguyên liệu chưa phát sinh dữ liệu kho.' });
     } catch (err) {
-        res.status(400).json({ message: err.message || 'Không thể xóa nguyên liệu' });
+        res.status(err.statusCode || 400).json({ message: err.message || 'Không thể xóa nguyên liệu' });
     }
 };
 
@@ -1374,23 +1393,27 @@ const createKitchenRequest = async (req, res) => {
 
 const approveKitchenRequest = async (req, res) => {
     try {
-        const { status, approvalNotes } = req.body;
+        assertValidObjectId(req.params.id, 'ID phiếu đề xuất');
+        const { status, approvalNotes } = req.body || {};
         if (!['approved', 'rejected'].includes(status)) {
             return res.status(400).json({ message: 'Trạng thái chỉ có thể là approved hoặc rejected' });
         }
 
         const request = await KitchenRequest.findOne({ _id: req.params.id, ...buildTenantFilter(req) });
         if (!request) return res.status(404).json({ message: 'Không tìm thấy phiếu đề xuất' });
+        if (request.status !== 'pending') {
+            return res.status(409).json({ message: 'Phiếu đề xuất này đã được xử lý trước đó' });
+        }
 
         request.status = status;
         request.approvedBy = req.user._id;
         request.approvedByName = req.user.profile?.fullName || req.user.username;
-        request.approvalNotes = approvalNotes || '';
+        request.approvalNotes = String(approvalNotes || '').trim().slice(0, 500);
         await request.save();
 
         res.json({ success: true, message: `Đã ${status === 'approved' ? 'duyệt' : 'từ chối'} đề xuất`, data: request });
     } catch (err) {
-        res.status(400).json({ message: 'Lỗi duyệt phiếu đề xuất' });
+        res.status(err.statusCode || 400).json({ message: err.statusCode ? err.message : 'Lỗi duyệt phiếu đề xuất' });
     }
 };
 
@@ -1398,7 +1421,7 @@ const getKitchenClassrooms = async (req, res) => {
     try {
         const tenantFilter = buildTenantFilter(req);
         const filter = { status: 'active', ...tenantFilter };
-        if (req.query.schoolYear?.trim()) {
+        if (typeof req.query.schoolYear === 'string' && req.query.schoolYear.trim()) {
             filter.schoolYear = req.query.schoolYear.trim();
         }
         const classrooms = await Classroom.find(filter)

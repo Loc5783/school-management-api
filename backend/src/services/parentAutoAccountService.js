@@ -63,9 +63,9 @@ const buildAuthorizedPickersFromParents = (parents = [], existingPickers = []) =
     if (!fullName) continue;
 
     const alreadyExists = result.some((p) => {
+      const pName = String(p?.fullName || '').trim().toLowerCase();
       const pPhone = normalizeParentPhoneUsername(p?.phone) || String(p?.phone || '').trim();
-      if (phone && pPhone && phone === pPhone) return true;
-      return String(p?.fullName || '').trim().toLowerCase() === fullName.toLowerCase();
+      return pName === fullName.toLowerCase() && (!phone || !pPhone || phone === pPhone);
     });
 
     if (!alreadyExists) {
@@ -212,14 +212,17 @@ const syncParentAccountsForStudents = async ({ students = [], tenantId = null, s
     try {
       await User.bulkWrite(bulkOps, { ...(session ? { session } : {}), ordered: false });
     } catch (err) {
-      // Bắt xung đột E11000 nếu 2 yêu cầu song song cùng tạo mới 1 SĐT phụ huynh tại cùng thời điểm
+      // Nếu đang ở trong MongoDB Transaction (session != null), lỗi E11000 đã làm hủy transaction trên server;
+      // ném lại lỗi có nhãn TransientTransactionError để withTransaction tự động thử lại sạch từ đầu.
+      if (session) {
+        throw err;
+      }
       if (err.code === 11000 || (Array.isArray(err.writeErrors) && err.writeErrors.every((e) => e.code === 11000))) {
         for (const [phone, info] of parentByPhone.entries()) {
           const studentObjectIds = [...info.studentIds.values()];
           await User.updateOne(
             { ...tenantCondition, username: phone, role: 'parent' },
-            { $addToSet: { 'parentInfo.studentIds': { $each: studentObjectIds } } },
-            session ? { session } : undefined
+            { $addToSet: { 'parentInfo.studentIds': { $each: studentObjectIds } } }
           );
         }
       } else {

@@ -13,7 +13,7 @@ const { assertPersonCodeAvailable } = require('../services/personCodeService');
 const { buildAuthorizedPickersFromParents, normalizeParentPhoneUsername, syncParentAccountsForStudents } = require('../services/parentAutoAccountService');
 const { isValidWorkDate, getWorkDate } = require('../utils/dateHelpers');
 
-const ADMIN_MUTABLE = ['studentCode', 'identityCode', 'healthInsuranceCode', 'bloodType', 'vaccinations', 'growthRecords', 'fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'notes', 'classroomId', 'schoolYear', 'parents', 'authorizedPickers', 'allergies', 'disease', 'emergencyContact', 'admissionDate'];
+const ADMIN_MUTABLE = ['studentCode', 'identityCode', 'healthInsuranceCode', 'bloodType', 'fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'notes', 'classroomId', 'schoolYear', 'parents', 'authorizedPickers', 'allergies', 'disease', 'emergencyContact', 'admissionDate'];
 const TEACHER_CREATE_FIELDS = ['studentCode', 'identityCode', 'healthInsuranceCode', 'bloodType', 'fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'notes', 'parents'];
 const TEACHER_MUTABLE = ['avatar', 'notes', 'healthInsuranceCode', 'bloodType'];
 const PARENT_MUTABLE = ['identityCode', 'healthInsuranceCode', 'bloodType', 'fullName', 'birthDate', 'gender', 'address', 'nationality', 'ethnicity', 'birthPlace', 'avatar', 'allergies', 'disease', 'emergencyContact', 'authorizedPickers'];
@@ -40,7 +40,11 @@ const respondError = (res, err, fallback = 'Lỗi server') => {
     }
     const field = Object.keys(err.keyPattern || {})[0];
     const duplicateMessages = { studentCode: 'Mã học sinh đã tồn tại', attendanceCardId: 'Mã thẻ điểm danh đã tồn tại', faceProfileId: 'Mã hồ sơ khuôn mặt đã tồn tại' };
-    return res.status(err.statusCode || (err.code === 11000 ? 409 : 500)).json({ success: false, message: err.code === 11000 ? (duplicateMessages[field] || 'Dữ liệu trùng lặp') : (err.message || fallback) });
+    const status = err.statusCode || (err.code === 11000 ? 409 : 500);
+    return res.status(status).json({
+        success: false,
+        message: err.code === 11000 ? (duplicateMessages[field] || 'Dữ liệu trùng lặp') : (status < 500 ? (err.message || fallback) : fallback)
+    });
 };
 const regexEscape = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const deriveSchoolYear = (date = new Date()) => {
@@ -49,15 +53,49 @@ const deriveSchoolYear = (date = new Date()) => {
     return `${startYear}-${startYear + 1}`;
 };
 
+const isStrictValidCalendarDate = (rawVal) => {
+    if (rawVal instanceof Date) return !Number.isNaN(rawVal.getTime());
+    const str = String(rawVal || '').trim();
+    const ymd = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s].*)?$/);
+    if (ymd) {
+        const y = Number(ymd[1]); const m = Number(ymd[2]); const d = Number(ymd[3]);
+        const check = new Date(Date.UTC(y, m - 1, d));
+        return check.getUTCFullYear() === y && check.getUTCMonth() === m - 1 && check.getUTCDate() === d;
+    }
+    const parsed = new Date(str);
+    return !Number.isNaN(parsed.getTime());
+};
+
 const audit = (req, action, student, before = {}, after = {}, session = null) => AuditLog.create([{
+    ...(req.tenantId || req.user?.tenantId ? { tenantId: req.tenantId || req.user?.tenantId } : {}),
     actorId: req.user._id, actorUsername: req.user.username || req.user.profile?.fullName || 'system', action, targetType: 'Student', targetId: student._id, before, after
-}], { session });
-const adjustHeadcount = (classroomId, delta, session = null) => delta ? Classroom.findOneAndUpdate({ _id: classroomId, 'statistics.currentStudents': { $gte: delta < 0 ? Math.abs(delta) : 0 } }, { $inc: { 'statistics.currentStudents': delta } }, { session }) : null;
+}], session ? { session } : undefined);
+const adjustHeadcount = (classroomId, delta, session = null) => {
+    if (!delta) return null;
+    const filter = delta < 0
+        ? { _id: classroomId, 'statistics.currentStudents': { $gte: Math.abs(delta) } }
+        : {
+            _id: classroomId,
+            $expr: {
+                $lte: [
+                    { $add: [{ $ifNull: ['$statistics.currentStudents', 0] }, delta] },
+                    { $ifNull: ['$maxSize', 25] }
+                ]
+            }
+        };
+    return Classroom.findOneAndUpdate(filter, { $inc: { 'statistics.currentStudents': delta } }, session ? { session } : undefined);
+};
 const validatePayload = (data, creating = false) => {
     if (creating && (!String(data.fullName || '').trim() || !data.birthDate || !data.gender || !data.classroomId)) throw httpError('Vui lòng nhập họ tên, ngày sinh, giới tính và lớp học', 422);
-    if (data.birthDate && Number.isNaN(new Date(data.birthDate).getTime())) throw httpError('Ngày sinh không hợp lệ', 422);
-    if (data.birthDate && new Date(data.birthDate) > new Date()) throw httpError('Ngày sinh không được ở tương lai', 422);
-    if (data.admissionDate && Number.isNaN(new Date(data.admissionDate).getTime())) throw httpError('Ngày nhập học không hợp lệ', 422);
+    if (data.birthDate) {
+        if (!isStrictValidCalendarDate(data.birthDate)) throw httpError('Ngày sinh không hợp lệ (ngày không tồn tại trên lịch)', 422);
+        const bd = new Date(data.birthDate);
+        const now = new Date();
+        if (bd > now) throw httpError('Ngày sinh không được ở tương lai', 422);
+        const ageYears = (now.getTime() - bd.getTime()) / (365.25 * 24 * 3600 * 1000);
+        if (ageYears > 12) throw httpError('Độ tuổi học sinh mầm non không hợp lệ (vượt quá 12 tuổi)', 422);
+    }
+    if (data.admissionDate && !isStrictValidCalendarDate(data.admissionDate)) throw httpError('Ngày nhập học không hợp lệ', 422);
     if (data.birthDate && data.admissionDate && new Date(data.admissionDate) < new Date(data.birthDate)) throw httpError('Ngày nhập học không được trước ngày sinh', 422);
     if (data.schoolYear) {
         const match = String(data.schoolYear).trim().match(/^(\d{4})-(\d{4})$/);
@@ -165,7 +203,7 @@ const createStudent = async (req, res) => {
             if (tenantId) studentPayload.tenantId = tenantId;
             const created = (await Student.create([studentPayload], { session }))[0];
             await syncParentAccountsForStudents({ students: [created], tenantId: tenantId || null, session });
-            if (isClassroomCountedStatus(status) && !await adjustHeadcount(classroom._id, 1, session)) throw httpError('Không thể cập nhật sĩ số lớp', 409);
+            if (isClassroomCountedStatus(status) && !await adjustHeadcount(classroom._id, 1, session)) throw httpError(`Lớp ${classroom.name} đã đạt sĩ số tối đa (${classroom.maxSize} học sinh)`, 409);
             await audit(req, 'STUDENT_CREATED', created, {}, { studentCode: created.studentCode, status }, session);
             return created;
         });
@@ -181,12 +219,14 @@ const getAllStudents = async (req, res) => {
         if (!Number.isInteger(page) || page < 1 || !Number.isInteger(limit) || limit < 1 || limit > 100) return res.status(400).json({ message: 'Thông tin phân trang không hợp lệ' });
         if (!SORTS.has(sortBy) || !['asc', 'desc'].includes(sortOrder)) return res.status(400).json({ message: 'Thông tin sắp xếp không hợp lệ' });
         if (status && status !== 'all' && !STUDENT_STATUSES.includes(status)) return res.status(400).json({ message: 'Trạng thái học sinh không hợp lệ' });
+        if (schoolYear !== undefined && typeof schoolYear !== 'string') return res.status(400).json({ message: 'Năm học lọc không hợp lệ' });
+        if (search !== undefined && typeof search !== 'string') return res.status(400).json({ message: 'Từ khóa tìm kiếm không hợp lệ' });
         let filter = {};
         if (classroomId) filter.classroomId = classroomId;
-        if (schoolYear?.trim()) filter.schoolYear = schoolYear.trim();
+        if (typeof schoolYear === 'string' && schoolYear.trim()) filter.schoolYear = schoolYear.trim();
         if (status && status !== 'all') filter.status = status; else if (!status) filter.status = 'enrolled';
-        if (search?.trim()) {
-            const keyword = regexEscape(search.trim());
+        if (typeof search === 'string' && search.trim()) {
+            const keyword = regexEscape(search.trim().slice(0, 120));
             filter.$or = [
                 { fullName: { $regex: keyword, $options: 'i' } },
                 { studentCode: { $regex: keyword, $options: 'i' } },
@@ -322,7 +362,7 @@ const saveDailyReport = async (req, res) => {
         const tenantId = req.tenantId || req.user?.tenantId;
         const student = await Student.findOne({ _id: req.params.id, ...tenantFilter });
         if (!student) return res.status(404).json({ success: false, message: 'Không tìm thấy học sinh' });
-        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, student.classroomId)) return res.status(403).json({ success: false, message: 'Bạn không được ghi sổ cho học sinh ngoài lớp phụ trách' });
+        if (req.user.role === 'teacher' && !await canAccessClassroom(req.user, student.classroomId, req)) return res.status(403).json({ success: false, message: 'Bạn không được ghi sổ cho học sinh ngoài lớp phụ trách' });
         const reportDate = new Date(req.body.reportDate || new Date());
         if (Number.isNaN(reportDate.getTime())) return res.status(422).json({ success: false, message: 'Ngày ghi nhận không hợp lệ' });
         const today = new Date(); today.setHours(23, 59, 59, 999);
@@ -339,6 +379,7 @@ const saveDailyReport = async (req, res) => {
         const saved = student.dailyReports.find((item) => new Date(item.reportDate).toISOString().slice(0, 10) === dateKey);
         const parents = await User.find({ role: 'parent', status: 'active', 'parentInfo.studentIds': student._id, ...tenantFilter }).select('_id').lean();
         await Promise.all(parents.map((parent) => Notification.create({
+            ...(tenantId ? { tenantId } : {}),
             recipientId: parent._id, title: `Sổ chăm sóc: ${student.fullName}`,
             message: `Giáo viên đã cập nhật tình hình ăn, ngủ, sức khỏe và hoạt động ngày ${reportDate.toLocaleDateString('vi-VN')}.`,
             type: 'info', link: '/parent-portal', createdBy: req.user._id,
@@ -1314,13 +1355,14 @@ const transferStudentClassroom = async (req, res) => {
 
             for (const recipientId of recipients) {
                 await Notification.create([{
+                    ...(tenantId ? { tenantId } : {}),
                     recipientId,
                     title: `Học sinh ${studentDoc.fullName} chuyển lớp`,
                     message: `Học sinh ${studentDoc.fullName} (${studentDoc.studentCode}) đã được chuyển từ lớp ${fromClassroom.name} sang lớp ${toClassroom.name}. Lý do: ${cleanReason}`,
                     type: 'info',
                     link: '/students',
                     createdBy: req.user._id
-                }], { session });
+                }], session ? { session } : undefined);
             }
 
             const responsePayload = {
@@ -1481,7 +1523,10 @@ const saveGrowthRecord = async (req, res) => {
         }
 
         const bmi = Number((weightKg / ((heightCm / 100) ** 2)).toFixed(1));
-        const nutritionStatus = String(req.body?.nutritionStatus || '').trim() || evaluatePreschoolNutritionStatus(bmi);
+        if (!Number.isFinite(bmi) || bmi < 5 || bmi > 80) {
+            return res.status(422).json({ success: false, message: 'Tỷ lệ cân nặng và chiều cao không hợp lý (BMI nằm ngoài ngưỡng sinh học). Vui lòng kiểm tra lại đơn vị kg và cm.' });
+        }
+        const nutritionStatus = (String(req.body?.nutritionStatus || '').trim() || evaluatePreschoolNutritionStatus(bmi)).slice(0, 80);
 
         student.growthRecords = student.growthRecords || [];
         const existing = student.growthRecords.find((item) => item.month === month);
@@ -1568,7 +1613,7 @@ const addVaccinationRecord = async (req, res) => {
         }
 
         const vaccineName = String(req.body?.vaccineName || '').trim();
-        const doseNumber = Number(req.body?.doseNumber || 1);
+        const doseNumber = Number(req.body?.doseNumber ?? 1);
         const status = String(req.body?.status || 'completed').trim();
         const facility = String(req.body?.facility || '').trim().slice(0, 150);
         const note = String(req.body?.note || '').trim().slice(0, 500);
@@ -1586,9 +1631,12 @@ const addVaccinationRecord = async (req, res) => {
 
         let vaccinatedDate = null;
         if (rawDate) {
-            vaccinatedDate = new Date(rawDate);
-            if (Number.isNaN(vaccinatedDate.getTime())) {
+            if (!isStrictValidCalendarDate(rawDate)) {
                 return res.status(422).json({ success: false, message: 'Ngày tiêm chủng không hợp lệ' });
+            }
+            vaccinatedDate = new Date(rawDate);
+            if (student.birthDate && vaccinatedDate < new Date(student.birthDate)) {
+                return res.status(422).json({ success: false, message: 'Ngày tiêm chủng không được trước ngày sinh của bé' });
             }
         }
 

@@ -187,8 +187,12 @@ export default function MultiSchoolManagement() {
         }
         localStorage.setItem('token', token);
         localStorage.setItem('user', JSON.stringify(user));
-        localStorage.setItem('tenant', JSON.stringify(tenant));
-        localStorage.setItem('last_school_code', tenant.code);
+        if (tenant) {
+          localStorage.setItem('tenant', JSON.stringify(tenant));
+          if (tenant.code) localStorage.setItem('last_school_code', tenant.code);
+        } else {
+          localStorage.removeItem('tenant');
+        }
         navigate('/dashboard');
       }
     } catch (err) {

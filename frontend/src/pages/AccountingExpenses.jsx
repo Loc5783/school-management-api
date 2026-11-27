@@ -3,6 +3,7 @@ import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
 import { getExpenseOrders, getPurchaseExpenses, recordPurchaseExpense, exportPurchaseExpenses } from '../api/finance';
 import './AccountingExpenses.css';
+import { generateClientId, getStoredUser } from '../utils/storage';
 
 const schoolToday = () => {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
@@ -12,10 +13,10 @@ const schoolToday = () => {
 const currentMonth = () => schoolToday().slice(0, 7);
 const asPeriod = (month) => `${month.slice(5, 7)}-${month.slice(0, 4)}`;
 const money = (value) => `${new Intl.NumberFormat('vi-VN').format(Number(value) || 0)} đ`;
-const freshForm = () => ({ orderId: '', amount: '', paidAt: schoolToday(), method: 'bank_transfer', transactionRef: '', documentNumber: '', note: '', idempotencyKey: crypto.randomUUID() });
+const freshForm = () => ({ orderId: '', amount: '', paidAt: schoolToday(), method: 'bank_transfer', transactionRef: '', documentNumber: '', note: '', idempotencyKey: generateClientId() });
 
 export default function AccountingExpenses() {
-  const role = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const role = getStoredUser().role;
   const canRecord = ['admin', 'accountant'].includes(role);
   const [month, setMonth] = useState(currentMonth);
   const [page, setPage] = useState(1);
@@ -65,7 +66,7 @@ export default function AccountingExpenses() {
     setForm((current) => ({ ...current, [key]: value,
       ...(key === 'orderId' ? { amount: newOrder ? String(newOrder.totalAmount - (newOrder.paidAmount || 0)) : '' } : {}),
       ...(key === 'method' && value === 'cash' ? { transactionRef: '' } : {}),
-      idempotencyKey: crypto.randomUUID() }));
+      idempotencyKey: generateClientId() }));
   };
   const submit = async (event) => {
     event.preventDefault();

@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import api from '../api/axiosConfig';
 import Icon from './Icon';
+import { getStoredUser } from '../utils/storage';
 
 export default function ParentEvaluationReportView() {
   const [data, setData] = useState({ items: [], summary: { totalCount: 0, avgOverall: 0, avgCare: 0, avgTeaching: 0, avgCommunication: 0 }, pagination: { page: 1, totalPages: 1 } });
@@ -24,7 +25,7 @@ export default function ParentEvaluationReportView() {
     endDate: ''
   });
 
-  const userRole = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const userRole = getStoredUser().role;
   const canManagePeriods = ['admin', 'principal', 'hr'].includes(userRole);
 
   const handleTogglePeriodStatus = async (periodId, currentStatus) => {

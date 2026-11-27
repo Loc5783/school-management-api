@@ -14,6 +14,7 @@ const PurchaseOrder = require('../models/zone6_procurement/PurchaseOrder');
 const crypto = require('crypto');
 const { isValidObjectId } = require('../utils/idValidation');
 const { buildTenantFilter } = require('../services/tenantFilterService');
+const { runSafeTransaction } = require('../utils/safeTransaction');
 const { DEFAULT_SCHOOL_TIMEZONE, getWorkDate, isValidWorkDate } = require('../utils/dateHelpers');
 const {
   resolveEventDateAndTime,
@@ -455,8 +456,9 @@ const createIncident = async (req, res) => {
       throw fail('Dữ liệu ngoại tuyến chỉ được đồng bộ trong đúng ngày phát sinh', 422);
     }
 
-    const item = await mongoose.connection.transaction(async (session) => {
-      const [incident] = await SecurityIncident.create([{ ...(tenantId ? { tenantId } : {}), incidentDate, occurredAt: dateObj, category, severity, location: clean(location, 160), description: clean(description, 2000), actionTaken: clean(actionTaken, 1000), studentId: student?._id || null, studentName: student?.fullName || '', ...(clientEventId ? { clientEventId: clean(clientEventId, 100), payloadFingerprint } : {}), reportedBy: req.user._id, reportedByName: actorName(req.user), nextReminderAt: severity === 'normal' ? null : new Date(Date.now() + REMINDER_INTERVAL_MS) }], { session });
+    const item = await runSafeTransaction(async (session) => {
+      const sessionOpt = session ? { session } : undefined;
+      const [incident] = await SecurityIncident.create([{ ...(tenantId ? { tenantId } : {}), incidentDate, occurredAt: dateObj, category, severity, location: clean(location, 160), description: clean(description, 2000), actionTaken: clean(actionTaken, 1000), studentId: student?._id || null, studentName: student?.fullName || '', ...(clientEventId ? { clientEventId: clean(clientEventId, 100), payloadFingerprint } : {}), reportedBy: req.user._id, reportedByName: actorName(req.user), nextReminderAt: severity === 'normal' ? null : new Date(Date.now() + REMINDER_INTERVAL_MS) }], sessionOpt);
       if (severity !== 'normal') await notifyManagers(`Sự cố ${severity === 'emergency' ? 'khẩn cấp' : 'nghiêm trọng'} tại ${incident.location}`, incident.description, req.user._id, { incidentId: incident._id, severity }, session, tenantFilter, tenantId);
       return incident;
     });
@@ -611,7 +613,8 @@ const createHandover = async (req, res) => {
       SchoolVisitor.find({ status: 'inside', ...tenantFilter }).select('fullName hostName').lean(),
       SecurityIncident.find({ status: { $ne: 'closed' }, ...tenantFilter }).select('location description status').lean()
     ]);
-    const item = await mongoose.connection.transaction(async (session) => {
+    const item = await runSafeTransaction(async (session) => {
+      const sessionOpt = session ? { session } : undefined;
       const [handover] = await GuardShiftHandover.create([{
         ...(tenantId ? { tenantId } : {}),
         handoverDate: today(),
@@ -628,7 +631,7 @@ const createHandover = async (req, res) => {
         notes: clean(notes, 2000),
         handedOverBy: req.user._id,
         handedOverByName: actorName(req.user)
-      }], { session });
+      }], sessionOpt);
       await Notification.create([{
         ...(tenantId ? { tenantId } : {}),
         recipientId: receiver._id,
@@ -638,7 +641,7 @@ const createHandover = async (req, res) => {
         link: '/guard',
         createdBy: req.user._id,
         metadata: { handoverId: handover._id, priority: 'high' }
-      }], { session });
+      }], sessionOpt);
       return handover;
     });
     const safeData = isGuard ? (() => {
@@ -658,13 +661,14 @@ const acceptHandover = async (req, res) => {
     if (note.length > 500) throw fail('Ghi chú tiếp nhận tối đa 500 ký tự');
     const tenantFilter = buildTenantFilter(req);
     const tenantId = req.tenantId || req.user?.tenantId;
-    const item = await mongoose.connection.transaction(async (session) => {
+    const item = await runSafeTransaction(async (session) => {
+      const sessionOpt = session ? { session } : undefined;
       const accepted = await GuardShiftHandover.findOneAndUpdate(
         { _id: req.params.id, receiverId: req.user._id, status: 'pending', handedOverBy: { $ne: req.user._id }, ...tenantFilter },
         { $set: { status: 'accepted', acceptedAt: new Date(), acceptedBy: req.user._id, acceptanceNote: note } },
-        { returnDocument: 'after', session }
+        { returnDocument: 'after', ...(session ? { session } : {}) }
       );
-      if (accepted) await Notification.create([{ ...(tenantId ? { tenantId } : {}), recipientId: accepted.handedOverBy, title: 'Ca trực đã được tiếp nhận', message: `${actorName(req.user)} đã xác nhận nhận ca ${accepted.shiftName}.`, type: 'info', link: '/guard', createdBy: req.user._id, metadata: { handoverId: accepted._id } }], { session });
+      if (accepted) await Notification.create([{ ...(tenantId ? { tenantId } : {}), recipientId: accepted.handedOverBy, title: 'Ca trực đã được tiếp nhận', message: `${actorName(req.user)} đã xác nhận nhận ca ${accepted.shiftName}.`, type: 'info', link: '/guard', createdBy: req.user._id, metadata: { handoverId: accepted._id } }], sessionOpt);
       return accepted;
     });
     const isGuard = req.user.role === 'guard';
@@ -738,27 +742,39 @@ const verifyPickupOtp = async (req, res) => {
     const tenantId = req.tenantId || req.user?.tenantId;
     const candidate = await PickupOtpChallenge.findOne({ _id: req.params.id, ...tenantFilter }).select('+codeHash');
     if (!candidate) throw fail('Không tìm thấy yêu cầu OTP', 404);
-    if (candidate.status === 'verified' && candidate.pickupRecordId) {
+    if (candidate.pickupDate !== today()) throw fail('Yêu cầu OTP đã qua ngày hiệu lực', 409);
+    const incomingHash = hashOtp(req.body.otp);
+    if (candidate.status === 'verified' && candidate.pickupRecordId && candidate.codeHash === incomingHash) {
       const existingRecord = await PickupRecord.findOne({ _id: candidate.pickupRecordId, ...tenantFilter });
       return res.json({ success: true, message: 'OTP đã được xác nhận trước đó', data: existingRecord });
     }
     if (candidate.status !== 'pending') throw fail('Yêu cầu OTP không còn hiệu lực', 409);
     if (candidate.expiresAt <= new Date()) { candidate.status = 'expired'; await candidate.save(); throw fail('Mã OTP đã hết hạn', 409); }
-    if (candidate.codeHash !== hashOtp(req.body.otp)) {
-      candidate.attempts += 1;
-      if (candidate.attempts >= 5) candidate.status = 'cancelled';
-      await candidate.save();
-      throw fail(candidate.attempts >= 5 ? 'OTP sai quá 5 lần, yêu cầu đã bị khóa' : `OTP không đúng, còn ${5 - candidate.attempts} lần thử`, 422);
+    if (candidate.codeHash !== incomingHash) {
+      const bumped = await PickupOtpChallenge.findOneAndUpdate(
+        { _id: candidate._id, status: 'pending', ...tenantFilter },
+        { $inc: { attempts: 1 } },
+        { returnDocument: 'after' }
+      );
+      const currentAttempts = bumped?.attempts ?? (candidate.attempts + 1);
+      if (currentAttempts >= 5) {
+        await PickupOtpChallenge.updateOne({ _id: candidate._id, ...tenantFilter }, { $set: { status: 'cancelled' } });
+      }
+      throw fail(currentAttempts >= 5 ? 'OTP sai quá 5 lần, yêu cầu đã bị khóa' : `OTP không đúng, còn ${Math.max(0, 5 - currentAttempts)} lần thử`, 422);
     }
-    const item = await mongoose.connection.transaction(async (session) => {
-      const challenge = await PickupOtpChallenge.findOne({ _id: req.params.id, status: 'pending', expiresAt: { $gt: new Date() }, codeHash: hashOtp(req.body.otp), ...tenantFilter }).select('+codeHash').session(session);
+    const item = await runSafeTransaction(async (session) => {
+      const sessionOpt = session ? { session } : undefined;
+      const challenge = await PickupOtpChallenge.findOne({ _id: req.params.id, status: 'pending', expiresAt: { $gt: new Date() }, codeHash: incomingHash, ...tenantFilter }).select('+codeHash').session(session);
       if (!challenge) throw fail('Yêu cầu OTP vừa được xử lý hoặc không còn hiệu lực', 409);
-      if (await PickupRecord.exists({ studentId: challenge.studentId, pickupDate: challenge.pickupDate, status: 'scheduled', ...tenantFilter }).session(session)) throw fail('Học sinh đã có lịch đón đang hiệu lực trong ngày', 409);
+      if (await StudentGateEvent.exists({ studentId: challenge.studentId, gateDate: challenge.pickupDate, direction: 'departure', ...tenantFilter }).session(session)) {
+        throw fail('Học sinh đã được bàn giao rời trường trong ngày hôm nay', 409);
+      }
+      if (await PickupRecord.exists({ studentId: challenge.studentId, pickupDate: challenge.pickupDate, status: { $in: ['scheduled', 'confirmed'] }, ...tenantFilter }).session(session)) throw fail('Học sinh đã có lịch đón đang hiệu lực trong ngày', 409);
       const parent = await User.findOne({ role: 'parent', status: 'active', 'parentInfo.studentIds': challenge.studentId, ...tenantFilter }).select('_id profile.fullName username').session(session);
       if (!parent) throw fail('Tài khoản phụ huynh không còn hoạt động', 409);
-      const [record] = await PickupRecord.create([{ ...(tenantId ? { tenantId } : {}), studentId: challenge.studentId, studentName: challenge.studentName, classroomId: challenge.classroomId, className: challenge.className, requesterId: parent._id, requesterName: parent.profile?.fullName || parent.username, pickupDate: challenge.pickupDate, expectedPickupTime: '', note: 'Người đón thay được phụ huynh xác nhận bằng OTP tại cổng', authorizationMethod: 'otp', otpChallengeId: challenge._id, pickupCode: createPickupCode(), picker: { pickerId: challenge._id, ...challenge.picker.toObject() } }], { session });
-      challenge.status = 'verified'; challenge.verifiedAt = new Date(); challenge.verifiedBy = req.user._id; challenge.pickupRecordId = record._id; await challenge.save({ session });
-      await Notification.create([{ ...(tenantId ? { tenantId } : {}), recipientId: parent._id, title: `Đã xác nhận OTP đón ${challenge.studentName}`, message: `${challenge.picker.fullName} đã được xác nhận là người đón thay trong hôm nay.`, type: 'info', link: '/pickups', createdBy: req.user._id, metadata: { pickupRecordId: record._id, studentId: challenge.studentId } }], { session });
+      const [record] = await PickupRecord.create([{ ...(tenantId ? { tenantId } : {}), studentId: challenge.studentId, studentName: challenge.studentName, classroomId: challenge.classroomId, className: challenge.className, requesterId: parent._id, requesterName: parent.profile?.fullName || parent.username, pickupDate: challenge.pickupDate, expectedPickupTime: '', note: 'Người đón thay được phụ huynh xác nhận bằng OTP tại cổng', authorizationMethod: 'otp', otpChallengeId: challenge._id, pickupCode: createPickupCode(), picker: { pickerId: challenge._id, ...challenge.picker.toObject() } }], sessionOpt);
+      challenge.status = 'verified'; challenge.verifiedAt = new Date(); challenge.verifiedBy = req.user._id; challenge.pickupRecordId = record._id; await challenge.save(sessionOpt);
+      await Notification.create([{ ...(tenantId ? { tenantId } : {}), recipientId: parent._id, title: `Đã xác nhận OTP đón ${challenge.studentName}`, message: `${challenge.picker.fullName} đã được xác nhận là người đón thay trong hôm nay.`, type: 'info', link: '/pickups', createdBy: req.user._id, metadata: { pickupRecordId: record._id, studentId: challenge.studentId } }], sessionOpt);
       return record;
     });
     return res.json({ success: true, message: 'OTP hợp lệ, đã tạo lịch bàn giao trong ngày', data: item });

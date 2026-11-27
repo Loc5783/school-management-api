@@ -8,17 +8,17 @@ const login = async (req, res) => {
   try {
     const { schoolCode, username, password } = req.body || {};
 
-    if (!username || !password) {
+    if (typeof username !== 'string' || typeof password !== 'string' || !username.trim() || !password) {
       return res.status(400).json({
         success: false,
         message: 'Vui lòng cung cấp tên đăng nhập và mật khẩu'
       });
     }
 
-    const cleanUsername = String(username).trim();
+    const cleanUsername = username.trim();
 
     // 1. Phân luồng đăng nhập phiên Legacy (không có mã trường schoolCode)
-    if (!schoolCode || !String(schoolCode).trim()) {
+    if (!schoolCode || typeof schoolCode !== 'string' || !schoolCode.trim()) {
       const user = await User.findOne({
         tenantId: { $in: [null, undefined] },
         username: cleanUsername
@@ -31,11 +31,11 @@ const login = async (req, res) => {
         });
       }
 
-      if (user.status === 'inactive' || user.status === 'locked' || user.status === 'suspended') {
+      if (user.status !== 'active' || (user.accessEndsAt && user.accessEndsAt <= new Date())) {
         return res.status(401).json({
           success: false,
           code: 'ACCOUNT_LOCKED',
-          message: 'Tài khoản đã bị vô hiệu hóa hoặc bị khóa'
+          message: 'Tài khoản đã bị vô hiệu hóa, bị khóa hoặc đã hết thời hạn truy cập'
         });
       }
 
@@ -102,12 +102,12 @@ const login = async (req, res) => {
       });
     }
 
-    // Check account status
-    if (user.status === 'inactive' || user.status === 'locked' || user.status === 'suspended') {
+    // Check account status & access expiration
+    if (user.status !== 'active' || (user.accessEndsAt && user.accessEndsAt <= new Date())) {
       return res.status(401).json({
         success: false,
         code: 'ACCOUNT_LOCKED',
-        message: 'Tài khoản đã bị vô hiệu hóa hoặc bị khóa'
+        message: 'Tài khoản đã bị vô hiệu hóa, bị khóa hoặc đã hết thời hạn truy cập'
       });
     }
 

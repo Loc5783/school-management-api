@@ -2,6 +2,7 @@ const TuitionFee = require('../models/zone4_finance/TuitionFee');
 const FeeSchedule = require('../models/zone4_finance/FeeSchedule');
 const Payroll = require('../models/zone2_hr/Payroll');
 const { getWorkDate } = require('../utils/dateHelpers');
+const { isValidObjectId } = require('../utils/idValidation');
 const { assertOpen, fromPeriod } = require('../services/accountingPeriodService');
 const { buildTenantFilter } = require('../services/tenantFilterService');
 
@@ -11,19 +12,25 @@ const guard = (resolveMonth) => async (req, res, next) => {
         await assertOpen(month, null, req);
         next();
     } catch (error) {
+        if (error?.name === 'CastError') {
+            return res.status(400).json({ message: 'Mã định danh dữ liệu không hợp lệ' });
+        }
         return res.status(error.statusCode || 500).json({ message: error.statusCode ? error.message : 'Không thể kiểm tra trạng thái kỳ kế toán' });
     }
 };
 
 const invoice = async (req) => {
+    if (!isValidObjectId(req.params.id)) return null;
     const record = await TuitionFee.findOne({ _id: req.params.id, ...buildTenantFilter(req) }).select('period').lean();
     return fromPeriod(record?.period);
 };
 const schedule = async (req) => {
+    if (!isValidObjectId(req.params.id)) return null;
     const record = await FeeSchedule.findOne({ _id: req.params.id, ...buildTenantFilter(req) }).select('period').lean();
     return fromPeriod(record?.period);
 };
 const payroll = async (req) => {
+    if (!isValidObjectId(req.params.id)) return null;
     const record = await Payroll.findOne({ _id: req.params.id, ...buildTenantFilter(req) }).select('month year').lean();
     return record ? `${record.year}-${String(record.month).padStart(2, '0')}` : null;
 };

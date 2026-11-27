@@ -29,6 +29,7 @@ import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
 import FeeSchedulePanel from './FeeSchedulePanel';
 import FinanceExcelImportModal from '../components/FinanceExcelImportModal';
+import { generateClientId, getStoredUser } from '../utils/storage';
 
 const currentPeriod = () => {
   const d = new Date();
@@ -73,7 +74,7 @@ const schoolToday = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Ho_
 const emptyAdjustment = () => ({ type: 'discount', amount: '', reason: '', paidDate: schoolToday(), method: 'bank_transfer', transactionRef: '', documentNumber: '' });
 
 export default function FinanceManagement() {
-  const role = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const role = getStoredUser().role;
   const canCancel = role === 'admin';
   const canManageInvoices = ['admin', 'accountant'].includes(role);
   const canCollect = canManageInvoices;
@@ -384,7 +385,7 @@ export default function FinanceManagement() {
 
   const openPayment = async (invoice) => {
     setPaymentError('');
-    setPayment({ invoice, amount: Math.max(0, invoice.totalAmount - invoice.paidAmount), method: 'cash', txnRef: '', note: '', idempotencyKey: crypto.randomUUID() });
+    setPayment({ invoice, amount: Math.max(0, invoice.totalAmount - invoice.paidAmount), method: 'cash', txnRef: '', note: '', idempotencyKey: generateClientId() });
     try {
       const res = await getPayments(invoice._id);
       setPayments(res.data.data || []);
@@ -395,7 +396,7 @@ export default function FinanceManagement() {
 
   const changePayment = (key, value) => {
     setPaymentError('');
-    setPayment((current) => ({ ...current, [key]: value, ...(key === 'method' ? { txnRef: '' } : {}), idempotencyKey: crypto.randomUUID() }));
+    setPayment((current) => ({ ...current, [key]: value, ...(key === 'method' ? { txnRef: '' } : {}), idempotencyKey: generateClientId() }));
   };
 
   const submitPayment = async (event) => {
@@ -490,7 +491,7 @@ export default function FinanceManagement() {
     setAdjustmentSubmitting(true);
     setError('');
     try {
-      if (!adjustmentKey.current) adjustmentKey.current = crypto.randomUUID();
+      if (!adjustmentKey.current) adjustmentKey.current = generateClientId();
       const result = await payRefundRequest(
         request._id,
         { paidDate: adjustmentForm.paidDate, method: adjustmentForm.method, transactionRef: adjustmentForm.transactionRef, documentNumber: adjustmentForm.documentNumber },

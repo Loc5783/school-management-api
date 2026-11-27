@@ -4,13 +4,14 @@ import { Link } from 'react-router-dom';
 import { getLeaveRequests, reviewLeaveRequest } from '../api/attendance';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
+import { getStoredUser } from '../utils/storage';
 
 const dateText = (value) => value ? new Date(value).toLocaleDateString('vi-VN') : '—';
 const text = { pending: 'Chờ duyệt', approved: 'Đã duyệt', rejected: 'Từ chối', cancelled: 'Đã hủy' };
 
 export default function AttendanceLeaveManagement() {
   const [requests, setRequests] = useState([]); const [status, setStatus] = useState('pending'); const [state, setState] = useState({ loading: true, error: '' }); const [workingId, setWorkingId] = useState('');
-  const role = JSON.parse(localStorage.getItem('user') || '{}').role; const canReview = ['admin', 'principal'].includes(role);
+  const role = getStoredUser().role; const canReview = ['admin', 'principal'].includes(role);
   const load = async () => { setState({ loading: true, error: '' }); try { const res = await getLeaveRequests(status ? { status } : {}); setRequests(res.data.data || []); setState({ loading: false, error: '' }); } catch (err) { setState({ loading: false, error: err.response?.data?.message || 'Không thể tải đơn xin nghỉ.' }); } };
   useEffect(() => { load(); }, [status]);
   const review = async (item, decision) => { const reviewNote = window.prompt(decision === 'approved' ? 'Ghi chú cho phụ huynh (có thể để trống):' : 'Lý do từ chối (có thể để trống):', '') ?? null; if (reviewNote === null) return; setWorkingId(item._id); try { await reviewLeaveRequest(item._id, { decision, reviewNote }); await load(); } catch (err) { setState((old) => ({ ...old, error: err.response?.data?.message || 'Không thể xử lý đơn.' })); } finally { setWorkingId(''); } };

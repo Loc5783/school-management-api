@@ -7,6 +7,7 @@ import ParentAccountManagement from './ParentAccountManagement';
 import StudentProfileChangeRequests from './StudentProfileChangeRequests';
 import { createInternalAccount, deactivateInternalAccount, getInternalAccounts, updateInternalAccount } from '../api/systemUsers';
 import { getEmployees } from '../api/hr';
+import { getStoredUser } from '../utils/storage';
 
 const roleOptions = [
   { value: 'principal', label: 'Hiệu trưởng' },
@@ -39,8 +40,8 @@ const formatVnd = (val) => `${new Intl.NumberFormat('vi-VN').format(Number(val |
 
 export default function AccountManagement() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const currentRole = JSON.parse(localStorage.getItem('user') || '{}').role;
-  const currentUserId = JSON.parse(localStorage.getItem('user') || '{}')._id;
+  const currentRole = getStoredUser().role;
+  const currentUserId = getStoredUser()._id;
   const isAdmin = currentRole === 'admin';
   const canAssignPrincipal = isAdmin;
   const availableRoles = roleOptions.filter((item) => canAssignPrincipal || item.value !== 'principal');

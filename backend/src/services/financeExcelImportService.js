@@ -81,6 +81,13 @@ const extractCellStaticString = (cell, colLabel = '') => {
 
   const val = cell.value;
   if (val == null) return { text: '' };
+  if (cell.type === ExcelJS.ValueType.Error || (typeof val === 'object' && val !== null && val.error)) {
+    return {
+      text: '',
+      isFormula: true,
+      error: `Ô ${colLabel ? `cột "${colLabel}"` : cell.address} chứa lỗi công thức Excel (${val?.error || '#ERROR!'}).`
+    };
+  }
   if (typeof val === 'string') return { text: val.trim() };
   if (typeof val === 'number') return { text: String(val).trim() };
   if (typeof val === 'boolean') return { text: String(val) };
@@ -90,7 +97,15 @@ const extractCellStaticString = (cell, colLabel = '') => {
       return { text: val.richText.map(t => t.text || '').join('').trim() };
     }
     if (val.text != null) {
-      return { text: String(val.text).trim() };
+      if (typeof val.text === 'object' && Array.isArray(val.text.richText)) {
+        return { text: val.text.richText.map(t => t.text || '').join('').trim() };
+      }
+      if (typeof val.text !== 'object') {
+        return { text: String(val.text).trim() };
+      }
+    }
+    if (typeof val.hyperlink === 'string') {
+      return { text: val.hyperlink.replace(/^mailto:/i, '').trim() };
     }
   }
   return { text: '' };
@@ -756,9 +771,14 @@ const generateFeeScheduleTemplateWorkbook = async (context) => {
   dataSheet.getColumn(2).numFmt = '@';
   dataSheet.getColumn(8).numFmt = '@';
 
-  const classListFormula = classrooms.length > 0
-    ? `"${['Tất cả lớp (áp dụng chung)', ...classrooms.map(c => c.name)].slice(0, 30).join(',')}"`
-    : '"Tất cả lớp (áp dụng chung)"';
+  const classOptionList = ['Tất cả lớp (áp dụng chung)', ...classrooms.map((c) => String(c.name || '').trim()).filter(Boolean)];
+  const catSheet = workbook.addWorksheet('Danh mục');
+  catSheet.getCell('A1').value = 'Lớp học';
+  classOptionList.forEach((clsName, idx) => {
+    catSheet.getCell(`A${idx + 2}`).value = clsName;
+  });
+  catSheet.state = 'hidden';
+  const classListFormula = `'Danh mục'!$A$2:$A$${classOptionList.length + 1}`;
 
   for (let r = 2; r <= MAX_ROWS + 1; r++) {
     const cellA = dataSheet.getCell(`A${r}`);

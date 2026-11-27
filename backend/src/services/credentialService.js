@@ -5,6 +5,7 @@ const Credential = require('../models/zone2_hr/EmployeeCredential');
 const Policy = require('../models/zone2_hr/CredentialPolicy');
 const AuditLog = require('../models/zone1_system/AuditLog');
 const { getWorkDate, isValidWorkDate } = require('../utils/dateHelpers');
+const { runSafeTransaction } = require('../utils/safeTransaction');
 
 const fail = (message, statusCode = 422) => Object.assign(new Error(message), { statusCode });
 const checkId = (value) => { if (!mongoose.isValidObjectId(value)) throw fail('Mã hồ sơ không hợp lệ'); };
@@ -59,18 +60,14 @@ const normalizeCredential = (body, requirement, file = null) => {
   }
   return result;
 };
-const inTransaction = async (operation) => {
-  const topology = await mongoose.connection.db.admin().command({ hello: 1 });
-  if (!topology.setName && topology.msg !== 'isdbgrid' && process.env.ALLOW_STANDALONE_MONGODB !== 'true') {
-    throw fail('MongoDB cần Replica Set để lưu thay đổi nhân sự cùng lịch sử thao tác', 503);
-  }
-  const session = await mongoose.startSession();
-  try { let result; await session.withTransaction(async () => { result = await operation(session); }); return result; }
-  finally { await session.endSession(); }
-};
+const inTransaction = (operation) => runSafeTransaction(
+  operation,
+  'MongoDB cần Replica Set để lưu thay đổi nhân sự cùng lịch sử thao tác'
+);
 const audit = async (user, action, targetType, targetId, before, after, session, reason = '') => AuditLog.create([{
+  ...(user?.tenantId ? { tenantId: user.tenantId } : {}),
   actorId: user._id, actorUsername: user.username || String(user._id), action, targetType, targetId, before, after, reason
-}], { session });
+}], session ? { session } : undefined);
 const applies = (requirement, employee, schoolType) => requirement.positions.includes(employee.position)
   && (!requirement.schoolType || requirement.schoolType === schoolType);
 const credentialState = (record, requirement, today = getWorkDate()) => {

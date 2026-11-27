@@ -191,8 +191,9 @@ export default function PickupManagement({ embedded = false, classroomId = '', f
   const handleDirectHandover = async (rosterItem) => {
     const sid = String(rosterItem.studentId);
     if (handoverStudentId) return;
-    const chosenKey = selectedPickerByStudent[sid] || rosterItem.pickerOptions[0]?.key || CUSTOM_PICKER_KEY;
-    const chosenOption = rosterItem.pickerOptions.find((opt) => opt.key === chosenKey);
+    const optionsList = Array.isArray(rosterItem.pickerOptions) ? rosterItem.pickerOptions : [];
+    const chosenKey = selectedPickerByStudent[sid] || optionsList[0]?.key || CUSTOM_PICKER_KEY;
+    const chosenOption = optionsList.find((opt) => opt.key === chosenKey);
     const customInfo = customPickerByStudent[sid] || { fullName: '', relationship: 'Người thân', phone: '' };
 
     if (chosenKey === CUSTOM_PICKER_KEY && !String(customInfo.fullName || '').trim()) {
@@ -201,11 +202,13 @@ export default function PickupManagement({ embedded = false, classroomId = '', f
     }
 
     // Cảnh báo an toàn nếu buổi sáng bé đang được ghi nhận Vắng mặt / Nghỉ có phép nhưng buổi chiều bấm Trả trẻ
+    let confirmedAbsentOverride = false;
     if (rosterItem.attendanceStatus === 'absent' || rosterItem.attendanceStatus === 'absent_permission') {
       const ok = window.confirm(
         `Lưu ý: Bé ${rosterItem.fullName} sáng nay đang được ghi nhận "${attendanceBadgeText[rosterItem.attendanceStatus]}". Bạn có chắc chắn bé có mặt tại lớp và xác nhận trả trẻ không?`
       );
       if (!ok) return;
+      confirmedAbsentOverride = true;
     }
 
     setHandoverStudentId(sid);
@@ -214,6 +217,7 @@ export default function PickupManagement({ embedded = false, classroomId = '', f
       const payload = {
         studentId: rosterItem.studentId,
         pickupDate,
+        ...(confirmedAbsentOverride ? { forceAbsentHandover: true } : {}),
         ...(chosenOption
           ? {
               pickerKey: chosenOption.key,

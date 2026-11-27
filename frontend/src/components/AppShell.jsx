@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { createPortal } from 'react-dom';
 import { Navigate, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import Icon from './Icon';
+import AppErrorBoundary from './ErrorBoundary';
 import api from '../api/axiosConfig';
 import { getUnreadChat } from '../api/chat';
 
@@ -558,20 +559,21 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
       try {
         const res = await api.get('/auth/me');
         const userData = res.data?.data || res.data;
-        setUser(userData);
-        setPermissions(userData.permissions || []);
-        localStorage.setItem('user', JSON.stringify(userData));
+        if (userData && typeof userData === 'object') {
+          setUser(userData);
+          setPermissions(userData.permissions || []);
+          localStorage.setItem('user', JSON.stringify(userData));
+        }
         if (res.data?.tenant) {
           setTenant(res.data.tenant);
           localStorage.setItem('tenant', JSON.stringify(res.data.tenant));
-        } else {
+        } else if (res.data && Object.prototype.hasOwnProperty.call(res.data, 'tenant')) {
           setTenant(null);
           localStorage.removeItem('tenant');
         }
       } catch (err) {
+        // Không xóa tenant khi chỉ bị rớt mạng tạm thời hoặc lỗi 5xx thoáng qua
         console.error('Lỗi lấy user:', err);
-        setTenant(null);
-        localStorage.removeItem('tenant');
       } finally {
         setLoading(false);
       }
@@ -580,9 +582,24 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
     const syncStoredTenant = () => {
       setTenant(readStoredJson('tenant'));
     };
+    const handleStorageSync = (event) => {
+      if (event.key === 'token' && !event.newValue) {
+        window.location.assign('/login');
+        return;
+      }
+      if (event.key === 'user') {
+        const nextUser = readStoredJson('user');
+        if (nextUser) setUser(nextUser);
+      }
+      if (event.key === 'tenant') {
+        setTenant(readStoredJson('tenant'));
+      }
+    };
     window.addEventListener('tenant-updated', syncStoredTenant);
+    window.addEventListener('storage', handleStorageSync);
     return () => {
       window.removeEventListener('tenant-updated', syncStoredTenant);
+      window.removeEventListener('storage', handleStorageSync);
     };
   }, []);
 
@@ -1214,12 +1231,16 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
         <div className="page-content">
           {isPersistentLayout ? (
             <AppShellSlotContext.Provider value={slotContextValue}>
-              <div key={location.pathname} className="route-view-transition">
-                {children}
-              </div>
+              <AppErrorBoundary inline resetKey={location.pathname}>
+                <div key={location.pathname} className="route-view-transition">
+                  {children}
+                </div>
+              </AppErrorBoundary>
             </AppShellSlotContext.Provider>
           ) : (
-            children
+            <AppErrorBoundary inline resetKey={location.pathname}>
+              {children}
+            </AppErrorBoundary>
           )}
         </div>
       </main>

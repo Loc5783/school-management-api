@@ -10,6 +10,7 @@ import {
   previewInvoiceImport,
   confirmInvoiceImport
 } from '../api/finance';
+import { generateClientId } from '../utils/storage';
 
 const money = (val) => `${new Intl.NumberFormat('vi-VN').format(Number(val) || 0)} đ`;
 
@@ -145,13 +146,19 @@ export default function FinanceExcelImportModal({
     const selected = e.target.files?.[0];
     if (!selected) return;
 
-    if (!selected.name.endsWith('.xlsx')) {
+    if (!selected.name.toLowerCase().endsWith('.xlsx')) {
       setError('Vui lòng chọn tệp tin định dạng Excel (.xlsx).');
+      setFile(null);
+      setPreviewData(null);
+      e.target.value = '';
       return;
     }
 
     if (selected.size > 5 * 1024 * 1024) {
       setError('Dung lượng tệp tin vượt quá giới hạn cho phép (tối đa 5 MB).');
+      setFile(null);
+      setPreviewData(null);
+      e.target.value = '';
       return;
     }
 
@@ -167,6 +174,7 @@ export default function FinanceExcelImportModal({
 
   // 3. Xem trước file
   const handlePreview = async (fileToPreview) => {
+    if (previewing) return;
     const targetFile = fileToPreview || file;
     if (!targetFile) {
       setError('Vui lòng chọn file Excel.');
@@ -188,8 +196,8 @@ export default function FinanceExcelImportModal({
 
       setPreviewData(res.data);
       setPreviewPage(1);
-      // Tạo một Idempotency-Key ổn định cho một lần xem trước thành công
-      setImportKey(crypto.randomUUID());
+      // Tạo một Idempotency-Key ổn định cho một lần xem trước thành công (an toàn trên cả HTTP LAN)
+      setImportKey(generateClientId('fin-import'));
     } catch (err) {
       setError(err.response?.data?.message || err.message || 'Không thể đọc và kiểm tra file Excel.');
     } finally {
@@ -204,7 +212,7 @@ export default function FinanceExcelImportModal({
     setConfirming(true);
     setError('');
 
-    const keyToSend = importKey || crypto.randomUUID();
+    const keyToSend = importKey || generateClientId('fin-import');
 
     try {
       const payload = {
@@ -471,7 +479,7 @@ export default function FinanceExcelImportModal({
                               </span>
                             ) : (
                               <div style={{ color: '#DC2626', fontSize: '0.8125rem' }}>
-                                {row.errors.map((err, errIdx) => (
+                                {(row.errors || []).map((err, errIdx) => (
                                   <div key={errIdx}>• {err}</div>
                                 ))}
                               </div>
@@ -495,10 +503,9 @@ export default function FinanceExcelImportModal({
                   <div style={{ marginTop: '10px' }}>
                     <StudentPagination
                       page={previewPage}
-                      totalPages={totalPages}
-                      onPageChange={setPreviewPage}
-                      limit={PAGE_SIZE}
+                      pageSize={PAGE_SIZE}
                       total={filteredRows.length}
+                      onChange={setPreviewPage}
                     />
                   </div>
                 )}

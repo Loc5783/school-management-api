@@ -3,6 +3,7 @@ const PurchaseOrder = require('../models/zone6_procurement/PurchaseOrder');
 const PurchaseExpense = require('../models/zone4_finance/PurchaseExpense');
 const User = require('../models/zone1_system/User');
 const { getWorkDate, isValidWorkDate, startOfWorkDate } = require('../utils/dateHelpers');
+const { runSafeTransaction } = require('../utils/safeTransaction');
 const { lockOpenPeriod } = require('../services/accountingPeriodService');
 const {
     assertTenantContext,
@@ -69,45 +70,39 @@ const recordPurchaseExpense = async (req, res) => {
         if (normalizedNote.length > 500) fail('Ghi chú tối đa 500 ký tự', 422);
         if (!idempotencyKey || idempotencyKey.length > 120) fail('Thiếu mã yêu cầu chống ghi trùng', 400);
 
-        const topology = await mongoose.connection.db.admin().command({ hello: 1 });
-        if (!topology.setName && topology.msg !== 'isdbgrid') fail('Cần MongoDB Replica Set hoặc sharded cluster để ghi nhận chi an toàn', 503);
-        const session = await mongoose.startSession();
-        let result;
-        try {
-            await session.withTransaction(async () => {
-                const actor = await User.findOne({ _id: req.user._id, status: 'active', ...tenantFilter }).session(session);
-                if (!actor || !['accountant', 'admin'].includes(actor.role)) {
-                    fail('Bạn không có quyền ghi chi mua sắm hoặc tài khoản đã bị khóa', 403);
-                }
+        const result = await runSafeTransaction(async (session) => {
+            const sessionOpt = session ? { session } : undefined;
+            const actor = await User.findOne({ _id: req.user._id, status: 'active', ...tenantFilter }).session(session);
+            if (!actor || !['accountant', 'admin'].includes(actor.role)) {
+                fail('Bạn không có quyền ghi chi mua sắm hoặc tài khoản đã bị khóa', 403);
+            }
 
-                const previous = await PurchaseExpense.findOne({ orderId, idempotencyKey, ...tenantFilter }).session(session);
-                if (previous) {
-                    if (previous.amount !== paidAmount || previous.method !== method || previous.transactionRef !== (ref || undefined) || previous.documentNumber !== document || previous.note !== normalizedNote || previous.paidAt.toISOString().slice(0, 10) !== paidAt) fail('Mã yêu cầu này đã dùng cho khoản chi khác', 409);
-                    result = { expense: previous, replayed: true };
-                    return;
-                }
-                await lockOpenPeriod(paidAt.slice(0, 7), session, req);
-                const order = await PurchaseOrder.findOne({ _id: orderId, ...tenantFilter }).session(session);
-                if (!order) fail('Không tìm thấy đơn đặt hàng', 404);
-                if (order.status !== 'delivered') fail('Chỉ được ghi chi cho đơn đã xác nhận giao', 409);
-                const remaining = order.totalAmount - (order.paidAmount || 0);
-                if (paidAmount > remaining) fail(`Số tiền chi vượt phần còn lại (${remaining}đ)`, 422);
+            const previous = await PurchaseExpense.findOne({ orderId, idempotencyKey, ...tenantFilter }).session(session);
+            if (previous) {
+                if (previous.amount !== paidAmount || previous.method !== method || previous.transactionRef !== (ref || undefined) || previous.documentNumber !== document || previous.note !== normalizedNote || previous.paidAt.toISOString().slice(0, 10) !== paidAt) fail('Mã yêu cầu này đã dùng cho khoản chi khác', 409);
+                return { expense: previous, replayed: true };
+            }
+            await lockOpenPeriod(paidAt.slice(0, 7), session, req);
+            const order = await PurchaseOrder.findOne({ _id: orderId, ...tenantFilter }).session(session);
+            if (!order) fail('Không tìm thấy đơn đặt hàng', 404);
+            if (order.status !== 'delivered') fail('Chỉ được ghi chi cho đơn đã xác nhận giao', 409);
+            const remaining = order.totalAmount - (order.paidAmount || 0);
+            if (paidAmount > remaining) fail(`Số tiền chi vượt phần còn lại (${remaining}đ)`, 422);
 
-                const expensePayload = {
-                    orderId: order._id, orderCode: order.orderCode, supplierName: order.supplierName,
-                    amount: paidAmount, paidAt: new Date(`${paidAt}T12:00:00+07:00`), method,
-                    transactionRef: ref || undefined, documentNumber: document, note: normalizedNote,
-                    recordedBy: actor._id, recordedByName: actor.profile?.fullName || actor.username, idempotencyKey
-                };
-                if (resolved.isSaaS) {
-                    expensePayload.tenantId = resolved.tenantId;
-                }
-                const expense = (await PurchaseExpense.create([expensePayload], { session }))[0];
-                order.paidAmount = (order.paidAmount || 0) + paidAmount;
-                await order.save({ session });
-                result = { expense, replayed: false };
-            });
-        } finally { await session.endSession(); }
+            const expensePayload = {
+                orderId: order._id, orderCode: order.orderCode, supplierName: order.supplierName,
+                amount: paidAmount, paidAt: new Date(`${paidAt}T12:00:00+07:00`), method,
+                transactionRef: ref || undefined, documentNumber: document, note: normalizedNote,
+                recordedBy: actor._id, recordedByName: actor.profile?.fullName || actor.username, idempotencyKey
+            };
+            if (resolved.isSaaS) {
+                expensePayload.tenantId = resolved.tenantId;
+            }
+            const expense = (await PurchaseExpense.create([expensePayload], sessionOpt))[0];
+            order.paidAmount = (order.paidAmount || 0) + paidAmount;
+            await order.save(sessionOpt);
+            return { expense, replayed: false };
+        }, 'Cần MongoDB Replica Set hoặc sharded cluster để ghi nhận chi an toàn');
         return res.status(result.replayed ? 200 : 201).json({
             success: true,
             message: result.replayed ? 'Khoản chi này đã được ghi nhận trước đó' : 'Đã ghi nhận khoản chi mua sắm',

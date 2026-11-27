@@ -3,6 +3,7 @@ import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
 import { getAccountingReport, getAccountingPeriod, closeAccountingPeriod, reopenAccountingPeriod, exportAccountingReport } from '../api/finance';
 import './AccountingReport.css';
+import { getStoredUser } from '../utils/storage';
 
 const currentMonth = () => {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit' }).formatToParts(new Date());
@@ -25,7 +26,7 @@ export default function AccountingReport() {
   const [periodState, setPeriodState] = useState(null);
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const role = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const role = getStoredUser().role;
   const canClose = ['admin', 'principal'].includes(role);
 
   const handleExport = async () => {

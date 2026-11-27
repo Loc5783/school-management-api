@@ -3,11 +3,12 @@ import { createPortal } from 'react-dom';
 import Icon from '../components/Icon';
 import StudentPagination from '../components/StudentPagination';
 import { downloadExcelTemplate, previewExcelImport, confirmExcelImport } from '../api/students';
+import { getStoredUser } from '../utils/storage';
 
 const MULTI_CLASS_TARGET = '__ALL__';
 
 export default function StudentExcelImportModal({ isOpen, onClose, defaultClassroomId, classrooms = [], onSuccess }) {
-  const userRole = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const userRole = getStoredUser().role;
   const canMultiClassImport = ['admin', 'principal'].includes(userRole);
 
   const [prevDefaultClassroomId, setPrevDefaultClassroomId] = useState(defaultClassroomId);
@@ -122,10 +123,14 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
   }, [isOpen]);
 
   const handleDownloadTemplate = async () => {
+    if (downloading) return;
     try {
       setDownloading(true);
       setError('');
       const res = await downloadExcelTemplate();
+      if (res.data?.type && (res.data.type.includes('json') || res.data.type.includes('html'))) {
+        throw new Error('Máy chủ trả về phản hồi không đúng định dạng tệp Excel.');
+      }
       const blob = new Blob([res.data], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       });
@@ -139,7 +144,7 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
       window.URL.revokeObjectURL(url);
     } catch (err) {
       console.error('Lỗi tải template:', err);
-      setError(err.response?.data?.message || 'Không thể tải file mẫu. Vui lòng thử lại sau.');
+      setError(err.response?.data?.message || err.message || 'Không thể tải file mẫu. Vui lòng thử lại sau.');
     } finally {
       setDownloading(false);
     }
@@ -150,14 +155,18 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
     if (!selected) return;
 
     if (!selected.name.toLowerCase().endsWith('.xlsx')) {
-      setError('Chỉ chấp nhận tập tin định dạng Excel (.xlsx).');
+      setError('Chỉ chấp nhận tập tin định dạng Excel (.xlsx). Nếu bạn đang dùng file .xls cũ, vui lòng lưu lại dưới dạng .xlsx.');
       setFile(null);
+      setPreviewData(null);
+      e.target.value = '';
       return;
     }
 
     if (selected.size > 5 * 1024 * 1024) {
       setError('Kích thước tập tin vượt quá 5 MB.');
       setFile(null);
+      setPreviewData(null);
+      e.target.value = '';
       return;
     }
 
@@ -168,6 +177,7 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
   };
 
   const handleUploadAndPreview = async () => {
+    if (previewingRef.current) return;
     if (!selectedClassId) {
       setError('Vui lòng chọn chế độ nhập hoặc lớp học tiếp nhận dữ liệu trước khi tải lên.');
       return;
@@ -177,6 +187,7 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
       return;
     }
 
+    previewingRef.current = true;
     setPreviewing(true);
     setError('');
     setPreviewData(null);
@@ -195,16 +206,19 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
       console.error('Lỗi xem trước import:', err);
       setError(err.response?.data?.message || 'Không thể đọc và phân tích tập tin Excel.');
     } finally {
+      previewingRef.current = false;
       setPreviewing(false);
     }
   };
 
   const handleConfirmImport = async () => {
-    if (!previewData || !previewData.canImport || previewData.capacityExceeded) {
+    if (confirmingRef.current) return;
+    if (!file || !previewData || !previewData.canImport || previewData.capacityExceeded) {
       setError(previewData?.capacityWarning || 'Dữ liệu chưa sẵn sàng hoặc còn lỗi. Vui lòng kiểm tra lại.');
       return;
     }
 
+    confirmingRef.current = true;
     setConfirming(true);
     setError('');
 
@@ -227,6 +241,7 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
       console.error('Lỗi xác nhận import:', err);
       setError(err.response?.data?.message || 'Không thể lưu học sinh vào hệ thống.');
     } finally {
+      confirmingRef.current = false;
       setConfirming(false);
     }
   };
@@ -528,7 +543,7 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
                                 </span>
                               ) : (
                                 <div className="row-error-list">
-                                  {row.errors.map((err, errIdx) => (
+                                  {(row.errors || []).map((err, errIdx) => (
                                     <span key={errIdx} className="badge badge-danger">
                                       ⚠ {err}
                                     </span>

@@ -18,13 +18,24 @@ const { runStudentTransaction } = require('../services/studentCoreService');
 const { lockOpenPeriod, fromPeriod } = require('../services/accountingPeriodService');
 const { assertTenantContext, buildTenantFilter, resolveTenantContext } = require('../services/tenantFilterService');
 
-const PERIOD_PATTERN = /^(0[1-9]|1[0-2])-\d{4}$/;
+const PERIOD_PATTERN = /^(0[1-9]|1[0-2])-20\d{2}$/;
+const escapeRegex = (raw) => String(raw || '').replace(/[.*+?^${}()|[\]\\]/g, '\\const PERIOD_PATTERN = /^(0[1-9]|1[0-2])-\d{4}$/;
 const parseMoney = (value, field) => {
     const amount = Number(value ?? 0);
     if (!Number.isFinite(amount) || amount < 0) {
         const error = new Error(`${field} phải là số không âm`); error.statusCode = 400; throw error;
     }
     return amount;
+};');
+const parseMoney = (value, field) => {
+    if (value !== null && value !== undefined && typeof value === 'object') {
+        const error = new Error(`${field} không đúng định dạng số`); error.statusCode = 400; throw error;
+    }
+    const amount = Number(value ?? 0);
+    if (!Number.isFinite(amount) || amount < 0 || !Number.isSafeInteger(Math.round(amount))) {
+        const error = new Error(`${field} phải là số không âm hợp lệ`); error.statusCode = 400; throw error;
+    }
+    return Math.round(amount);
 };
 const validateAdditionalItems = (rawItems) => {
     if (rawItems === undefined || rawItems === null) return [];
@@ -148,9 +159,15 @@ const applyStudentMealCreditToInput = (input, baseNote, creditInfo, prevPeriodLa
     if (!creditInfo || !(creditInfo.deduction > 0)) {
         return { ...input, note: cleanBaseNote };
     }
-    const adjustedDiscount = input.discount + creditInfo.deduction;
-    const adjustedTotal = Math.max(0, input.totalAmount - creditInfo.deduction);
-    const creditNote = `Khấu trừ ${creditInfo.absentDays} ngày ăn nghỉ có phép kỳ ${prevPeriodLabel} (-${creditInfo.deduction.toLocaleString('vi-VN')}đ)`;
+    const appliedDeduction = Math.min(Math.round(creditInfo.deduction), input.totalAmount);
+    if (appliedDeduction <= 0) {
+        return { ...input, note: cleanBaseNote };
+    }
+    const adjustedDiscount = input.discount + appliedDeduction;
+    const adjustedTotal = Math.max(0, input.totalAmount - appliedDeduction);
+    const creditNote = creditInfo.absentDays > 0
+        ? `Khấu trừ ${creditInfo.absentDays} ngày ăn nghỉ có phép kỳ ${prevPeriodLabel} (-${appliedDeduction.toLocaleString('vi-VN')}đ)`
+        : `Khấu trừ tiền ăn điều chỉnh kỳ ${prevPeriodLabel} (-${appliedDeduction.toLocaleString('vi-VN')}đ)`;
     return {
         ...input,
         discount: adjustedDiscount,
@@ -334,6 +351,7 @@ const createTuitionFee = async (req, res) => {
             classroomId: classroom._id,
             className: classroom.name,
             period,
+            status: resolvedInvoiceInput.totalAmount === 0 ? 'paid' : 'unpaid',
             ...resolvedInvoiceInput
         });
 
@@ -436,6 +454,17 @@ const createBulkTuitionFees = async (req, res) => {
                 throw err;
             }
             await lockOpenPeriod(fromPeriod(period), session, req);
+            const existedInTx = await TuitionFee.find({
+                studentId: { $in: students.map((student) => student._id) },
+                period,
+                status: { $ne: 'cancelled' },
+                ...tenantFilter
+            }).select('studentName className').session(session);
+            if (existedInTx.length) {
+                const dupErr = new Error(`${applyToAll ? 'Các lớp đã chọn' : 'Lớp'} đã có ${existedInTx.length} hóa đơn kỳ ${period}. Không lập chồng hóa đơn.`);
+                dupErr.statusCode = 409;
+                throw dupErr;
+            }
             const fees = students.map((student) => {
                 const effectiveCredit = resolveStudentCreditWithOverride(
                     student._id,
@@ -456,10 +485,11 @@ const createBulkTuitionFees = async (req, res) => {
                     classroomId: student.classroomId,
                     className: classroomNames.get(String(student.classroomId)) || student.className || '',
                     period,
+                    status: resolvedStudentInput.totalAmount === 0 ? 'paid' : 'unpaid',
                     ...resolvedStudentInput
                 };
             });
-            return TuitionFee.insertMany(fees, { session });
+            return TuitionFee.insertMany(fees, session ? { session } : undefined);
         });
 
         res.status(201).json({
@@ -592,14 +622,17 @@ const makePayment = async (req, res) => {
                 ]);
                 const collectedBy = req.user.profile?.fullName || req.user.username;
                 const amountText = `${Number(payment.amount).toLocaleString('vi-VN')}đ`;
+                const payNotifTenantId = req.tenantId || req.user?.tenantId || invoice.tenantId || null;
                 const notifications = [
                     ...parents.map((parent) => ({
+                        ...(payNotifTenantId ? { tenantId: payNotifTenantId } : {}),
                         recipientId: parent._id, title: 'Đã ghi nhận thanh toán học phí',
                         message: `Nhà trường đã ghi nhận ${amountText} cho học phí của ${invoice.studentName}.`,
                         type: 'finance', link: '/parent-portal', createdBy: req.user._id,
                         metadata: { invoiceId: invoice._id, paymentId: payment._id }
                     })),
                     ...principals.map((principal) => ({
+                        ...(payNotifTenantId ? { tenantId: payNotifTenantId } : {}),
                         recipientId: principal._id, title: 'Kế toán đã ghi nhận khoản thu',
                         message: `${collectedBy} đã ghi nhận ${amountText} của ${invoice.studentName} (${invoice.className}, kỳ ${invoice.period}).`,
                         type: 'finance', link: '/finance', createdBy: req.user._id,
@@ -710,7 +743,11 @@ const getInvoices = async (req, res) => {
         }
         if (period) { if (!PERIOD_PATTERN.test(period)) return res.status(400).json({ message: 'Kỳ thu phải có dạng MM-YYYY' }); filter.period = period; }
         if (status) { if (!['unpaid', 'partial', 'paid', 'cancelled'].includes(status)) return res.status(400).json({ message: 'Trạng thái hóa đơn không hợp lệ' }); filter.status = status; }
-        if (String(search).trim()) filter.$or = [{ studentName: new RegExp(String(search).trim(), 'i') }, { className: new RegExp(String(search).trim(), 'i') }];
+        if (search !== undefined && typeof search !== 'string') return res.status(400).json({ message: 'Từ khóa tìm kiếm hóa đơn không hợp lệ' });
+        if (typeof search === 'string' && search.trim()) {
+            const safeRegex = new RegExp(escapeRegex(search.trim().slice(0, 120)), 'i');
+            filter.$or = [{ studentName: safeRegex }, { className: safeRegex }];
+        }
         const [data, total] = await Promise.all([TuitionFee.find(filter).sort({ dueDate: 1, studentName: 1 }).skip((safePage - 1) * safeLimit).limit(safeLimit), TuitionFee.countDocuments(filter)]);
         return res.json({ success: true, data, pagination: { page: safePage, limit: safeLimit, total, totalPages: Math.ceil(total / safeLimit) } });
     } catch (err) { return res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Không thể lấy danh sách hóa đơn' }); }

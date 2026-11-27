@@ -13,6 +13,7 @@ import {
 } from '../api/timekeeping';
 import { getEmployees } from '../api/hr';
 import api from '../api/axiosConfig';
+import { getStoredUser } from '../utils/storage';
 
 export default function TimekeepingDeviceManagement() {
   const [devices, setDevices] = useState([]);
@@ -60,7 +61,7 @@ export default function TimekeepingDeviceManagement() {
   const [deviceForm, setDeviceForm] = useState(initialDeviceForm);
   const [actionLoading, setActionLoading] = useState({});
 
-  const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+  const currentUser = getStoredUser();
   const isAdmin = currentUser.role === 'admin';
   const canSync = ['admin', 'principal'].includes(currentUser.role);
 
@@ -148,10 +149,11 @@ export default function TimekeepingDeviceManagement() {
     try {
       const res = await listPersonMappings(device._id);
       setMappings(res.data.data || []);
+      const firstEmpUid = employees[0]?.userId?._id || employees[0]?.userId || '';
       setNewMapping({
         externalPersonId: '',
         subjectType: 'EMPLOYEE',
-        subjectId: employees[0]?.userId || '',
+        subjectId: firstEmpUid,
         displayName: ''
       });
     } catch {
@@ -248,10 +250,11 @@ export default function TimekeepingDeviceManagement() {
 
   const mapQuickFromUnmapped = (event) => {
     setActiveModal('mappings');
+    const firstEmpUid = employees[0]?.userId?._id || employees[0]?.userId || '';
     setNewMapping({
       externalPersonId: event.externalPersonId || '',
       subjectType: 'EMPLOYEE',
-      subjectId: employees[0]?.userId || '',
+      subjectId: firstEmpUid,
       displayName: event.employeeName && event.employeeName !== 'Chưa ánh xạ' ? event.employeeName : ''
     });
   };
@@ -533,7 +536,7 @@ export default function TimekeepingDeviceManagement() {
                       onChange={(e) => setNewMapping({
                         ...newMapping,
                         subjectType: e.target.value,
-                        subjectId: e.target.value === 'EMPLOYEE' ? (employees[0]?.userId || '') : (students[0]?._id || '')
+                        subjectId: e.target.value === 'EMPLOYEE' ? (employees[0]?.userId?._id || employees[0]?.userId || '') : (students[0]?._id || '')
                       })}
                       style={{ width: '100%', padding: '6px 10px', borderRadius: 4, border: '1px solid #ccc' }}
                     >
@@ -554,11 +557,14 @@ export default function TimekeepingDeviceManagement() {
                         required
                       >
                         <option value="">-- Chọn nhân viên --</option>
-                        {employees.map((emp) => (
-                          <option key={emp._id} value={emp.userId || ''} disabled={!emp.userId}>
-                            {emp.fullName} ({emp.employeeCode}) - {emp.position}{!emp.userId ? ' (Chưa tạo tài khoản)' : ''}
-                          </option>
-                        ))}
+                        {employees.map((emp) => {
+                          const empUid = emp.userId?._id || emp.userId || '';
+                          return (
+                            <option key={emp._id} value={empUid} disabled={!empUid}>
+                              {emp.fullName} ({emp.employeeCode}) - {emp.position}{!empUid ? ' (Chưa tạo tài khoản)' : ''}
+                            </option>
+                          );
+                        })}
                       </select>
                     ) : (
                       <select

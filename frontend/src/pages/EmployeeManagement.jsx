@@ -25,6 +25,7 @@ import {
   rejectCorrection,
   recalculateAttendance
 } from '../api/timekeeping';
+import { getStoredUser } from '../utils/storage';
 
 const money = (value) => `${new Intl.NumberFormat('vi-VN').format(value || 0)} đ`;
 const LOW_MONTHLY_SALARY = 1000000;
@@ -164,7 +165,7 @@ const formatHistoryFieldValue = (key, rawVal) => {
 export default function EmployeeManagement() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
-  const initialUser = JSON.parse(localStorage.getItem('user') || '{}');
+  const initialUser = getStoredUser();
   const userRole = initialUser.role || '';
   const initialTab = searchParams.get('tab') || 'employees';
   const validTabs = ['employees', 'staffing', 'transfers', 'timekeeping', 'devices', 'leave', 'internal', ...(userRole === 'admin' ? ['audit'] : [])];
@@ -195,7 +196,7 @@ export default function EmployeeManagement() {
   const [roleFilter, setRoleFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
 
-  const role = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const role = getStoredUser().role;
   const canOperateHr = ['admin', 'hr'].includes(role);
   const canManageHr = canOperateHr;
   const canReviewHr = canOperateHr || role === 'principal';

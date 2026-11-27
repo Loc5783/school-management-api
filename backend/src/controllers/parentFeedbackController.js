@@ -46,12 +46,14 @@ const respondFeedback = async (req, res) => {
     if (['responded', 'closed'].includes(status) && String(response || '').trim().length < 3) throw fail('Vui lòng nhập nội dung phản hồi cho phụ huynh');
     if (String(response || '').trim().length > 3000) throw fail('Nội dung phản hồi tối đa 3000 ký tự');
     const tenantFilter = buildTenantFilter(req);
+    const tenantId = req.tenantId || req.user?.tenantId;
     const item = await ParentFeedback.findOne({ _id: req.params.id, ...tenantFilter });
     if (!item) throw fail('Không tìm thấy phản hồi', 404);
+    if (item.status === 'closed') throw fail('Phản hồi này đã đóng, không thể ghi đè nội dung', 409);
     item.status = status;
     if (String(response || '').trim()) { item.response = response.trim(); item.respondedBy = req.user._id; item.responderName = actorName(req.user); item.respondedAt = new Date(); }
     await item.save();
-    if (item.response) await Notification.create({ recipientId: item.parentId, title: `Phản hồi từ nhà trường: ${item.subject}`, message: item.response, type: 'info', link: '/parent-portal', createdBy: req.user._id, metadata: { feedbackId: item._id, studentId: item.studentId } });
+    if (item.response) await Notification.create({ ...(tenantId ? { tenantId } : {}), recipientId: item.parentId, title: `Phản hồi từ nhà trường: ${item.subject}`, message: item.response, type: 'info', link: '/parent-portal', createdBy: req.user._id, metadata: { feedbackId: item._id, studentId: item.studentId } });
     return res.json({ success: true, message: 'Đã cập nhật phản hồi cho phụ huynh', data: item });
   } catch (error) { return res.status(error.status || 500).json({ success: false, message: error.message || 'Không thể phản hồi' }); }
 };

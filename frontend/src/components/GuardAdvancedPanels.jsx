@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import api from '../api/axiosConfig';
 import Icon from './Icon';
 import { queueGuardOperation } from '../utils/guardOfflineQueue';
+import { getStoredUser } from '../utils/storage';
 
 const deliveryInitial = { purchaseOrderId: '', supplierName: '', driverName: '', phone: '', vehiclePlate: '', itemsDescription: '', recipientName: '', allowedArea: 'Khu vực giao nhận', note: '' };
 const emergencyInitial = { level: 'security', title: '', instructions: '' };
@@ -62,7 +63,7 @@ export function GuardDeliveryPanel({ date, onOfflineQueued }) {
 }
 
 export function GuardEmergencyPanel() {
-  const role = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const role = getStoredUser().role;
   const isManager = ['admin', 'principal'].includes(role);
   const [active, setActive] = useState(null);
   const [form, setForm] = useState(emergencyInitial);

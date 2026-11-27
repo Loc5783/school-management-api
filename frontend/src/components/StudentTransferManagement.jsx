@@ -3,6 +3,7 @@ import api from '../api/axiosConfig';
 import { getStudent, transferStudentClassroom } from '../api/students';
 import { getVietnamToday } from '../utils/dateHelpers';
 import Icon from './Icon';
+import { generateClientId } from '../utils/storage';
 
 const isIndeterminateError = (err) => {
   if (!err) return false;
@@ -43,7 +44,7 @@ export default function StudentTransferManagement() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [transferKey, setTransferKey] = useState(() => crypto.randomUUID());
+  const [transferKey, setTransferKey] = useState(() => generateClientId());
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [indeterminateOp, setIndeterminateOp] = useState(null);
@@ -134,7 +135,7 @@ export default function StudentTransferManagement() {
     setToClassroomId('');
     setReason('');
     setEffectiveDate(getVietnamToday());
-    setTransferKey(crypto.randomUUID());
+    setTransferKey(generateClientId());
     setIndeterminateOp(null);
     indeterminateOpRef.current = null;
     lastSubmittedPayloadRef.current = null;
@@ -160,7 +161,7 @@ export default function StudentTransferManagement() {
     const snapshotStudentId = indeterminateOpRef.current?.studentId || indeterminateOp?.studentId || selectedStudent?._id;
     const snapshotGen = managementGenRef.current;
     const snapshotOp = indeterminateOpRef.current || indeterminateOp;
-    const refreshOpId = crypto.randomUUID();
+    const refreshOpId = generateClientId();
     activeRefreshOpIdRef.current = refreshOpId;
     refreshingRef.current = true;
     setRefreshing(true);
@@ -193,7 +194,7 @@ export default function StudentTransferManagement() {
       setIndeterminateOp(null);
       indeterminateOpRef.current = null;
       lastSubmittedPayloadRef.current = null;
-      setTransferKey(crypto.randomUUID());
+      setTransferKey(generateClientId());
       setToClassroomId('');
       setReason('');
       setEffectiveDate(getVietnamToday());
@@ -244,7 +245,7 @@ export default function StudentTransferManagement() {
       lastSubmittedPayloadRef.current &&
       !isSameTransferPayload(nextCanonical, lastSubmittedPayloadRef.current)
     ) {
-      setTransferKey(crypto.randomUUID());
+      setTransferKey(generateClientId());
       lastSubmittedPayloadRef.current = null;
       setError('');
     }
@@ -260,7 +261,7 @@ export default function StudentTransferManagement() {
     }
 
     const activeStudentId = indeterminateOp?.studentId || selectedStudent._id;
-    const opId = crypto.randomUUID();
+    const opId = generateClientId();
     activeOpRef.current = { opId, studentId: activeStudentId };
     activeTransferOpIdRef.current = opId;
 
@@ -270,7 +271,7 @@ export default function StudentTransferManagement() {
 
     // If retrying after a deterministic error with changed payload, ensure a fresh key
     if (!indeterminateOp && lastSubmittedPayloadRef.current && !isSameTransferPayload(currentCanonical, lastSubmittedPayloadRef.current)) {
-      activeKey = crypto.randomUUID();
+      activeKey = generateClientId();
       setTransferKey(activeKey);
       lastSubmittedPayloadRef.current = null;
     }
@@ -297,7 +298,7 @@ export default function StudentTransferManagement() {
       setToClassroomId('');
       setReason('');
       setEffectiveDate(getVietnamToday());
-      setTransferKey(crypto.randomUUID());
+      setTransferKey(generateClientId());
       setIndeterminateOp(null);
       indeterminateOpRef.current = null;
       lastSubmittedPayloadRef.current = null;

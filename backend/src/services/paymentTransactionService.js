@@ -4,6 +4,7 @@ const TuitionFee = require('../models/zone4_finance/TuitionFee');
 const User = require('../models/zone1_system/User');
 const { isValidObjectId } = require('../utils/idValidation');
 const { getWorkDate } = require('../utils/dateHelpers');
+const { runSafeTransaction } = require('../utils/safeTransaction');
 const { lockOpenPeriod } = require('./accountingPeriodService');
 const {
     resolveTenantContext,
@@ -21,28 +22,18 @@ const throwHttpError = (message, statusCode) => {
     throw error;
 };
 
-const runInTransaction = async (operation) => {
-    const topology = await mongoose.connection.db.admin().command({ hello: 1 });
-    if (!topology.setName && topology.msg !== 'isdbgrid' && process.env.ALLOW_STANDALONE_MONGODB !== 'true') {
-        throwHttpError('MongoDB phải chạy Replica Set hoặc sharded cluster để ghi nhận thanh toán an toàn', 503);
-    }
-    const session = await mongoose.startSession();
-    try {
-        let result;
-        await session.withTransaction(async () => {
-            result = await operation(session);
-        });
-        return result;
-    } finally {
-        await session.endSession();
-    }
-};
+const runInTransaction = (operation) => runSafeTransaction(
+    operation,
+    'MongoDB phải chạy Replica Set hoặc sharded cluster để ghi nhận thanh toán an toàn'
+);
 
 const recordPayment = async (payload, user, idempotencyKey, context = null) => {
     const { invoiceId, amount, method, txnRef, note } = payload;
     const paymentAmount = Number(amount);
     if (!isValidObjectId(invoiceId)) throwHttpError('ID hóa đơn không hợp lệ', 400);
-    if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) throwHttpError('Số tiền thanh toán phải lớn hơn 0', 400);
+    if (typeof amount === 'object' || !Number.isFinite(paymentAmount) || paymentAmount <= 0 || !Number.isSafeInteger(paymentAmount)) {
+        throwHttpError('Số tiền thanh toán phải là số nguyên dương (VNĐ)', 400);
+    }
     if (!PAYMENT_METHODS.has(method)) throwHttpError('Phương thức thanh toán không hợp lệ', 400);
     if (!String(idempotencyKey || '').trim()) throwHttpError('Thiếu mã chống ghi nhận thanh toán trùng', 400);
     if (String(idempotencyKey).trim().length > 120) throwHttpError('Mã yêu cầu quá dài', 400);
@@ -105,8 +96,11 @@ const recordPayment = async (payload, user, idempotencyKey, context = null) => {
 
             const invoice = await TuitionFee.findOne({ _id: invoiceId, ...tenantFilter }).session(session);
             if (!invoice) throwHttpError('Không tìm thấy hóa đơn', 404);
-            if (invoice.status === 'cancelled') throwHttpError('Hóa đơn đã bị hủy', 400);
+            if (invoice.status === 'cancelled') throwHttpError('Hóa đơn đã bị hủy, không thể thu tiền', 409);
             const remaining = invoice.totalAmount - invoice.paidAmount;
+            if (invoice.status === 'paid' || remaining <= 0) {
+                throwHttpError('Hóa đơn này đã được thanh toán đủ', 409);
+            }
             if (paymentAmount > remaining) {
                 throwHttpError(`Số tiền thanh toán vượt quá số tiền còn lại (${remaining})`, 422);
             }
@@ -126,10 +120,11 @@ const recordPayment = async (payload, user, idempotencyKey, context = null) => {
             if (resolvedContext.isSaaS) {
                 paymentPayload.tenantId = resolvedContext.tenantId;
             }
-            const payment = (await Payment.create([paymentPayload], { session }))[0];
+            const sessionOpt = session ? { session } : undefined;
+            const payment = (await Payment.create([paymentPayload], sessionOpt))[0];
             invoice.paidAmount += paymentAmount;
             invoice.status = invoice.paidAmount >= invoice.totalAmount ? 'paid' : 'partial';
-            await invoice.save({ session });
+            await invoice.save(sessionOpt);
             return { payment, invoice, replayed: false };
         });
     } catch (error) {

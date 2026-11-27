@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import api from '../api/axiosConfig';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
+import { getStoredUser } from '../utils/storage';
 
 const formatMoney = (value) => new Intl.NumberFormat('vi-VN').format(value || 0) + 'đ';
 const statusLabel = { present: 'Có mặt', absent: 'Vắng mặt', late: 'Đi muộn', absent_permission: 'Có phép' };
@@ -15,7 +16,7 @@ export default function Dashboard() {
   const [principalWorkError, setPrincipalWorkError] = useState('');
   const [attendancePage, setAttendancePage] = useState(1);
   const navigate = useNavigate();
-  const role = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const role = getStoredUser().role;
   const isTeacher = role === 'teacher';
   const isPrincipal = role === 'principal';
 

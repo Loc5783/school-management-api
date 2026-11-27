@@ -69,10 +69,13 @@ const register = async (req, res) => {
 // Đăng nhập
 const login = async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username, password } = req.body || {};
+    if (typeof username !== 'string' || typeof password !== 'string' || !username.trim() || !password) {
+      return res.status(400).json({ message: 'Vui lòng nhập tên đăng nhập và mật khẩu' });
+    }
 
     // Tìm user
-    const user = await User.findOne({ username: String(username || "").trim(), tenantId: { $in: [null, undefined] } });
+    const user = await User.findOne({ username: username.trim(), tenantId: { $in: [null, undefined] } });
     if (!user) {
       return res.status(401).json({ message: 'Tên đăng nhập hoặc mật khẩu không đúng' });
     }
@@ -123,6 +126,9 @@ const getMe = async (req, res) => {
     const user = await User.findById(req.user._id)
       .select('-passwordHash')
       .populate('permissions', 'name');
+    if (!user) {
+      return res.status(401).json({ message: 'Phiên đăng nhập không còn hiệu lực' });
+    }
 
     // Lấy danh sách tên quyền để frontend sử dụng
     const permissions = user.permissions ? user.permissions.map(p => p.name) : [];
@@ -155,7 +161,13 @@ const getAllPermissions = async (req, res) => {
 const updateUserPermissions = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { permissions } = req.body; // mảng tên quyền
+    const { permissions } = req.body || {}; // mảng tên quyền
+    if (!User.db.base.isValidObjectId(userId)) {
+      return res.status(400).json({ message: 'ID người dùng không hợp lệ' });
+    }
+    if (!Array.isArray(permissions)) {
+      return res.status(400).json({ message: 'Danh sách quyền phải là một mảng' });
+    }
 
     const user = await User.findById(userId);
     if (!user) {

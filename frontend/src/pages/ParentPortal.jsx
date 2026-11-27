@@ -26,30 +26,31 @@ const money = (value) =>
     currency: "VND",
     maximumFractionDigits: 0,
   }).format(value || 0);
-const mealItems = (meal = {}) =>
-  Array.isArray(meal)
-    ? meal
-    : Array.isArray(meal.items)
-      ? meal.items
-      : meal.dishName
-        ? [meal]
-        : [];
+const mealItems = (meal) => {
+  const m = meal || {};
+  if (Array.isArray(meal)) return meal;
+  if (Array.isArray(m.items)) return m.items;
+  if (m.dishName) return [m];
+  return [];
+};
 const dishes = (meal) =>
   mealItems(meal)
-    .map((item) => item.dishName || item.name)
+    .map((item) => item?.dishName || item?.name)
     .filter(Boolean)
     .join(", ");
-const lunchDishes = (lunch = {}) =>
-  [
-    ...(lunch.mainDishes || (lunch.mainDish?.dishName ? [lunch.mainDish] : [])),
-    ...(lunch.stirFryDishes ||
-      (lunch.stirFryDish?.dishName ? [lunch.stirFryDish] : [])),
-    ...(lunch.soupDishes || (lunch.soupDish?.dishName ? [lunch.soupDish] : [])),
-    ...(lunch.desserts || (lunch.dessert?.dishName ? [lunch.dessert] : [])),
+const lunchDishes = (lunch) => {
+  const l = lunch || {};
+  return [
+    ...(l.mainDishes || (l.mainDish?.dishName ? [l.mainDish] : [])),
+    ...(l.stirFryDishes ||
+      (l.stirFryDish?.dishName ? [l.stirFryDish] : [])),
+    ...(l.soupDishes || (l.soupDish?.dishName ? [l.soupDish] : [])),
+    ...(l.desserts || (l.dessert?.dishName ? [l.dessert] : [])),
   ]
-    .map((item) => item.dishName || item.name)
+    .map((item) => item?.dishName || item?.name)
     .filter(Boolean)
     .join(", ");
+};
 const today = () => new Date().toISOString().slice(0, 10);
 const parentAllergens = [
   ["gluten", "Gluten / lúa mì"], ["crustacean", "Tôm, cua / giáp xác"],

@@ -25,7 +25,7 @@ const schoolAuthMiddleware = async (req, res, next) => {
           const legacyDecoded = verifyToken(token);
           if (!legacyDecoded.purpose && !legacyDecoded.tenantId) {
             const user = await User.findById(legacyDecoded.sub || legacyDecoded.subject);
-            if (!user || user.status !== 'active' || user.tenantId) {
+            if (!user || user.status !== 'active' || user.tenantId || (user.accessEndsAt && user.accessEndsAt <= new Date())) {
               return res.status(401).json({
                 success: false,
                 code: 'TOKEN_INVALID',
@@ -51,7 +51,9 @@ const schoolAuthMiddleware = async (req, res, next) => {
       return res.status(401).json({
         success: false,
         code: 'TOKEN_INVALID',
-        message: err.message || 'Token không hợp lệ hoặc đã hết hạn'
+        message: err?.name === 'TokenExpiredError'
+          ? 'Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại'
+          : 'Token xác thực không hợp lệ hoặc đã hết hạn'
       });
     }
 
@@ -86,11 +88,11 @@ const schoolAuthMiddleware = async (req, res, next) => {
 
     // Authoritative check on User
     const user = await User.findById(decoded.sub);
-    if (!user || user.status !== 'active') {
+    if (!user || user.status !== 'active' || (user.accessEndsAt && user.accessEndsAt <= new Date())) {
       return res.status(401).json({
         success: false,
         code: 'USER_INACTIVE',
-        message: 'Tài khoản không tồn tại hoặc đã bị khóa'
+        message: 'Tài khoản không tồn tại, đã bị khóa hoặc đã hết thời hạn truy cập'
       });
     }
 

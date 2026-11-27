@@ -4,6 +4,7 @@ import Icon from '../components/Icon';
 import SmartAttendance from './SmartAttendance';
 import ManualTimekeeping from './ManualTimekeeping';
 import MyLeaveRequests from './MyLeaveRequests';
+import { getStoredUser } from '../utils/storage';
 
 const tabs = [
   { id: 'kiosk', label: 'Chấm công bằng mã', icon: 'clock', roles: ['admin', 'principal', 'guard', 'accountant', 'chef', 'hr'], Component: SmartAttendance },
@@ -13,7 +14,7 @@ const tabs = [
 
 export default function TimekeepingHub() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const role = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const role = getStoredUser().role;
 
   const visibleTabs = tabs.filter(
     (tab) => (role !== 'guard' || tab.id !== 'corrections') && (!tab.roles || tab.roles.includes(role))

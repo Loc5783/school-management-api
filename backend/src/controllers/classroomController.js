@@ -19,12 +19,16 @@ const editableFields = ['name', 'fullName', 'campus', 'subject', 'ageGroup', 'ma
 const VALID_AGE_GROUPS = ['6-12m', '1-2', '2-3', '3-4', '4-5', '5-6'];
 const DEFAULT_CAMPUS = 'Cơ sở chính';
 const activeStudentStatuses = ['enrolled', 'temporarily_absent'];
-let homeroomIndexPromise;
+const homeroomIndexPromises = new Map();
+const escapeRegex = (str) => String(str || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const error = (message, statusCode) => Object.assign(new Error(message), { statusCode });
 const isId = (value) => mongoose.isValidObjectId(value);
 const pick = (body = {}) => Object.fromEntries(editableFields.filter((key) => Object.hasOwn(body, key)).map((key) => [key, body[key]]));
 const validate = (data) => {
-  if (!String(data.name || '').trim()) throw error('Tên lớp học là bắt buộc', 422);
+  const cleanName = String(data.name || '').trim();
+  if (!cleanName || cleanName.length > 80) throw error('Tên lớp học là bắt buộc và tối đa 80 ký tự', 422);
+  if (cleanName.includes('"')) throw error('Tên lớp học không được chứa dấu ngoặc kép (")', 422);
+  if (data.fullName != null && String(data.fullName).trim().length > 160) throw error('Tên đầy đủ của lớp tối đa 160 ký tự', 422);
   if (!VALID_AGE_GROUPS.includes(data.ageGroup)) throw error('Độ tuổi lớp không hợp lệ', 422);
   if (!Number.isInteger(Number(data.maxSize)) || Number(data.maxSize) < 1 || Number(data.maxSize) > 60) throw error('Sĩ số tối đa phải từ 1 đến 60', 422);
   const yearMatch = String(data.schoolYear || '').trim().match(/^(\d{4})-(\d{4})$/);
@@ -45,38 +49,44 @@ const respond = (res, err) => {
   if (err.code === 11000) {
     return res.status(409).json({ success: false, message: 'Thông tin lớp học hoặc phân công giáo viên bị trùng lặp' });
   }
-  return res.status(err.statusCode || 500).json({ success: false, message: err.message || 'Lỗi server' });
+  const status = err.statusCode || 500;
+  return res.status(status).json({ success: false, message: status < 500 ? err.message : 'Lỗi máy chủ khi xử lý lớp học' });
 };
 const ensureHomeroomAssignmentIndex = (tenantId = null) => {
-  if (!homeroomIndexPromise) {
-    if (tenantId) {
-      homeroomIndexPromise = Classroom.collection.createIndex(
-        { tenantId: 1, schoolYear: 1, homeroomTeacherId: 1 },
-        { name: 'tenantId_1_schoolYear_1_homeroomTeacherId_1_unique', unique: true, partialFilterExpression: { status: 'active', homeroomTeacherId: { $type: 'objectId' }, tenantId: { $type: 'objectId' } } }
-      );
-    } else {
-      homeroomIndexPromise = Classroom.collection.createIndex(
-        { schoolYear: 1, homeroomTeacherId: 1 },
-        { name: 'legacy_schoolYear_1_homeroomTeacherId_1_unique', unique: true, partialFilterExpression: { status: 'active', homeroomTeacherId: { $type: 'objectId' }, tenantId: null } }
-      );
-    }
+  const modeKey = tenantId ? 'saas' : 'legacy';
+  if (!homeroomIndexPromises.has(modeKey)) {
+    const promise = (tenantId
+      ? Classroom.collection.createIndex(
+          { tenantId: 1, schoolYear: 1, homeroomTeacherId: 1 },
+          { name: 'tenantId_1_schoolYear_1_homeroomTeacherId_1_unique', unique: true, partialFilterExpression: { status: 'active', homeroomTeacherId: { $type: 'objectId' }, tenantId: { $type: 'objectId' } } }
+        )
+      : Classroom.collection.createIndex(
+          { schoolYear: 1, homeroomTeacherId: 1 },
+          { name: 'legacy_schoolYear_1_homeroomTeacherId_1_unique', unique: true, partialFilterExpression: { status: 'active', homeroomTeacherId: { $type: 'objectId' }, tenantId: null } }
+        )
+    ).catch((idxErr) => {
+      homeroomIndexPromises.delete(modeKey);
+      throw idxErr;
+    });
+    homeroomIndexPromises.set(modeKey, promise);
   }
-  return homeroomIndexPromise;
+  return homeroomIndexPromises.get(modeKey);
 };
 
 const createClassroom = async (req, res) => {
   try {
     const data = pick(req.body);
-    data.name = String(data.name || '').trim();
-    data.campus = String(data.campus || '').trim() || DEFAULT_CAMPUS;
+    data.name = String(data.name || '').replace(/\s+/g, ' ').trim();
+    if (data.fullName != null) data.fullName = String(data.fullName).replace(/\s+/g, ' ').trim();
+    data.campus = String(data.campus || '').replace(/\s+/g, ' ').trim() || DEFAULT_CAMPUS;
     data.subject = String(data.subject || '').trim();
     validate(data);
     const tenantFilter = buildTenantFilter(req);
     const tenantId = req.tenantId || req.user?.tenantId;
     const duplicateCampusCondition = data.campus === DEFAULT_CAMPUS
       ? { $or: [{ campus: DEFAULT_CAMPUS }, { campus: { $exists: false } }, { campus: '' }] }
-      : { campus: data.campus };
-    if (await Classroom.exists({ name: data.name, schoolYear: data.schoolYear, status: 'active', ...duplicateCampusCondition, ...tenantFilter })) {
+      : { campus: { $regex: `^${escapeRegex(data.campus)}$`, $options: 'i' } };
+    if (await Classroom.exists({ name: { $regex: `^${escapeRegex(data.name)}$`, $options: 'i' }, schoolYear: data.schoolYear, status: 'active', ...duplicateCampusCondition, ...tenantFilter })) {
       throw error('Tên lớp đã tồn tại trong cùng phân hiệu và năm học này', 409);
     }
     const payload = { ...data, maxSize: Number(data.maxSize), statistics: { currentStudents: 0, male: 0, female: 0 } };
@@ -88,11 +98,17 @@ const createClassroom = async (req, res) => {
 
 const getAllClassrooms = async (req, res) => {
   try {
+    if (req.query.schoolYear !== undefined && typeof req.query.schoolYear !== 'string') {
+      throw error('Tham số năm học không hợp lệ', 400);
+    }
+    if (req.query.campus !== undefined && typeof req.query.campus !== 'string') {
+      throw error('Tham số phân hiệu không hợp lệ', 400);
+    }
     const filter = req.query.includeArchived === 'true' ? {} : { status: 'active' };
-    if (req.query.schoolYear?.trim()) {
+    if (typeof req.query.schoolYear === 'string' && req.query.schoolYear.trim()) {
       filter.schoolYear = req.query.schoolYear.trim();
     }
-    if (req.query.campus?.trim()) {
+    if (typeof req.query.campus === 'string' && req.query.campus.trim()) {
       const requestedCampus = req.query.campus.trim();
       if (requestedCampus === DEFAULT_CAMPUS) {
         filter.$or = [{ campus: DEFAULT_CAMPUS }, { campus: { $exists: false } }, { campus: '' }];
@@ -150,8 +166,8 @@ const updateClassroom = async (req, res) => {
     }
     const duplicateCampusCondition = resolvedCampus === DEFAULT_CAMPUS
       ? { $or: [{ campus: DEFAULT_CAMPUS }, { campus: { $exists: false } }, { campus: '' }] }
-      : { campus: resolvedCampus };
-    if (await Classroom.exists({ _id: { $ne: current._id }, name: data.name, schoolYear: data.schoolYear, status: 'active', ...duplicateCampusCondition, ...tenantFilter })) {
+      : { campus: { $regex: `^${escapeRegex(resolvedCampus)}$`, $options: 'i' } };
+    if (await Classroom.exists({ _id: { $ne: current._id }, name: { $regex: `^${escapeRegex(data.name)}$`, $options: 'i' }, schoolYear: data.schoolYear, status: 'active', ...duplicateCampusCondition, ...tenantFilter })) {
       throw error('Tên lớp đã tồn tại trong cùng phân hiệu và năm học này', 409);
     }
     const classroom = await Classroom.findOneAndUpdate({ _id: current._id, ...tenantFilter }, { $set: data }, { returnDocument: 'after', runValidators: true });

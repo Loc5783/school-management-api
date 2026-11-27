@@ -16,6 +16,7 @@ import {
 } from '../api/students';
 import { getVietnamToday } from '../utils/dateHelpers';
 import api from '../api/axiosConfig';
+import { generateClientId, getStoredUser } from '../utils/storage';
 
 const labels = { pending_admission: 'Chờ nhập học', enrolled: 'Đang theo học', temporarily_absent: 'Tạm nghỉ', withdrawn: 'Đã thôi học', transferred: 'Đã chuyển trường', graduated: 'Đã tốt nghiệp' };
 const transitions = { pending_admission: ['enrolled', 'withdrawn'], enrolled: ['temporarily_absent', 'withdrawn', 'transferred', 'graduated'], temporarily_absent: ['enrolled', 'withdrawn', 'transferred'], withdrawn: [], transferred: [], graduated: [] };
@@ -56,7 +57,7 @@ export default function StudentDetail() {
   const [classes, setClasses] = useState([]);
   const [transferHistory, setTransferHistory] = useState([]);
   const [showTransferModal, setShowTransferModal] = useState(false);
-  const [transferKey, setTransferKey] = useState(() => crypto.randomUUID());
+  const [transferKey, setTransferKey] = useState(() => generateClientId());
   const [transferForm, setTransferForm] = useState(() => ({
     toClassroomId: '',
     reason: '',
@@ -79,7 +80,7 @@ export default function StudentDetail() {
   const isMountedRef = useRef(true);
   const lastSubmittedPayloadRef = useRef(null);
 
-  const role = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const role = getStoredUser().role;
   const manager = role === 'admin';
   const canTransfer = ['admin', 'hr', 'principal'].includes(role);
   const canUpdateHealth = ['admin', 'principal', 'teacher'].includes(role);
@@ -113,7 +114,7 @@ export default function StudentDetail() {
     setTransferError('');
     setIndeterminateOp(null);
     setRefreshing(false);
-    setTransferKey(crypto.randomUUID());
+    setTransferKey(generateClientId());
     setTransferForm({
       toClassroomId: '',
       reason: '',
@@ -196,7 +197,7 @@ export default function StudentDetail() {
         lastSubmittedPayloadRef.current &&
         !isSameTransferPayload(nextCanonical, lastSubmittedPayloadRef.current)
       ) {
-        setTransferKey(crypto.randomUUID());
+        setTransferKey(generateClientId());
         lastSubmittedPayloadRef.current = null;
         setTransferError('');
       }
@@ -218,7 +219,7 @@ export default function StudentDetail() {
 
     const opStudentId = id;
     const opRouteGen = routeGenRef.current;
-    const opId = crypto.randomUUID();
+    const opId = generateClientId();
     activeTransferOpIdRef.current = opId;
 
     let activeKey = indeterminateOp ? indeterminateOp.key : transferKey;
@@ -227,7 +228,7 @@ export default function StudentDetail() {
 
     // If retrying after a deterministic error with changed payload, ensure a fresh key
     if (!indeterminateOp && lastSubmittedPayloadRef.current && !isSameTransferPayload(currentCanonical, lastSubmittedPayloadRef.current)) {
-      activeKey = crypto.randomUUID();
+      activeKey = generateClientId();
       setTransferKey(activeKey);
       lastSubmittedPayloadRef.current = null;
     }
@@ -250,7 +251,7 @@ export default function StudentDetail() {
         setIndeterminateOp(null);
         indeterminateOpRef.current = null;
         lastSubmittedPayloadRef.current = null;
-        setTransferKey(crypto.randomUUID());
+        setTransferKey(generateClientId());
         setTransferForm({ toClassroomId: '', reason: '', effectiveDate: getVietnamToday() });
         setNotice(res.data?.message || 'Đã chuyển lớp học sinh thành công.');
         load().catch(() => {});
@@ -300,7 +301,7 @@ export default function StudentDetail() {
     const snapshotStudentId = id;
     const snapshotGen = routeGenRef.current;
     const snapshotOp = indeterminateOpRef.current || indeterminateOp;
-    const refreshOpId = crypto.randomUUID();
+    const refreshOpId = generateClientId();
     activeRefreshOpIdRef.current = refreshOpId;
     refreshingRef.current = true;
     setRefreshing(true);
@@ -326,7 +327,7 @@ export default function StudentDetail() {
       setIndeterminateOp(null);
       indeterminateOpRef.current = null;
       lastSubmittedPayloadRef.current = null;
-      setTransferKey(crypto.randomUUID());
+      setTransferKey(generateClientId());
       setTransferForm({ toClassroomId: '', reason: '', effectiveDate: getVietnamToday() });
       setTransferError('');
     } catch {

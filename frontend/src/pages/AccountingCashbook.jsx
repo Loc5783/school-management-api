@@ -3,6 +3,7 @@ import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
 import { getCashbook, saveCashReconciliation, exportCashbook } from '../api/finance';
 import './AccountingCashbook.css';
+import { getStoredUser } from '../utils/storage';
 
 const keys = ['cashIn', 'cashOut', 'bankIn', 'bankOut', 'walletIn', 'walletOut'];
 const labels = { cashIn: 'Tiền mặt thu', cashOut: 'Tiền mặt chi', bankIn: 'Chuyển khoản thu', bankOut: 'Chuyển khoản chi', walletIn: 'Ví điện tử thu', walletOut: 'Ví điện tử chi' };
@@ -18,7 +19,7 @@ const todaySchool = () => {
 const blankActual = () => Object.fromEntries(keys.map((key) => [key, '0']));
 
 export default function AccountingCashbook() {
-  const role = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const role = getStoredUser().role;
   const canSave = ['admin', 'accountant'].includes(role);
   const today = todaySchool();
   const [filter, setFilter] = useState({ from: `${today.slice(0, 7)}-01`, to: today });

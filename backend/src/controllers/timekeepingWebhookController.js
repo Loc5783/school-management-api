@@ -99,6 +99,14 @@ const getWebhookLogs = async (req, res) => {
  */
 const getWebhookLogById = async (req, res) => {
   try {
+    const mongoose = require('mongoose');
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_WEBHOOK_LOG_ID',
+        message: 'Mã bản ghi gói tin Webhook không hợp lệ'
+      });
+    }
     const detail = await getWebhookLogDetail(
       req.params.id,
       req.user?.tenantId || req.tenantId || null

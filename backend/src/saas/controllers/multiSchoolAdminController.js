@@ -256,10 +256,10 @@ const createSchoolWithAdmin = async (req, res) => {
         message: 'Tên trường phải có từ 2 đến 160 ký tự'
       });
     }
-    if (cleanAdminUser.length < 3 || cleanAdminUser.length > 50 || /\s/.test(cleanAdminUser)) {
+    if (!/^[a-zA-Z0-9._-]{3,50}$/.test(cleanAdminUser)) {
       return res.status(422).json({
         success: false,
-        message: 'Tên đăng nhập tài khoản Admin trường phải từ 3–50 ký tự và không chứa khoảng trắng'
+        message: 'Tên đăng nhập tài khoản Admin trường chỉ gồm chữ không dấu, số, dấu chấm/gạch (3–50 ký tự)'
       });
     }
     if (cleanAdminPass.length < 6) {
@@ -279,28 +279,31 @@ const createSchoolWithAdmin = async (req, res) => {
     const permissionIds = await ensureAllPermissions();
     const passwordHash = await bcrypt.hash(cleanAdminPass, BCRYPT_SALT_ROUNDS);
 
-    // Chuẩn bị danh sách phân hiệu ban đầu không trùng mã/tên
+    // Chuẩn bị danh sách phân hiệu ban đầu không trùng mã/tên và chuẩn hóa mã an toàn URL
     const seenNames = new Set();
     const seenCodes = new Set();
     const parsedCampuses = [];
     if (Array.isArray(initialCampuses)) {
       initialCampuses.forEach((item, idx) => {
-        const cName = typeof item === 'string' ? item.trim() : String(item?.name || '').trim();
+        const cName = (typeof item === 'string' ? item.trim() : String(item?.name || '').trim()).slice(0, 120);
         if (!cName || seenNames.has(cName.toLowerCase())) return;
         seenNames.add(cName.toLowerCase());
-        let cCode = (typeof item === 'object' && item?.code)
-          ? String(item.code).trim().toUpperCase()
+        let rawCampusCode = (typeof item === 'object' && item?.code)
+          ? String(item.code).trim().toUpperCase().replace(/[^A-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 16)
+          : '';
+        let cCode = rawCampusCode.length >= 2
+          ? rawCampusCode
           : (cName.toLowerCase() === 'cơ sở chính' ? 'CS-CHINH' : `PH-${idx + 1}`);
         while (seenCodes.has(cCode)) {
-          cCode = `${cCode}-${parsedCampuses.length + 1}`;
+          cCode = `${cCode.slice(0, 16)}-${parsedCampuses.length + 1}`;
         }
         seenCodes.add(cCode);
         parsedCampuses.push({
           code: cCode,
           name: cName,
-          address: (typeof item === 'object' && item?.address) ? String(item.address).trim() : '',
-          phone: (typeof item === 'object' && item?.phone) ? String(item.phone).trim() : '',
-          managerName: (typeof item === 'object' && item?.managerName) ? String(item.managerName).trim() : '',
+          address: (typeof item === 'object' && item?.address) ? String(item.address).trim().slice(0, 300) : '',
+          phone: (typeof item === 'object' && item?.phone) ? String(item.phone).trim().slice(0, 20) : '',
+          managerName: (typeof item === 'object' && item?.managerName) ? String(item.managerName).trim().slice(0, 120) : '',
           isActive: true
         });
       });

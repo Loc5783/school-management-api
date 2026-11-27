@@ -67,6 +67,7 @@ const attendanceStatusText = { present: 'có mặt', late: 'đi muộn', absent:
 const notifyParentsOfAttendance = async (attendance, actorId, context) => {
     if (!attendance?._id || !attendance?.studentId) return;
     const tenantFilter = buildTenantFilter(context || { user: { _id: actorId } });
+    const tenantId = context?.tenantId || context?.user?.tenantId || attendance.tenantId || null;
     const parents = await User.find({
         role: 'parent', status: 'active', 'parentInfo.studentIds': attendance.studentId,
         ...tenantFilter
@@ -75,8 +76,9 @@ const notifyParentsOfAttendance = async (attendance, actorId, context) => {
     const statusText = attendanceStatusText[attendance.status] || attendance.status;
     const eventKey = `${attendance._id}:${attendance.status}`;
     await Promise.all(parents.map((parent) => Notification.updateOne(
-        { recipientId: parent._id, 'metadata.attendanceEventKey': eventKey },
+        { recipientId: parent._id, 'metadata.attendanceEventKey': eventKey, ...(tenantId ? { tenantId } : {}) },
         { $setOnInsert: {
+            ...(tenantId ? { tenantId } : {}),
             recipientId: parent._id,
             title: `Điểm danh: ${attendance.studentName}`,
             message: `${attendance.studentName} được ghi nhận ${statusText} ngày ${new Date(attendance.attendDate).toLocaleDateString('vi-VN')}.`,
@@ -730,7 +732,9 @@ const reviewLeaveRequest = async (req, res) => {
             await request.save({ session });
             return request;
         });
+        const notifTenantId = req.tenantId || req.user?.tenantId || reviewed.tenantId;
         await Notification.create({
+            ...(notifTenantId ? { tenantId: notifTenantId } : {}),
             recipientId: reviewed.requesterId,
             title: decision === 'approved' ? 'Đơn xin nghỉ đã được duyệt' : 'Đơn xin nghỉ bị từ chối',
             message: decision === 'approved' ? `Đơn nghỉ của ${reviewed.studentName} đã được ghi nhận là nghỉ có phép.` : (reviewed.reviewNote || 'Nhà trường chưa thể phê duyệt đơn nghỉ này.'),
@@ -740,7 +744,7 @@ const reviewLeaveRequest = async (req, res) => {
     } catch (err) {
         const status = err.statusCode || (isDuplicateKeyError(err) ? 409 : 500);
         if (status === 500) console.error(err);
-        return res.status(status).json({ success: false, message: err.message || 'Không thể xử lý đơn xin nghỉ' });
+        return res.status(status).json({ success: false, message: status < 500 ? (err.message || 'Yêu cầu không hợp lệ') : 'Không thể xử lý đơn xin nghỉ' });
     }
 };
 

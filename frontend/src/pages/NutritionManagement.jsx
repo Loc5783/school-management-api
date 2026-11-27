@@ -39,6 +39,7 @@ import {
   approveKitchenRequest,
   getKitchenClassrooms
 } from '../api/nutrition';
+import { getStoredUser } from '../utils/storage';
 
 const MENU_DAYS = [
   { key: 'monday', label: 'Thứ Hai' },
@@ -95,7 +96,7 @@ const createEmptyDishForm = () => ({
 
 const getSessionRole = () => {
   try {
-    return JSON.parse(localStorage.getItem('user') || '{}').role || '';
+    return getStoredUser().role || '';
   } catch {
     return '';
   }
@@ -670,7 +671,7 @@ export default function NutritionManagement() {
     e.preventDefault();
     if (!currentMenu || editingDayIndex === null || !dailyMenuForm) return;
     try {
-      const days = currentMenu.days.map((day, index) => index === editingDayIndex ? dailyMenuForm : day);
+      const days = (currentMenu.days || []).map((day, index) => index === editingDayIndex ? dailyMenuForm : day);
       const response = await updateMenu(currentMenu._id, { days });
       setCurrentMenu(response.data.data);
       setShowEditDayModal(false);

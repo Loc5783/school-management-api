@@ -1,6 +1,7 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import api from '../api/axiosConfig';
+import { generateClientId } from '../utils/storage';
 
 export default function ParentTeacherEvaluationTab({ child }) {
   const [context, setContext] = useState(null);
@@ -143,7 +144,7 @@ export default function ParentTeacherEvaluationTab({ child }) {
     const opTeacherId = target.teacherId;
     const opPeriod = currentPeriodCode;
     const opGeneration = contextGenRef.current;
-    const opId = crypto.randomUUID();
+    const opId = generateClientId();
 
     if (!opPeriod) {
       setError('Vui lòng chọn kỳ đánh giá hợp lệ.');

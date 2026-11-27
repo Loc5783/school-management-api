@@ -15,6 +15,27 @@
 const mongoose = require('mongoose');
 
 /**
+ * Kiểm tra nhanh kết nối hiện tại có hỗ trợ MongoDB Multi-Document Transaction hay không.
+ * Ưu tiên đọc mô tả topology sẵn có trên driver để tránh tốn thêm 1 vòng mạng mỗi giao dịch,
+ * và bọc `try/catch` phòng trường hợp tài khoản DB bị giới hạn quyền `admin().command`.
+ *
+ * @returns {Promise<boolean>}
+ */
+const supportsTransactions = async () => {
+  try {
+    const topoType = mongoose.connection?.client?.topology?.description?.type;
+    if (topoType) {
+      return topoType === 'ReplicaSetWithPrimary' || topoType === 'Sharded' || topoType === 'LoadBalanced';
+    }
+    if (!mongoose.connection?.db) return false;
+    const topology = await mongoose.connection.db.admin().command({ hello: 1 });
+    return Boolean(topology?.setName || topology?.msg === 'isdbgrid');
+  } catch {
+    return false;
+  }
+};
+
+/**
  * Thực thi hàm nghiệp vụ trong MongoDB Transaction (hoặc chế độ fallback an toàn khi chạy Standalone).
  *
  * @template T
@@ -26,8 +47,7 @@ const runSafeTransaction = async (
   operation,
   strictMessage = 'MongoDB phải chạy Replica Set để thực hiện giao dịch an toàn'
 ) => {
-  const topology = await mongoose.connection.db.admin().command({ hello: 1 });
-  const isReplicaOrMongos = Boolean(topology?.setName || topology?.msg === 'isdbgrid');
+  const isReplicaOrMongos = await supportsTransactions();
 
   if (!isReplicaOrMongos) {
     if (process.env.ALLOW_STANDALONE_MONGODB === 'false') {
@@ -47,9 +67,11 @@ const runSafeTransaction = async (
     });
     return result;
   } finally {
-    await session.endSession();
+    await session.endSession().catch(() => {});
   }
 };
 
-module.exports = { runSafeTransaction };
-
+module.exports = {
+  supportsTransactions,
+  runSafeTransaction
+};

@@ -98,22 +98,11 @@ const writeAudit = (req, action, target, before, after, reason = '', session = n
   }], session ? { session } : {}).then(([log]) => log);
 };
 
-const runLinkedAccountTransaction = async (operation) => {
-  const topology = await mongoose.connection.db.admin().command({ hello: 1 });
-  if (!topology.setName && topology.msg !== 'isdbgrid' && process.env.ALLOW_STANDALONE_MONGODB !== 'true') {
-    const error = new Error('MongoDB phải chạy Replica Set để đồng bộ tài khoản và hồ sơ nhân sự');
-    error.statusCode = 503;
-    throw error;
-  }
-  const session = await mongoose.startSession();
-  try {
-    let result;
-    await session.withTransaction(async (activeSession) => {
-      result = await operation(activeSession === undefined ? session : activeSession);
-    });
-    return result;
-  } finally { await session.endSession(); }
-};
+const { runSafeTransaction } = require('../utils/safeTransaction');
+const runLinkedAccountTransaction = (operation) => runSafeTransaction(
+  operation,
+  'MongoDB phải chạy Replica Set để đồng bộ tài khoản và hồ sơ nhân sự'
+);
 
 const findParent = async (req, id) => {
   if (!mongoose.isValidObjectId(id)) return null;

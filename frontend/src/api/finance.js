@@ -1,4 +1,5 @@
 import api from './axiosConfig';
+import { generateClientId } from '../utils/storage';
 
 export const getInvoices = (params) => api.get('/finance/invoices', { params });
 export const getFinanceClassrooms = () => api.get('/finance/classrooms');
@@ -19,7 +20,7 @@ export const deleteFeeSchedule = (id) => api.delete(`/finance/fee-schedules/${id
 export const createClassInvoices = (data) => api.post('/finance/tuition/bulk', data);
 export const previewClassInvoices = (data) => api.post('/finance/tuition/bulk/preview', data);
 export const addBulkInvoiceItem = (data) => api.post('/finance/tuition/bulk-additional-item', data);
-export const recordPayment = (data, idempotencyKey = crypto.randomUUID()) => api.post('/finance/payment', data, { headers: { 'Idempotency-Key': idempotencyKey } });
+export const recordPayment = (data, idempotencyKey = generateClientId()) => api.post('/finance/payment', data, { headers: { 'Idempotency-Key': idempotencyKey } });
 export const getPayments = (invoiceId) => api.get(`/finance/payment/invoice/${invoiceId}`);
 export const getDebtReport = (params) => api.get('/finance/debts', { params });
 export const sendDebtReminders = (data) => api.post('/finance/debts/remind', data);

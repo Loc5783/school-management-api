@@ -4,6 +4,7 @@ import Icon from './Icon';
 import { getRecruitment, saveHiringNeed, closeHiringNeed, saveJobApplicant, scheduleApplicantInterview,
   evaluateApplicantInterview, recommendJobApplicant, decideJobApplicant, stopJobApplicant, declineJobApplicant, addApplicantTask,
   completeApplicantTask, linkApplicantEmployee, getApplicantHistory } from '../api/hr';
+import { getStoredUser } from '../utils/storage';
 
 const positions = { teacher: 'Giáo viên', head_teacher: 'Tổ trưởng chuyên môn', assistant_teacher: 'Trợ giảng', chef: 'Nhân viên bếp', security: 'Bảo vệ', accountant: 'Kế toán', hr: 'Nhân sự', principal: 'Hiệu trưởng', vice_principal: 'Phó hiệu trưởng' };
 const statuses = { applied: 'Mới tiếp nhận', interviewing: 'Đang phỏng vấn', recommended: 'Chờ hiệu trưởng quyết định', approved: 'Đã duyệt nhận việc', rejected: 'Không nhận', declined: 'Ứng viên không nhận việc' };
@@ -36,7 +37,7 @@ export default function RecruitmentManagement({ employees, onOpenStaffing }) {
   const [history, setHistory] = useState(null);
   const [modalError, setModalError] = useState('');
   const [saving, setSaving] = useState(false);
-  const userRole = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const userRole = getStoredUser().role;
   const canDecide = ['admin', 'principal'].includes(userRole);
   const load = useCallback(async () => {
     setState((old) => ({ ...old, loading: true, error: '' }));

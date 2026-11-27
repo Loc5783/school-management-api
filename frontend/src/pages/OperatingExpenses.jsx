@@ -3,6 +3,7 @@ import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
 import { createOperatingExpenseRequest, getOperatingExpenseRequests, getOperatingExpenses, recordOperatingExpense, reviewOperatingExpenseRequest, exportOperatingExpenses } from '../api/finance';
 import './AccountingExpenses.css';
+import { generateClientId, getStoredUser } from '../utils/storage';
 
 const todaySchool = () => {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
@@ -11,11 +12,11 @@ const todaySchool = () => {
 };
 const money = (value) => `${new Intl.NumberFormat('vi-VN').format(Number(value) || 0)} đ`;
 const categories = { utilities: 'Điện, nước, internet', rent: 'Thuê mặt bằng', maintenance: 'Bảo trì, sửa chữa', services: 'Dịch vụ vận hành', other: 'Chi vận hành khác' };
-const blankRequest = () => ({ category: 'utilities', payee: '', description: '', amount: '', requestKey: crypto.randomUUID() });
-const blankPayment = () => ({ requestId: '', paidAt: todaySchool(), method: 'bank_transfer', transactionRef: '', documentNumber: '', note: '', idempotencyKey: crypto.randomUUID() });
+const blankRequest = () => ({ category: 'utilities', payee: '', description: '', amount: '', requestKey: generateClientId() });
+const blankPayment = () => ({ requestId: '', paidAt: todaySchool(), method: 'bank_transfer', transactionRef: '', documentNumber: '', note: '', idempotencyKey: generateClientId() });
 
 export default function OperatingExpenses() {
-  const role = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const role = getStoredUser().role;
   const [month, setMonth] = useState(() => todaySchool().slice(0, 7));
   const [page, setPage] = useState(1);
   const [requestForm, setRequestForm] = useState(blankRequest);
@@ -53,8 +54,8 @@ export default function OperatingExpenses() {
   }, [month, page, requestFilter, requestPage]);
   useEffect(() => { const timer = window.setTimeout(load, 0); return () => window.clearTimeout(timer); }, [load]);
 
-  const changeRequest = (key, value) => { setError(''); setRequestForm((current) => ({ ...current, [key]: value, requestKey: crypto.randomUUID() })); };
-  const changePayment = (key, value) => { setError(''); setPaymentForm((current) => ({ ...current, [key]: value, ...(key === 'method' && value === 'cash' ? { transactionRef: '' } : {}), idempotencyKey: crypto.randomUUID() })); };
+  const changeRequest = (key, value) => { setError(''); setRequestForm((current) => ({ ...current, [key]: value, requestKey: generateClientId() })); };
+  const changePayment = (key, value) => { setError(''); setPaymentForm((current) => ({ ...current, [key]: value, ...(key === 'method' && value === 'cash' ? { transactionRef: '' } : {}), idempotencyKey: generateClientId() })); };
   const submitRequest = async (event) => {
     event.preventDefault();
     if (saving) return;

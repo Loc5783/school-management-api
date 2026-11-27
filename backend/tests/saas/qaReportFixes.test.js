@@ -1298,5 +1298,132 @@ describe('QA & Security Evaluation Fixes — Full Replica Set Verification (phas
     expect(dbDictRes.body.totalZones).toBe(7);
     expect(dbDictRes.body.totalCollections).toBeGreaterThanOrEqual(70);
   });
+
+  test('13. Deep Exception & Tenant Isolation Audit Round 2: Regex đặc biệt, ngày không tồn tại, maxSize, ObjectId sai, Object password & Thông báo SaaS', async () => {
+    // 13.1 Ký tự Regex đặc biệt "(", "[", "+" trong tìm kiếm Hóa đơn & Món ăn không gây crash 500
+    const regexInvoiceRes = await request(app)
+      .get('/api/finance/invoices')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .query({ search: 'Lớp Mầm 1 ([+*' });
+    expect(regexInvoiceRes.status).toBe(200);
+
+    const regexDishRes = await request(app)
+      .get('/api/nutrition/dishes')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .query({ search: 'Cháo thịt (ít muối [+' });
+    expect(regexDishRes.status).toBe(200);
+
+    // 13.2 Gửi mảng vào query param (?search[]=a) trả 400 thay vì crash 500 TypeError .trim()
+    const arrayQueryStudent = await request(app)
+      .get('/api/students?search[]=an&search[]=binh')
+      .set('Authorization', `Bearer ${tokenAdminA}`);
+    expect(arrayQueryStudent.status).toBe(400);
+
+    // 13.3 Gửi Object thay chuỗi vào password đăng nhập bị chặn 400 thay vì crash 500 bcrypt
+    const badLoginRes = await request(app)
+      .post('/api/auth/login')
+      .send({ schoolCode: tenantA.code, username: 'admin', password: { $gt: '' } });
+    expect(badLoginRes.status).toBe(400);
+
+    // 13.4 Gửi ObjectId sai vào các route có middleware khóa kỳ kế toán trả 400 thay vì 500 CastError
+    const badCancelInvoice = await request(app)
+      .put('/api/finance/tuition/cancel/not-an-object-id')
+      .set('Authorization', `Bearer ${tokenAdminA}`);
+    expect(badCancelInvoice.status).toBe(400);
+
+    const badPayrollStatus = await request(app)
+      .patch('/api/hr/payroll/not-an-object-id/status')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({ status: 'reviewed' });
+    expect(badPayrollStatus.status).toBe(400);
+
+    const badPayrollQuery = await request(app)
+      .get('/api/hr/payroll?month=abc&year=xyz')
+      .set('Authorization', `Bearer ${tokenAdminA}`);
+    expect(badPayrollQuery.status).toBe(400);
+
+    // 13.5 Chặn ngày sinh không tồn tại trên lịch ("2023-02-31") và chặn vượt sĩ số maxSize khi tạo lẻ học sinh
+    const tinyClsRes = await request(app)
+      .post('/api/classrooms')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({ name: 'LOP-MAX-1', ageGroup: '2-3', maxSize: 1, schoolYear: '2026-2027' });
+    expect(tinyClsRes.status).toBe(201);
+    const tinyClsId = tinyClsRes.body.data._id;
+
+    const fakeDateStudent = await request(app)
+      .post('/api/students')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({
+        fullName: 'Bé Ngày 31 Tháng 2',
+        birthDate: '2023-02-31',
+        gender: 'male',
+        classroomId: tinyClsId
+      });
+    expect(fakeDateStudent.status).toBe(422);
+
+    const firstValidStudent = await request(app)
+      .post('/api/students')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({
+        fullName: 'Bé Đủ Sĩ Số 1',
+        birthDate: '2023-05-10',
+        gender: 'female',
+        classroomId: tinyClsId,
+        parents: [{ fullName: 'Mẹ Bé 1', phone: '0966778899', relationship: 'mother', isPrimary: true }]
+      });
+    expect(firstValidStudent.status).toBe(201);
+
+    const overCapacityStudent = await request(app)
+      .post('/api/students')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({
+        fullName: 'Bé Vượt Sĩ Số 2',
+        birthDate: '2023-06-12',
+        gender: 'male',
+        classroomId: tinyClsId
+      });
+    expect(overCapacityStudent.status).toBe(409);
+
+    // 13.6 Cách ly dị ứng thực đơn giữa 2 trường: Admin Trường B không thể kiểm tra lớp của Trường A
+    const crossTenantAllergy = await request(app)
+      .post('/api/nutrition/menus/check-allergies')
+      .set('Authorization', `Bearer ${tokenAdminB}`)
+      .send({ classroomId: tinyClsId, days: [] });
+    expect(crossTenantAllergy.status).toBe(404);
+
+    // 13.7 Chặn trả trẻ nhầm khi học sinh đang điểm danh Nghỉ có phép (trừ khi gửi cờ xác nhận forceAbsentHandover)
+    const todayStr = getWorkDate(new Date());
+    await request(app)
+      .post('/api/attendance')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({
+        studentId: firstValidStudent.body.data._id,
+        classroomId: tinyClsId,
+        attendDate: todayStr,
+        status: 'absent_permission',
+        note: 'Bé nghỉ ốm có xin phép'
+      });
+
+    const blockedAbsentHandover = await request(app)
+      .post('/api/pickups/direct-handover')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({
+        studentId: firstValidStudent.body.data._id,
+        pickupDate: todayStr,
+        pickerFullName: 'Mẹ Bé 1'
+      });
+    expect(blockedAbsentHandover.status).toBe(409);
+
+    const forcedAbsentHandover = await request(app)
+      .post('/api/pickups/direct-handover')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({
+        studentId: firstValidStudent.body.data._id,
+        pickupDate: todayStr,
+        pickerFullName: 'Mẹ Bé 1',
+        forceAbsentHandover: true
+      });
+    expect(forcedAbsentHandover.status).toBe(201);
+  });
 });
 

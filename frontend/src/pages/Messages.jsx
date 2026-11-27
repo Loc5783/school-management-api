@@ -7,6 +7,7 @@ import {
   getChatMessages, sendChatMessage, updateChatMessage, deleteChatMessage,
   markChatRead, getConversationById, setChatArchived
 } from '../api/chat';
+import { getStoredUser } from '../utils/storage';
 
 const timeLabel = (value) => value ? new Date(value).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) : '';
 const errorText = (error, fallback) => error.response?.data?.message || fallback;
@@ -14,7 +15,7 @@ const errorText = (error, fallback) => error.response?.data?.message || fallback
 export default function Messages() {
   const [searchParams, setSearchParams] = useSearchParams();
   const conversationParam = searchParams.get('conversation');
-  const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+  const currentUser = getStoredUser();
   const [threads, setThreads] = useState([]);
   const [threadPage, setThreadPage] = useState(1);
   const [threadTotalPages, setThreadTotalPages] = useState(0);

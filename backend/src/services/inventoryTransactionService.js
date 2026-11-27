@@ -4,6 +4,7 @@ const InventoryTransaction = require('../models/zone5_nutrition/InventoryTransac
 const IngredientMaster = require('../models/zone5_nutrition/IngredientMaster');
 const { getWorkDate, startOfWorkDate } = require('../utils/dateHelpers');
 const { isValidObjectId } = require('../utils/idValidation');
+const { runSafeTransaction } = require('../utils/safeTransaction');
 
 const getTodayStart = () => startOfWorkDate(getWorkDate(new Date()));
 
@@ -20,24 +21,10 @@ const assertObjectId = (value, label) => {
     }
 };
 
-const runInTransaction = async (operation) => {
-    const topology = await mongoose.connection.db.admin().command({ hello: 1 });
-    if (!topology.setName && topology.msg !== 'isdbgrid' && process.env.ALLOW_STANDALONE_MONGODB !== 'true') {
-        const error = new Error('MongoDB phải chạy Replica Set hoặc sharded cluster để ghi nhận giao dịch kho an toàn');
-        error.statusCode = 503;
-        throw error;
-    }
-    const session = await mongoose.startSession();
-    try {
-        let result;
-        await session.withTransaction(async () => {
-            result = await operation(session);
-        });
-        return result;
-    } finally {
-        await session.endSession();
-    }
-};
+const runInTransaction = (operation) => runSafeTransaction(
+    operation,
+    'MongoDB phải chạy Replica Set hoặc sharded cluster để ghi nhận giao dịch kho an toàn'
+);
 
 const calculateLotStatus = (quantity, expiryDate) => {
     if (quantity <= 0) return 'depleted';

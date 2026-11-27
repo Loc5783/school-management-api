@@ -8,6 +8,7 @@ import { checkMenuAllergies, getClassroomDietaryAlerts, getDailyServingPlan, get
 import { buildKitchenIngredientPlan, displayIngredientQuantity } from '../utils/kitchenIngredientPlan';
 import { kitchenErrorMessage } from '../utils/kitchenErrorMessage';
 import './ChefDashboard.css';
+import { getStoredUser } from '../utils/storage';
 
 const today = () => new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit'
@@ -169,9 +170,9 @@ export default function ChefDashboard() {
           {!plan.classBreakdown?.length && <p className="chef-empty">Chưa có lớp đang hoạt động.</p>}
         </section>
 
-        <MealServingOperations key={`servings-${date}`} role={JSON.parse(localStorage.getItem('user') || '{}').role} date={date} classes={plan.classBreakdown || []} />
-        <KitchenSafetyPanel key={`safety-${date}`} role={JSON.parse(localStorage.getItem('user') || '{}').role} date={date} />
-        <KitchenReconciliationPanel key={`reconciliation-${date}`} role={JSON.parse(localStorage.getItem('user') || '{}').role} date={date} />
+        <MealServingOperations key={`servings-${date}`} role={getStoredUser().role} date={date} classes={plan.classBreakdown || []} />
+        <KitchenSafetyPanel key={`safety-${date}`} role={getStoredUser().role} date={date} />
+        <KitchenReconciliationPanel key={`reconciliation-${date}`} role={getStoredUser().role} date={date} />
 
         <div className="chef-actions"><Link className="button button-primary" to="/nutrition?tab=menus">Xem thực đơn theo lớp</Link><Link className="button button-secondary" to="/nutrition?tab=dailyKitchenReport">Xem báo cáo suất ăn & kho</Link><Link className="button button-secondary" to="/nutrition?tab=inventory">Kiểm tra kho thực phẩm</Link></div>
       </>}

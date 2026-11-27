@@ -29,11 +29,12 @@ const notifyAssignment = async (recipientId, title, message, actorId, key, reqOr
   if (!recipientId || !reqOrContext) return;
   try {
     const tenantFilter = buildTenantFilter(reqOrContext, { failClosed: true });
+    const tenantId = reqOrContext.tenantId || reqOrContext.user?.tenantId || null;
     const validRecipient = await User.findOne({ _id: recipientId, ...tenantFilter }).select('_id').lean();
     if (!validRecipient) return;
     await Notification.updateOne(
-      { deduplicationKey: key },
-      { $setOnInsert: { recipientId: validRecipient._id, title, message, type: 'info', link: '/my-staffing', createdBy: actorId, deduplicationKey: key } },
+      { deduplicationKey: key, ...(tenantId ? { tenantId } : {}) },
+      { $setOnInsert: { ...(tenantId ? { tenantId } : {}), recipientId: validRecipient._id, title, message, type: 'info', link: '/my-staffing', createdBy: actorId, deduplicationKey: key } },
       { upsert: true }
     );
   } catch (error) { console.error('Không thể gửi thông báo phân công:', error); }

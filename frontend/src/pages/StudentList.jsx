@@ -5,6 +5,7 @@ import Icon from '../components/Icon';
 import StudentExcelImportModal from '../components/StudentExcelImportModal';
 import { listStudents } from '../api/students';
 import api from '../api/axiosConfig';
+import { getStoredUser } from '../utils/storage';
 
 const DEFAULT_CAMPUS = 'Cơ sở chính';
 const statusText = {
@@ -34,7 +35,7 @@ export default function StudentList() {
   const [pagination, setPagination] = useState({});
   const [state, setState] = useState({ loading: true, error: '' });
   const [showImportModal, setShowImportModal] = useState(false);
-  const role = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const role = getStoredUser().role;
 
   const load = useCallback(async () => {
     setState({ loading: true, error: '' });

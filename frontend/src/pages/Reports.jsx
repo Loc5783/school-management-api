@@ -5,6 +5,7 @@ import Icon from '../components/Icon';
 import StudentPagination from '../components/StudentPagination';
 import api from '../api/axiosConfig';
 import { getClassReport, getDashboardStats, getFinanceReport, getSavedReports, saveReport } from '../api/reports';
+import { getStoredUser } from '../utils/storage';
 
 const formatMoney = (value) => `${Number(value || 0).toLocaleString('vi-VN')} đ`;
 const formatDate = (value) => value ? new Date(value).toLocaleDateString('vi-VN') : '—';
@@ -20,7 +21,7 @@ const attendanceStatus = (status) => ({
 }[status] || ['Chưa điểm danh', 'neutral']);
 
 export default function Reports() {
-  const currentRole = JSON.parse(localStorage.getItem('user') || '{}').role;
+  const currentRole = getStoredUser().role;
   const isAccountant = currentRole === 'accountant';
   const [activeTab, setActiveTab] = useState(isAccountant ? 'finance' : 'overview');
   const [loading, setLoading] = useState(false);

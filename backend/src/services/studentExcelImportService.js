@@ -8,7 +8,7 @@ const { buildTenantFilter } = require('../services/tenantFilterService');
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
 const MAX_ROWS = 500;
-const MAX_SHEETS = 5;
+const MAX_SHEETS = 15;
 const MAX_COLUMNS = 30;
 const MULTI_CLASS_TARGET = '__ALL__';
 
@@ -274,8 +274,17 @@ const parseBirthDate = (cellValue, is1904 = false) => {
       }
     }
   } else if (typeof cellValue === 'object' && cellValue !== null) {
-    if (cellValue.text) {
+    if (cellValue.error) {
+      return { error: `Ô ngày sinh chứa lỗi công thức Excel (${cellValue.error})` };
+    }
+    if (Array.isArray(cellValue.richText)) {
+      return parseBirthDate(cellValue.richText.map((t) => t.text || '').join(''), is1904);
+    }
+    if (typeof cellValue.text === 'string') {
       return parseBirthDate(cellValue.text, is1904);
+    }
+    if (cellValue.text && Array.isArray(cellValue.text.richText)) {
+      return parseBirthDate(cellValue.text.richText.map((t) => t.text || '').join(''), is1904);
     }
     return { error: 'Giá trị ngày sinh không đúng định dạng' };
   } else {
@@ -302,9 +311,29 @@ const parseBirthDate = (cellValue, is1904 = false) => {
   return { date: `${y}-${m}-${dayStr}`, dateObj: d };
 };
 
+const unwrapExcelObjectText = (val) => {
+  if (val == null) return '';
+  if (typeof val === 'string') return val.trim();
+  if (typeof val === 'number' || typeof val === 'boolean') return String(val).trim();
+  if (val instanceof Date) return val.toISOString();
+  if (typeof val === 'object') {
+    if (Array.isArray(val.richText)) {
+      return val.richText.map((t) => t.text || '').join('').trim();
+    }
+    if (val.text != null) {
+      const inner = typeof val.text === 'object' ? unwrapExcelObjectText(val.text) : String(val.text).trim();
+      if (inner) return inner;
+    }
+    if (typeof val.hyperlink === 'string') {
+      return val.hyperlink.replace(/^mailto:/i, '').trim();
+    }
+  }
+  return '';
+};
+
 const extractCellStaticString = (cell, colLabel = '') => {
   if (cell == null) return { text: '' };
-  if (isFormulaCell(cell)) {
+  if (isFormulaCell(cell) || cell?.sharedFormula || cell?.value?.sharedFormula) {
     return {
       text: '',
       isFormula: true,
@@ -314,22 +343,14 @@ const extractCellStaticString = (cell, colLabel = '') => {
 
   const val = cell.value;
   if (val == null) return { text: '' };
-  if (typeof val === 'string') return { text: val.trim() };
-  if (typeof val === 'number') return { text: String(val).trim() };
-  if (typeof val === 'boolean') return { text: String(val) };
-  if (val instanceof Date) return { text: val.toISOString() };
-  if (typeof val === 'object') {
-    if (Array.isArray(val.richText)) {
-      return { text: val.richText.map((t) => t.text || '').join('').trim() };
-    }
-    if (val.text != null) {
-      return { text: String(val.text).trim() };
-    }
-    if (val.hyperlink && val.text == null) {
-      return { text: String(val.hyperlink).replace(/^mailto:/i, '').trim() };
-    }
+  if (cell.type === ExcelJS.ValueType.Error || (typeof val === 'object' && val !== null && val.error)) {
+    return {
+      text: '',
+      isFormula: true,
+      error: `Ô ${colLabel ? `cột "${colLabel}"` : cell.address} chứa giá trị lỗi Excel (${val?.error || '#ERROR!'}). Vui lòng kiểm tra lại.`
+    };
   }
-  return { text: '' };
+  return { text: unwrapExcelObjectText(val) };
 };
 
 const computeBatchFingerprint = (classroomId, rows) => {
@@ -365,9 +386,9 @@ const computeBatchFingerprint = (classroomId, rows) => {
 };
 
 const pickString = (item, primaryKey, rawKey = '') => {
-  if (item[primaryKey] != null) return String(item[primaryKey]).trim();
-  if (rawKey && item[rawKey] != null) return String(item[rawKey]).trim();
-  return '';
+  const val = item[primaryKey] != null ? item[primaryKey] : (rawKey ? item[rawKey] : null);
+  if (val == null || typeof val === 'object') return '';
+  return String(val).trim();
 };
 
 const normalizeExcelPhone = (rawVal) => {
@@ -416,8 +437,10 @@ const validateStudentRowStrict = (item, rowNumber, _now = new Date(), is1904 = f
   const parent2RelRaw = pickString(item, 'parent2Relationship', 'rawParent2Relationship');
 
   // 1. Mã ID & Mã định danh
-  if (studentCode && !/^[A-Z0-9_-]{1,30}$/.test(studentCode)) {
-    errors.push('Mã ID học sinh chỉ được chứa chữ cái không dấu, chữ số, dấu gạch ngang/dưới (tối đa 30 ký tự)');
+  if (studentCode) {
+    if (!/^[A-Z0-9_-]{1,30}$/.test(studentCode) || /^0+$/.test(studentCode)) {
+      errors.push('Mã ID học sinh chỉ được chứa chữ cái không dấu, chữ số (khác 0), dấu gạch ngang/dưới (tối đa 30 ký tự)');
+    }
   }
   if (identityCode.length > 40) {
     errors.push(`Mã định danh học sinh vượt quá 40 ký tự (hiện tại: ${identityCode.length} ký tự)`);
@@ -797,17 +820,16 @@ const parseAndValidateExcelBuffer = async (buffer, classroomId, user, options = 
 
   let worksheet = workbook.getWorksheet('Danh sách học sinh');
   if (!worksheet) {
-    worksheet = workbook.worksheets.find((s) => s.name !== 'Hướng dẫn' && s.name !== 'Danh mục') || workbook.worksheets[0];
+    worksheet = workbook.worksheets.find((s) => s.name !== 'Hướng dẫn' && s.name !== 'Danh mục' && s.state !== 'hidden');
   }
-  if (!worksheet || worksheet.name === 'Hướng dẫn') {
+  if (!worksheet || worksheet.name === 'Hướng dẫn' || worksheet.name === 'Danh mục') {
     throw Object.assign(new Error('Không tìm thấy trang tính "Danh sách học sinh" trong file Excel.'), { statusCode: 422 });
   }
 
-  if (worksheet.rowCount > MAX_ROWS + 100) {
-    throw Object.assign(new Error(`Tập tin Excel chứa quá nhiều dòng (${worksheet.rowCount} dòng). Giới hạn tối đa là ${MAX_ROWS} dòng dữ liệu.`), { statusCode: 422 });
-  }
-  if (worksheet.columnCount > MAX_COLUMNS) {
-    throw Object.assign(new Error(`Số lượng cột trong trang tính (${worksheet.columnCount}) vượt quá giới hạn cho phép (${MAX_COLUMNS}).`), { statusCode: 422 });
+  // Cho phép giáo viên kẻ khung viền (All Borders) dư các dòng trống bên dưới mà không bị chặn oan;
+  // chỉ chặn các file bất thường vượt quá 20.000 dòng XML để bảo vệ bộ nhớ.
+  if (worksheet.rowCount > 20000) {
+    throw Object.assign(new Error(`Tập tin Excel chứa quá nhiều dòng định dạng (${worksheet.rowCount} dòng). Vui lòng xóa bớt các dòng trống bên dưới.`), { statusCode: 422 });
   }
 
   const headerRow = worksheet.getRow(1);
@@ -959,6 +981,7 @@ const parseAndValidateExcelBuffer = async (buffer, classroomId, user, options = 
   const validatedRows = [];
   const inMemoryDuplicates = new Map();
   const inMemoryStudentCodes = new Map();
+  const inMemoryIdentityCodes = new Map();
 
   for (const item of parsedRows) {
     const validated = validateStudentRowStrict(item, item.rowNumber, now, is1904);
@@ -1005,6 +1028,11 @@ const parseAndValidateExcelBuffer = async (buffer, classroomId, user, options = 
       else inMemoryStudentCodes.get(validated.studentCode).push(validated.rowNumber);
     }
 
+    if (validated.identityCode) {
+      if (!inMemoryIdentityCodes.has(validated.identityCode)) inMemoryIdentityCodes.set(validated.identityCode, [validated.rowNumber]);
+      else inMemoryIdentityCodes.get(validated.identityCode).push(validated.rowNumber);
+    }
+
     validatedRows.push(validated);
   }
 
@@ -1024,6 +1052,13 @@ const parseAndValidateExcelBuffer = async (buffer, classroomId, user, options = 
         row.errors.push(`Mã ID học sinh "${row.studentCode}" bị trùng ở dòng ${dupCodeRows.filter((r) => r !== row.rowNumber).join(', ')} trong file này`);
       }
     }
+    if (row.identityCode) {
+      const dupIdentityRows = inMemoryIdentityCodes.get(row.identityCode) || [];
+      if (dupIdentityRows.length > 1) {
+        row.isValid = false;
+        row.errors.push(`Mã định danh học sinh "${row.identityCode}" bị trùng ở dòng ${dupIdentityRows.filter((r) => r !== row.rowNumber).join(', ')} trong file này`);
+      }
+    }
   }
 
   // Bước 2: Đối chiếu trùng lặp với cơ sở dữ liệu theo đúng phạm vi trường (tenantId) trong 1 truy vấn duy nhất
@@ -1039,17 +1074,21 @@ const parseAndValidateExcelBuffer = async (buffer, classroomId, user, options = 
     const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const uniqueLowerNames = [...new Set(validCandidates.map((r) => r.fullName.toLowerCase()))];
     const manualCodes = [...new Set(validCandidates.map((r) => r.studentCode).filter(Boolean))];
+    const manualIdentities = [...new Set(validCandidates.map((r) => r.identityCode).filter(Boolean))];
     const nameRegexes = uniqueLowerNames.map((n) => new RegExp(`^${escapeRegex(n)}$`, 'i'));
     const orConditions = [{ fullName: { $in: nameRegexes } }];
     if (manualCodes.length > 0) {
       orConditions.push({ studentCode: { $in: manualCodes } });
+    }
+    if (manualIdentities.length > 0) {
+      orConditions.push({ identityCode: { $in: manualIdentities } });
     }
 
     const [existingStudents, conflictingEmployees, conflictingUsers] = await Promise.all([
       Student.find({
         ...tenantFilter,
         $or: orConditions
-      }).select('fullName birthDate gender classroomId className studentCode status').lean(),
+      }).select('fullName birthDate gender classroomId className studentCode identityCode status').lean(),
       manualCodes.length > 0
         ? Employee.find({ ...tenantFilter, employeeCode: { $in: manualCodes } }).select('employeeCode fullName').lean()
         : Promise.resolve([]),
@@ -1074,6 +1113,15 @@ const parseAndValidateExcelBuffer = async (buffer, classroomId, user, options = 
         if (codeConflict) {
           row.isValid = false;
           row.errors.push(`Mã ID học sinh "${row.studentCode}" đã được cấp cho học sinh "${codeConflict.fullName}"`);
+          continue;
+        }
+      }
+
+      if (row.identityCode) {
+        const identityConflict = existingStudents.find((s) => String(s.identityCode || '').toUpperCase() === row.identityCode);
+        if (identityConflict) {
+          row.isValid = false;
+          row.errors.push(`Mã định danh "${row.identityCode}" đã tồn tại trên hồ sơ học sinh "${identityConflict.fullName}"`);
           continue;
         }
       }

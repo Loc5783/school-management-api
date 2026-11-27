@@ -5,6 +5,7 @@ import Icon from "../components/Icon";
 import StudentExcelImportModal from "../components/StudentExcelImportModal";
 import { createStudent, getStudent, updateStudent } from "../api/students";
 import api from "../api/axiosConfig";
+import { getStoredUser } from '../utils/storage';
 
 const ALLERGEN_OPTIONS = [
   { value: "gluten", label: "Gluten / lúa mì" },
@@ -93,7 +94,7 @@ export default function StudentForm() {
   const editing = Boolean(id);
   const role = (() => {
     try {
-      return JSON.parse(localStorage.getItem("user") || "{}")?.role || "";
+      return getStoredUser()?.role || "";
     } catch {
       return "";
     }

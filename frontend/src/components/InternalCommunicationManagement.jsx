@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getInternalOverview, publishMonthlyTimesheet, sendInternalAnnouncement } from '../api/hr';
+import { generateClientId } from '../utils/storage';
 
 const roles = { admin: 'Quản trị', principal: 'Hiệu trưởng', teacher: 'Giáo viên', accountant: 'Kế toán', chef: 'Nhà bếp', guard: 'Bảo vệ', hr: 'Nhân sự' };
 const when = (value) => value ? new Date(value).toLocaleString('vi-VN', { hour12: false }) : '';
-const freshForm = () => ({ category: 'meeting', title: '', message: '', eventAt: '', location: '', employeeIds: [], roles: [], requestId: crypto.randomUUID() });
+const freshForm = () => ({ category: 'meeting', title: '', message: '', eventAt: '', location: '', employeeIds: [], roles: [], requestId: generateClientId() });
 const previousMonth = () => { const date = new Date(); return `${date.getFullYear() - (date.getMonth() === 0 ? 1 : 0)}-${String(date.getMonth() || 12).padStart(2, '0')}`; };
 
 export default function InternalCommunicationManagement() {

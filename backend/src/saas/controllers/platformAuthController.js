@@ -12,6 +12,7 @@ const {
   generatePlatformAdminToken,
   verifySaasToken
 } = require('../utils/saasJwt');
+const { runSafeTransaction } = require('../../utils/safeTransaction');
 
 const getDecryptedTotpSecret = (admin) => {
   // Reject plaintext secret records (Lỗi 6)
@@ -25,7 +26,7 @@ const login = async (req, res) => {
   try {
     const { username, password } = req.body || {};
 
-    if (!username || !password) {
+    if (typeof username !== 'string' || typeof password !== 'string' || !username.trim() || !password) {
       return res.status(400).json({
         success: false,
         message: 'Vui lòng cung cấp tên đăng nhập và mật khẩu'
@@ -266,78 +267,80 @@ const verifyMfa = async (req, res) => {
       });
     }
 
-    // 6. KHỐI HOÀN TẤT NGUYÊN TỬ TRONG MONGODB TRANSACTION (Lỗi 2)
-    session = await PlatformAdmin.db.startSession();
-    session.startTransaction();
+    // 6. KHỐI HOÀN TẤT NGUYÊN TỬ TRONG MONGODB TRANSACTION (An toàn trên cả Replica Set & Standalone)
+    const txOutcome = await runSafeTransaction(async (txSession) => {
+      const sessionOpt = txSession ? { session: txSession } : {};
 
-    // Tiêu thụ challenge có điều kiện trong transaction
-    const consumedChallenge = await MfaChallenge.findOneAndUpdate(
-      {
-        _id: challenge._id,
-        used: false,
-        expiresAt: { $gt: new Date() },
-        adminId: admin._id,
-        authVersion: admin.authVersion || 0
-      },
-      {
-        $set: { used: true, usedAt: new Date() }
-      },
-      { session, returnDocument: 'after' }
-    );
+      const consumedChallenge = await MfaChallenge.findOneAndUpdate(
+        {
+          _id: challenge._id,
+          used: false,
+          expiresAt: { $gt: new Date() },
+          adminId: admin._id,
+          authVersion: admin.authVersion || 0
+        },
+        {
+          $set: { used: true, usedAt: new Date() }
+        },
+        { ...sessionOpt, returnDocument: 'after' }
+      );
 
-    if (!consumedChallenge) {
-      await session.abortTransaction();
+      if (!consumedChallenge) {
+        return { errorCode: 'CHALLENGE_ALREADY_USED_OR_EXPIRED', message: 'Challenge token không hợp lệ hoặc đã được sử dụng' };
+      }
+
+      const updatedAdmin = await PlatformAdmin.findOneAndUpdate(
+        {
+          _id: admin._id,
+          status: 'active',
+          authVersion: decoded.authVersion,
+          totpSecret: admin.totpSecret,
+          totpSecretIv: admin.totpSecretIv,
+          totpSecretTag: admin.totpSecretTag,
+          $or: [
+            { lastUsedTotpStep: { $lt: matchedStep } },
+            { lastUsedTotpStep: { $exists: false } }
+          ]
+        },
+        {
+          $set: { lastUsedTotpStep: matchedStep }
+        },
+        { ...sessionOpt, returnDocument: 'after' }
+      );
+
+      if (!updatedAdmin) {
+        const otpErr = new Error('Mã xác thực TOTP đã được sử dụng hoặc trạng thái quản trị đã thay đổi');
+        otpErr.otpConflict = true;
+        throw otpErr;
+      }
+
+      return { updatedAdmin };
+    });
+
+    if (txOutcome?.errorCode) {
       return res.status(401).json({
         success: false,
-        code: 'CHALLENGE_ALREADY_USED_OR_EXPIRED',
-        message: 'Challenge token không hợp lệ hoặc đã được sử dụng'
+        code: txOutcome.errorCode,
+        message: txOutcome.message
       });
     }
 
-    // Cập nhật PlatformAdmin có điều kiện trong transaction
-    const updatedAdmin = await PlatformAdmin.findOneAndUpdate(
-      {
-        _id: admin._id,
-        status: 'active',
-        authVersion: decoded.authVersion,
-        totpSecret: admin.totpSecret, // Bảo đảm secret không bị đổi đồng thời
-        totpSecretIv: admin.totpSecretIv,
-        totpSecretTag: admin.totpSecretTag,
-        $or: [
-          { lastUsedTotpStep: { $lt: matchedStep } },
-          { lastUsedTotpStep: { $exists: false } }
-        ]
-      },
-      {
-        $set: { lastUsedTotpStep: matchedStep }
-      },
-      { session, returnDocument: 'after' }
-    );
-
-    if (!updatedAdmin) {
-      await session.abortTransaction();
-      return res.status(401).json({
-        success: false,
-        code: 'OTP_ALREADY_USED',
-        message: 'Mã xác thực TOTP đã được sử dụng hoặc trạng thái quản trị đã thay đổi'
-      });
-    }
-
-    // Commit transaction thành công cả 2 điều kiện
-    await session.commitTransaction();
-
-    // 7. Cấp Access Token CHỈ SAU KHI transaction đã commit thành công
-    const token = generatePlatformAdminToken(updatedAdmin);
+    // 7. Cấp Access Token CHỈ SAU KHI giao dịch hoàn tất thành công
+    const token = generatePlatformAdminToken(txOutcome.updatedAdmin);
 
     return res.status(200).json({
       success: true,
       message: 'Xác thực MFA thành công',
       token,
-      admin: updatedAdmin.toSafeObject()
+      admin: txOutcome.updatedAdmin.toSafeObject()
     });
   } catch (err) {
-    if (session && session.inTransaction()) {
-      await session.abortTransaction().catch(() => {});
+    if (err?.otpConflict) {
+      return res.status(401).json({
+        success: false,
+        code: 'OTP_ALREADY_USED',
+        message: err.message
+      });
     }
 
     // Xử lý WriteConflict nếu request đồng thời thua cuộc đua transaction

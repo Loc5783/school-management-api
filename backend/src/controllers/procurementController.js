@@ -6,7 +6,11 @@ const Asset = require('../models/zone6_procurement/Asset');
 const Supplier = require('../models/zone5_nutrition/Supplier'); // dùng chung từ Zone 5
 const User = require('../models/zone1_system/User');
 const Notification = require('../models/zone1_system/Notification');
+const Classroom = require('../models/zone3_school/Classroom');
 const { buildTenantFilter } = require('../services/tenantFilterService');
+const { isValidObjectId } = require('../utils/idValidation');
+const { sendControllerError } = require('../utils/controllerError');
+const { runSafeTransaction } = require('../utils/safeTransaction');
 
 const startOfToday = () => {
     const value = new Date();
@@ -26,18 +30,26 @@ const parseExpectedDelivery = (value) => {
     return { date };
 };
 
+const ITEM_EDITABLE_FIELDS = ['code', 'name', 'category', 'unit', 'referencePrice', 'description', 'status'];
+const ASSET_EDITABLE_FIELDS = ['assetCode', 'name', 'category', 'purchaseDate', 'purchaseValue', 'currentValue', 'classroomId', 'location', 'assignedTo', 'status', 'warrantyExpiry', 'note'];
+const pickAllowed = (body = {}, keys = []) => Object.fromEntries(keys.filter((k) => Object.hasOwn(body || {}, k)).map((k) => [k, body[k]]));
+
 // ==============================
 // 1. Quản lý mặt hàng (Item Master)
 // ==============================
 const createItem = async (req, res) => {
     try {
         const tenantId = req.tenantId || req.user?.tenantId;
-        const item = new ItemMaster({ ...req.body, ...(tenantId ? { tenantId } : {}) });
+        const allowed = pickAllowed(req.body, ITEM_EDITABLE_FIELDS);
+        if (allowed.referencePrice != null && (!Number.isFinite(Number(allowed.referencePrice)) || Number(allowed.referencePrice) < 0)) {
+            return res.status(422).json({ message: 'Đơn giá tham khảo phải là số không âm' });
+        }
+        const item = new ItemMaster({ ...allowed, ...(tenantId ? { tenantId } : {}) });
         await item.save();
         res.status(201).json({ message: 'Tạo mặt hàng thành công', data: item });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ message: 'Lỗi server' });
+        return sendControllerError(res, err, 'Không thể tạo mặt hàng');
     }
 };
 
@@ -45,38 +57,44 @@ const getItems = async (req, res) => {
     try {
         const { category, status } = req.query;
         const filter = {};
-        if (category) filter.category = category;
-        if (status) filter.status = status;
+        if (category && typeof category === 'string') filter.category = category;
+        if (status && typeof status === 'string') filter.status = status;
         const tenantFilter = buildTenantFilter(req);
         const items = await ItemMaster.find({ ...filter, ...tenantFilter }).sort({ name: 1 });
         res.json({ message: 'Lấy danh sách mặt hàng thành công', data: items });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ message: 'Lỗi server' });
+        return sendControllerError(res, err, 'Không thể lấy danh sách mặt hàng');
     }
 };
 
 const updateItem = async (req, res) => {
     try {
+        if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'ID mặt hàng không hợp lệ' });
+        const allowed = pickAllowed(req.body, ITEM_EDITABLE_FIELDS);
+        if (allowed.referencePrice != null && (!Number.isFinite(Number(allowed.referencePrice)) || Number(allowed.referencePrice) < 0)) {
+            return res.status(422).json({ message: 'Đơn giá tham khảo phải là số không âm' });
+        }
         const tenantFilter = buildTenantFilter(req);
-        const item = await ItemMaster.findOneAndUpdate({ _id: req.params.id, ...tenantFilter }, req.body, { new: true });
+        const item = await ItemMaster.findOneAndUpdate({ _id: req.params.id, ...tenantFilter }, { $set: allowed }, { new: true, runValidators: true });
         if (!item) return res.status(404).json({ message: 'Không tìm thấy mặt hàng' });
         res.json({ message: 'Cập nhật mặt hàng thành công', data: item });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ message: 'Lỗi server' });
+        return sendControllerError(res, err, 'Không thể cập nhật mặt hàng');
     }
 };
 
 const deleteItem = async (req, res) => {
     try {
+        if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'ID mặt hàng không hợp lệ' });
         const tenantFilter = buildTenantFilter(req);
         const item = await ItemMaster.findOneAndDelete({ _id: req.params.id, ...tenantFilter });
         if (!item) return res.status(404).json({ message: 'Không tìm thấy mặt hàng' });
         res.json({ message: 'Xóa mặt hàng thành công' });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ message: 'Lỗi server' });
+        return sendControllerError(res, err, 'Không thể xóa mặt hàng');
     }
 };
 
@@ -85,20 +103,44 @@ const deleteItem = async (req, res) => {
 // ==============================
 const createProcurementRequest = async (req, res) => {
     try {
-        const { items, ...rest } = req.body;
-        // Tính tổng ước tính
+        const { items, title, department, urgency, reason, note } = req.body || {};
+        if (!Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ message: 'Đề xuất mua sắm phải có ít nhất một hạng mục' });
+        }
         let totalEstimatedCost = 0;
-        const processedItems = items.map(item => {
-            const total = (item.estimatedPrice || 0) * (item.quantity || 0);
+        const processedItems = items.map((item, idx) => {
+            const qty = Number(item?.quantity);
+            const estPrice = Number(item?.estimatedPrice ?? 0);
+            const itemName = String(item?.itemName || '').trim();
+            if (!itemName || !Number.isFinite(qty) || qty <= 0 || !Number.isFinite(estPrice) || estPrice < 0) {
+                const invalidErr = new Error(`Hạng mục thứ ${idx + 1} cần có tên, số lượng > 0 và đơn giá dự kiến không âm`);
+                invalidErr.statusCode = 422;
+                throw invalidErr;
+            }
+            const cleanItemId = item?.itemId && isValidObjectId(item.itemId) ? item.itemId : undefined;
+            const total = estPrice * qty;
             totalEstimatedCost += total;
-            return { ...item, totalEstimated: total };
+            return {
+                ...(cleanItemId ? { itemId: cleanItemId } : {}),
+                itemName,
+                unit: String(item?.unit || 'cái').trim(),
+                quantity: qty,
+                estimatedPrice: estPrice,
+                totalEstimated: total,
+                note: String(item?.note || '').trim().slice(0, 300)
+            };
         });
 
         const tenantId = req.tenantId || req.user?.tenantId;
         const requesterName = req.user.profile?.fullName || req.user.username || 'Quản trị viên';
         const request = new ProcurementRequest({
             ...(tenantId ? { tenantId } : {}),
-            ...rest,
+            ...(title ? { title: String(title).trim().slice(0, 200) } : {}),
+            ...(department ? { department: String(department).trim().slice(0, 120) } : {}),
+            ...(urgency ? { urgency } : {}),
+            ...(reason ? { reason: String(reason).trim().slice(0, 1000) } : {}),
+            ...(note ? { note: String(note).trim().slice(0, 1000) } : {}),
+            status: 'pending',
             items: processedItems,
             totalEstimatedCost,
             requesterId: req.user._id,
@@ -108,7 +150,7 @@ const createProcurementRequest = async (req, res) => {
         res.status(201).json({ message: 'Tạo đề xuất mua sắm thành công', data: request });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ message: 'Không thể tạo đề xuất mua sắm lúc này' });
+        return sendControllerError(res, err, 'Không thể tạo đề xuất mua sắm lúc này');
     }
 };
 
@@ -132,7 +174,8 @@ const getProcurementRequests = async (req, res) => {
 const approveProcurementRequest = async (req, res) => {
     try {
         const { id } = req.params;
-        const { level, status, rejectionReason } = req.body; // level: 1 hoặc 2
+        if (!isValidObjectId(id)) return res.status(400).json({ message: 'ID đề xuất mua sắm không hợp lệ' });
+        const { level, status, rejectionReason } = req.body || {}; // level: 1 hoặc 2
 
         const tenantFilter = buildTenantFilter(req);
         const tenantId = req.tenantId || req.user?.tenantId;
@@ -208,7 +251,7 @@ const createPurchaseOrder = async (req, res) => {
         if (request.status !== 'approved_l2') {
             return res.status(409).json({ message: request.status === 'purchased' ? 'Đề xuất này đã có đơn đặt hàng' : 'Đề xuất chưa được phê duyệt để đặt hàng' });
         }
-        if (await PurchaseOrder.exists({ requestId, ...tenantFilter })) return res.status(409).json({ message: 'Đề xuất này đã có đơn đặt hàng' });
+        if (await PurchaseOrder.exists({ requestId, status: { $ne: 'cancelled' }, ...tenantFilter })) return res.status(409).json({ message: 'Đề xuất này đã có đơn đặt hàng' });
 
         // Kiểm tra supplier
         let supplier = null;
@@ -293,17 +336,32 @@ const getPurchaseOrders = async (req, res) => {
 const updatePurchaseOrderStatus = async (req, res) => {
     try {
         const { id } = req.params;
-        const { status } = req.body;
+        if (!isValidObjectId(id)) return res.status(400).json({ message: 'Mã đơn hàng không hợp lệ' });
+        const { status } = req.body || {};
         if (!['delivered', 'cancelled'].includes(status)) return res.status(400).json({ message: 'Chỉ có thể xác nhận đã giao hoặc hủy đơn' });
         const tenantFilter = buildTenantFilter(req);
         const current = await PurchaseOrder.findOne({ _id: id, ...tenantFilter });
         if (!current) return res.status(404).json({ message: 'Không tìm thấy đơn hàng' });
         if (current.status !== 'ordered') return res.status(409).json({ message: 'Chỉ đơn đang đặt mới có thể xác nhận giao hoặc hủy' });
-        const order = await PurchaseOrder.findOneAndUpdate({ _id: id, ...tenantFilter }, { status }, { new: true });
+        if (status === 'cancelled' && Number(current.paidAmount || 0) > 0) {
+            return res.status(409).json({ message: 'Đơn hàng đã phát sinh thanh toán nên không thể hủy' });
+        }
+        const order = await runSafeTransaction(async (session) => {
+            const sessionOpt = session ? { session } : {};
+            const updatedOrder = await PurchaseOrder.findOneAndUpdate({ _id: id, ...tenantFilter }, { status }, { new: true, ...sessionOpt });
+            if (status === 'cancelled' && current.requestId) {
+                await ProcurementRequest.updateOne(
+                    { _id: current.requestId, status: 'purchased', ...tenantFilter },
+                    { $set: { status: 'approved_l2' } },
+                    sessionOpt
+                );
+            }
+            return updatedOrder;
+        });
         res.json({ message: 'Cập nhật đơn hàng thành công', data: order });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ message: 'Lỗi server' });
+        return sendControllerError(res, err, 'Không thể cập nhật trạng thái đơn hàng');
     }
 };
 
@@ -343,13 +401,32 @@ const getProcurementSuppliers = async (req, res) => {
 // ==============================
 const createAsset = async (req, res) => {
     try {
+        const tenantFilter = buildTenantFilter(req);
         const tenantId = req.tenantId || req.user?.tenantId;
-        const asset = new Asset({ ...req.body, ...(tenantId ? { tenantId } : {}) });
+        const allowed = pickAllowed(req.body, ASSET_EDITABLE_FIELDS);
+        if (allowed.purchaseValue != null && (!Number.isFinite(Number(allowed.purchaseValue)) || Number(allowed.purchaseValue) < 0)) {
+            return res.status(422).json({ message: 'Nguyên giá mua sắm phải là số không âm' });
+        }
+        if (allowed.assignedTo) {
+            if (!isValidObjectId(allowed.assignedTo) || !(await User.exists({ _id: allowed.assignedTo, ...tenantFilter }))) {
+                return res.status(422).json({ message: 'Người được giao quản lý tài sản không hợp lệ' });
+            }
+        } else {
+            delete allowed.assignedTo;
+        }
+        if (allowed.classroomId) {
+            if (!isValidObjectId(allowed.classroomId) || !(await Classroom.exists({ _id: allowed.classroomId, ...tenantFilter }))) {
+                return res.status(422).json({ message: 'Lớp học sử dụng tài sản không hợp lệ' });
+            }
+        } else {
+            delete allowed.classroomId;
+        }
+        const asset = new Asset({ ...allowed, ...(tenantId ? { tenantId } : {}) });
         await asset.save();
         res.status(201).json({ message: 'Tạo tài sản thành công', data: asset });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ message: 'Lỗi server' });
+        return sendControllerError(res, err, 'Không thể tạo tài sản');
     }
 };
 
@@ -358,40 +435,59 @@ const getAssets = async (req, res) => {
         if (!['admin', 'principal'].includes(req.user.role)) return res.status(403).json({ message: 'Bạn không có quyền xem danh mục tài sản toàn trường' });
         const { status, category, assignedTo } = req.query;
         const filter = {};
-        if (status) filter.status = status;
-        if (category) filter.category = category;
-        if (assignedTo) filter.assignedTo = assignedTo;
+        if (status && typeof status === 'string') filter.status = status;
+        if (category && typeof category === 'string') filter.category = category;
+        if (assignedTo) {
+            if (!isValidObjectId(assignedTo)) return res.status(400).json({ message: 'ID người quản lý tài sản không hợp lệ' });
+            filter.assignedTo = assignedTo;
+        }
         const tenantFilter = buildTenantFilter(req);
         const assets = await Asset.find({ ...filter, ...tenantFilter }).sort({ createdAt: -1 });
         res.json({ message: 'Lấy danh sách tài sản thành công', data: assets });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ message: 'Lỗi server' });
+        return sendControllerError(res, err, 'Không thể tải danh sách tài sản');
     }
 };
 
 const updateAsset = async (req, res) => {
     try {
         const { id } = req.params;
+        if (!isValidObjectId(id)) return res.status(400).json({ message: 'ID tài sản không hợp lệ' });
         const tenantFilter = buildTenantFilter(req);
-        const asset = await Asset.findOneAndUpdate({ _id: id, ...tenantFilter }, req.body, { new: true });
+        const allowed = pickAllowed(req.body, ASSET_EDITABLE_FIELDS);
+        if (allowed.purchaseValue != null && (!Number.isFinite(Number(allowed.purchaseValue)) || Number(allowed.purchaseValue) < 0)) {
+            return res.status(422).json({ message: 'Nguyên giá tài sản phải là số không âm' });
+        }
+        if (allowed.assignedTo) {
+            if (!isValidObjectId(allowed.assignedTo) || !(await User.exists({ _id: allowed.assignedTo, ...tenantFilter }))) {
+                return res.status(422).json({ message: 'Người quản lý tài sản không hợp lệ' });
+            }
+        }
+        if (allowed.classroomId) {
+            if (!isValidObjectId(allowed.classroomId) || !(await Classroom.exists({ _id: allowed.classroomId, ...tenantFilter }))) {
+                return res.status(422).json({ message: 'Lớp học sử dụng tài sản không hợp lệ' });
+            }
+        }
+        const asset = await Asset.findOneAndUpdate({ _id: id, ...tenantFilter }, { $set: allowed }, { new: true, runValidators: true });
         if (!asset) return res.status(404).json({ message: 'Không tìm thấy tài sản' });
         res.json({ message: 'Cập nhật tài sản thành công', data: asset });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ message: 'Lỗi server' });
+        return sendControllerError(res, err, 'Không thể cập nhật tài sản');
     }
 };
 
 const deleteAsset = async (req, res) => {
     try {
+        if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'ID tài sản không hợp lệ' });
         const tenantFilter = buildTenantFilter(req);
         const asset = await Asset.findOneAndDelete({ _id: req.params.id, ...tenantFilter });
         if (!asset) return res.status(404).json({ message: 'Không tìm thấy tài sản' });
         res.json({ message: 'Xóa tài sản thành công' });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ message: 'Lỗi server' });
+        return sendControllerError(res, err, 'Không thể xóa tài sản');
     }
 };
 
@@ -399,24 +495,34 @@ const deleteAsset = async (req, res) => {
 const addMaintenance = async (req, res) => {
     try {
         const { id } = req.params;
+        if (!isValidObjectId(id)) return res.status(400).json({ message: 'ID tài sản không hợp lệ' });
+        const cost = Number(req.body?.cost ?? 0);
+        if (!Number.isFinite(cost) || cost < 0) {
+            return res.status(422).json({ message: 'Chi phí bảo trì phải là số không âm' });
+        }
+        const tenantFilter = buildTenantFilter(req);
+        const current = await Asset.findOne({ _id: id, ...tenantFilter }).select('status');
+        if (!current) return res.status(404).json({ message: 'Không tìm thấy tài sản' });
+        if (current.status === 'liquidated') {
+            return res.status(409).json({ message: 'Tài sản đã thanh lý, không thể ghi nhận bảo trì mới' });
+        }
         const maintenanceRecord = {
             ...req.body,
+            cost,
             recordedBy: req.user._id
         };
-        const tenantFilter = buildTenantFilter(req);
         const asset = await Asset.findOneAndUpdate(
             { _id: id, ...tenantFilter },
-            { 
+            {
                 $push: { maintenanceHistory: maintenanceRecord },
                 status: 'maintenance'
             },
-            { new: true }
+            { new: true, runValidators: true }
         );
-        if (!asset) return res.status(404).json({ message: 'Không tìm thấy tài sản' });
         res.json({ message: 'Thêm bảo trì thành công', data: asset });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ message: 'Lỗi server' });
+        return sendControllerError(res, err, 'Không thể ghi nhận bảo trì tài sản');
     }
 };
 
@@ -424,28 +530,37 @@ const addMaintenance = async (req, res) => {
 const liquidateAsset = async (req, res) => {
     try {
         const { id } = req.params;
-        const { liquidationDate, liquidationValue, reason, note } = req.body;
+        if (!isValidObjectId(id)) return res.status(400).json({ message: 'ID tài sản không hợp lệ' });
+        const { liquidationDate, liquidationValue = 0, reason, note } = req.body || {};
+        const numericValue = Number(liquidationValue ?? 0);
+        if (!Number.isFinite(numericValue) || numericValue < 0) {
+            return res.status(422).json({ message: 'Giá trị thanh lý phải là số không âm' });
+        }
         const tenantFilter = buildTenantFilter(req);
+        const current = await Asset.findOne({ _id: id, ...tenantFilter }).select('status');
+        if (!current) return res.status(404).json({ message: 'Không tìm thấy tài sản' });
+        if (current.status === 'liquidated') {
+            return res.status(409).json({ message: 'Tài sản này đã được thanh lý trước đó' });
+        }
         const asset = await Asset.findOneAndUpdate(
             { _id: id, ...tenantFilter },
             {
                 liquidation: {
-                    liquidationDate,
-                    liquidationValue,
-                    reason,
+                    liquidationDate: liquidationDate || new Date(),
+                    liquidationValue: numericValue,
+                    reason: String(reason || '').trim(),
                     approvedBy: req.user._id,
                     approvedByName: req.user.profile?.fullName || req.user.username || 'Quản trị viên',
-                    note
+                    note: String(note || '').trim()
                 },
                 status: 'liquidated'
             },
-            { new: true }
+            { new: true, runValidators: true }
         );
-        if (!asset) return res.status(404).json({ message: 'Không tìm thấy tài sản' });
         res.json({ message: 'Thanh lý tài sản thành công', data: asset });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ message: 'Lỗi server' });
+        return sendControllerError(res, err, 'Không thể thanh lý tài sản');
     }
 };
 

@@ -12,6 +12,7 @@ import {
   updatePayrollStatus,
   exportPayroll
 } from '../api/hr';
+import { getStoredUser } from '../utils/storage';
 
 const money = (value) => `${new Intl.NumberFormat('vi-VN').format(value || 0)} đ`;
 const currentMonth = new Date().getMonth() + 1;
@@ -59,7 +60,7 @@ export default function PayrollManagement() {
   const [adjustmentForm, setAdjustmentForm] = useState({ bonus: 0, advancePayment: 0, otherDeduction: 0, insurance: 0, insuranceBasisNote: '', insuranceConfirmed: false, note: '' });
   const [exportingPayroll, setExportingPayroll] = useState(false);
 
-  const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+  const currentUser = getStoredUser();
   const role = currentUser.role || '';
   const canConfirm = ['admin', 'principal'].includes(role);
   const canReview = ['admin', 'accountant'].includes(role);
