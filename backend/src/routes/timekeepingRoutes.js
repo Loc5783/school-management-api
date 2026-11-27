@@ -67,6 +67,7 @@ router.get('/device-events', roleCheck(approvalRoles), getDeviceEvents);
 // Timekeeping Device & Person Mapping Management Endpoints
 router.get('/devices', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.listDevices);
 router.post('/devices', roleCheck(['admin']), deviceCtrl.createDevice);
+router.post('/devices/simulate-webhook', roleCheck(['admin', 'principal']), deviceCtrl.simulateWebhook);
 router.get('/devices-unmapped', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.getUnmappedEvents);
 router.get('/devices/:id', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.getDeviceById);
 router.patch('/devices/:id', roleCheck(['admin']), deviceCtrl.updateDevice);

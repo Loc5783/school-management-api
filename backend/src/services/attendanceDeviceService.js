@@ -127,7 +127,7 @@ const resolvePersonIdentity = async ({ tenantId, externalPersonId, deviceObjectI
 
   const matchedEmployee = await Employee.findOne({
     tenantId,
-    status: 'active',
+    status: { $in: ['active', 'on_leave'] },
     employeeCode: { $in: codeCandidates },
     userId: { $ne: null }
   }).select('userId').lean();
@@ -136,8 +136,8 @@ const resolvePersonIdentity = async ({ tenantId, externalPersonId, deviceObjectI
     return { mappingStatus: 'MAPPED', subjectType: 'EMPLOYEE', userId: matchedEmployee.userId, studentId: null };
   }
 
-  // Bước 3: Tự động dò theo Mã Học sinh (`Student.studentCode`, hỗ trợ số nguyên '1', '2'... và cả mã cũ)
-  const studentCodeCandidates = [...codeCandidates];
+  // Bước 3: Tự động dò theo Mã Học sinh (`Student.studentCode`, hỗ trợ số nguyên '1', '2'..., chữ hoa/thường và mã viết liền)
+  const studentCodeCandidates = [...new Set([...codeCandidates, cleanExternalId, cleanExternalId.toLowerCase()])];
   const dashedVariant = buildNormalizedStudentCodeVariant(cleanExternalId);
   if (dashedVariant && !studentCodeCandidates.includes(dashedVariant)) {
     studentCodeCandidates.push(dashedVariant);
@@ -151,6 +151,18 @@ const resolvePersonIdentity = async ({ tenantId, externalPersonId, deviceObjectI
 
   if (matchedStudent) {
     return { mappingStatus: 'MAPPED', subjectType: 'STUDENT', userId: null, studentId: matchedStudent._id };
+  }
+
+  // Bước 3b: Fallback dò theo tên đăng nhập (`username`) của nhân sự nội bộ đang hoạt động trong trường
+  const matchedStaffByUsername = await User.findOne({
+    tenantId,
+    status: 'active',
+    role: { $in: ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'] },
+    username: { $in: [cleanExternalId, cleanExternalId.toLowerCase()] }
+  }).select('_id').lean();
+
+  if (matchedStaffByUsername) {
+    return { mappingStatus: 'MAPPED', subjectType: 'EMPLOYEE', userId: matchedStaffByUsername._id, studentId: null };
   }
 
   // Bước 4: Chưa khớp -> Đưa vào hàng đợi UNMAPPED để Admin gán trên giao diện Web

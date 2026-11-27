@@ -18,6 +18,7 @@ const Tenant = require('../models/zone1_system/Tenant');
 const User = require('../models/zone1_system/User');
 const PlatformAdmin = require('../models/zone1_system/PlatformAdmin');
 const PlatformAuditLog = require('../models/zone1_system/PlatformAuditLog');
+const AuditLog = require('../models/zone1_system/AuditLog');
 const SystemSetting = require('../models/zone1_system/SystemSetting');
 const Classroom = require('../models/zone3_school/Classroom');
 const Student = require('../models/zone3_school/Student');
@@ -25,6 +26,9 @@ const StudentAttendance = require('../models/zone3_school/StudentAttendance');
 const ParentFeedback = require('../models/zone3_school/ParentFeedback');
 const Employee = require('../models/zone2_hr/Employee');
 const AttendanceRecord = require('../models/zone2_hr/AttendanceRecord');
+const AttendanceAuditLog = require('../models/zone2_hr/AttendanceAuditLog');
+const TimekeepingDevice = require('../models/zone2_hr/TimekeepingDevice');
+const TimekeepingWebhookLog = require('../models/zone2_hr/TimekeepingWebhookLog');
 const Payroll = require('../models/zone2_hr/Payroll');
 const TuitionFee = require('../models/zone4_finance/TuitionFee');
 const OperatingExpense = require('../models/zone4_finance/OperatingExpense');
@@ -417,7 +421,7 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
     return cachedDashboard;
   }
 
-  const { todayKey, startOfToday, endOfToday, thirtyDaysAgo, isWeekend } = getVietnamDateBounds();
+  const { todayKey, startOfToday, endOfToday, thirtyDaysAgo, sevenDaysAgo, isWeekend } = getVietnamDateBounds();
 
   const [
     settings,
@@ -427,14 +431,22 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
     studentStats,
     staffStats,
     userActivityStats,
+    roleDistRaw,
     schoolAdmins,
     todayStudentAtt,
     monthStudentAtt,
     todayStaffAtt,
     financeStats,
+    tuitionByPeriodRaw,
     expenseStats,
+    expenseByMonthRaw,
     payrollStats,
+    payrollByPeriodRaw,
     foodSampleStats,
+    menuStats,
+    deviceStats,
+    webhookLogStats,
+    schoolAuditStats,
     feedbackStats,
     superAdminCount
   ] = await Promise.all([
@@ -447,7 +459,7 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
         $group: {
           _id: '$tenantId',
           classCount: { $sum: 1 },
-          totalCapacity: { $sum: { $ifNull: ['$capacity', 30] } },
+          totalCapacity: { $sum: { $ifNull: ['$maxSize', { $ifNull: ['$capacity', 25] }] } },
           distinctCampuses: { $addToSet: { $ifNull: ['$campus', 'Cơ sở chính'] } }
         }
       }
@@ -491,7 +503,29 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
           totalAccounts: { $sum: 1 },
           activeAccounts: { $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] } },
           parentAccounts: { $sum: { $cond: [{ $eq: ['$role', 'parent'] }, 1, 0] } },
+          internalActiveAccounts: {
+            $sum: {
+              $cond: [
+                { $and: [{ $eq: ['$status', 'active'] }, { $ne: ['$role', 'parent'] }] },
+                1,
+                0
+              ]
+            }
+          },
+          logins7dCount: {
+            $sum: { $cond: [{ $gte: ['$lastLogin', sevenDaysAgo] }, 1, 0] }
+          },
           lastActivityAt: { $max: '$lastLogin' }
+        }
+      }
+    ]),
+    User.aggregate([
+      { $match: { tenantId: { $ne: null } } },
+      {
+        $group: {
+          _id: '$role',
+          total: { $sum: 1 },
+          active: { $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] } }
         }
       }
     ]),
@@ -568,19 +602,55 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
         }
       }
     ]),
+    TuitionFee.aggregate([
+      { $match: { tenantId: { $ne: null }, status: { $ne: 'cancelled' } } },
+      {
+        $group: {
+          _id: '$period',
+          billed: { $sum: { $ifNull: ['$totalAmount', 0] } },
+          collected: { $sum: { $ifNull: ['$paidAmount', 0] } },
+          invoiceCount: { $sum: 1 }
+        }
+      }
+    ]),
     OperatingExpense.aggregate([
       { $match: { tenantId: { $ne: null } } },
       { $group: { _id: '$tenantId', totalOperatingExpense: { $sum: { $ifNull: ['$amount', 0] } } } }
     ]),
+    OperatingExpense.aggregate([
+      { $match: { tenantId: { $ne: null } } },
+      {
+        $group: {
+          _id: {
+            $dateToString: {
+              format: '%Y-%m',
+              date: { $ifNull: ['$expenseDate', { $ifNull: ['$createdAt', startOfToday] }] },
+              timezone: '+07:00'
+            }
+          },
+          operatingExpense: { $sum: { $ifNull: ['$amount', 0] } }
+        }
+      }
+    ]),
     Payroll.aggregate([
       { $match: { tenantId: { $ne: null } } },
       { $group: { _id: '$tenantId', totalPayroll: { $sum: { $ifNull: ['$netSalary', 0] } } } }
+    ]),
+    Payroll.aggregate([
+      { $match: { tenantId: { $ne: null } } },
+      {
+        $group: {
+          _id: { year: '$year', month: '$month' },
+          payroll: { $sum: { $ifNull: ['$netSalary', 0] } }
+        }
+      }
     ]),
     FoodSample.aggregate([
       { $match: { tenantId: { $ne: null } } },
       {
         $group: {
           _id: '$tenantId',
+          totalSamples: { $sum: 1 },
           alertSampleCount: {
             $sum: { $cond: [{ $in: ['$status', ['sent_to_lab', 'investigating']] }, 1, 0] }
           },
@@ -595,6 +665,35 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
           }
         }
       }
+    ]),
+    Menu.aggregate([
+      { $match: { tenantId: { $ne: null } } },
+      { $group: { _id: '$tenantId', menuCount: { $sum: 1 } } }
+    ]),
+    TimekeepingDevice.aggregate([
+      { $match: { tenantId: { $ne: null } } },
+      {
+        $group: {
+          _id: '$tenantId',
+          devicesCount: { $sum: 1 },
+          onlineDevicesCount: { $sum: { $cond: [{ $eq: ['$status', 'ONLINE'] }, 1, 0] } }
+        }
+      }
+    ]),
+    TimekeepingWebhookLog.aggregate([
+      { $match: { tenantId: { $ne: null } } },
+      {
+        $group: {
+          _id: '$tenantId',
+          totalEvents: { $sum: 1 },
+          processedEvents: { $sum: { $cond: [{ $eq: ['$processingStatus', 'PROCESSED'] }, 1, 0] } },
+          lastWebhookAt: { $max: '$createdAt' }
+        }
+      }
+    ]),
+    AuditLog.aggregate([
+      { $match: { tenantId: { $ne: null }, occurredAt: { $gte: thirtyDaysAgo } } },
+      { $group: { _id: '$tenantId', auditCount30d: { $sum: 1 } } }
     ]),
     ParentFeedback.aggregate([
       { $match: { tenantId: { $ne: null }, status: { $in: ['pending', 'in_progress'] } } },
@@ -614,6 +713,10 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
   const expenseMap = new Map(expenseStats.map((x) => [String(x._id), x.totalOperatingExpense]));
   const payrollMap = new Map(payrollStats.map((x) => [String(x._id), x.totalPayroll]));
   const sampleMap = new Map(foodSampleStats.map((x) => [String(x._id), x]));
+  const menuMap = new Map(menuStats.map((x) => [String(x._id), x.menuCount]));
+  const deviceMap = new Map(deviceStats.map((x) => [String(x._id), x]));
+  const webhookMap = new Map(webhookLogStats.map((x) => [String(x._id), x]));
+  const schoolAuditMap = new Map(schoolAuditStats.map((x) => [String(x._id), x.auditCount30d]));
   const feedbackMap = new Map(feedbackStats.map((x) => [String(x._id), x.openFeedbackCount]));
 
   const adminsByTenant = new Map();
@@ -638,7 +741,14 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
     const cls = classMap.get(tid) || { classCount: 0, totalCapacity: 0, distinctCampuses: [] };
     const stu = studentMap.get(tid) || { enrolledCount: 0, strictlyEnrolledCount: 0, withdrawnCount: 0 };
     const stf = staffMap.get(tid) || { activeStaffCount: 0, resignedStaffCount: 0 };
-    const uAct = userActMap.get(tid) || { totalAccounts: 0, activeAccounts: 0, parentAccounts: 0, lastActivityAt: null };
+    const uAct = userActMap.get(tid) || {
+      totalAccounts: 0,
+      activeAccounts: 0,
+      parentAccounts: 0,
+      internalActiveAccounts: 0,
+      logins7dCount: 0,
+      lastActivityAt: null
+    };
     const attToday = todayAttMap.get(tid) || { totalRecorded: 0, presentCount: 0, absentCount: 0 };
     const att30d = monthAttMap.get(tid) || { totalRecords30d: 0, presentRecords30d: 0 };
     const staffToday = todayStaffMap.get(tid) || { staffPresentToday: 0 };
@@ -651,8 +761,24 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
     };
     const opExp = expenseMap.get(tid) || 0;
     const payExp = payrollMap.get(tid) || 0;
-    const smp = sampleMap.get(tid) || { alertSampleCount: 0, todaySampleCount: 0 };
+    const smp = sampleMap.get(tid) || { totalSamples: 0, alertSampleCount: 0, todaySampleCount: 0 };
+    const menuCount = menuMap.get(tid) || 0;
+    const devStat = deviceMap.get(tid) || { devicesCount: 0, onlineDevicesCount: 0 };
+    const whStat = webhookMap.get(tid) || { totalEvents: 0, processedEvents: 0, lastWebhookAt: null };
+    const auditCount30d = schoolAuditMap.get(tid) || 0;
     const openFeedbackCount = feedbackMap.get(tid) || 0;
+
+    // Điểm mức độ khai thác phần mềm thực tế của trường (thang 100%)
+    let usageScorePercent = 0;
+    if (cls.classCount > 0 && stu.enrolledCount > 0) usageScorePercent += 20;
+    if (uAct.internalActiveAccounts >= 2) usageScorePercent += 20;
+    else if (uAct.internalActiveAccounts === 1) usageScorePercent += 10;
+    if (att30d.totalRecords30d > 0) usageScorePercent += 25;
+    if (fin.invoiceCount > 0) usageScorePercent += 20;
+    if (menuCount > 0 || smp.totalSamples > 0 || whStat.totalEvents > 0 || devStat.devicesCount > 0) {
+      usageScorePercent += 15;
+    }
+    const usageTier = usageScorePercent >= 75 ? 'Sôi nổi' : (usageScorePercent >= 40 ? 'Đang triển khai' : 'Mới khởi tạo');
 
     const declaredCampuses = Array.isArray(t.campuses) && t.campuses.length > 0
       ? t.campuses.map((c) => c.name).filter(Boolean)
@@ -756,7 +882,9 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
       accountStats: {
         totalAccounts: uAct.totalAccounts,
         activeAccounts: uAct.activeAccounts,
+        internalActiveAccounts: uAct.internalActiveAccounts || 0,
         parentAccounts: uAct.parentAccounts,
+        logins7dCount: uAct.logins7dCount || 0,
         lastActivityAt: uAct.lastActivityAt
       },
       attendance: {
@@ -764,7 +892,8 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
         todayPresent: attToday.presentCount,
         todayAbsent: attToday.absentCount,
         todayPercent: attendanceTodayPercent,
-        rolling30dPercent: attendance30dPercent
+        rolling30dPercent: attendance30dPercent,
+        records30dCount: att30d.totalRecords30d || 0
       },
       finance: {
         totalBilled: fin.totalBilled,
@@ -775,12 +904,32 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
         unpaidInvoiceCount: fin.unpaidInvoiceCount,
         totalOperatingExpense: opExp,
         totalPayroll: payExp,
-        totalExpenditure: opExp + payExp
+        totalExpenditure: opExp + payExp,
+        netCashflow: fin.totalCollected - (opExp + payExp)
       },
       safety: {
         foodSampleAlerts: smp.alertSampleCount,
         todayFoodSamples: smp.todaySampleCount,
+        totalFoodSamples: smp.totalSamples || 0,
         openParentFeedback: openFeedbackCount
+      },
+      webhook: {
+        endpointPath: `/api/attendance/webhook/${t.code}`,
+        devicesCount: devStat.devicesCount,
+        onlineDevicesCount: devStat.onlineDevicesCount,
+        totalEvents: whStat.totalEvents,
+        processedEvents: whStat.processedEvents,
+        lastWebhookAt: whStat.lastWebhookAt || null
+      },
+      usage: {
+        usageScorePercent,
+        usageTier,
+        menusCount: menuCount,
+        foodSamplesCount: smp.totalSamples || 0,
+        auditLogs30d: auditCount30d,
+        logins7dCount: uAct.logins7dCount || 0,
+        studentQuotaPercent: quotas.maxStudents > 0 ? Math.min(100, Math.round((stu.enrolledCount / quotas.maxStudents) * 100)) : 0,
+        campusQuotaPercent: quotas.maxCampuses > 0 ? Math.min(100, Math.round((mergedCampusNames.length / quotas.maxCampuses) * 100)) : 0
       },
       primaryAdmin: admins[0] || null,
       adminAccounts: admins,
@@ -842,10 +991,110 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
   summary.overallCollectionRatePercent = summary.totalBilled > 0
     ? Math.min(100, Math.round((summary.totalCollected / summary.totalBilled) * 100))
     : 0;
+  summary.netCashflow = summary.totalCollected - summary.totalExpenditure;
   summary.alertCount = alerts.length;
+
+  // Tổng hợp chuỗi thời gian Kinh tế theo kỳ (tối đa 6 kỳ gần nhất) để vẽ biểu đồ trực quan
+  const normalizePeriodKey = (rawPeriod) => {
+    const s = String(rawPeriod || '').trim();
+    const m1 = /^(\d{4})[-/](\d{1,2})$/.exec(s);
+    if (m1) {
+      const mm = m1[2].padStart(2, '0');
+      return { sortKey: `${m1[1]}-${mm}`, label: `${mm}/${m1[1]}` };
+    }
+    const m2 = /^(\d{1,2})[-/](\d{4})$/.exec(s);
+    if (m2) {
+      const mm = m2[1].padStart(2, '0');
+      return { sortKey: `${m2[2]}-${mm}`, label: `${mm}/${m2[2]}` };
+    }
+    return null;
+  };
+
+  const periodBucketMap = new Map();
+  const ensureBucket = (sortKey, label) => {
+    if (!periodBucketMap.has(sortKey)) {
+      periodBucketMap.set(sortKey, {
+        period: sortKey,
+        label,
+        billed: 0,
+        collected: 0,
+        outstanding: 0,
+        operatingExpense: 0,
+        payroll: 0,
+        totalExpenditure: 0,
+        netBalance: 0,
+        invoiceCount: 0
+      });
+    }
+    return periodBucketMap.get(sortKey);
+  };
+
+  for (const row of tuitionByPeriodRaw) {
+    const norm = normalizePeriodKey(row._id);
+    if (!norm) continue;
+    const b = ensureBucket(norm.sortKey, norm.label);
+    b.billed += row.billed || 0;
+    b.collected += row.collected || 0;
+    b.invoiceCount += row.invoiceCount || 0;
+  }
+
+  for (const row of expenseByMonthRaw) {
+    const norm = normalizePeriodKey(row._id);
+    if (!norm) continue;
+    const b = ensureBucket(norm.sortKey, norm.label);
+    b.operatingExpense += row.operatingExpense || 0;
+  }
+
+  for (const row of payrollByPeriodRaw) {
+    if (!row._id?.year || !row._id?.month) continue;
+    const mm = String(row._id.month).padStart(2, '0');
+    const sortKey = `${row._id.year}-${mm}`;
+    const b = ensureBucket(sortKey, `${mm}/${row._id.year}`);
+    b.payroll += row.payroll || 0;
+  }
+
+  const economicTrend = [...periodBucketMap.values()]
+    .sort((a, b) => a.period.localeCompare(b.period))
+    .slice(-6)
+    .map((b) => {
+      const outstanding = Math.max(0, b.billed - b.collected);
+      const totalExpenditure = b.operatingExpense + b.payroll;
+      const collectionRatePercent = b.billed > 0 ? Math.min(100, Math.round((b.collected / b.billed) * 100)) : 0;
+      return {
+        ...b,
+        outstanding,
+        totalExpenditure,
+        netBalance: b.collected - totalExpenditure,
+        collectionRatePercent
+      };
+    });
+
+  // Phân bố tài khoản theo vai trò trên toàn chuỗi trường
+  const ROLE_CATALOG = [
+    { role: 'admin', label: 'Quản trị trường (School Admin)' },
+    { role: 'principal', label: 'Ban Giám đốc / Hiệu trưởng' },
+    { role: 'teacher', label: 'Giáo viên đứng lớp' },
+    { role: 'accountant', label: 'Kế toán học phí' },
+    { role: 'hr', label: 'Nhân sự & Tiền lương' },
+    { role: 'chef', label: 'Đầu bếp & Dinh dưỡng' },
+    { role: 'guard', label: 'Bảo vệ & An ninh cổng' },
+    { role: 'parent', label: 'Phụ huynh học sinh' }
+  ];
+  const roleRawMap = new Map(roleDistRaw.map((r) => [String(r._id), r]));
+  const roleDistribution = ROLE_CATALOG.map((rc) => {
+    const found = roleRawMap.get(rc.role) || { total: 0, active: 0 };
+    return {
+      role: rc.role,
+      label: rc.label,
+      total: found.total || 0,
+      active: found.active || 0
+    };
+  });
 
   const dashboardPayload = {
     summary,
+    economicTrend,
+    roleDistribution,
     systemHealth: {
       ...systemHealth,
       antiBotShieldEnabled: settings.securityPolicy.antiBotShieldEnabled,
@@ -902,7 +1151,7 @@ const getSchoolDetailedReport = async (tenantId) => {
     recentPlatformLogs
   ] = await Promise.all([
     Classroom.find({ tenantId: tid, status: 'active' })
-      .select('name ageGroup schoolYear capacity campus homeroomTeacherId')
+      .select('name ageGroup schoolYear maxSize capacity campus homeroomTeacherId')
       .populate('homeroomTeacherId', 'username profile.fullName')
       .sort({ campus: 1, name: 1 })
       .lean(),
@@ -1044,7 +1293,7 @@ const getSchoolDetailedReport = async (tenantId) => {
   const classStudentMap = new Map(studentsByClass.map((s) => [String(s._id), s]));
   const classroomReport = classrooms.map((cls) => {
     const stat = classStudentMap.get(String(cls._id)) || { studentCount: 0, allergyCount: 0 };
-    const cap = cls.capacity || 30;
+    const cap = cls.maxSize || cls.capacity || 25;
     return {
       _id: cls._id,
       name: cls.name,
@@ -1239,6 +1488,189 @@ const listPlatformAuditLogs = async (query = {}) => {
   };
 };
 
+/**
+ * Truy xuất Nhật ký Hoạt động của Từng Trường cụ thể (`school_audit`, `webhook`, `attendance_audit`)
+ * hoặc toàn bộ các trường dành cho SuperAdmin kiểm tra, hỗ trợ kỹ thuật & đối soát.
+ *
+ * @param {{ schoolId?: string, logType?: string, search?: string, action?: string, page?: number, limit?: number }} query
+ * @returns {Promise<object>}
+ */
+const listSchoolOperationalLogs = async (query = {}) => {
+  const logType = String(query.logType || 'school_audit').trim();
+  if (logType === 'platform') {
+    return listPlatformAuditLogs(query);
+  }
+
+  const page = Math.max(1, Math.min(500, parseInt(query.page, 10) || 1));
+  const limit = Math.max(5, Math.min(100, parseInt(query.limit, 10) || 25));
+  const skip = (page - 1) * limit;
+
+  const tenants = await Tenant.find({}).select('code name').lean();
+  const tenantMap = new Map(tenants.map((t) => [String(t._id), { code: t.code, name: t.name }]));
+
+  let tenantFilter = { $ne: null };
+  if (query.schoolId && String(query.schoolId).trim() && String(query.schoolId).trim() !== 'all') {
+    const rawSchoolId = String(query.schoolId).trim();
+    if (!mongoose.Types.ObjectId.isValid(rawSchoolId)) {
+      throw Object.assign(new Error('Mã định danh trường học không hợp lệ'), { statusCode: 400 });
+    }
+    tenantFilter = new mongoose.Types.ObjectId(rawSchoolId);
+  }
+
+  const escapedSearch = query.search && String(query.search).trim()
+    ? String(query.search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    : '';
+
+  // Nhánh 1: Nhật ký gói tin Webhook máy chấm công & điểm danh học sinh của trường (`TimekeepingWebhookLog`)
+  if (logType === 'webhook') {
+    const filter = { tenantId: tenantFilter };
+    if (query.action && String(query.action).trim()) {
+      filter.processingStatus = String(query.action).trim();
+    }
+    if (escapedSearch) {
+      filter.$or = [
+        { schoolCode: { $regex: escapedSearch, $options: 'i' } },
+        { deviceCode: { $regex: escapedSearch, $options: 'i' } },
+        { processingNote: { $regex: escapedSearch, $options: 'i' } },
+        { 'hikvisionSummary.employeeNoString': { $regex: escapedSearch, $options: 'i' } },
+        { 'hikvisionSummary.personName': { $regex: escapedSearch, $options: 'i' } }
+      ];
+    }
+
+    const [rawItems, total] = await Promise.all([
+      TimekeepingWebhookLog.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .select('-rawBodyPreview -headers')
+        .lean(),
+      TimekeepingWebhookLog.countDocuments(filter)
+    ]);
+
+    const items = rawItems.map((item) => {
+      const tInfo = item.tenantId ? tenantMap.get(String(item.tenantId)) : null;
+      return {
+        _id: item._id,
+        logType: 'webhook',
+        occurredAt: item.createdAt,
+        schoolId: item.tenantId || null,
+        schoolCode: item.schoolCode || tInfo?.code || 'N/A',
+        schoolName: tInfo?.name || '',
+        actorUsername: item.deviceCode || 'HIKVISION',
+        actorRole: 'device_webhook',
+        action: item.processingStatus || 'RECEIVED_RAW',
+        personCode: item.hikvisionSummary?.employeeNoString || '',
+        personName: item.hikvisionSummary?.personName || '',
+        verifyMode: item.hikvisionSummary?.currentVerifyMode || '',
+        url: item.url || '',
+        summary: item.processingNote || 'Gói tin từ thiết bị chấm công'
+      };
+    });
+
+    return {
+      items,
+      pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) }
+    };
+  }
+
+  // Nhánh 2: Nhật ký chấm công & điều chỉnh ca làm việc của trường (`AttendanceAuditLog`)
+  if (logType === 'attendance_audit') {
+    const filter = { tenantId: tenantFilter };
+    if (query.action && String(query.action).trim()) {
+      filter.action = String(query.action).trim();
+    }
+    if (escapedSearch) {
+      filter.$or = [
+        { actorName: { $regex: escapedSearch, $options: 'i' } },
+        { action: { $regex: escapedSearch, $options: 'i' } },
+        { entity: { $regex: escapedSearch, $options: 'i' } },
+        { reason: { $regex: escapedSearch, $options: 'i' } }
+      ];
+    }
+
+    const [rawItems, total] = await Promise.all([
+      AttendanceAuditLog.find(filter)
+        .sort({ timestamp: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      AttendanceAuditLog.countDocuments(filter)
+    ]);
+
+    const items = rawItems.map((item) => {
+      const tInfo = item.tenantId ? tenantMap.get(String(item.tenantId)) : null;
+      return {
+        _id: item._id,
+        logType: 'attendance_audit',
+        occurredAt: item.timestamp || item.createdAt,
+        schoolId: item.tenantId || null,
+        schoolCode: tInfo?.code || 'N/A',
+        schoolName: tInfo?.name || '',
+        actorUsername: item.actorName || 'Hệ thống tự động',
+        actorRole: item.actorRole || 'system',
+        action: item.action,
+        targetType: item.entity,
+        summary: item.reason || `Đối tượng: ${item.entity}`
+      };
+    });
+
+    return {
+      items,
+      pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) }
+    };
+  }
+
+  // Nhánh 3 (Mặc định): Nhật ký Nghiệp vụ & Phân quyền nội bộ của Từng Trường (`AuditLog`)
+  const filter = { tenantId: tenantFilter };
+  if (query.action && String(query.action).trim()) {
+    filter.action = String(query.action).trim();
+  }
+  if (escapedSearch) {
+    filter.$or = [
+      { actorUsername: { $regex: escapedSearch, $options: 'i' } },
+      { actorName: { $regex: escapedSearch, $options: 'i' } },
+      { action: { $regex: escapedSearch, $options: 'i' } },
+      { targetType: { $regex: escapedSearch, $options: 'i' } },
+      { reason: { $regex: escapedSearch, $options: 'i' } }
+    ];
+  }
+
+  const [rawItems, total] = await Promise.all([
+    AuditLog.find(filter)
+      .sort({ occurredAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    AuditLog.countDocuments(filter)
+  ]);
+
+  const items = rawItems.map((item) => {
+    const tInfo = item.tenantId ? tenantMap.get(String(item.tenantId)) : null;
+    const targetHint = item.after?.username
+      ? `@${item.after.username}${item.after.role ? ` (${item.after.role})` : ''}`
+      : (item.after?.fullName || item.after?.studentCode || item.reason || '');
+    return {
+      _id: item._id,
+      logType: 'school_audit',
+      occurredAt: item.occurredAt || item.createdAt,
+      schoolId: item.tenantId || null,
+      schoolCode: tInfo?.code || 'N/A',
+      schoolName: tInfo?.name || '',
+      actorUsername: item.actorUsername || item.actorName || 'admin',
+      actorName: item.actorName || '',
+      actorRole: item.actorRole || '',
+      action: item.action,
+      targetType: item.targetType,
+      summary: [targetHint, item.reason].filter(Boolean).join(' · ') || `Bảng: ${item.targetType}`
+    };
+  });
+
+  return {
+    items,
+    pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) }
+  };
+};
+
 module.exports = {
   ALL_MODULE_DEFINITIONS,
   ALL_ENABLED_MODULES,
@@ -1252,6 +1684,7 @@ module.exports = {
   measureSystemHealth,
   getPlatformDashboardAndSchools,
   getSchoolDetailedReport,
-  listPlatformAuditLogs
+  listPlatformAuditLogs,
+  listSchoolOperationalLogs
 };
 

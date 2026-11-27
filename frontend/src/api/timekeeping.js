@@ -30,3 +30,5 @@ export const upsertPersonMapping = (deviceId, data) => api.post(`/timekeeping/de
 export const deletePersonMapping = (deviceId, mappingId) => api.delete(`/timekeeping/devices/${deviceId}/person-mappings/${mappingId}`);
 export const getTimekeepingDeviceSyncLogs = (deviceId) => api.get(`/timekeeping/devices/${deviceId}/sync-logs`);
 export const getUnmappedDeviceEvents = (deviceCode) => api.get('/timekeeping/devices-unmapped', { params: deviceCode ? { deviceCode } : {} });
+export const simulateSchoolTimekeepingWebhook = (data) => api.post('/timekeeping/devices/simulate-webhook', data);
+export const getSchoolWebhookLogs = (params = {}) => api.get('/attendance/webhook/logs', { params });

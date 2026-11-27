@@ -7,6 +7,8 @@
  * xảy ra lỗi nội bộ trong khối `catch`, nhằm tránh việc máy Hikvision đẩy lại sự kiện liên tục gây tràn bộ nhớ thiết bị.
  */
 
+const mongoose = require('mongoose');
+const Tenant = require('../models/zone1_system/Tenant');
 const {
   captureIncomingWebhook,
   listWebhookLogs,
@@ -14,18 +16,40 @@ const {
 } = require('../services/timekeepingWebhookService');
 
 /**
- * Kiểm tra nhanh trạng thái hoạt động của endpoint Webhook trên trình duyệt hoặc máy chấm công (`GET /api/attendance/webhook`).
+ * Kiểm tra nhanh trạng thái hoạt động của endpoint Webhook trên trình duyệt hoặc máy chấm công
+ * (`GET /api/attendance/webhook` & `GET /api/attendance/webhook/:schoolCode`).
  *
  * @param {import('express').Request} req
  * @param {import('express').Response} res
  */
-const pingWebhook = (req, res) => {
+const pingWebhook = async (req, res) => {
+  const rawCode = req.params?.schoolCode ? String(req.params.schoolCode).trim().toUpperCase() : null;
+  let schoolActive = null;
+  let schoolName = null;
+
+  if (rawCode && mongoose.connection.readyState === 1) {
+    try {
+      const tenant = await Tenant.findOne({ code: rawCode }).select('name status').lean();
+      schoolActive = Boolean(tenant && tenant.status === 'active');
+      schoolName = tenant?.name || null;
+    } catch {
+      schoolActive = null;
+    }
+  }
+
   return res.status(200).json({
     success: true,
     status: 'OK',
-    message: 'Endpoint /api/attendance/webhook đang hoạt động sẵn sàng nhận dữ liệu Hikvision',
+    message: rawCode
+      ? (schoolActive
+          ? `Webhook đồng bộ chấm công & điểm danh của trường ${rawCode} (${schoolName}) đang sẵn sàng hoạt động`
+          : `Endpoint /api/attendance/webhook/${rawCode} đã kết nối (lưu ý kiểm tra mã trường ${rawCode} đang hoạt động)`)
+      : 'Endpoint /api/attendance/webhook đang hoạt động sẵn sàng nhận dữ liệu Hikvision',
     serverTime: new Date().toISOString(),
-    schoolCode: req.params?.schoolCode ? String(req.params.schoolCode).toUpperCase() : null
+    schoolCode: rawCode,
+    schoolActive,
+    schoolName,
+    endpointPath: rawCode ? `/api/attendance/webhook/${rawCode}` : '/api/attendance/webhook'
   });
 };
 

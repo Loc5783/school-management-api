@@ -20,15 +20,19 @@ const {
 const router = express.Router();
 const rawWebhookBody = express.raw({ type: '*/*', limit: '10mb' });
 
+router.get('/', deviceIngestLimiter, webhookTestAuth, pingWebhook);
 router.get('/ping', deviceIngestLimiter, webhookTestAuth, pingWebhook);
 router.get('/hikvision', deviceIngestLimiter, webhookTestAuth, pingWebhook);
 router.get('/hikvision/:schoolCode', deviceIngestLimiter, webhookTestAuth, pingWebhook);
 router.get('/logs', schoolAuthMiddleware, roleCheck(['admin', 'principal', 'hr']), getWebhookLogs);
 router.get('/logs/:id', schoolAuthMiddleware, roleCheck(['admin', 'principal', 'hr']), getWebhookLogById);
+router.get('/:schoolCode', deviceIngestLimiter, webhookTestAuth, pingWebhook);
 
+router.post('/', deviceIngestLimiter, webhookTestAuth, rawWebhookBody, handleWebhook);
 router.post('/hikvision', deviceIngestLimiter, webhookTestAuth, rawWebhookBody, handleWebhook);
 router.post('/hikvision/:schoolCode', deviceIngestLimiter, webhookTestAuth, rawWebhookBody, handleWebhook);
 router.post('/token/:token/hikvision', deviceIngestLimiter, webhookTestAuth, rawWebhookBody, handleWebhook);
 router.post('/token/:token/hikvision/:schoolCode', deviceIngestLimiter, webhookTestAuth, rawWebhookBody, handleWebhook);
+router.post('/:schoolCode', deviceIngestLimiter, webhookTestAuth, rawWebhookBody, handleWebhook);
 
 module.exports = router;

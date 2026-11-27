@@ -26,8 +26,10 @@ const {
   invalidatePlatformDashboardCache,
   getPlatformDashboardAndSchools,
   getSchoolDetailedReport,
-  listPlatformAuditLogs
+  listPlatformAuditLogs,
+  listSchoolOperationalLogs
 } = require('../../services/superAdminControlService');
+const { simulateSchoolWebhookEvent } = require('../../services/timekeepingWebhookService');
 const { generatePlatformAdminToken, generateSchoolUserToken } = require('../utils/saasJwt');
 const { runSafeTransaction } = require('../../utils/safeTransaction');
 const { isHoneypotTriggered } = require('../../middlewares/botScannerShield');
@@ -348,6 +350,75 @@ const listPlatformAuditLogsHandler = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Không thể tải nhật ký kiểm toán hệ thống'
+    });
+  }
+};
+
+/**
+ * Xem Nhật ký Hoạt động chi tiết của Từng Trường (`AuditLog` nội bộ trường, `TimekeepingWebhookLog` hoặc `AttendanceAuditLog`).
+ */
+const listSchoolOperationalLogsHandler = async (req, res) => {
+  try {
+    const result = await listSchoolOperationalLogs(req.query || {});
+    return res.json({
+      success: true,
+      data: result.items,
+      pagination: result.pagination
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.message || 'Không thể tải nhật ký hoạt động của trường'
+    });
+  }
+};
+
+/**
+ * Hỗ trợ SuperAdmin gửi gói tin kiểm tra luồng Webhook chấm công / điểm danh theo mã trường (`/api/attendance/webhook/:schoolCode`).
+ */
+const testSchoolWebhookBySuperAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: 'ID trường học không hợp lệ' });
+    }
+    const tenant = await Tenant.findById(id).select('code name status').lean();
+    if (!tenant) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy trường học' });
+    }
+    if (tenant.status !== 'active') {
+      return res.status(422).json({ success: false, message: 'Trường đang tạm ngưng, không thể gửi sự kiện chấm công' });
+    }
+
+    const { externalPersonId, personName, verifyMode, occurredAt } = req.body || {};
+    const out = await simulateSchoolWebhookEvent({
+      schoolCode: tenant.code,
+      externalPersonId,
+      personName,
+      verifyMode,
+      occurredAt,
+      deviceCode: 'SUPERADMIN-WEBHOOK-TEST',
+      sourceIp: req.ip || '127.0.0.1'
+    });
+
+    invalidatePlatformDashboardCache();
+
+    return res.status(200).json({
+      success: true,
+      message: out.record?.processingNote || `Đã kiểm tra Webhook cho trường ${tenant.code}`,
+      data: {
+        schoolCode: tenant.code,
+        endpointPath: `/api/attendance/webhook/${tenant.code}`,
+        logId: out.savedId,
+        processingStatus: out.record?.processingStatus,
+        processingNote: out.record?.processingNote,
+        attendanceResult: out.attendanceResult
+      }
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.message || 'Không thể kiểm tra Webhook chấm công của trường'
     });
   }
 };
@@ -838,6 +909,8 @@ module.exports = {
   getSystemSettingsHandler,
   updateSystemSettingsHandler,
   listPlatformAuditLogsHandler,
+  listSchoolOperationalLogsHandler,
+  testSchoolWebhookBySuperAdmin,
   createSchoolWithAdmin,
   updateSchoolAndAdmin,
   enterSchoolWorkspace

@@ -42,6 +42,7 @@ const rawWebhookBody = express.raw({ type: '*/*', limit: '10mb' });
 router.get('/webhook', deviceIngestLimiter, webhookTestAuth, pingWebhook);
 router.get('/webhook/logs', schoolAuthMiddleware, roleCheck(['admin', 'principal', 'hr']), getWebhookLogs);
 router.get('/webhook/logs/:id', schoolAuthMiddleware, roleCheck(['admin', 'principal', 'hr']), getWebhookLogById);
+router.get('/webhook/:schoolCode', deviceIngestLimiter, webhookTestAuth, pingWebhook);
 router.post('/webhook', deviceIngestLimiter, webhookTestAuth, rawWebhookBody, handleWebhook);
 router.post('/webhook/:schoolCode', deviceIngestLimiter, webhookTestAuth, rawWebhookBody, handleWebhook);
 

@@ -258,7 +258,15 @@ const extractHikvisionSummary = (parsedPayload, filesMeta = [], fallbackIp = '')
   const cleanMajor = Number.isNaN(majorEventType) ? null : majorEventType;
   const cleanSub = Number.isNaN(subEventType) ? null : subEventType;
 
-  const rawEmployeeNo = eventInfo.employeeNoString ?? eventInfo.EmployeeNo ?? eventInfo.employeeNo ?? null;
+  const rawEmployeeNo =
+    eventInfo.employeeNoString
+    ?? eventInfo.EmployeeNo
+    ?? eventInfo.employeeNo
+    ?? eventInfo.personCode
+    ?? eventInfo.studentCode
+    ?? eventInfo.employeeCode
+    ?? eventInfo.externalPersonId
+    ?? null;
   const employeeNoString = rawEmployeeNo !== null && String(rawEmployeeNo).trim() !== ''
     ? String(rawEmployeeNo).trim()
     : null;
@@ -272,13 +280,14 @@ const extractHikvisionSummary = (parsedPayload, filesMeta = [], fallbackIp = '')
     (cleanSub === null || VALID_AUTH_PASS_SUB_EVENTS.has(cleanSub))
   );
 
-  const verifyMethod = resolveHikvisionVerifyMethod(cleanSub, eventInfo.currentVerifyMode);
+  const rawVerifyInput = eventInfo.currentVerifyMode || root.verifyMode || root.method || null;
+  const verifyMethod = resolveHikvisionVerifyMethod(cleanSub, rawVerifyInput);
   const shortSerialNumber = root.shortSerialNumber || eventInfo.shortSerialNumber || null;
 
   return {
     eventType,
     eventState: root.eventState || null,
-    dateTime: root.dateTime || eventInfo.time || null,
+    dateTime: root.dateTime || eventInfo.time || root.occurredAt || root.timestamp || null,
     deviceIp: root.ipAddress || fallbackIp || null,
     macAddress: root.macAddress || null,
     shortSerialNumber,
@@ -289,11 +298,11 @@ const extractHikvisionSummary = (parsedPayload, filesMeta = [], fallbackIp = '')
       ? (HIKVISION_SUB_EVENT_LABELS[cleanSub] || `Sự kiện kiểm soát mã phụ #${cleanSub}`)
       : null,
     employeeNoString,
-    personName: eventInfo.name || null,
+    personName: eventInfo.name || eventInfo.personName || eventInfo.fullName || null,
     cardNo: eventInfo.cardNo ? String(eventInfo.cardNo).trim() : null,
     userType: eventInfo.userType || null,
     attendanceStatus: eventInfo.attendanceStatus || null,
-    currentVerifyMode: verifyMethod !== 'UNKNOWN' ? verifyMethod : (eventInfo.currentVerifyMode || null),
+    currentVerifyMode: verifyMethod !== 'UNKNOWN' ? verifyMethod : (rawVerifyInput || null),
     serialNo: eventInfo.serialNo !== undefined && !Number.isNaN(Number(eventInfo.serialNo))
       ? Number(eventInfo.serialNo)
       : null,
@@ -612,12 +621,86 @@ const getWebhookLogDetail = async (id, tenantId = null) => {
   return TimekeepingWebhookLog.findOne(filter).lean();
 };
 
+/**
+ * Giả lập gửi 1 gói tin chuẩn Hikvision vào đúng luồng `captureIncomingWebhook` với đuôi `/:schoolCode`
+ * để Admin trường hoặc SuperAdmin kiểm tra thông suốt luồng đồng bộ Điểm danh Học sinh & Chấm công Nhân viên.
+ *
+ * @param {object} params
+ * @param {string} params.schoolCode
+ * @param {string} params.externalPersonId - Mã học sinh (`studentCode`), mã nhân viên (`employeeCode`) hoặc ID ánh xạ trên máy
+ * @param {string} [params.personName]
+ * @param {'FACE'|'CARD'|'FINGERPRINT'} [params.verifyMode]
+ * @param {string | Date} [params.occurredAt]
+ * @param {string} [params.deviceCode]
+ * @param {string} [params.sourceIp]
+ */
+const simulateSchoolWebhookEvent = async ({
+  schoolCode,
+  externalPersonId,
+  personName = '',
+  verifyMode = 'FACE',
+  occurredAt = null,
+  deviceCode = 'SIMULATOR-WEB',
+  sourceIp = '127.0.0.1'
+}) => {
+  const cleanCode = String(schoolCode || '').trim().toUpperCase();
+  const cleanPersonId = String(externalPersonId || '').trim();
+  if (!cleanCode) {
+    throw Object.assign(new Error('Thiếu mã trường (schoolCode) để gửi Webhook'), { statusCode: 400 });
+  }
+  if (!cleanPersonId) {
+    throw Object.assign(new Error('Vui lòng nhập Mã học sinh, Mã nhân viên hoặc ID trên máy chấm công'), { statusCode: 400 });
+  }
+
+  const eventDate = occurredAt ? new Date(occurredAt) : new Date();
+  const validIso = Number.isNaN(eventDate.getTime()) ? new Date().toISOString() : eventDate.toISOString();
+  const normalizedVerify = String(verifyMode || 'FACE').toUpperCase();
+  const subEventType = normalizedVerify === 'CARD' ? 1 : (normalizedVerify === 'FINGERPRINT' ? 38 : 75);
+
+  const simulatedPayload = {
+    ipAddress: sourceIp,
+    dateTime: validIso,
+    eventType: 'AccessControllerEvent',
+    eventState: 'active',
+    AccessControllerEvent: {
+      deviceName: `Webhook Test (${cleanCode})`,
+      majorEventType: 5,
+      subEventType,
+      employeeNoString: cleanPersonId,
+      name: String(personName || '').trim() || undefined,
+      currentVerifyMode: normalizedVerify === 'CARD' ? 'card' : (normalizedVerify === 'FINGERPRINT' ? 'fp' : 'face'),
+      serialNo: Math.floor(Date.now() / 1000) + Math.floor(Math.random() * 1000)
+    }
+  };
+
+  const mockReq = {
+    method: 'POST',
+    url: `/api/attendance/webhook/${cleanCode}`,
+    originalUrl: `/api/attendance/webhook/${cleanCode}`,
+    params: { schoolCode: cleanCode },
+    query: deviceCode ? { deviceCode } : {},
+    headers: {
+      'content-type': 'application/json',
+      'user-agent': 'HoaNang-Webhook-Simulator/1.0',
+      'x-forwarded-for': sourceIp
+    },
+    header(name) {
+      return this.headers[String(name || '').toLowerCase()];
+    },
+    body: simulatedPayload,
+    ip: sourceIp
+  };
+
+  return captureIncomingWebhook(mockReq);
+};
+
 module.exports = {
   extractJsonFromMultipart,
   resolveHikvisionVerifyMethod,
   normalizeIncomingWebhook,
   extractHikvisionSummary,
   captureIncomingWebhook,
+  simulateSchoolWebhookEvent,
   listWebhookLogs,
   getWebhookLogDetail
 };

@@ -28,6 +28,10 @@ const rawWebhookBody = express.raw({ type: '*/*', limit: '10mb' });
 
 // NOTE: Đặt các route nhận tín hiệu từ phần cứng Hikvision TRƯỚC `router.use(auth)`, nhưng khóa đọc `/webhook/logs` sau `auth`
 router.get('/webhook', webhookTestAuth, pingWebhook);
+router.get('/webhook/:schoolCode', (req, res, next) => {
+    if (String(req.params.schoolCode || '').toLowerCase() === 'logs') return next();
+    return webhookTestAuth(req, res, () => pingWebhook(req, res, next));
+});
 router.post('/webhook', webhookTestAuth, rawWebhookBody, handleWebhook);
 router.post('/webhook/:schoolCode', webhookTestAuth, rawWebhookBody, handleWebhook);
 

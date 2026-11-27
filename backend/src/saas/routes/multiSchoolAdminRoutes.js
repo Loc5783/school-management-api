@@ -17,6 +17,8 @@ const {
   getSystemSettingsHandler,
   updateSystemSettingsHandler,
   listPlatformAuditLogsHandler,
+  listSchoolOperationalLogsHandler,
+  testSchoolWebhookBySuperAdmin,
   createSchoolWithAdmin,
   updateSchoolAndAdmin,
   enterSchoolWorkspace
@@ -30,11 +32,13 @@ router.get('/me', getSuperAdminMe);
 router.post('/me/password', authLimiter, changeSuperAdminPassword);
 router.get('/schools', listAllSchoolsOverview);
 router.get('/schools/:id/report', getSchoolDetailedReportHandler);
+router.post('/schools/:id/test-webhook', requirePlatformRole(['platform_lead']), testSchoolWebhookBySuperAdmin);
 router.post('/schools', requirePlatformRole(['platform_lead']), createSchoolWithAdmin);
 router.put('/schools/:id', requirePlatformRole(['platform_lead']), updateSchoolAndAdmin);
 router.post('/schools/:id/enter', requirePlatformRole(['platform_lead']), enterSchoolWorkspace);
 router.get('/settings', getSystemSettingsHandler);
 router.put('/settings', requirePlatformRole(['platform_lead']), updateSystemSettingsHandler);
 router.get('/audit-logs', listPlatformAuditLogsHandler);
+router.get('/school-logs', listSchoolOperationalLogsHandler);
 
 module.exports = router;

@@ -12,6 +12,7 @@ const Tenant = require('../models/zone1_system/Tenant');
 const { testDeviceConnection, syncDeviceEvents } = require('../services/hikvisionSyncService');
 const { validateDeviceHost } = require('../services/hikvisionIsapiService');
 const { ingestStudentDeviceAttendance } = require('../services/attendanceDeviceService');
+const { simulateSchoolWebhookEvent } = require('../services/timekeepingWebhookService');
 const { calculateAttendanceForUserDate } = require('../services/attendanceCalculationService');
 const { createTrustedTenantContext } = require('../services/tenantFilterService');
 const { getWorkDate, DEFAULT_SCHOOL_TIMEZONE } = require('../utils/dateHelpers');
@@ -72,7 +73,10 @@ async function resolveTenantCode(req, tenantId) {
 async function listDevices(req, res) {
   try {
     const tenantId = assertTenantContext(req);
-    const devices = await TimekeepingDevice.find({ tenantId }).sort({ createdAt: -1 });
+    const [devices, schoolCode] = await Promise.all([
+      TimekeepingDevice.find({ tenantId }).sort({ createdAt: -1 }),
+      resolveTenantCode(req, tenantId)
+    ]);
 
     const deviceCodes = devices.map((d) => d.deviceCode);
     const unmappedCounts = await RawAttendanceEvent.aggregate([
@@ -88,7 +92,15 @@ async function listDevices(req, res) {
       unmappedCount: countMap.get(d.deviceCode) || 0
     }));
 
-    return res.json({ success: true, data: result });
+    return res.json({
+      success: true,
+      data: result,
+      webhookMeta: {
+        schoolCode: schoolCode || null,
+        endpointPath: schoolCode ? `/api/attendance/webhook/${schoolCode}` : '/api/attendance/webhook',
+        hikvisionAliasPath: schoolCode ? `/api/webhooks/timekeeping/hikvision/${schoolCode}` : '/api/webhooks/timekeeping/hikvision'
+      }
+    });
   } catch (err) {
     return res.status(err.statusCode || 500).json({
       success: false,
@@ -682,6 +694,52 @@ async function getUnmappedEvents(req, res) {
   }
 }
 
+/**
+ * Giả lập tín hiệu máy chấm công đẩy về Webhook đuôi `/:schoolCode` của chính trường hiện tại,
+ * giúp Admin/Hiệu trưởng kiểm tra tức thì luồng đồng bộ Điểm danh Học sinh & Chấm công Nhân sự.
+ */
+async function simulateWebhook(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const schoolCode = await resolveTenantCode(req, tenantId);
+    if (!schoolCode) {
+      return res.status(404).json({
+        success: false,
+        message: 'Không xác định được Mã trường (schoolCode) của đơn vị hiện tại'
+      });
+    }
+
+    const { externalPersonId, personName, verifyMode, occurredAt, deviceCode } = req.body || {};
+    const out = await simulateSchoolWebhookEvent({
+      schoolCode,
+      externalPersonId,
+      personName,
+      verifyMode,
+      occurredAt,
+      deviceCode: deviceCode || 'SIMULATOR-SCHOOL-UI',
+      sourceIp: req.ip || '127.0.0.1'
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: out.record?.processingNote || 'Đã gửi gói tin kiểm tra Webhook thành công',
+      data: {
+        schoolCode,
+        endpointPath: `/api/attendance/webhook/${schoolCode}`,
+        logId: out.savedId,
+        processingStatus: out.record?.processingStatus,
+        processingNote: out.record?.processingNote,
+        attendanceResult: out.attendanceResult
+      }
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.message || 'Không thể giả lập sự kiện Webhook chấm công'
+    });
+  }
+}
+
 module.exports = {
   assertTenantContext,
   sanitizeDevice,
@@ -695,5 +753,6 @@ module.exports = {
   upsertPersonMapping,
   deletePersonMapping,
   getSyncLogs,
-  getUnmappedEvents
+  getUnmappedEvents,
+  simulateWebhook
 };

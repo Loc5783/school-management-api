@@ -20,6 +20,8 @@ export const enterSchoolWorkspace = (id) => api.post(`/multi-school/schools/${id
 export const getSuperAdminSystemSettings = () => api.get('/multi-school/settings', { headers: superAdminHeaders() });
 export const updateSuperAdminSystemSettings = (data) => api.put('/multi-school/settings', data, { headers: superAdminHeaders() });
 export const getSuperAdminAuditLogs = (params = {}) => api.get('/multi-school/audit-logs', { params, headers: superAdminHeaders() });
+export const getSuperAdminSchoolLogs = (params = {}) => api.get('/multi-school/school-logs', { params, headers: superAdminHeaders() });
+export const testSuperAdminSchoolWebhook = (id, data) => api.post(`/multi-school/schools/${id}/test-webhook`, data, { headers: superAdminHeaders() });
 
 // API quản lý Phân hiệu / Cơ sở trong phạm vi từng trường (Admin trường)
 export const getSchoolCampuses = () => api.get('/system/campuses');

@@ -25,7 +25,11 @@ const {
   getDeviceEvents
 } = require('../../controllers/timekeepingController');
 const deviceCtrl = require('../../controllers/timekeepingDeviceController');
+const webhookTestAuth = require('../../middlewares/webhookTestAuth');
+const { pingWebhook, handleWebhook } = require('../../controllers/timekeepingWebhookController');
 const { getRequestSaasMode, isHrAllowed, isFinanceAllowed } = require('../utils/saasMode');
+
+const rawWebhookBody = express.raw({ type: '*/*', limit: '10mb' });
 
 // Defense-in-depth: Timekeeping module is strictly allowed in phase1d and phase1e
 router.use((req, res, next) => {
@@ -36,8 +40,12 @@ router.use((req, res, next) => {
   next();
 });
 
-// Hardware machine ingest endpoint: Bypasses staff JWT and strictly enforces deviceIngestLimiter + saasDeviceAuth
+// Hardware machine ingest endpoint & schoolCode webhook alias (`/api/timekeeping/webhook/:schoolCode`):
 router.post('/device-events', deviceIngestLimiter, saasDeviceAuth, receiveDeviceEvent);
+router.get('/webhook', deviceIngestLimiter, webhookTestAuth, pingWebhook);
+router.get('/webhook/:schoolCode', deviceIngestLimiter, webhookTestAuth, pingWebhook);
+router.post('/webhook', deviceIngestLimiter, webhookTestAuth, rawWebhookBody, handleWebhook);
+router.post('/webhook/:schoolCode', deviceIngestLimiter, webhookTestAuth, rawWebhookBody, handleWebhook);
 
 // Explicitly gate unapproved timekeeping submodules so they cleanly fall through to tenantFeatureGate (501)
 const UNAPPROVED_TIMEKEEPING_PREFIXES = [
@@ -93,6 +101,7 @@ router.post('/recalculate/:date', roleCheck(approvalRoles), recalculateAttendanc
 // 5. Timekeeping Device & Person Mapping Management Endpoints
 router.get('/devices', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.listDevices);
 router.post('/devices', roleCheck(['admin']), deviceCtrl.createDevice);
+router.post('/devices/simulate-webhook', roleCheck(['admin', 'principal']), deviceCtrl.simulateWebhook);
 router.get('/devices-unmapped', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.getUnmappedEvents);
 router.get('/devices/:id', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.getDeviceById);
 router.patch('/devices/:id', roleCheck(['admin']), deviceCtrl.updateDevice);

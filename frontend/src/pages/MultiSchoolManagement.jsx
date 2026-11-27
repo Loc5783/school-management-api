@@ -2,14 +2,17 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import Icon from '../components/Icon';
+import { CashflowDonutChart, EconomicPeriodChart } from '../components/SuperAdminCharts';
 import SuperAdminSchoolReportModal from '../components/SuperAdminSchoolReportModal';
+import SuperAdminUsageAnalyticsPanel from '../components/SuperAdminUsageAnalyticsPanel';
 import SuperAdminSettingsPanel from '../components/SuperAdminSettingsPanel';
 import SuperAdminAuditPanel from '../components/SuperAdminAuditPanel';
 import {
   getSuperAdminSchools,
   createSchoolWithAdmin,
   updateSchoolAndAdmin,
-  enterSchoolWorkspace
+  enterSchoolWorkspace,
+  testSuperAdminSchoolWebhook
 } from '../api/multiSchool';
 import { getStoredSuperAdminUser, getStoredUser } from '../utils/storage';
 import './MultiSchoolManagement.css';
@@ -55,6 +58,15 @@ const formatShortDate = (val) => {
   });
 };
 
+const generateRandomAdminPassword = () => {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+  let pass = 'Hn@';
+  for (let i = 0; i < 6; i += 1) {
+    pass += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return pass;
+};
+
 const makeEmptyCreateForm = (standards = {}, allModuleKeys = []) => ({
   code: '',
   name: '',
@@ -94,8 +106,11 @@ export default function MultiSchoolManagement() {
     totalBilled: 0,
     totalCollected: 0,
     totalOutstandingDebt: 0,
+    totalExpenditure: 0,
     alertCount: 0
   });
+  const [economicTrend, setEconomicTrend] = useState([]);
+  const [roleDistribution, setRoleDistribution] = useState([]);
   const [systemHealth, setSystemHealth] = useState(null);
   const [alerts, setAlerts] = useState([]);
   const [moduleCatalog, setModuleCatalog] = useState(DEFAULT_MODULE_CATALOG);
@@ -104,16 +119,25 @@ export default function MultiSchoolManagement() {
 
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState(null);
+  const [handoverCard, setHandoverCard] = useState(null);
+  const [copiedKey, setCopiedKey] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [enteringId, setEnteringId] = useState('');
   const [reportSchoolId, setReportSchoolId] = useState(null);
 
+  // Điều phối chuyển sang tab Nhật ký của từng trường cụ thể
+  const [auditJumpSchoolId, setAuditJumpSchoolId] = useState('all');
+  const [auditJumpLogType, setAuditJumpLogType] = useState('school_audit');
+
+  // Modal Tạo Trường Mới
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createForm, setCreateForm] = useState(() => makeEmptyCreateForm());
+  const [showCreatePass, setShowCreatePass] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
 
+  // Modal Sửa Trường / Cấp lại Tài khoản Admin Trường
   const [editingSchool, setEditingSchool] = useState(null);
   const [editForm, setEditForm] = useState({
     name: '',
@@ -127,8 +151,16 @@ export default function MultiSchoolManagement() {
     maxStaff: 200,
     enabledModules: DEFAULT_MODULE_CATALOG.map((m) => m.key)
   });
+  const [showEditPass, setShowEditPass] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
   const [editError, setEditError] = useState('');
+
+  // Modal Kiểm tra nhanh Webhook theo mã trường cho SuperAdmin
+  const [webhookTestSchool, setWebhookTestSchool] = useState(null);
+  const [webhookTestCode, setWebhookTestCode] = useState('');
+  const [webhookTestName, setWebhookTestName] = useState('');
+  const [webhookTesting, setWebhookTesting] = useState(false);
+  const [webhookTestResult, setWebhookTestResult] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -136,6 +168,8 @@ export default function MultiSchoolManagement() {
       const res = await getSuperAdminSchools();
       const payload = res.data?.data || {};
       setSummary((prev) => ({ ...prev, ...(payload.summary || {}) }));
+      setEconomicTrend(payload.economicTrend || []);
+      setRoleDistribution(payload.roleDistribution || []);
       setSystemHealth(payload.systemHealth || null);
       setAlerts(payload.alerts || []);
       if (Array.isArray(payload.moduleCatalog) && payload.moduleCatalog.length > 0) {
@@ -179,13 +213,14 @@ export default function MultiSchoolManagement() {
   };
 
   useEffect(() => {
-    if (!showCreateModal && !editingSchool) return undefined;
+    if (!showCreateModal && !editingSchool && !webhookTestSchool) return undefined;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const onKeyDown = (e) => {
       if (e.key === 'Escape') {
         if (showCreateModal && !creating) setShowCreateModal(false);
         if (editingSchool && !savingEdit) setEditingSchool(null);
+        if (webhookTestSchool && !webhookTesting) setWebhookTestSchool(null);
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -193,10 +228,27 @@ export default function MultiSchoolManagement() {
       document.body.style.overflow = prevOverflow;
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [showCreateModal, editingSchool, creating, savingEdit]);
+  }, [showCreateModal, editingSchool, webhookTestSchool, creating, savingEdit, webhookTesting]);
+
+  const copyText = async (key, text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      window.setTimeout(() => setCopiedKey(''), 2300);
+    } catch {
+      // Bỏ qua nếu trình duyệt chặn clipboard
+    }
+  };
+
+  const openSchoolLogs = (schoolId = 'all', logType = 'school_audit') => {
+    setAuditJumpSchoolId(schoolId || 'all');
+    setAuditJumpLogType(logType);
+    setActiveSection('audit');
+  };
 
   const openCreateModal = () => {
     setCreateError('');
+    setShowCreatePass(false);
     setCreateForm(
       makeEmptyCreateForm(
         systemSettings?.preschoolStandards || {},
@@ -224,6 +276,9 @@ export default function MultiSchoolManagement() {
     if (creating) return;
     setCreating(true);
     setCreateError('');
+    const cleanCode = createForm.code.trim().toUpperCase();
+    const cleanUser = createForm.adminUsername.trim();
+    const plainPass = createForm.adminPassword;
     try {
       const initialCampuses = createForm.campusesInput
         .split(/[,;\n]/)
@@ -235,12 +290,12 @@ export default function MultiSchoolManagement() {
         }));
 
       const res = await createSchoolWithAdmin({
-        code: createForm.code.trim().toUpperCase(),
+        code: cleanCode,
         name: createForm.name.trim(),
         organizationCode: createForm.organizationCode.trim().toUpperCase(),
         contactEmail: createForm.contactEmail.trim(),
-        adminUsername: createForm.adminUsername.trim(),
-        adminPassword: createForm.adminPassword,
+        adminUsername: cleanUser,
+        adminPassword: plainPass,
         adminFullName: createForm.adminFullName.trim(),
         adminPhone: createForm.adminPhone.trim(),
         initialCampuses,
@@ -252,6 +307,13 @@ export default function MultiSchoolManagement() {
         }
       });
       setShowCreateModal(false);
+      setHandoverCard({
+        schoolCode: cleanCode,
+        schoolName: createForm.name.trim(),
+        username: cleanUser,
+        password: plainPass,
+        webhookUrl: `${window.location.origin}/api/attendance/webhook/${cleanCode}`
+      });
       await load();
       setNotice({ type: 'success', text: res.data?.message || 'Đã khởi tạo trường học mới kèm tài khoản Admin riêng.' });
     } catch (err) {
@@ -264,12 +326,13 @@ export default function MultiSchoolManagement() {
   const openEditModal = (school) => {
     const fullSchool = schools.find((s) => String(s._id) === String(school._id)) || school;
     setEditingSchool(fullSchool);
+    setShowEditPass(false);
     setEditForm({
       name: fullSchool.name || '',
       organizationCode: fullSchool.organizationCode || '',
       contactEmail: fullSchool.contactEmail || '',
       status: fullSchool.status || 'active',
-      adminUsername: fullSchool.primaryAdmin?.username || 'admin',
+      adminUsername: fullSchool.primaryAdmin?.username || `admin_${String(fullSchool.code || '').toLowerCase()}`,
       newAdminPassword: '',
       maxCampuses: fullSchool.quotas?.maxCampuses || 10,
       maxStudents: fullSchool.quotas?.maxStudents || 800,
@@ -299,14 +362,16 @@ export default function MultiSchoolManagement() {
     if (!editingSchool || savingEdit) return;
     setSavingEdit(true);
     setEditError('');
+    const plainResetPass = editForm.newAdminPassword.trim();
+    const cleanAdminUser = editForm.adminUsername.trim();
     try {
       await updateSchoolAndAdmin(editingSchool._id, {
         name: editForm.name,
         organizationCode: editForm.organizationCode,
         contactEmail: editForm.contactEmail,
         status: editForm.status,
-        adminUsername: editForm.adminUsername,
-        newAdminPassword: editForm.newAdminPassword,
+        adminUsername: cleanAdminUser,
+        newAdminPassword: plainResetPass,
         enabledModules: editForm.enabledModules,
         quotas: {
           maxCampuses: Number(editForm.maxCampuses),
@@ -314,13 +379,45 @@ export default function MultiSchoolManagement() {
           maxStaff: Number(editForm.maxStaff)
         }
       });
+      if (plainResetPass) {
+        setHandoverCard({
+          schoolCode: editingSchool.code,
+          schoolName: editForm.name,
+          username: cleanAdminUser,
+          password: plainResetPass,
+          webhookUrl: `${window.location.origin}/api/attendance/webhook/${editingSchool.code}`
+        });
+      }
       setEditingSchool(null);
       await load();
-      setNotice({ type: 'success', text: 'Đã lưu cấu hình trường học, hạn mức và gói phân hệ chức năng.' });
+      setNotice({ type: 'success', text: 'Đã lưu cấu hình trường học, tài khoản Admin riêng và phân hệ chức năng.' });
     } catch (err) {
       setEditError(err.response?.data?.message || 'Không thể lưu cập nhật.');
     } finally {
       setSavingEdit(false);
+    }
+  };
+
+  const handleRunSuperWebhookTest = async (e) => {
+    e.preventDefault();
+    if (!webhookTestSchool || !webhookTestCode.trim() || webhookTesting) return;
+    setWebhookTesting(true);
+    setWebhookTestResult(null);
+    try {
+      const res = await testSuperAdminSchoolWebhook(webhookTestSchool._id, {
+        externalPersonId: webhookTestCode.trim(),
+        personName: webhookTestName.trim(),
+        verifyMode: 'FACE'
+      });
+      setWebhookTestResult(res.data?.data || null);
+      await load();
+    } catch (err) {
+      setWebhookTestResult({
+        error: true,
+        processingNote: err.response?.data?.message || 'Không thể gửi gói tin kiểm tra Webhook'
+      });
+    } finally {
+      setWebhookTesting(false);
     }
   };
 
@@ -369,18 +466,34 @@ export default function MultiSchoolManagement() {
   const navItems = [
     {
       id: 'overview',
-      label: 'Tổng quan & Hiệu năng',
+      label: 'Tổng quan & Kinh tế',
       icon: 'chart',
       theme: 'system',
       badge: alerts.length > 0 ? alerts.length : null,
       alertBadge: alerts.length > 0
     },
     {
+      id: 'analytics',
+      label: 'Thống kê Sử dụng & Biểu đồ',
+      icon: 'activity',
+      theme: 'finance',
+      badge: null,
+      alertBadge: false
+    },
+    {
       id: 'schools',
-      label: 'Quản lý Trường & Báo cáo',
+      label: 'Quản lý Trường & Account',
       icon: 'classes',
       theme: 'student',
       badge: summary.totalSchools || 0,
+      alertBadge: false
+    },
+    {
+      id: 'audit',
+      label: 'Nhật ký Từng Trường & Log',
+      icon: 'fileText',
+      theme: 'personal',
+      badge: null,
       alertBadge: false
     },
     {
@@ -390,33 +503,29 @@ export default function MultiSchoolManagement() {
       theme: 'ops',
       badge: null,
       alertBadge: false
-    },
-    {
-      id: 'audit',
-      label: 'Nhật ký & Bảo mật',
-      icon: 'shield',
-      theme: 'personal',
-      badge: null,
-      alertBadge: false
     }
   ];
 
   const sectionTitleMap = {
     overview: {
-      title: 'Dashboard Tổng quan & Hiệu năng Toàn chuỗi',
-      subtitle: 'Giám sát sức khỏe máy chủ, điểm danh, lấp đầy lớp, thu học phí và cảnh báo an toàn của toàn bộ các trường.'
+      title: 'Dashboard Tổng quan, Kinh tế & Hỗ trợ Nhanh Các Trường',
+      subtitle: 'Biểu đồ thu–chi toàn chuỗi, giám sát sức khỏe máy chủ, cấp tài khoản Admin và hỗ trợ trực tiếp từng trường.'
+    },
+    analytics: {
+      title: 'Báo cáo Thống kê Mức độ Sử dụng & Biểu đồ So sánh Các Trường',
+      subtitle: 'Đo lường chi tiết cách từng trường khai thác Điểm danh, Học phí, Thực đơn, Tài khoản nhân sự và Webhook chấm công.'
     },
     schools: {
-      title: 'Quản lý Các Trường & Báo cáo Chi tiết 360°',
-      subtitle: 'Cấp phát trường mới, phân quyền gói Module, đặt hạn mức và xem báo cáo độc lập từng trường cho SuperAdmin.'
+      title: 'Quản lý Đơn vị Trường, Cấp Account Admin & Webhook',
+      subtitle: 'Cấp tài khoản Admin riêng để trường tự tạo Giám đốc, Giáo viên, Đầu bếp... và đồng bộ máy chấm công qua đuôi /mã-trường.'
+    },
+    audit: {
+      title: 'Nhật ký Hoạt động Từng Trường, Webhook & Bảo mật',
+      subtitle: 'Tra cứu chi tiết nhật ký nghiệp vụ nội bộ của từng trường, lịch sử gói tin máy chấm công và kiểm toán SuperAdmin.'
     },
     settings: {
       title: 'Cấu hình Chung Toàn Hệ thống (Global Settings)',
       subtitle: 'Thiết lập thương hiệu chuỗi, System Banner toàn trường, chuẩn nghiệp vụ Mầm non và chính sách bảo mật.'
-    },
-    audit: {
-      title: 'Nhật ký Kiểm toán & Bảo mật SuperAdmin',
-      subtitle: 'Theo dõi mọi thao tác quản trị cấp hệ thống và cập nhật thông tin bảo mật tài khoản Admin Tổng.'
     }
   };
 
@@ -571,8 +680,51 @@ export default function MultiSchoolManagement() {
             </div>
           )}
 
+          {/* PHIẾU BÀN GIAO NHANH TÀI KHOẢN ADMIN TRƯỜNG & URL WEBHOOK */}
+          {handoverCard && (
+            <div className="credential-handover-card">
+              <div style={{ flex: '1 1 480px' }}>
+                <h3>✓ Phiếu bàn giao Tài khoản Admin & Đường dẫn Webhook cho {handoverCard.schoolName} ({handoverCard.schoolCode})</h3>
+                <div className="credential-handover-grid" style={{ marginBottom: 6 }}>
+                  <span>Mã trường: <code>{handoverCard.schoolCode}</code></span>
+                  <span>Tài khoản Admin trường: <code>{handoverCard.username}</code></span>
+                  <span>Mật khẩu: <code>{handoverCard.password}</code></span>
+                </div>
+                <div className="credential-handover-grid">
+                  <span>Webhook chấm công & điểm danh HS: <code>POST {handoverCard.webhookUrl}</code></span>
+                </div>
+                <small style={{ display: 'block', marginTop: 6, color: '#166534' }}>
+                  * Gửi thông tin này cho Quản trị viên của trường. Sau khi đăng nhập, Admin trường vào mục <strong>Tài khoản & Phân quyền</strong> để tự tạo tài khoản <strong>Ban Giám đốc/Hiệu trưởng, Giáo viên, Đầu bếp, Kế toán, Nhân sự, Bảo vệ</strong>.
+                </small>
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="button button-primary"
+                  onClick={() =>
+                    copyText(
+                      'handover',
+                      [
+                        `Trường: ${handoverCard.schoolName} (${handoverCard.schoolCode})`,
+                        `Đăng nhập tại: ${window.location.origin}/login`,
+                        `Tên đăng nhập Admin trường: ${handoverCard.username}`,
+                        `Mật khẩu: ${handoverCard.password}`,
+                        `Webhook máy chấm công & điểm danh HS: ${handoverCard.webhookUrl}`
+                      ].join('\n')
+                    )
+                  }
+                >
+                  <Icon name="copy" size={15} /> {copiedKey === 'handover' ? 'Đã sao chép trọn bộ!' : 'Sao chép gửi cho trường'}
+                </button>
+                <button type="button" className="button button-secondary" onClick={() => setHandoverCard(null)}>
+                  Đóng phiếu
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* ================================================================
-              MỤC 1: DASHBOARD TỔNG QUAN & HIỆU NĂNG TOÀN CHUỖI
+              MỤC 1: DASHBOARD TỔNG QUAN, BIỂU ĐỒ KINH TẾ & HỖ TRỢ NHANH
              ================================================================ */}
           {activeSection === 'overview' && (
             <div>
@@ -647,6 +799,111 @@ export default function MultiSchoolManagement() {
                   </div>
                 </article>
               </div>
+
+              {/* BIỂU ĐỒ DASHBOARD XEM KINH TẾ TOÀN CHUỖI */}
+              <div className="superadmin-two-col">
+                <section className="content-card" style={{ padding: '20px 22px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+                    <div>
+                      <p className="card-kicker">BIỂU ĐỒ KINH TẾ CHUỖI TRƯỜNG</p>
+                      <h2 style={{ margin: '2px 0 0' }}>Doanh thu Học phí – Thực thu – Chi phí vận hành</h2>
+                    </div>
+                    <button type="button" className="button button-secondary" onClick={() => setActiveSection('analytics')}>
+                      Phân tích sâu & Xuất Excel →
+                    </button>
+                  </div>
+                  <EconomicPeriodChart economicTrend={economicTrend} schools={schools} />
+                </section>
+
+                <section className="content-card" style={{ padding: '20px 22px' }}>
+                  <p className="card-kicker">PHÂN TÍCH DÒNG TIỀN & CÔNG NỢ</p>
+                  <h2 style={{ margin: '2px 0 6px' }}>Cơ cấu Thực thu, Nợ đọng & Chi lương</h2>
+                  <CashflowDonutChart
+                    collected={summary.totalCollected}
+                    outstanding={summary.totalOutstandingDebt}
+                    expenditure={summary.totalExpenditure}
+                  />
+                </section>
+              </div>
+
+              {/* TRUNG TÂM HỖ TRỢ NHANH CÁC TRƯỜNG (QUICK SUPPORT) */}
+              {schools.length > 0 && (
+                <section className="sa-quick-support-card">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                    <div>
+                      <p className="card-kicker" style={{ color: '#1d4ed8' }}>HỖ TRỢ KỸ THUẬT & BÀN GIAO NHANH CHO CÁC TRƯỜNG</p>
+                      <h2 style={{ margin: '2px 0 4px', color: '#0f172a' }}>Hỗ trợ nhanh các trường ({schools.length} trường)</h2>
+                      <p style={{ margin: 0, fontSize: 13, color: '#475569' }}>
+                        Thao tác 1 chạm: Cấp/Đặt lại mật khẩu tài khoản Admin trường, sao chép đường dẫn Webhook <code>/api/attendance/webhook/&lt;MÃ_TRƯỜNG&gt;</code>, kiểm tra Log hoặc vào hỗ trợ trực tiếp.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="sa-quick-support-grid">
+                    {schools.map((s) => {
+                      const webhookUrl = `${window.location.origin}/api/attendance/webhook/${s.code}`;
+                      return (
+                        <article key={s._id} className="sa-quick-school-box">
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                            <div>
+                              <strong style={{ color: '#1d4ed8', fontSize: 14 }}>{s.code}</strong> · <strong>{s.name}</strong>
+                              <small style={{ display: 'block', color: '#64748b', marginTop: 2 }}>
+                                Admin trường: <strong>{s.primaryAdmin ? `@${s.primaryAdmin.username}` : 'Chưa có'}</strong> · Khai thác: <strong>{s.usage?.usageScorePercent || 0}%</strong>
+                              </small>
+                            </div>
+                            <span className={`student-status ${s.status === 'active' ? 'enrolled' : 'withdrawn'}`}>
+                              {s.status === 'active' ? 'Hoạt động' : 'Tạm ngưng'}
+                            </span>
+                          </div>
+
+                          <div className="sa-quick-webhook-line" title={webhookUrl}>
+                            <code>/api/attendance/webhook/{s.code}</code>
+                            <button
+                              type="button"
+                              className="button button-secondary"
+                              style={{ padding: '4px 9px', minHeight: 28, fontSize: 11 }}
+                              onClick={() => copyText(`wh-${s._id}`, webhookUrl)}
+                            >
+                              <Icon name="copy" size={12} /> {copiedKey === `wh-${s._id}` ? 'Đã chép!' : 'Copy URL'}
+                            </button>
+                          </div>
+
+                          <div className="classroom-actions" style={{ flexWrap: 'wrap', marginTop: 'auto' }}>
+                            <button type="button" className="button button-secondary" onClick={() => openEditModal(s)}>
+                              Cấp / Đổi MK Admin
+                            </button>
+                            <button
+                              type="button"
+                              className="button button-secondary"
+                              onClick={() => {
+                                setWebhookTestSchool(s);
+                                setWebhookTestCode('');
+                                setWebhookTestName('');
+                                setWebhookTestResult(null);
+                              }}
+                            >
+                              Test Webhook
+                            </button>
+                            <button type="button" className="button button-secondary" onClick={() => openSchoolLogs(s._id, 'school_audit')}>
+                              Xem Log
+                            </button>
+                            {s.status === 'active' && (
+                              <button
+                                type="button"
+                                className="button button-primary"
+                                disabled={Boolean(enteringId)}
+                                onClick={() => handleEnterSchool(s)}
+                              >
+                                {enteringId === s._id ? 'Đang mở...' : 'Vào hỗ trợ'}
+                              </button>
+                            )}
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
 
               <div className="superadmin-two-col">
                 {/* KHỐI HIỆU NĂNG & SỨC KHỎE HỆ THỐNG */}
@@ -776,7 +1033,7 @@ export default function MultiSchoolManagement() {
                           <th>Quy mô & Lấp đầy</th>
                           <th>Điểm danh hôm nay / 30 ngày</th>
                           <th>Tiến độ thu học phí</th>
-                          <th>Hoạt động gần nhất</th>
+                          <th>Hoạt động & Log</th>
                           <th>Trạng thái</th>
                           <th>Báo cáo & Điều hành</th>
                         </tr>
@@ -824,7 +1081,7 @@ export default function MultiSchoolManagement() {
                             <td style={{ whiteSpace: 'nowrap', fontSize: '12.5px' }}>
                               {formatShortDate(s.accountStats?.lastActivityAt)}
                               <small style={{ display: 'block', color: '#64748b' }}>
-                                {s.accountStats?.activeAccounts || 0} TK active
+                                {s.accountStats?.activeAccounts || 0} TK active · Webhook: {s.webhook?.totalEvents || 0}
                               </small>
                             </td>
                             <td>
@@ -834,6 +1091,13 @@ export default function MultiSchoolManagement() {
                             </td>
                             <td>
                               <div className="classroom-actions" style={{ flexWrap: 'wrap' }}>
+                                <button
+                                  type="button"
+                                  className="button button-secondary"
+                                  onClick={() => openSchoolLogs(s._id, 'school_audit')}
+                                >
+                                  Log trường
+                                </button>
                                 <button
                                   type="button"
                                   className="button button-secondary"
@@ -864,16 +1128,31 @@ export default function MultiSchoolManagement() {
           )}
 
           {/* ================================================================
-              MỤC 2: QUẢN LÝ DANH SÁCH TRƯỜNG, GÓI MODULE & BÁO CÁO CHI TIẾT
+              MỤC 2: TRANG THỐNG KÊ MỨC ĐỘ SỬ DỤNG & BIỂU ĐỒ KINH TẾ
+             ================================================================ */}
+          {activeSection === 'analytics' && (
+            <SuperAdminUsageAnalyticsPanel
+              summary={summary}
+              economicTrend={economicTrend}
+              roleDistribution={roleDistribution}
+              schools={schools}
+              onOpenReport={(id) => setReportSchoolId(id)}
+              onOpenSchoolLogs={openSchoolLogs}
+              onEnterSchool={handleEnterSchool}
+            />
+          )}
+
+          {/* ================================================================
+              MỤC 3: QUẢN LÝ DANH SÁCH TRƯỜNG, CẤP ACCOUNT & WEBHOOK
              ================================================================ */}
           {activeSection === 'schools' && (
             <section className="content-card student-list-card">
               <div className="list-toolbar">
                 <div>
-                  <p className="card-kicker">QUẢN TRỊ ĐƠN VỊ TRƯỜNG & PHÂN QUYỀN GÓI TÍNH NĂNG</p>
+                  <p className="card-kicker">QUẢN TRỊ ĐƠN VỊ TRƯỜNG, CẤP TÀI KHOẢN ADMIN RIÊNG & ĐỒNG BỘ WEBHOOK</p>
                   <h2>Danh sách Trường học độc lập ({filteredSchools.length})</h2>
                   <p>
-                    SuperAdmin quản lý định danh cấp Trường, gói Phân hệ chức năng và Hạn mức; còn Admin từng trường chỉ quản lý cấu hình các Phân hiệu trực thuộc trường đó.
+                    SuperAdmin cấp tài khoản <strong>Admin riêng</strong> cho từng trường; Admin trường đăng nhập vào sẽ tự tạo các tài khoản <strong>Ban Giám đốc/Hiệu trưởng, Giáo viên, Đầu bếp, Kế toán, Nhân sự, Bảo vệ</strong>. Máy chấm công của trường đẩy sự kiện về đuôi <code>/api/attendance/webhook/&lt;MÃ_TRƯỜNG&gt;</code>.
                   </p>
                 </div>
               </div>
@@ -910,84 +1189,91 @@ export default function MultiSchoolManagement() {
                     <thead>
                       <tr>
                         <th>Mã & Tên trường</th>
-                        <th>Phân hiệu / Hạn mức</th>
                         <th>Admin riêng của trường</th>
-                        <th>Học sinh / Hạn mức</th>
+                        <th>Webhook Máy chấm công & Điểm danh</th>
+                        <th>Quy mô & Hạn mức</th>
                         <th>Gói Phân hệ</th>
                         <th>Trạng thái</th>
                         <th>Thao tác SuperAdmin</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredSchools.map((s) => (
-                        <tr key={s._id}>
-                          <td>
-                            <strong style={{ color: '#1d4ed8' }}>{s.code}</strong> · <strong>{s.name}</strong>
-                            <small style={{ display: 'block', color: '#64748b' }}>
-                              {s.organizationCode ? `Cụm: ${s.organizationCode}` : 'Đơn vị độc lập'}
-                              {s.contactEmail ? ` · ${s.contactEmail}` : ''}
-                            </small>
-                          </td>
-                          <td>
-                            <strong>{s.campusCount} / {s.quotas?.maxCampuses || 10} phân hiệu</strong>
-                            <small style={{ display: 'block', color: '#475569' }}>
-                              {(s.campusNames || []).join(', ')}
-                            </small>
-                          </td>
-                          <td>
-                            {s.primaryAdmin ? (
-                              <>
-                                <strong>@{s.primaryAdmin.username}</strong>
-                                <small style={{ display: 'block', color: '#64748b' }}>
-                                  {s.primaryAdmin.fullName} · {formatShortDate(s.primaryAdmin.lastLogin)}
-                                </small>
-                              </>
-                            ) : (
-                              <span className="account-unlinked">Chưa cấp TK</span>
-                            )}
-                          </td>
-                          <td style={{ whiteSpace: 'nowrap' }}>
-                            <div><strong>{s.studentCount}</strong> / {s.quotas?.maxStudents || 800} HS</div>
-                            <small style={{ color: '#64748b' }}>{s.classCount} lớp · {s.staffCount} nhân sự</small>
-                          </td>
-                          <td style={{ whiteSpace: 'nowrap' }}>
-                            <strong>{s.enabledModules?.length || moduleCatalog.length}/{moduleCatalog.length}</strong> phân hệ
-                          </td>
-                          <td style={{ whiteSpace: 'nowrap' }}>
-                            <span className={`student-status ${s.status === 'active' ? 'enrolled' : 'withdrawn'}`}>
-                              {s.status === 'active' ? 'Hoạt động' : s.status === 'suspended' ? 'Tạm ngưng' : 'Đã đóng'}
-                            </span>
-                          </td>
-                          <td>
-                            <div className="classroom-actions" style={{ flexWrap: 'wrap' }}>
-                              <button
-                                type="button"
-                                className="button button-secondary"
-                                onClick={() => setReportSchoolId(s._id)}
-                              >
-                                Báo cáo chi tiết
-                              </button>
-                              <button
-                                type="button"
-                                className="button button-secondary"
-                                onClick={() => openEditModal(s)}
-                              >
-                                Cấu hình & Phân hệ
-                              </button>
-                              {s.status === 'active' && (
+                      {filteredSchools.map((s) => {
+                        const webhookUrl = `${window.location.origin}/api/attendance/webhook/${s.code}`;
+                        return (
+                          <tr key={s._id}>
+                            <td>
+                              <strong style={{ color: '#1d4ed8' }}>{s.code}</strong> · <strong>{s.name}</strong>
+                              <small style={{ display: 'block', color: '#64748b' }}>
+                                {s.campusCount}/{s.quotas?.maxCampuses || 10} phân hiệu: {(s.campusNames || []).join(', ')}
+                              </small>
+                            </td>
+                            <td>
+                              {s.primaryAdmin ? (
+                                <>
+                                  <strong>@{s.primaryAdmin.username}</strong>
+                                  <small style={{ display: 'block', color: '#64748b' }}>
+                                    {s.primaryAdmin.fullName} · {formatShortDate(s.primaryAdmin.lastLogin)}
+                                  </small>
+                                </>
+                              ) : (
+                                <span className="account-unlinked">Chưa cấp TK</span>
+                              )}
+                            </td>
+                            <td>
+                              <code style={{ fontSize: 12, fontWeight: 700, color: '#1e3a8a' }}>
+                                /api/attendance/webhook/{s.code}
+                              </code>
+                              <div style={{ marginTop: 4, display: 'flex', gap: 6, alignItems: 'center' }}>
                                 <button
                                   type="button"
-                                  className="button button-primary"
-                                  disabled={Boolean(enteringId)}
-                                  onClick={() => handleEnterSchool(s)}
+                                  className="button button-secondary"
+                                  style={{ padding: '2px 8px', minHeight: 25, fontSize: 11 }}
+                                  onClick={() => copyText(`tbl-wh-${s._id}`, webhookUrl)}
                                 >
-                                  {enteringId === s._id ? 'Đang mở...' : 'Vào điều hành'}
+                                  {copiedKey === `tbl-wh-${s._id}` ? 'Đã chép' : 'Copy URL'}
                                 </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                                <small style={{ margin: 0 }}>{s.webhook?.totalEvents || 0} lượt đẩy</small>
+                              </div>
+                            </td>
+                            <td style={{ whiteSpace: 'nowrap' }}>
+                              <div><strong>{s.studentCount}</strong> / {s.quotas?.maxStudents || 800} HS</div>
+                              <small style={{ color: '#64748b' }}>{s.classCount} lớp · {s.staffCount} nhân sự ({s.accountStats?.activeAccounts || 0} TK)</small>
+                            </td>
+                            <td style={{ whiteSpace: 'nowrap' }}>
+                              <strong>{s.enabledModules?.length || moduleCatalog.length}/{moduleCatalog.length}</strong> phân hệ
+                            </td>
+                            <td style={{ whiteSpace: 'nowrap' }}>
+                              <span className={`student-status ${s.status === 'active' ? 'enrolled' : 'withdrawn'}`}>
+                                {s.status === 'active' ? 'Hoạt động' : s.status === 'suspended' ? 'Tạm ngưng' : 'Đã đóng'}
+                              </span>
+                            </td>
+                            <td>
+                              <div className="classroom-actions" style={{ flexWrap: 'wrap' }}>
+                                <button type="button" className="button button-secondary" onClick={() => openEditModal(s)}>
+                                  Cấu hình & Cấp MK
+                                </button>
+                                <button type="button" className="button button-secondary" onClick={() => openSchoolLogs(s._id, 'school_audit')}>
+                                  Xem Log
+                                </button>
+                                <button type="button" className="button button-secondary" onClick={() => setReportSchoolId(s._id)}>
+                                  Báo cáo 360°
+                                </button>
+                                {s.status === 'active' && (
+                                  <button
+                                    type="button"
+                                    className="button button-primary"
+                                    disabled={Boolean(enteringId)}
+                                    onClick={() => handleEnterSchool(s)}
+                                  >
+                                    {enteringId === s._id ? 'Đang mở...' : 'Vào điều hành'}
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -996,7 +1282,21 @@ export default function MultiSchoolManagement() {
           )}
 
           {/* ================================================================
-              MỤC 3: CẤU HÌNH CHUNG HỆ THỐNG (GLOBAL SETTINGS)
+              MỤC 4: NHẬT KÝ TỪNG TRƯỜNG, WEBHOOK & BẢO MẬT SUPERADMIN
+             ================================================================ */}
+          {activeSection === 'audit' && (
+            <SuperAdminAuditPanel
+              key={`${auditJumpSchoolId}-${auditJumpLogType}`}
+              superUser={superUser}
+              schools={schools}
+              initialSchoolId={auditJumpSchoolId}
+              initialLogType={auditJumpLogType}
+              onSuperUserUpdated={(nextUser) => setSuperUser(nextUser)}
+            />
+          )}
+
+          {/* ================================================================
+              MỤC 5: CẤU HÌNH CHUNG HỆ THỐNG (GLOBAL SETTINGS)
              ================================================================ */}
           {activeSection === 'settings' && (
             <SuperAdminSettingsPanel
@@ -1006,16 +1306,6 @@ export default function MultiSchoolManagement() {
                 if (nextSettings) setSystemSettings(nextSettings);
                 void load();
               }}
-            />
-          )}
-
-          {/* ================================================================
-              MỤC 4: NHẬT KÝ HOẠT ĐỘNG & BẢO MẬT SUPERADMIN
-             ================================================================ */}
-          {activeSection === 'audit' && (
-            <SuperAdminAuditPanel
-              superUser={superUser}
-              onSuperUserUpdated={(nextUser) => setSuperUser(nextUser)}
             />
           )}
         </div>
@@ -1032,7 +1322,101 @@ export default function MultiSchoolManagement() {
         />
       )}
 
-      {/* MODAL KHỞI TẠO TRƯỜNG MỚI KÈM HẠN MỨC & GÓI MODULE */}
+      {/* MODAL KIỂM TRA NHANH LUỒNG WEBHOOK CHẤM CÔNG / ĐIỂM DANH CỦA TRƯỜNG */}
+      {webhookTestSchool && createPortal(
+        <div
+          className="account-modal-backdrop"
+          role="presentation"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !webhookTesting) setWebhookTestSchool(null);
+          }}
+        >
+          <form
+            className="account-modal-card student-form"
+            style={{ width: 'min(620px, 96vw)' }}
+            autoComplete="off"
+            onSubmit={handleRunSuperWebhookTest}
+          >
+            <div className="account-modal-header">
+              <div>
+                <p className="card-kicker">KIỂM TRA ĐỒNG BỘ MÁY CHẤM CÔNG & ĐIỂM DANH HỌC SINH</p>
+                <h2>Test Webhook: {webhookTestSchool.name} ({webhookTestSchool.code})</h2>
+              </div>
+              <button
+                type="button"
+                className="button button-secondary modal-close-btn"
+                disabled={webhookTesting}
+                onClick={() => setWebhookTestSchool(null)}
+              >
+                <Icon name="close" size={18} />
+              </button>
+            </div>
+
+            <p style={{ margin: '0 0 14px', fontSize: 13, color: '#475569', lineHeight: 1.55 }}>
+              Gửi thử sự kiện quẹt khuôn mặt vào endpoint <code>/api/attendance/webhook/{webhookTestSchool.code}</code>. Nếu mã khớp <code>studentCode</code> sẽ ghi vào <strong>Điểm danh Học sinh</strong>; nếu khớp <code>employeeCode</code> / <code>username</code> sẽ ghi vào <strong>Chấm công Nhân sự</strong>.
+            </p>
+
+            <div className="student-form-grid">
+              <label>
+                Mã Học sinh hoặc Mã Nhân viên trên máy *
+                <input
+                  required
+                  autoComplete="off"
+                  placeholder="VD: HS-2026-000001 hoặc EMP-0001"
+                  value={webhookTestCode}
+                  onChange={(e) => setWebhookTestCode(e.target.value)}
+                />
+              </label>
+              <label>
+                Họ tên hiển thị (tùy chọn)
+                <input
+                  autoComplete="off"
+                  placeholder="VD: Bé Nguyễn An"
+                  value={webhookTestName}
+                  onChange={(e) => setWebhookTestName(e.target.value)}
+                />
+              </label>
+            </div>
+
+            {webhookTestResult && (
+              <div
+                style={{
+                  marginTop: 16,
+                  padding: '12px 15px',
+                  borderRadius: 12,
+                  border: `1px solid ${webhookTestResult.error ? '#fecdd3' : '#86efac'}`,
+                  background: webhookTestResult.error ? '#fff1f2' : '#f0fdf4',
+                  color: webhookTestResult.error ? '#be123c' : '#14532d',
+                  fontSize: 13
+                }}
+              >
+                <strong>{webhookTestResult.error ? '⚠ Kết quả:' : `✓ Đã xử lý tại ${webhookTestResult.endpointPath}:`}</strong>
+                <div style={{ marginTop: 4 }}>{webhookTestResult.processingNote}</div>
+              </div>
+            )}
+
+            <div className="account-modal-actions">
+              <button
+                type="button"
+                className="button button-secondary"
+                onClick={() => {
+                  const id = webhookTestSchool._id;
+                  setWebhookTestSchool(null);
+                  openSchoolLogs(id, 'webhook');
+                }}
+              >
+                Xem Nhật ký Webhook trường này
+              </button>
+              <button type="submit" className="button button-primary" disabled={webhookTesting}>
+                <Icon name="send" size={15} /> {webhookTesting ? 'Đang gửi...' : 'Gửi sự kiện Test'}
+              </button>
+            </div>
+          </form>
+        </div>,
+        document.body
+      )}
+
+      {/* MODAL KHỞI TẠO TRƯỜNG MỚI KÈM HẠN MỨC, ACCOUNT ADMIN RIÊNG & GÓI MODULE */}
       {showCreateModal && createPortal(
         <div
           className="account-modal-backdrop"
@@ -1043,36 +1427,50 @@ export default function MultiSchoolManagement() {
         >
           <form
             className="account-modal-card student-form"
-            style={{ width: 'min(820px, 96vw)', maxHeight: '90dvh', overflowY: 'auto' }}
+            style={{ width: 'min(840px, 96vw)' }}
+            autoComplete="off"
             onSubmit={handleCreateSchool}
           >
             <div className="account-modal-header">
               <div>
-                <p className="card-kicker">KHỞI TẠO TRƯỜNG MỚI, HẠN MỨC & GÓI TÍNH NĂNG</p>
+                <p className="card-kicker">KHỞI TẠO TRƯỜNG MỚI, CẤP ACCOUNT ADMIN & WEBHOOK</p>
                 <h2>Thêm trường học mới vào hệ thống</h2>
               </div>
-              <button type="button" className="button button-secondary" disabled={creating} onClick={() => setShowCreateModal(false)}>
-                Đóng
+              <button
+                type="button"
+                className="button button-secondary modal-close-btn"
+                disabled={creating}
+                onClick={() => setShowCreateModal(false)}
+                aria-label="Đóng"
+              >
+                <Icon name="close" size={18} />
               </button>
             </div>
 
-            {createError && <div className="form-error" role="alert">{createError}</div>}
+            {createError && <div className="account-modal-error" role="alert"><Icon name="alertCircle" size={16} /><span>{createError}</span></div>}
 
             <div className="student-form-grid">
               <label>
-                Mã trường (School Code) *
+                Mã trường (School Code — dùng cho đuôi Webhook) *
                 <input
                   required
+                  autoComplete="off"
                   maxLength={20}
                   placeholder="VD: HOANANG-B"
                   value={createForm.code}
-                  onChange={(e) => setCreateForm({ ...createForm, code: e.target.value.toUpperCase() })}
+                  onChange={(e) => setCreateForm({ ...createForm, code: e.target.value.toUpperCase().replace(/\s+/g, '') })}
                 />
+                {createForm.code && (
+                  <small style={{ display: 'block', marginTop: 4, color: '#1d4ed8' }}>
+                    Webhook của trường: <code>/api/attendance/webhook/{createForm.code}</code>
+                  </small>
+                )}
               </label>
               <label>
                 Tên trường học *
                 <input
                   required
+                  autoComplete="off"
                   maxLength={160}
                   placeholder="VD: Trường Mầm non Hoa Nắng - Cơ sở Cầu Giấy"
                   value={createForm.name}
@@ -1082,6 +1480,7 @@ export default function MultiSchoolManagement() {
               <label>
                 Mã hệ thống / Cụm trường
                 <input
+                  autoComplete="off"
                   maxLength={40}
                   placeholder="VD: HOA-NANG-GROUP"
                   value={createForm.organizationCode}
@@ -1089,9 +1488,11 @@ export default function MultiSchoolManagement() {
                 />
               </label>
               <label>
-                Email liên hệ chính thức
+                Email văn phòng trường (không tự điền tài khoản cá nhân)
                 <input
                   type="email"
+                  name="school_office_contact_email"
+                  autoComplete="off"
                   placeholder="vanphong@hoanang.edu.vn"
                   value={createForm.contactEmail}
                   onChange={(e) => setCreateForm({ ...createForm, contactEmail: e.target.value })}
@@ -1100,6 +1501,7 @@ export default function MultiSchoolManagement() {
               <label className="form-wide">
                 Các Phân hiệu / Cơ sở ban đầu của trường (ngăn cách bằng dấu phẩy)
                 <input
+                  autoComplete="off"
                   placeholder="VD: Cơ sở chính, Phân hiệu 1, Phân hiệu 2"
                   value={createForm.campusesInput}
                   onChange={(e) => setCreateForm({ ...createForm, campusesInput: e.target.value })}
@@ -1128,43 +1530,55 @@ export default function MultiSchoolManagement() {
               </label>
 
               <fieldset className="student-allergy-fieldset form-wide">
-                <legend>Tài khoản Quản trị riêng của trường này (Chỉ quản lý nội bộ & phân hiệu của trường)</legend>
+                <legend>Tài khoản Quản trị riêng của trường (Dùng để trường tự tạo Giám đốc, Giáo viên, Đầu bếp...)</legend>
                 <div className="student-form-grid" style={{ padding: 0 }}>
                   <label>
                     Tên đăng nhập Admin trường *
                     <input
                       required
+                      name="new_school_admin_username"
+                      autoComplete="off"
                       placeholder="VD: admin_csb"
                       value={createForm.adminUsername}
                       onChange={(e) => setCreateForm({ ...createForm, adminUsername: e.target.value })}
                     />
                   </label>
                   <label>
-                    Mật khẩu khởi tạo *
-                    <input
-                      type="password"
-                      required
-                      minLength={6}
-                      placeholder="Tối thiểu 6 ký tự"
-                      value={createForm.adminPassword}
-                      onChange={(e) => setCreateForm({ ...createForm, adminPassword: e.target.value })}
-                    />
-                  </label>
-                  <label>
                     Họ tên người quản trị trường
                     <input
+                      autoComplete="off"
                       placeholder="VD: Nguyễn Thị Minh"
                       value={createForm.adminFullName}
                       onChange={(e) => setCreateForm({ ...createForm, adminFullName: e.target.value })}
                     />
                   </label>
-                  <label>
-                    Số điện thoại liên hệ
-                    <input
-                      placeholder="09xxxxxxxx"
-                      value={createForm.adminPhone}
-                      onChange={(e) => setCreateForm({ ...createForm, adminPhone: e.target.value })}
-                    />
+                  <label className="form-wide">
+                    Mật khẩu khởi tạo bàn giao cho Admin trường *
+                    <div className="password-field-group">
+                      <input
+                        type={showCreatePass ? 'text' : 'password'}
+                        name="new_school_admin_password"
+                        autoComplete="new-password"
+                        required
+                        minLength={6}
+                        placeholder="Nhập tối thiểu 6 ký tự hoặc bấm Tạo mật khẩu nhanh"
+                        value={createForm.adminPassword}
+                        onChange={(e) => setCreateForm({ ...createForm, adminPassword: e.target.value })}
+                      />
+                      <button type="button" className="password-field-btn" onClick={() => setShowCreatePass((v) => !v)}>
+                        <Icon name={showCreatePass ? 'eyeOff' : 'eye'} size={15} /> {showCreatePass ? 'Ẩn' : 'Hiện'}
+                      </button>
+                      <button
+                        type="button"
+                        className="password-field-btn"
+                        onClick={() => {
+                          setCreateForm((prev) => ({ ...prev, adminPassword: generateRandomAdminPassword() }));
+                          setShowCreatePass(true);
+                        }}
+                      >
+                        Tạo mật khẩu nhanh
+                      </button>
+                    </div>
                   </label>
                 </div>
               </fieldset>
@@ -1193,12 +1607,12 @@ export default function MultiSchoolManagement() {
               </fieldset>
             </div>
 
-            <div className="form-actions">
+            <div className="account-modal-actions">
               <button type="button" className="button button-secondary" disabled={creating} onClick={() => setShowCreateModal(false)}>
                 Hủy
               </button>
               <button type="submit" className="button button-primary" disabled={creating}>
-                {creating ? 'Đang khởi tạo...' : 'Tạo trường & Cấp tài khoản riêng'}
+                {creating ? 'Đang khởi tạo...' : 'Tạo trường & Cấp tài khoản Admin'}
               </button>
             </div>
           </form>
@@ -1206,7 +1620,7 @@ export default function MultiSchoolManagement() {
         document.body
       )}
 
-      {/* MODAL CẤU HÌNH ĐỊNH DANH TRƯỜNG, HẠN MỨC, MODULE & ACCOUNT ADMIN TRƯỜNG */}
+      {/* MODAL CẤU HÌNH ĐỊNH DANH TRƯỜNG, HẠN MỨC, MODULE & ĐẶT LẠI ACCOUNT ADMIN TRƯỜNG */}
       {editingSchool && createPortal(
         <div
           className="account-modal-backdrop"
@@ -1217,26 +1631,34 @@ export default function MultiSchoolManagement() {
         >
           <form
             className="account-modal-card student-form"
-            style={{ width: 'min(820px, 96vw)', maxHeight: '90dvh', overflowY: 'auto' }}
+            style={{ width: 'min(840px, 96vw)' }}
+            autoComplete="off"
             onSubmit={handleSaveEdit}
           >
             <div className="account-modal-header">
               <div>
-                <p className="card-kicker">CẤU HÌNH CẤP TRƯỜNG, HẠN MỨC & GÓI PHÂN HỆ</p>
+                <p className="card-kicker">CẤU HÌNH CẤP TRƯỜNG, CẤP LẠI ACCOUNT ADMIN & PHÂN HỆ</p>
                 <h2>{editingSchool.name} ({editingSchool.code})</h2>
               </div>
-              <button type="button" className="button button-secondary" disabled={savingEdit} onClick={() => setEditingSchool(null)}>
-                Đóng
+              <button
+                type="button"
+                className="button button-secondary modal-close-btn"
+                disabled={savingEdit}
+                onClick={() => setEditingSchool(null)}
+                aria-label="Đóng"
+              >
+                <Icon name="close" size={18} />
               </button>
             </div>
 
-            {editError && <div className="form-error" role="alert">{editError}</div>}
+            {editError && <div className="account-modal-error" role="alert"><Icon name="alertCircle" size={16} /><span>{editError}</span></div>}
 
             <div className="student-form-grid">
               <label className="form-wide">
                 Tên trường pháp lý / hiển thị *
                 <input
                   required
+                  autoComplete="off"
                   value={editForm.name}
                   onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
                 />
@@ -1244,6 +1666,7 @@ export default function MultiSchoolManagement() {
               <label>
                 Mã cụm / Chuỗi trường
                 <input
+                  autoComplete="off"
                   value={editForm.organizationCode}
                   onChange={(e) => setEditForm({ ...editForm, organizationCode: e.target.value.toUpperCase() })}
                 />
@@ -1262,6 +1685,8 @@ export default function MultiSchoolManagement() {
                 Email liên hệ chính thức
                 <input
                   type="email"
+                  name="edit_school_office_email"
+                  autoComplete="off"
                   value={editForm.contactEmail}
                   onChange={(e) => setEditForm({ ...editForm, contactEmail: e.target.value })}
                 />
@@ -1298,23 +1723,48 @@ export default function MultiSchoolManagement() {
               </label>
 
               <fieldset className="student-allergy-fieldset form-wide">
-                <legend>Tài khoản Admin riêng của trường</legend>
+                <legend>Tài khoản Admin riêng của trường & Đường dẫn Webhook đồng bộ</legend>
+                <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 8, background: '#fff', border: '1px solid #cbd5e1', fontSize: 12.5 }}>
+                  Đường dẫn đồng bộ máy chấm công & điểm danh học sinh của trường:{' '}
+                  <code style={{ fontWeight: 700, color: '#1e3a8a' }}>
+                    {window.location.origin}/api/attendance/webhook/{editingSchool.code}
+                  </code>
+                </div>
                 <div className="student-form-grid" style={{ padding: 0 }}>
                   <label>
                     Tên đăng nhập Admin trường
                     <input
+                      name="edit_school_admin_username"
+                      autoComplete="off"
                       value={editForm.adminUsername}
                       onChange={(e) => setEditForm({ ...editForm, adminUsername: e.target.value })}
                     />
                   </label>
                   <label>
-                    Đặt lại mật khẩu Admin trường (để trống nếu giữ nguyên)
-                    <input
-                      type="password"
-                      placeholder="Nhập mật khẩu mới (>= 6 ký tự)"
-                      value={editForm.newAdminPassword}
-                      onChange={(e) => setEditForm({ ...editForm, newAdminPassword: e.target.value })}
-                    />
+                    Cấp mới / Đặt lại mật khẩu Admin trường (để trống nếu giữ nguyên)
+                    <div className="password-field-group">
+                      <input
+                        type={showEditPass ? 'text' : 'password'}
+                        name="edit_school_admin_new_password"
+                        autoComplete="new-password"
+                        placeholder="Nhập mật khẩu mới (>= 6 ký tự)"
+                        value={editForm.newAdminPassword}
+                        onChange={(e) => setEditForm({ ...editForm, newAdminPassword: e.target.value })}
+                      />
+                      <button type="button" className="password-field-btn" onClick={() => setShowEditPass((v) => !v)}>
+                        <Icon name={showEditPass ? 'eyeOff' : 'eye'} size={15} /> {showEditPass ? 'Ẩn' : 'Hiện'}
+                      </button>
+                      <button
+                        type="button"
+                        className="password-field-btn"
+                        onClick={() => {
+                          setEditForm((prev) => ({ ...prev, newAdminPassword: generateRandomAdminPassword() }));
+                          setShowEditPass(true);
+                        }}
+                      >
+                        Tạo MK mới
+                      </button>
+                    </div>
                   </label>
                 </div>
               </fieldset>
@@ -1345,12 +1795,12 @@ export default function MultiSchoolManagement() {
               </fieldset>
             </div>
 
-            <div className="form-actions">
+            <div className="account-modal-actions">
               <button type="button" className="button button-secondary" disabled={savingEdit} onClick={() => setEditingSchool(null)}>
                 Hủy
               </button>
               <button type="submit" className="button button-primary" disabled={savingEdit}>
-                {savingEdit ? 'Đang lưu...' : 'Lưu cấu hình & Phân hệ trường'}
+                {savingEdit ? 'Đang lưu...' : 'Lưu cấu hình & Tài khoản trường'}
               </button>
             </div>
           </form>

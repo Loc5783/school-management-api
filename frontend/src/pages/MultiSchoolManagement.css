@@ -2,11 +2,24 @@
  * Giao diện Trung tâm Điều hành Hệ thống Đa Trường (SuperAdmin Control Center)
  * ============================================================================ */
 
+/* Lưới 6 thẻ KPI luôn cân đối 3×2 trên màn hình lớn, 2×3 trên tablet, 1 cột trên điện thoại */
 .superadmin-kpi-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(235px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
   margin-bottom: 22px;
+}
+
+@media (max-width: 1180px) {
+  .superadmin-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .superadmin-kpi-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .superadmin-kpi-card {
@@ -78,7 +91,7 @@
   margin-bottom: 22px;
 }
 
-@media (max-width: 1024px) {
+@media (max-width: 1080px) {
   .superadmin-two-col {
     grid-template-columns: 1fr;
   }
@@ -174,36 +187,264 @@
   border-color: #bfdbfe;
 }
 
+/* ============================================================================
+ * Lưới chọn Phân hệ Module trong Modal Tạo/Sửa Trường (Đã fix thẳng hàng Checkbox)
+ * ============================================================================ */
 .superadmin-module-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(225px, 1fr));
   gap: 10px;
   margin-top: 8px;
 }
 
 .superadmin-module-Option {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 10px 12px;
-  border-radius: 10px;
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px;
+  min-height: 44px;
+  padding: 9px 12px;
+  border-radius: 11px;
   border: 1px solid #cbd5e1;
   background: #f8fafc;
-  font-size: 13px;
-  font-weight: 600;
-  color: #1e293b;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  color: #1e293b !important;
   cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.superadmin-module-Option:hover {
+  border-color: #93c5fd;
+  background: #f0f9ff;
 }
 
 .superadmin-module-Option.checked {
   background: #eff6ff;
   border-color: #60a5fa;
-  color: #1e3a8a;
+  color: #1e3a8a !important;
 }
 
 .superadmin-module-Option.locked {
-  opacity: 0.8;
+  opacity: 0.86;
   cursor: not-allowed;
+}
+
+.superadmin-module-Option span {
+  flex: 1;
+  line-height: 1.35;
+}
+
+/* ============================================================================
+ * Biểu đồ SVG Kinh tế, Donut & So sánh Trường (SuperAdminCharts)
+ * ============================================================================ */
+.sa-chart-wrapper {
+  width: 100%;
+}
+
+.sa-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+}
+
+.sa-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sa-chart-legend i,
+.sa-donut-label i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.sa-svg-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.sa-chart-tooltip-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-top: 8px;
+  padding: 9px 13px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  font-size: 12.5px;
+  color: #1e293b;
+}
+
+.sa-chart-empty {
+  padding: 36px 16px;
+  text-align: center;
+  color: #64748b;
+  font-size: 13px;
+  background: #f8fafc;
+  border-radius: 12px;
+  border: 1px dashed #cbd5e1;
+}
+
+.sa-donut-layout {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.sa-donut-figure {
+  flex: 0 0 auto;
+  margin: 0 auto;
+}
+
+.sa-donut-details {
+  flex: 1 1 230px;
+  display: grid;
+  gap: 10px;
+}
+
+.sa-donut-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  font-size: 12.5px;
+}
+
+.sa-donut-row.sa-donut-net {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.sa-donut-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.sa-horizontal-bars {
+  display: grid;
+  gap: 12px;
+  max-height: 310px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.sa-hbar-item {
+  padding: 10px 12px;
+  border-radius: 11px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.sa-hbar-item.compact {
+  padding: 8px 12px;
+}
+
+.sa-hbar-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  margin-bottom: 6px;
+}
+
+.sa-hbar-metrics {
+  font-size: 12px;
+  color: #475569;
+}
+
+.sa-hbar-dual {
+  display: grid;
+  gap: 5px;
+}
+
+.sa-hbar-track {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.sa-hbar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+
+.sa-hbar-fill.blue { background: #2563eb; }
+.sa-hbar-fill.green { background: #16a34a; }
+.sa-hbar-fill.purple { background: #7c3aed; }
+.sa-hbar-fill.teal { background: #0d9488; }
+.sa-hbar-fill.light-amber { background: #fde68a; }
+
+/* ============================================================================
+ * Bảng Hỗ trợ Nhanh Các Trường (Quick Support Strip)
+ * ============================================================================ */
+.sa-quick-support-card {
+  padding: 20px 22px;
+  margin-bottom: 22px;
+  border-radius: 16px;
+  border: 1px solid #bfdbfe;
+  background: linear-gradient(135deg, #f8fbff, #eff6ff);
+}
+
+.sa-quick-support-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.sa-quick-school-box {
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: #ffffff;
+  border: 1px solid #dbeafe;
+  box-shadow: 0 3px 10px rgba(30, 64, 175, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sa-quick-webhook-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  font-size: 11.5px;
+}
+
+.sa-quick-webhook-line code {
+  font-weight: 700;
+  color: #1e3a8a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .superadmin-report-tabs {
@@ -274,4 +515,3 @@
   color: #991b1b;
   border-bottom-color: #fecaca;
 }
-

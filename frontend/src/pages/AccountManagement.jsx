@@ -7,15 +7,15 @@ import ParentAccountPanel from '../components/ParentAccountPanel';
 import StudentProfileChangeRequests from './StudentProfileChangeRequests';
 import { createInternalAccount, deactivateInternalAccount, getInternalAccounts, updateInternalAccount } from '../api/systemUsers';
 import { getEmployees } from '../api/hr';
-import { getStoredUser } from '../utils/storage';
+import { getStoredTenant, getStoredUser } from '../utils/storage';
 
 const roleOptions = [
-  { value: 'principal', label: 'Hiệu trưởng' },
-  { value: 'teacher', label: 'Giáo viên' },
-  { value: 'accountant', label: 'Kế toán' },
-  { value: 'chef', label: 'Nhân viên bếp' },
-  { value: 'guard', label: 'Bảo vệ' },
-  { value: 'hr', label: 'Nhân sự (HR)' }
+  { value: 'principal', label: 'Ban Giám đốc / Hiệu trưởng' },
+  { value: 'teacher', label: 'Giáo viên đứng lớp' },
+  { value: 'chef', label: 'Đầu bếp / Dinh dưỡng' },
+  { value: 'accountant', label: 'Kế toán học phí' },
+  { value: 'hr', label: 'Nhân sự & Tiền lương (HR)' },
+  { value: 'guard', label: 'Bảo vệ & An ninh cổng' }
 ];
 const statusOptions = { active: 'Đang hoạt động', suspended: 'Tạm ngưng', inactive: 'Đã thu hồi' };
 const emptyForm = { existingEmployeeId: '', fullName: '', username: '', password: '', phone: '', email: '', role: 'teacher', status: 'active' };
@@ -71,6 +71,9 @@ export default function AccountManagement() {
   const [form, setForm] = useState(emptyForm);
   const [editingAccount, setEditingAccount] = useState(null);
   const [showModal, setShowModal] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [handoverCredential, setHandoverCredential] = useState(null);
+  const [copiedHandover, setCopiedHandover] = useState(false);
   const [modalError, setModalError] = useState('');
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 0 });
@@ -242,40 +245,90 @@ export default function AccountManagement() {
 
   const setField = (field, value) => setForm((current) => ({ ...current, [field]: value }));
 
+  const generateQuickPassword = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    let pass = 'Hn@';
+    for (let i = 0; i < 6; i += 1) {
+      pass += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    setForm((current) => ({ ...current, password: pass }));
+    setShowPassword(true);
+  };
+
+  const copyHandoverInfo = async () => {
+    if (!handoverCredential) return;
+    const text = [
+      `Trường: ${handoverCredential.schoolName}${handoverCredential.schoolCode ? ` (${handoverCredential.schoolCode})` : ''}`,
+      `Họ tên: ${handoverCredential.fullName}`,
+      `Vai trò: ${handoverCredential.roleLabel}`,
+      `Tên đăng nhập: ${handoverCredential.username}`,
+      `Mật khẩu: ${handoverCredential.password}`,
+      `Đường dẫn đăng nhập: ${window.location.origin}/login`
+    ].join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedHandover(true);
+      window.setTimeout(() => setCopiedHandover(false), 2500);
+    } catch {
+      // Bỏ qua nếu trình duyệt chặn clipboard
+    }
+  };
+
   const submit = async (event) => {
     event.preventDefault();
     setSaving(true);
     setModalError('');
+    const currentSchool = getStoredTenant() || {};
+    const roleLabel = roleOptions.find((r) => r.value === form.role)?.label || form.role;
     try {
       if (editingAccount) {
         const payload = {
-          username: form.username,
+          username: form.username.trim(),
           role: form.role,
           status: form.status,
-          profile: { fullName: form.fullName, phone: form.phone, email: form.email }
+          profile: { fullName: form.fullName.trim(), phone: form.phone.trim(), email: form.email.trim() }
         };
         if (form.password) payload.password = form.password;
         await updateInternalAccount(editingAccount._id, payload);
-        setNotice({ type: 'success', text: `Đã cập nhật tài khoản @${form.username}.` });
+        if (form.password) {
+          setHandoverCredential({
+            schoolCode: currentSchool.code || getStoredUser()?.schoolCode || '',
+            schoolName: currentSchool.name || 'Nhà trường',
+            fullName: form.fullName.trim(),
+            username: form.username.trim(),
+            password: form.password,
+            roleLabel
+          });
+        }
+        setNotice({ type: 'success', text: `Đã cập nhật tài khoản @${form.username.trim()}.` });
       } else {
         const createRes = await createInternalAccount({
-          username: form.username,
+          username: form.username.trim(),
           password: form.password,
           role: form.role,
           ...(form.existingEmployeeId ? { existingEmployeeId: form.existingEmployeeId } : {}),
-          profile: { fullName: form.fullName, phone: form.phone, email: form.email }
+          profile: { fullName: form.fullName.trim(), phone: form.phone.trim(), email: form.email.trim() }
         });
         const createdAccount = createRes.data?.data;
         if (createdAccount?._id) {
           setHighlightedAccountId(createdAccount._id);
         }
+        setHandoverCredential({
+          schoolCode: currentSchool.code || getStoredUser()?.schoolCode || '',
+          schoolName: currentSchool.name || 'Nhà trường',
+          fullName: form.fullName.trim(),
+          username: form.username.trim(),
+          password: form.password,
+          roleLabel
+        });
         setNotice({
           type: 'success',
           text: form.existingEmployeeId
-            ? `Đã tạo tài khoản @${form.username} và liên kết với hồ sơ nhân sự ${createdAccount?.employeeId || ''} (giữ nguyên mức lương & hợp đồng).`
-            : `Đã tạo tài khoản @${form.username} và hồ sơ nhân sự mới. Hãy thiết lập mức lương tại mục Nhân sự.`
+            ? `Đã tạo tài khoản @${form.username.trim()} (${roleLabel}) và liên kết hồ sơ nhân sự ${createdAccount?.employeeId || ''}.`
+            : `Đã tạo tài khoản @${form.username.trim()} (${roleLabel}) kèm hồ sơ nhân sự mới.`
         });
       }
+      setShowPassword(false);
       dismissModal();
       if (page !== 1) setPage(1);
       else await load();
@@ -317,6 +370,30 @@ export default function AccountManagement() {
         <div className={`timekeeping-notice ${notice.type}`}>
           <Icon name={notice.type === 'success' ? 'check' : 'shield'} size={17} />
           {notice.text}
+        </div>
+      )}
+
+      {handoverCredential && (
+        <div className="credential-handover-card">
+          <div>
+            <h3>✓ Phiếu bàn giao tài khoản nhân sự vừa cấp ({handoverCredential.roleLabel})</h3>
+            <div className="credential-handover-grid">
+              <span>Nhân sự: <strong>{handoverCredential.fullName}</strong></span>
+              <span>Tên đăng nhập: <code>{handoverCredential.username}</code></span>
+              <span>Mật khẩu: <code>{handoverCredential.password}</code></span>
+              {handoverCredential.schoolCode && (
+                <span>Mã trường: <code>{handoverCredential.schoolCode}</code></span>
+              )}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <button type="button" className="button button-primary" onClick={copyHandoverInfo}>
+              <Icon name="copy" size={15} /> {copiedHandover ? 'Đã sao chép!' : 'Sao chép gửi nhân sự'}
+            </button>
+            <button type="button" className="button button-secondary" onClick={() => setHandoverCredential(null)}>
+              Ẩn
+            </button>
+          </div>
         </div>
       )}
 
@@ -582,7 +659,7 @@ export default function AccountManagement() {
                   : 'Mỗi tài khoản có một vai trò và được tạo cùng hồ sơ nhân sự. Lương mặc định là 0 cho tới khi HR thiết lập. Phụ huynh đăng ký ở trang riêng.'}
               </p>
 
-              <form className="student-form account-modal-form" onSubmit={submit}>
+              <form className="student-form account-modal-form" autoComplete="off" onSubmit={submit}>
                 <div className="student-form-grid">
                   {!editingAccount && unlinkedEmployees.length > 0 && (
                     <label className="form-wide">
@@ -603,8 +680,9 @@ export default function AccountManagement() {
                     </label>
                   )}
                   <label>
-                    Họ và tên
+                    Họ và tên *
                     <input
+                      autoComplete="off"
                       value={form.fullName}
                       onChange={(event) => setField('fullName', event.target.value)}
                       placeholder="Nhập họ và tên đầy đủ"
@@ -612,11 +690,12 @@ export default function AccountManagement() {
                     />
                   </label>
                   <label>
-                    Tên đăng nhập
+                    Tên đăng nhập *
                     <input
+                      autoComplete="off"
                       value={form.username}
                       onChange={(event) => setField('username', event.target.value)}
-                      placeholder="Ví dụ: nguyenvana"
+                      placeholder="Ví dụ: giamdoc_cs1, giaovien_mam1, daubep01"
                       minLength="3"
                       maxLength="50"
                       required
@@ -625,6 +704,7 @@ export default function AccountManagement() {
                   <label>
                     Số điện thoại
                     <input
+                      autoComplete="off"
                       value={form.phone}
                       onChange={(event) => setField('phone', event.target.value)}
                       placeholder="Không bắt buộc"
@@ -634,13 +714,14 @@ export default function AccountManagement() {
                     Email
                     <input
                       type="email"
+                      autoComplete="off"
                       value={form.email}
                       onChange={(event) => setField('email', event.target.value)}
                       placeholder="Không bắt buộc"
                     />
                   </label>
                   <label>
-                    Vai trò
+                    Vai trò phân quyền trong trường *
                     <select
                       value={form.role}
                       onChange={(event) => setField('role', event.target.value)}
@@ -651,7 +732,7 @@ export default function AccountManagement() {
                         </option>
                       ))}
                     </select>
-                    <small>Mỗi tài khoản chỉ được gán một vai trò.</small>
+                    <small>Admin trường cấp tài khoản cho Ban Giám đốc/Hiệu trưởng, Giáo viên, Đầu bếp, Kế toán, Nhân sự, Bảo vệ.</small>
                   </label>
                   {editingAccount && (
                     <label>
@@ -669,16 +750,34 @@ export default function AccountManagement() {
                     </label>
                   )}
                   <label className="form-wide">
-                    {editingAccount ? 'Đặt lại mật khẩu (để trống nếu giữ nguyên)' : 'Mật khẩu tạm thời'}
-                    <input
-                      type="password"
-                      value={form.password}
-                      onChange={(event) => setField('password', event.target.value)}
-                      minLength={editingAccount && !form.password ? 0 : 8}
-                      maxLength="72"
-                      placeholder={editingAccount ? 'Để trống nếu không đổi mật khẩu' : 'Tối thiểu 8 ký tự'}
-                      required={!editingAccount}
-                    />
+                    {editingAccount ? 'Đặt lại mật khẩu (để trống nếu giữ nguyên)' : 'Mật khẩu khởi tạo (tối thiểu 8 ký tự) *'}
+                    <div className="password-field-group">
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        autoComplete="new-password"
+                        value={form.password}
+                        onChange={(event) => setField('password', event.target.value)}
+                        minLength={editingAccount && !form.password ? 0 : 8}
+                        maxLength="72"
+                        placeholder={editingAccount ? 'Để trống nếu không đổi mật khẩu' : 'Nhập tối thiểu 8 ký tự hoặc bấm Tạo nhanh'}
+                        required={!editingAccount}
+                      />
+                      <button
+                        type="button"
+                        className="password-field-btn"
+                        onClick={() => setShowPassword((v) => !v)}
+                      >
+                        <Icon name={showPassword ? 'eyeOff' : 'eye'} size={15} />
+                        {showPassword ? 'Ẩn' : 'Hiện'}
+                      </button>
+                      <button
+                        type="button"
+                        className="password-field-btn"
+                        onClick={generateQuickPassword}
+                      >
+                        Tạo mật khẩu chuẩn
+                      </button>
+                    </div>
                   </label>
                 </div>
                 <div className="form-actions account-modal-actions">
