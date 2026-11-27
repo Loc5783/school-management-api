@@ -10,7 +10,7 @@ Hệ thống đã được đóng gói theo mô hình **Unified Full-Stack Produ
 
 | Dịch vụ | Container | Image / Công nghệ | Cổng mặc định | Vai trò |
 | :--- | :--- | :--- | :--- | :--- |
-| **`backend`** | `school-backend` | `node:22-alpine` (nhúng sẵn React 19 Production + Express 5) | `http://localhost:5001` | **Chạy cả Giao diện Web SPA lẫn toàn bộ API `/api/*`** trên duy nhất 1 cổng (host 5001 → container 5000) |
+| **`backend`** | `school-backend` | `node:22-alpine` (nhúng sẵn React 19 Production + Express 5) | `http://localhost:5001` | **Chạy cả Giao diện Web SPA lẫn toàn bộ API `/api/*`** trên duy nhất 1 cổng (`5001`) |
 | **`mongodb`** | `school-mongodb` | `mongo:7.0` (Replica Set `rs0`) | `127.0.0.1:27019` | Lưu trữ dữ liệu bền vững và hỗ trợ ACID Transaction đa bảng (tránh đụng cổng `27017` trên Windows) |
 
 ### Dữ liệu bền vững (Named Volumes)
@@ -56,7 +56,7 @@ docker compose logs -f backend
 > cd backend
 > npm run start:prod
 > ```
-> Lệnh này sẽ tự build Frontend ra Production (`frontend/dist`) rồi chạy `node server.js` — mở `http://localhost:5000` là dùng được ngay cả Frontend lẫn Backend!
+> Lệnh này sẽ tự build Frontend ra Production (`frontend/dist`) rồi chạy `node server.js` — mở `http://localhost:5001` là dùng được ngay cả Frontend lẫn Backend!
 
 ### Tài khoản Admin được tạo tự động khi DB trống
 - **Mã trường (School Code):** `HOANANG-A` *(đã được điền sẵn trên màn hình đăng nhập)*

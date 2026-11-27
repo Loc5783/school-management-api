@@ -8,9 +8,9 @@ Tài liệu kỹ thuật toàn diện của dự án `school-management-api` đ�
 
 | Đường dẫn | Mục đích sử dụng |
 | :--- | :--- |
-| **`http://localhost:5000/api-docs`** *(hoặc `/api/docs`)* | Giao diện **Swagger UI** trực quan: tra cứu toàn bộ API theo 15 nhóm nghiệp vụ, tìm kiếm nhanh (`Filter`), gắn JWT Token (`Authorize`), bấm gọi thử (`Try it out`) và xem chi tiết toàn bộ 74 bảng MongoDB ở mục **Schemas** cuối trang. |
-| **`http://localhost:5000/api-docs.json`** *(hoặc `/api/openapi.json`)* | Tập tin đặc tả **OpenAPI 3.0.3 JSON** thô để Import 1 chạm vào **Postman**, **Insomnia**, **Apidog** hoặc trình sinh mã TypeScript/Mobile. |
-| **`http://localhost:5000/api/docs/database`** | API trả về **Từ điển Cơ sở dữ liệu 7 Phân vùng (Database Dictionary)** dạng JSON gồm danh sách bảng vật lý (`collectionName`), số trường, khóa ngoại (`ref`) liên kết giữa các bảng và danh sách `Indexes` (bao gồm các compound unique index cách ly `tenantId`). |
+| **`http://localhost:5001/api-docs`** *(hoặc `/api/docs`)* | Giao diện **Swagger UI** trực quan: tra cứu toàn bộ API theo 15 nhóm nghiệp vụ, tìm kiếm nhanh (`Filter`), gắn JWT Token (`Authorize`), bấm gọi thử (`Try it out`) và xem chi tiết toàn bộ 74 bảng MongoDB ở mục **Schemas** cuối trang. |
+| **`http://localhost:5001/api-docs.json`** *(hoặc `/api/openapi.json`)* | Tập tin đặc tả **OpenAPI 3.0.3 JSON** thô để Import 1 chạm vào **Postman**, **Insomnia**, **Apidog** hoặc trình sinh mã TypeScript/Mobile. |
+| **`http://localhost:5001/api/docs/database`** | API trả về **Từ điển Cơ sở dữ liệu 7 Phân vùng (Database Dictionary)** dạng JSON gồm danh sách bảng vật lý (`collectionName`), số trường, khóa ngoại (`ref`) liên kết giữa các bảng và danh sách `Indexes` (bao gồm các compound unique index cách ly `tenantId`). |
 
 ---
 

@@ -5,7 +5,7 @@
  *
  * Mục đích:
  * - Cho phép triển khai hợp nhất (Single-Process / Single-Container): chỉ cần khởi chạy Backend (`node server.js`)
- *   trên một cổng duy nhất (mặc định `5000`) là phục vụ trọn vẹn cả `/api/*` lẫn giao diện React SPA (`index.html`).
+ *   trên một cổng duy nhất (mặc định `5001`) là phục vụ trọn vẹn cả `/api/*` lẫn giao diện React SPA (`index.html`).
  * - Hỗ trợ điều hướng phía trình duyệt (React Router v7 SPA Fallback) mà không bao giờ nuốt nhầm các đường dẫn `/api/*`.
  */
 

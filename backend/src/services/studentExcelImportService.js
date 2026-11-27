@@ -557,10 +557,10 @@ const validateStudentRowStrict = (item, rowNumber, _now = new Date(), is1904 = f
   const primaryParent = parents[0];
   const emergencyContact = primaryParent
     ? {
-        name: primaryParent.fullName,
-        phone: primaryParent.phone,
-        relationship: { father: 'Bố', mother: 'Mẹ', guardian: 'Người giám hộ' }[primaryParent.relationship] || 'Phụ huynh'
-      }
+      name: primaryParent.fullName,
+      phone: primaryParent.phone,
+      relationship: { father: 'Bố', mother: 'Mẹ', guardian: 'Người giám hộ' }[primaryParent.relationship] || 'Phụ huynh'
+    }
     : {};
 
   // 8. Dị ứng & Bệnh lý

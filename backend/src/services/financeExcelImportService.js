@@ -771,14 +771,7 @@ const generateFeeScheduleTemplateWorkbook = async (context) => {
   dataSheet.getColumn(2).numFmt = '@';
   dataSheet.getColumn(8).numFmt = '@';
 
-  const classOptionList = ['Tất cả lớp (áp dụng chung)', ...classrooms.map((c) => String(c.name || '').trim()).filter(Boolean)];
-  const catSheet = workbook.addWorksheet('Danh mục');
-  catSheet.getCell('A1').value = 'Lớp học';
-  classOptionList.forEach((clsName, idx) => {
-    catSheet.getCell(`A${idx + 2}`).value = clsName;
-  });
-  catSheet.state = 'hidden';
-  const classListFormula = `'Danh mục'!$A$2:$A$${classOptionList.length + 1}`;
+  const classListFormula = `'Danh mục lớp'!$A$2:$A$${Math.max(2, classrooms.length + 2)}`;
 
   for (let r = 2; r <= MAX_ROWS + 1; r++) {
     const cellA = dataSheet.getCell(`A${r}`);

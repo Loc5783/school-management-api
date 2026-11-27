@@ -1313,9 +1313,9 @@ describe('QA & Security Evaluation Fixes — Full Replica Set Verification (phas
       .query({ search: 'Cháo thịt (ít muối [+' });
     expect(regexDishRes.status).toBe(200);
 
-    // 13.2 Gửi mảng vào query param (?search[]=a) trả 400 thay vì crash 500 TypeError .trim()
+    // 13.2 Gửi mảng lặp khóa vào query param (?search=an&search=binh trên Express 5) trả 400 thay vì crash 500 TypeError .trim()
     const arrayQueryStudent = await request(app)
-      .get('/api/students?search[]=an&search[]=binh')
+      .get('/api/students?search=an&search=binh')
       .set('Authorization', `Bearer ${tokenAdminA}`);
     expect(arrayQueryStudent.status).toBe(400);
 
@@ -1385,9 +1385,12 @@ describe('QA & Security Evaluation Fixes — Full Replica Set Verification (phas
     expect(overCapacityStudent.status).toBe(409);
 
     // 13.6 Cách ly dị ứng thực đơn giữa 2 trường: Admin Trường B không thể kiểm tra lớp của Trường A
+    const freshAdminB = await User.findById(adminB._id);
+    const freshTenantB = await Tenant.findById(tenantB._id);
+    const freshTokenAdminB = generateSchoolUserToken(freshAdminB, freshTenantB);
     const crossTenantAllergy = await request(app)
       .post('/api/nutrition/menus/check-allergies')
-      .set('Authorization', `Bearer ${tokenAdminB}`)
+      .set('Authorization', `Bearer ${freshTokenAdminB}`)
       .send({ classroomId: tinyClsId, days: [] });
     expect(crossTenantAllergy.status).toBe(404);
 

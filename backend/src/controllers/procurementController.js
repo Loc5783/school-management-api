@@ -103,7 +103,7 @@ const deleteItem = async (req, res) => {
 // ==============================
 const createProcurementRequest = async (req, res) => {
     try {
-        const { items, title, department, urgency, reason, note } = req.body || {};
+        const { items, category, requesterDepartment, department, urgency, reason, attachment } = req.body || {};
         if (!Array.isArray(items) || items.length === 0) {
             return res.status(400).json({ message: 'Đề xuất mua sắm phải có ít nhất một hạng mục' });
         }
@@ -135,11 +135,11 @@ const createProcurementRequest = async (req, res) => {
         const requesterName = req.user.profile?.fullName || req.user.username || 'Quản trị viên';
         const request = new ProcurementRequest({
             ...(tenantId ? { tenantId } : {}),
-            ...(title ? { title: String(title).trim().slice(0, 200) } : {}),
-            ...(department ? { department: String(department).trim().slice(0, 120) } : {}),
+            ...(category ? { category: String(category).trim() } : {}),
+            ...(requesterDepartment || department ? { requesterDepartment: String(requesterDepartment || department).trim().slice(0, 120) } : {}),
             ...(urgency ? { urgency } : {}),
             ...(reason ? { reason: String(reason).trim().slice(0, 1000) } : {}),
-            ...(note ? { note: String(note).trim().slice(0, 1000) } : {}),
+            ...(attachment ? { attachment: String(attachment).trim().slice(0, 1000) } : {}),
             status: 'pending',
             items: processedItems,
             totalEstimatedCost,

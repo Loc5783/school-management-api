@@ -1353,9 +1353,10 @@ const transferStudentClassroom = async (req, res) => {
             }).select('_id').session(session);
             for (const p of parentUsers) recipients.add(String(p._id));
 
+            const notifTenantId = req.tenantId || req.user?.tenantId || studentDoc.tenantId || null;
             for (const recipientId of recipients) {
                 await Notification.create([{
-                    ...(tenantId ? { tenantId } : {}),
+                    ...(notifTenantId ? { tenantId: notifTenantId } : {}),
                     recipientId,
                     title: `Học sinh ${studentDoc.fullName} chuyển lớp`,
                     message: `Học sinh ${studentDoc.fullName} (${studentDoc.studentCode}) đã được chuyển từ lớp ${fromClassroom.name} sang lớp ${toClassroom.name}. Lý do: ${cleanReason}`,

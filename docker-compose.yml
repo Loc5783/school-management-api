@@ -57,11 +57,11 @@ services:
     environment:
       NODE_ENV: production
       RUNNING_IN_DOCKER: "true"
-      PORT: 5000
+      PORT: 5001
       HOST: 0.0.0.0
       FRONTEND_DIST_PATH: /app/public
     ports:
-      - "5001:5000"
+      - "5001:5001"
     volumes:
       - backend_uploads:/app/uploads
     networks:

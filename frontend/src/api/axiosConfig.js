@@ -2,7 +2,7 @@ import axios from 'axios';
 import { clearAuthSession } from '../utils/storage';
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || (typeof window !== 'undefined' ? '/api' : 'http://127.0.0.1:5000/api'),
+  baseURL: import.meta.env.VITE_API_URL || (typeof window !== 'undefined' ? '/api' : 'http://127.0.0.1:5001/api'),
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' }
 });

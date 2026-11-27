@@ -25,7 +25,7 @@ RUN apk add --no-cache tzdata
 ENV TZ=Asia/Ho_Chi_Minh \
     NODE_ENV=production \
     RUNNING_IN_DOCKER=true \
-    PORT=5000 \
+    PORT=5001 \
     HOST=0.0.0.0 \
     FRONTEND_DIST_PATH=/app/public
 
@@ -46,10 +46,10 @@ RUN sed -i 's/\r$//' /app/docker-entrypoint.sh \
     && chown -R node:node /app/uploads /app/docker-entrypoint.sh
 
 USER node
-EXPOSE 5000
+EXPOSE 5001
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
-  CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || 5000) + '/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || 5001) + '/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["node", "server.js"]

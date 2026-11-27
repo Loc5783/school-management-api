@@ -2,7 +2,7 @@
 
 /**
  * @fileoverview Entrypoint khởi động máy chủ Backend (`npm start` / `npm run dev`).
- * Mặc định khởi chạy ứng dụng chuẩn SaaS Multi-Tenant (`phase1e`) trên toàn mạng LAN (`0.0.0.0:5000`),
+ * Mặc định khởi chạy ứng dụng chuẩn SaaS Multi-Tenant (`phase1e`) trên toàn mạng LAN (`0.0.0.0:5001`),
  * hỗ trợ đăng nhập theo mã trường (`HOANANG-A`, `HOANANG-B`) cũng như nhận Webhook máy chấm công Hikvision.
  */
 
@@ -23,7 +23,7 @@ const { startStaffHandoverScheduler } = require('./src/services/staffHandoverSer
 // Tránh tự động ghi đè compound unique index khi khởi động tiến trình web
 mongoose.set('autoIndex', false);
 
-const PORT = Number(process.env.PORT || 5000);
+const PORT = Number(process.env.PORT || 5001);
 const HOST = process.env.HOST || '0.0.0.0';
 const useLegacyApp = process.env.USE_LEGACY_APP === 'true';
 const schedulerEnabled = process.env.TIMEKEEPING_SCHEDULER_ENABLED === 'true';

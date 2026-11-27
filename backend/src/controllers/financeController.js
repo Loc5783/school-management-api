@@ -18,15 +18,8 @@ const { runStudentTransaction } = require('../services/studentCoreService');
 const { lockOpenPeriod, fromPeriod } = require('../services/accountingPeriodService');
 const { assertTenantContext, buildTenantFilter, resolveTenantContext } = require('../services/tenantFilterService');
 
+const { escapeRegex } = require('../utils/controllerError');
 const PERIOD_PATTERN = /^(0[1-9]|1[0-2])-20\d{2}$/;
-const escapeRegex = (raw) => String(raw || '').replace(/[.*+?^${}()|[\]\\]/g, '\\const PERIOD_PATTERN = /^(0[1-9]|1[0-2])-\d{4}$/;
-const parseMoney = (value, field) => {
-    const amount = Number(value ?? 0);
-    if (!Number.isFinite(amount) || amount < 0) {
-        const error = new Error(`${field} phải là số không âm`); error.statusCode = 400; throw error;
-    }
-    return amount;
-};');
 const parseMoney = (value, field) => {
     if (value !== null && value !== undefined && typeof value === 'object') {
         const error = new Error(`${field} không đúng định dạng số`); error.statusCode = 400; throw error;
