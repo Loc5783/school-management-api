@@ -1,0 +1,277 @@
+/* ============================================================================
+ * Giao diện Trung tâm Điều hành Hệ thống Đa Trường (SuperAdmin Control Center)
+ * ============================================================================ */
+
+.superadmin-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(235px, 1fr));
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.superadmin-kpi-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 18px 20px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+.superadmin-kpi-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.superadmin-kpi-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  flex-shrink: 0;
+}
+
+.superadmin-kpi-icon.blue { background: #dbeafe; color: #1d4ed8; }
+.superadmin-kpi-icon.amber { background: #fef3c7; color: #b45309; }
+.superadmin-kpi-icon.green { background: #dcfce7; color: #15803d; }
+.superadmin-kpi-icon.purple { background: #ede9fe; color: #6d28d9; }
+.superadmin-kpi-icon.rose { background: #ffe4e6; color: #be123c; }
+.superadmin-kpi-icon.teal { background: #ccfbf1; color: #0f766e; }
+
+.superadmin-kpi-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.superadmin-kpi-body small {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.superadmin-kpi-body strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 20px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.superadmin-kpi-sub {
+  display: block;
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: #475569;
+}
+
+.superadmin-two-col {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 18px;
+  margin-bottom: 22px;
+}
+
+@media (max-width: 1024px) {
+  .superadmin-two-col {
+    grid-template-columns: 1fr;
+  }
+}
+
+.superadmin-health-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+@media (max-width: 600px) {
+  .superadmin-health-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.superadmin-health-box {
+  padding: 13px 15px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+
+.superadmin-health-box small {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.superadmin-health-box strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 15.5px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.superadmin-progress-track {
+  width: 100%;
+  height: 8px;
+  margin-top: 7px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.superadmin-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+
+.superadmin-progress-fill.blue { background: #2563eb; }
+.superadmin-progress-fill.green { background: #16a34a; }
+.superadmin-progress-fill.amber { background: #d97706; }
+.superadmin-progress-fill.rose { background: #e11d48; }
+
+.superadmin-alert-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  max-height: 310px;
+  overflow-y: auto;
+}
+
+.superadmin-alert-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.superadmin-alert-item.critical {
+  background: #fff1f2;
+  border-color: #fecdd3;
+}
+
+.superadmin-alert-item.warning {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+.superadmin-alert-item.info {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.superadmin-module-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.superadmin-module-Option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+  cursor: pointer;
+}
+
+.superadmin-module-Option.checked {
+  background: #eff6ff;
+  border-color: #60a5fa;
+  color: #1e3a8a;
+}
+
+.superadmin-module-Option.locked {
+  opacity: 0.8;
+  cursor: not-allowed;
+}
+
+.superadmin-report-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 12px 0 16px;
+  border-bottom: 1px solid #e2e8f0;
+  margin-bottom: 16px;
+}
+
+.superadmin-report-tab {
+  padding: 8px 15px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.superadmin-report-tab.active {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #ffffff;
+}
+
+.superadmin-nav-pill-count {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}
+
+.superadmin-nav-pill-count.alert {
+  background: #ef4444;
+  color: #ffffff;
+}
+
+.system-global-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 22px;
+  font-size: 13.5px;
+  font-weight: 600;
+  border-bottom: 1px solid transparent;
+}
+
+.system-global-banner.info {
+  background: #eff6ff;
+  color: #1e40af;
+  border-bottom-color: #bfdbfe;
+}
+
+.system-global-banner.warning {
+  background: #fffbeb;
+  color: #92400e;
+  border-bottom-color: #fde68a;
+}
+
+.system-global-banner.critical {
+  background: #fef2f2;
+  color: #991b1b;
+  border-bottom-color: #fecaca;
+}
+

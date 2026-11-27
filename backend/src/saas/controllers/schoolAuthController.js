@@ -23,6 +23,7 @@ const PlatformAdmin = require('../../models/zone1_system/PlatformAdmin');
 const RevokedSession = require('../../models/zone1_system/RevokedSession');
 const { generateSchoolUserToken, generatePlatformAdminToken } = require('../utils/saasJwt');
 const { isHoneypotTriggered } = require('../../middlewares/botScannerShield');
+const { ALL_ENABLED_MODULES, sanitizeEnabledModules, getSystemSettings } = require('../../services/superAdminControlService');
 
 const buildSuperAdminPayload = (platformAdmin) => ({
   success: true,
@@ -42,10 +43,30 @@ const buildSuperAdminPayload = (platformAdmin) => ({
 });
 
 const buildSchoolUserPayload = async (user, tenant) => {
-  user.lastLogin = new Date();
-  await user.save();
+  const settings = await getSystemSettings();
+  if (settings.maintenanceMode?.enabled) {
+    throw Object.assign(
+      new Error(settings.maintenanceMode.message || 'Hệ thống đang bảo trì nâng cấp định kỳ.'),
+      { statusCode: 503, code: 'MAINTENANCE_MODE' }
+    );
+  }
 
-  const token = generateSchoolUserToken(user, tenant);
+  user.lastLogin = new Date();
+  if (typeof user.save === 'function') {
+    await user.save();
+  } else {
+    await User.updateOne({ _id: user._id }, { $set: { lastLogin: user.lastLogin } });
+  }
+
+  const sessionHours = settings.securityPolicy?.sessionTimeoutHours;
+  const expiresIn = Number.isInteger(sessionHours) && sessionHours >= 1 && sessionHours <= 72
+    ? `${sessionHours}h`
+    : undefined;
+  const token = generateSchoolUserToken(user, tenant, expiresIn);
+  const resolvedModules = tenant.config?.moduleGateConfigured
+    ? sanitizeEnabledModules(tenant.enabledModules)
+    : [...ALL_ENABLED_MODULES];
+
   return {
     success: true,
     message: 'Đăng nhập thành công',
@@ -55,7 +76,10 @@ const buildSchoolUserPayload = async (user, tenant) => {
       id: tenant._id,
       code: tenant.code,
       name: tenant.name,
-      status: tenant.status
+      status: tenant.status,
+      enabledModules: resolvedModules,
+      moduleGateConfigured: Boolean(tenant.config?.moduleGateConfigured),
+      quotas: tenant.quotas || { maxCampuses: 10, maxStudents: 800, maxStaff: 200 }
     },
     user: {
       _id: user._id,
@@ -304,6 +328,13 @@ const login = async (req, res) => {
       message: 'Thông tin đăng nhập không chính xác'
     });
   } catch (err) {
+    if (err?.statusCode) {
+      return res.status(err.statusCode).json({
+        success: false,
+        ...(err.code ? { code: err.code } : {}),
+        message: err.message
+      });
+    }
     return res.status(500).json({
       success: false,
       message: 'Lỗi đăng nhập hệ thống'
@@ -316,14 +347,24 @@ const getMe = async (req, res) => {
     const user = req.user.toObject ? req.user.toObject() : req.user;
     delete user.passwordHash;
 
+    const resolvedModules = req.tenant
+      ? (req.tenant.config?.moduleGateConfigured
+          ? sanitizeEnabledModules(req.tenant.enabledModules)
+          : [...ALL_ENABLED_MODULES])
+      : null;
+
     return res.status(200).json({
       success: true,
       data: user,
       tenant: req.tenant ? {
+        _id: req.tenant._id,
         id: req.tenant._id,
         code: req.tenant.code,
         name: req.tenant.name,
-        status: req.tenant.status
+        status: req.tenant.status,
+        enabledModules: resolvedModules,
+        moduleGateConfigured: Boolean(req.tenant.config?.moduleGateConfigured),
+        quotas: req.tenant.quotas || { maxCampuses: 10, maxStudents: 800, maxStaff: 200 }
       } : null
     });
   } catch (err) {

@@ -234,6 +234,21 @@ const isSameIndexKeys = (keyA, keyB) => {
   return entriesA.every(([k, v], idx) => entriesB[idx][0] === k && entriesB[idx][1] === v);
 };
 
+// Nhóm Index phục vụ truy vấn đọc tần suất cao (Dashboard, Điểm danh, Học phí, Bếp ăn, Nhật ký)
+const PERFORMANCE_READ_INDEXES = [
+  { col: 'systemsettings', name: 'key_1_unique', keys: { key: 1 }, options: { unique: true } },
+  { col: 'studentattendances', name: 'perf_tenant_dateKey_1', keys: { tenantId: 1, attendanceDateKey: 1 } },
+  { col: 'studentattendances', name: 'perf_tenant_attendDate_class_1', keys: { tenantId: 1, attendDate: -1, classroomId: 1 } },
+  { col: 'attendancerecords', name: 'perf_tenant_workDate_user_1', keys: { tenantId: 1, workDate: -1, userId: 1 } },
+  { col: 'tuitionfees', name: 'perf_tenant_period_status_1', keys: { tenantId: 1, period: -1, status: 1 } },
+  { col: 'tuitionfees', name: 'perf_tenant_student_status_1', keys: { tenantId: 1, studentId: 1, status: 1 } },
+  { col: 'students', name: 'perf_tenant_status_class_1', keys: { tenantId: 1, status: 1, classroomId: 1 } },
+  { col: 'classrooms', name: 'perf_tenant_status_campus_1', keys: { tenantId: 1, status: 1, campus: 1 } },
+  { col: 'employees', name: 'perf_tenant_status_1', keys: { tenantId: 1, status: 1 } },
+  { col: 'foodsamples', name: 'perf_tenant_mealDate_status_1', keys: { tenantId: 1, mealDate: -1, status: 1 } },
+  { col: 'platformauditlogs', name: 'perf_createdAt_desc_1', keys: { createdAt: -1 } }
+];
+
 /**
  * Đảm bảo toàn bộ compound unique index đa trường đã tồn tại an toàn trên cả DB mới lẫn DB đã có dữ liệu.
  *
@@ -277,6 +292,15 @@ const ensureMultiTenantIndexes = async (db) => {
       if (existingIndexes.some((idx) => idx.name === oldName)) {
         await collection.dropIndex(oldName).catch(() => {});
       }
+    }
+  }
+
+  for (const perfIdx of PERFORMANCE_READ_INDEXES) {
+    try {
+      const collection = db.collection(perfIdx.col);
+      await collection.createIndex(perfIdx.keys, { name: perfIdx.name, ...(perfIdx.options || {}) });
+    } catch {
+      // Bỏ qua nếu index tương đương đã tồn tại dưới tên khác
     }
   }
 };

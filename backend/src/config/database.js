@@ -216,8 +216,23 @@ const connectDB = async () => {
     for (const candidateUri of candidates) {
       try {
         await mongoose.connect(candidateUri, {
-          serverSelectionTimeoutMS: timeoutMs
+          serverSelectionTimeoutMS: timeoutMs,
+          ...(isTestEnv
+            ? {}
+            : {
+                maxPoolSize: Number(process.env.MONGO_MAX_POOL_SIZE || 30),
+                minPoolSize: Number(process.env.MONGO_MIN_POOL_SIZE || 2),
+                socketTimeoutMS: 45000,
+                heartbeatFrequencyMS: 10000
+              })
         });
+
+        if (!isTestEnv && !mongoose.connection._runtimeListenersAttached) {
+          mongoose.connection._runtimeListenersAttached = true;
+          mongoose.connection.on('error', (connErr) => {
+            console.error('⚠️ [MongoDB Runtime Error]:', connErr.message);
+          });
+        }
 
         const hello = await mongoose.connection.db.admin().command({ hello: 1 });
         const isReplicaOrMongos = Boolean(hello.setName || hello.msg === 'isdbgrid');

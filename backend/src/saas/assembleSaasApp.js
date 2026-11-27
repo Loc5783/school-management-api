@@ -9,6 +9,7 @@ const {
   requestPayloadSanitizer,
   globalErrorHandler
 } = require('../middlewares/securityAndErrorMiddleware');
+const responseCompressionMiddleware = require('../middlewares/responseCompressionMiddleware');
 const { apiGeneralLimiter } = require('./middlewares/rateLimiter');
 const { tenantFeatureGate } = require('./middlewares/tenantFeatureGate');
 const schoolAuthRoutes = require('./routes/schoolAuthRoutes');
@@ -53,6 +54,7 @@ const assembleSaasApp = (options = {}) => {
   const app = express();
 
   applySecurityMiddleware(app);
+  app.use(responseCompressionMiddleware);
 
   // Tin cậy Reverse Proxy (Nginx trong Docker) khi biến TRUST_PROXY được cấu hình để express-rate-limit v8 không báo lỗi X-Forwarded-For
   if (process.env.TRUST_PROXY) {

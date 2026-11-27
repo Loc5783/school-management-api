@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import Icon from '../components/Icon';
-import StudentPagination from '../components/StudentPagination';
+import Icon from './Icon';
+import StudentPagination from './StudentPagination';
 import { downloadExcelTemplate, previewExcelImport, confirmExcelImport } from '../api/students';
 import { getStoredUser } from '../utils/storage';
 

@@ -1,17 +1,14 @@
 'use strict';
 
 /**
- * @fileoverview Bộ điều khiển Quản trị Tổng Hệ thống Đa Trường (`Admin Chung Toàn Bộ`).
+ * @fileoverview Bộ điều khiển Quản trị Tổng Hệ thống Đa Trường (`SuperAdmin Control Center`).
  *
- * Đáp ứng các yêu cầu nghiệp vụ cốt lõi:
- * 1. "admin là quản lý: chung toàn bộ / từng trường":
- *    - Quản trị Tổng (`PlatformAdmin`) xem tổng quan tất cả các trường trong hệ thống và có thể bấm
- *      "Vào quản lý trường" (`enterSchoolWorkspace`) để điều hành chi tiết từng trường, sau đó quay lại bảng tổng.
- * 2. "Mỗi trường 1 account riêng":
- *    - Khi tạo trường mới (`createSchoolWithAdmin`), hệ thống khởi tạo nguyên tử trong cùng Transaction:
- *      Hồ sơ Trường (`Tenant`) + Phân hiệu mặc định (`Cơ sở chính`) + Tài khoản Quản trị riêng của trường đó (`User`, `role: 'admin'`).
- * 3. "Phân trường, Phân hiệu":
- *    - Thống kê trực tiếp số lượng Phân hiệu, Lớp học, Học sinh và Nhân sự của từng trường bằng truy vấn `aggregate` gom nhóm (không N+1).
+ * Trách nhiệm:
+ * - Xác thực & bảo mật tài khoản Quản trị Tổng (`PlatformAdmin`).
+ * - Cung cấp Dashboard Hiệu năng, Sức khỏe Máy chủ & Báo cáo Tổng hợp các trường (`listAllSchoolsOverview`).
+ * - Cung cấp Báo cáo Chi tiết 360° từng trường (`getSchoolDetailedReportHandler`).
+ * - Khởi tạo trường mới kèm tài khoản Admin riêng, phân hệ chức năng (`enabledModules`) và hạn mức (`quotas`).
+ * - Quản lý Cấu hình Chung Hệ thống (`SystemSetting`) và Nhật ký Kiểm toán (`PlatformAuditLog`).
  */
 
 const bcrypt = require('bcryptjs');
@@ -20,32 +17,75 @@ const PlatformAdmin = require('../../models/zone1_system/PlatformAdmin');
 const PlatformAuditLog = require('../../models/zone1_system/PlatformAuditLog');
 const Tenant = require('../../models/zone1_system/Tenant');
 const User = require('../../models/zone1_system/User');
-const Classroom = require('../../models/zone3_school/Classroom');
-const Student = require('../../models/zone3_school/Student');
-const Employee = require('../../models/zone2_hr/Employee');
 const { ensureAllPermissions } = require('../../services/defaultAdminBootstrapService');
+const {
+  ALL_ENABLED_MODULES,
+  sanitizeEnabledModules,
+  getSystemSettings,
+  updateSystemSettings,
+  invalidatePlatformDashboardCache,
+  getPlatformDashboardAndSchools,
+  getSchoolDetailedReport,
+  listPlatformAuditLogs
+} = require('../../services/superAdminControlService');
 const { generatePlatformAdminToken, generateSchoolUserToken } = require('../utils/saasJwt');
 const { runSafeTransaction } = require('../../utils/safeTransaction');
 const { isHoneypotTriggered } = require('../../middlewares/botScannerShield');
 
 const TENANT_CODE_REGEX = /^[A-Z0-9_-]{3,20}$/;
 const BCRYPT_SALT_ROUNDS = 10;
-const ALL_ENABLED_MODULES = [
-  'students',
-  'classrooms',
-  'attendance',
-  'hr',
-  'timekeeping',
-  'finance',
-  'reports',
-  'nutrition',
-  'notifications',
-  'chat',
-  'pickups',
-  'guard',
-  'procurement',
-  'feedback'
-];
+
+const parseQuotasInput = (rawQuotas, defaultStandards = {}) => {
+  const maxCampuses = rawQuotas?.maxCampuses != null
+    ? Number(rawQuotas.maxCampuses)
+    : (defaultStandards.defaultMaxCampusesPerSchool || 10);
+  const maxStudents = rawQuotas?.maxStudents != null
+    ? Number(rawQuotas.maxStudents)
+    : (defaultStandards.defaultMaxStudentsPerSchool || 800);
+  const maxStaff = rawQuotas?.maxStaff != null
+    ? Number(rawQuotas.maxStaff)
+    : 200;
+
+  if (!Number.isInteger(maxCampuses) || maxCampuses < 1 || maxCampuses > 100) {
+    throw Object.assign(new Error('Hạn mức số phân hiệu tối đa phải là số nguyên từ 1 đến 100'), { statusCode: 422 });
+  }
+  if (!Number.isInteger(maxStudents) || maxStudents < 10 || maxStudents > 20000) {
+    throw Object.assign(new Error('Hạn mức số học sinh tối đa phải là số nguyên từ 10 đến 20.000'), { statusCode: 422 });
+  }
+  if (!Number.isInteger(maxStaff) || maxStaff < 5 || maxStaff > 5000) {
+    throw Object.assign(new Error('Hạn mức nhân sự tối đa phải là số nguyên từ 5 đến 5.000'), { statusCode: 422 });
+  }
+
+  return { maxCampuses, maxStudents, maxStaff };
+};
+
+/**
+ * API công khai nhẹ trả về Thương hiệu, System Banner & Chế độ bảo trì cho toàn hệ thống.
+ */
+const getPublicSystemMeta = async (req, res) => {
+  try {
+    const settings = await getSystemSettings();
+    return res.status(200).json({
+      success: true,
+      data: {
+        branding: settings.branding,
+        systemBanner: settings.systemBanner,
+        maintenanceMode: settings.maintenanceMode,
+        preschoolStandards: settings.preschoolStandards
+      }
+    });
+  } catch {
+    return res.status(200).json({
+      success: true,
+      data: {
+        branding: { systemName: 'Hệ thống Giáo dục Mầm non Hoa Nắng' },
+        systemBanner: { enabled: false, level: 'info', message: '' },
+        maintenanceMode: { enabled: false, message: '' },
+        preschoolStandards: { defaultSchoolYear: '2026-2027' }
+      }
+    });
+  }
+};
 
 /**
  * Đăng nhập cổng Quản trị Tổng Hệ thống Đa Trường (`Admin chung toàn bộ`).
@@ -127,12 +167,13 @@ const getSuperAdminMe = async (req, res) => {
 };
 
 /**
- * Cho phép tài khoản Quản trị Tổng (`admin`) tự đổi mật khẩu và/hoặc tên đăng nhập của chính mình.
- * Tự động tăng `authVersion` để thu hồi các phiên cũ và cấp lại `token` mới ngay lập tức.
+ * Cho phép tài khoản Quản trị Tổng tự đổi mật khẩu và/hoặc tên đăng nhập.
  */
 const changeSuperAdminPassword = async (req, res) => {
   try {
     const { currentPassword, newPassword, newUsername } = req.body || {};
+    const settings = await getSystemSettings();
+    const minLen = settings.securityPolicy?.minPasswordLength || 6;
 
     if (typeof currentPassword !== 'string' || !currentPassword) {
       return res.status(400).json({
@@ -140,10 +181,10 @@ const changeSuperAdminPassword = async (req, res) => {
         message: 'Vui lòng nhập mật khẩu hiện tại của Admin Tổng'
       });
     }
-    if (typeof newPassword !== 'string' || newPassword.length < 6) {
+    if (typeof newPassword !== 'string' || newPassword.length < minLen) {
       return res.status(422).json({
         success: false,
-        message: 'Mật khẩu mới của Admin Tổng phải từ 6 ký tự trở lên'
+        message: `Mật khẩu mới của Admin Tổng phải từ ${minLen} ký tự trở lên`
       });
     }
 
@@ -222,115 +263,103 @@ const changeSuperAdminPassword = async (req, res) => {
 };
 
 /**
- * Lấy danh sách toàn bộ các trường trong chuỗi kèm thống kê Phân hiệu, Lớp, Học sinh, Nhân sự và Account Admin riêng.
+ * Trả về toàn bộ Dashboard Hiệu năng, Cảnh báo, Sức khỏe Hệ thống & Danh sách Trường học.
  */
 const listAllSchoolsOverview = async (req, res) => {
   try {
-    const [tenants, classCounts, studentCounts, staffCounts, schoolAdmins] = await Promise.all([
-      Tenant.find({}).sort({ createdAt: 1 }).lean(),
-      Classroom.aggregate([
-        { $match: { status: 'active', tenantId: { $ne: null } } },
-        {
-          $group: {
-            _id: '$tenantId',
-            classCount: { $sum: 1 },
-            distinctCampuses: { $addToSet: { $ifNull: ['$campus', 'Cơ sở chính'] } }
-          }
-        }
-      ]),
-      Student.aggregate([
-        { $match: { status: { $in: ['enrolled', 'temporarily_absent'] }, tenantId: { $ne: null } } },
-        { $group: { _id: '$tenantId', studentCount: { $sum: 1 } } }
-      ]),
-      Employee.aggregate([
-        { $match: { status: { $in: ['active', 'on_leave'] }, tenantId: { $ne: null } } },
-        { $group: { _id: '$tenantId', staffCount: { $sum: 1 } } }
-      ]),
-      User.find({ role: 'admin', tenantId: { $ne: null } })
-        .select('username status profile tenantId lastLogin')
-        .sort({ createdAt: 1 })
-        .lean()
-    ]);
-
-    const classMap = new Map(classCounts.map((c) => [String(c._id), c]));
-    const studentMap = new Map(studentCounts.map((s) => [String(s._id), s.studentCount]));
-    const staffMap = new Map(staffCounts.map((e) => [String(e._id), e.staffCount]));
-    const adminsByTenant = new Map();
-    for (const adm of schoolAdmins) {
-      const tid = String(adm.tenantId);
-      if (!adminsByTenant.has(tid)) adminsByTenant.set(tid, []);
-      adminsByTenant.get(tid).push({
-        _id: adm._id,
-        username: adm.username,
-        fullName: adm.profile?.fullName || adm.username,
-        email: adm.profile?.email || '',
-        phone: adm.profile?.phone || '',
-        status: adm.status,
-        lastLogin: adm.lastLogin || null
-      });
-    }
-
-    const schools = tenants.map((t) => {
-      const tid = String(t._id);
-      const clsStat = classMap.get(tid);
-      const declaredCampuses = Array.isArray(t.campuses) && t.campuses.length > 0
-        ? t.campuses.map((c) => c.name).filter(Boolean)
-        : ['Cơ sở chính'];
-      const mergedCampusNames = [...new Set([...declaredCampuses, ...(clsStat?.distinctCampuses || [])])];
-      const admins = adminsByTenant.get(tid) || [];
-
-      return {
-        _id: t._id,
-        code: t.code,
-        name: t.name,
-        organizationCode: t.organizationCode || '',
-        contactEmail: t.contactEmail || '',
-        status: t.status,
-        campuses: Array.isArray(t.campuses) && t.campuses.length > 0
-          ? t.campuses
-          : [{ code: 'CS-CHINH', name: 'Cơ sở chính', address: '', phone: '', managerName: '', isActive: true }],
-        campusNames: mergedCampusNames,
-        campusCount: mergedCampusNames.length,
-        classCount: clsStat?.classCount || 0,
-        studentCount: studentMap.get(tid) || 0,
-        staffCount: staffMap.get(tid) || 0,
-        primaryAdmin: admins[0] || null,
-        adminAccounts: admins,
-        createdAt: t.createdAt
-      };
-    });
-
-    const summary = schools.reduce(
-      (acc, item) => {
-        acc.totalSchools += 1;
-        if (item.status === 'active') acc.activeSchools += 1;
-        acc.totalCampuses += item.campusCount;
-        acc.totalClassrooms += item.classCount;
-        acc.totalStudents += item.studentCount;
-        acc.totalStaff += item.staffCount;
-        return acc;
-      },
-      { totalSchools: 0, activeSchools: 0, totalCampuses: 0, totalClassrooms: 0, totalStudents: 0, totalStaff: 0 }
-    );
-
+    const dashboardData = await getPlatformDashboardAndSchools();
     return res.json({
       success: true,
-      data: {
-        summary,
-        schools
-      }
+      data: dashboardData
     });
   } catch (err) {
-    console.error('Lỗi tải danh sách trường học tổng:', err);
-    return res.status(500).json({ success: false, message: 'Không thể tải danh sách hệ thống trường học' });
+    console.error('Lỗi tải Dashboard hệ thống đa trường:', err);
+    return res.status(500).json({ success: false, message: 'Không thể tải dữ liệu điều hành hệ thống trường học' });
   }
 };
 
 /**
- * Tạo mới một Trường học kèm khởi tạo tự động 1 Tài khoản Admin riêng cho trường đó và danh mục Phân hiệu ban đầu.
+ * Trả về Báo cáo Chi tiết 360° của một trường cụ thể cho SuperAdmin.
+ */
+const getSchoolDetailedReportHandler = async (req, res) => {
+  try {
+    const report = await getSchoolDetailedReport(req.params.id);
+    return res.json({
+      success: true,
+      data: report
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.message || 'Không thể tải báo cáo chi tiết trường học'
+    });
+  }
+};
+
+/**
+ * Đọc Cấu hình Chung Hệ thống cho SuperAdmin.
+ */
+const getSystemSettingsHandler = async (req, res) => {
+  try {
+    const settings = await getSystemSettings({ bypassCache: true });
+    return res.json({
+      success: true,
+      data: settings
+    });
+  } catch {
+    return res.status(500).json({
+      success: false,
+      message: 'Không thể tải cấu hình chung hệ thống'
+    });
+  }
+};
+
+/**
+ * Lưu Cấu hình Chung Hệ thống do SuperAdmin chỉnh sửa.
+ */
+const updateSystemSettingsHandler = async (req, res) => {
+  try {
+    const updated = await updateSystemSettings(req.body || {}, req.platformAdmin);
+    return res.json({
+      success: true,
+      message: 'Đã lưu cấu hình chung toàn hệ thống thành công',
+      data: updated
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.message || 'Không thể lưu cấu hình chung hệ thống'
+    });
+  }
+};
+
+/**
+ * Xem Nhật ký Hoạt động & Bảo mật cấp Hệ thống (`PlatformAuditLog`).
+ */
+const listPlatformAuditLogsHandler = async (req, res) => {
+  try {
+    const result = await listPlatformAuditLogs(req.query || {});
+    return res.json({
+      success: true,
+      data: result.items,
+      pagination: result.pagination
+    });
+  } catch {
+    return res.status(500).json({
+      success: false,
+      message: 'Không thể tải nhật ký kiểm toán hệ thống'
+    });
+  }
+};
+
+/**
+ * Tạo mới một Trường học kèm khởi tạo tự động 1 Tài khoản Admin riêng, danh mục Phân hiệu, Module và Hạn mức.
  */
 const createSchoolWithAdmin = async (req, res) => {
   try {
+    const settings = await getSystemSettings();
+    const minPassLen = settings.securityPolicy?.minPasswordLength || 6;
+
     const {
       code,
       name,
@@ -340,7 +369,9 @@ const createSchoolWithAdmin = async (req, res) => {
       adminPassword,
       adminFullName = '',
       adminPhone = '',
-      initialCampuses = []
+      initialCampuses = [],
+      enabledModules,
+      quotas: rawQuotas
     } = req.body || {};
 
     const cleanCode = String(code || '').trim().toUpperCase();
@@ -366,10 +397,10 @@ const createSchoolWithAdmin = async (req, res) => {
         message: 'Tên đăng nhập tài khoản Admin trường chỉ gồm chữ không dấu, số, dấu chấm/gạch (3–50 ký tự)'
       });
     }
-    if (cleanAdminPass.length < 6) {
+    if (cleanAdminPass.length < minPassLen) {
       return res.status(422).json({
         success: false,
-        message: 'Mật khẩu tài khoản Admin trường phải từ 6 ký tự trở lên'
+        message: `Mật khẩu tài khoản Admin trường phải từ ${minPassLen} ký tự trở lên`
       });
     }
     const cleanEmail = String(contactEmail || '').trim().toLowerCase();
@@ -380,10 +411,14 @@ const createSchoolWithAdmin = async (req, res) => {
       });
     }
 
+    const quotas = parseQuotasInput(rawQuotas, settings.preschoolStandards);
+    const cleanModules = sanitizeEnabledModules(enabledModules || ALL_ENABLED_MODULES);
     const permissionIds = await ensureAllPermissions();
     const passwordHash = await bcrypt.hash(cleanAdminPass, BCRYPT_SALT_ROUNDS);
 
-    // Chuẩn bị danh sách phân hiệu ban đầu không trùng mã/tên và chuẩn hóa mã an toàn URL
+    const defaultOpen = settings.preschoolStandards?.standardCheckInTime || '07:00';
+    const defaultClose = settings.preschoolStandards?.standardCheckOutTime || '16:30';
+
     const seenNames = new Set();
     const seenCodes = new Set();
     const parsedCampuses = [];
@@ -408,6 +443,10 @@ const createSchoolWithAdmin = async (req, res) => {
           address: (typeof item === 'object' && item?.address) ? String(item.address).trim().slice(0, 300) : '',
           phone: (typeof item === 'object' && item?.phone) ? String(item.phone).trim().slice(0, 20) : '',
           managerName: (typeof item === 'object' && item?.managerName) ? String(item.managerName).trim().slice(0, 120) : '',
+          openTime: defaultOpen,
+          closeTime: defaultClose,
+          maxClassrooms: 20,
+          notes: '',
           isActive: true
         });
       });
@@ -420,7 +459,18 @@ const createSchoolWithAdmin = async (req, res) => {
         address: '',
         phone: '',
         managerName: '',
+        openTime: defaultOpen,
+        closeTime: defaultClose,
+        maxClassrooms: 20,
+        notes: '',
         isActive: true
+      });
+    }
+
+    if (parsedCampuses.length > quotas.maxCampuses) {
+      return res.status(422).json({
+        success: false,
+        message: `Số phân hiệu ban đầu (${parsedCampuses.length}) vượt quá hạn mức tối đa đã cấp (${quotas.maxCampuses})`
       });
     }
 
@@ -439,7 +489,9 @@ const createSchoolWithAdmin = async (req, res) => {
             organizationCode: String(organizationCode || '').trim().toUpperCase().slice(0, 40),
             contactEmail: cleanEmail,
             campuses: parsedCampuses,
-            enabledModules: ALL_ENABLED_MODULES,
+            enabledModules: cleanModules,
+            quotas,
+            config: { moduleGateConfigured: true },
             status: 'active',
             authVersion: 0
           }
@@ -479,7 +531,9 @@ const createSchoolWithAdmin = async (req, res) => {
               code: tenant.code,
               name: tenant.name,
               adminUsername: schoolAdmin.username,
-              campusCount: parsedCampuses.length
+              campusCount: parsedCampuses.length,
+              enabledModulesCount: cleanModules.length,
+              quotas
             }
           }
         ],
@@ -488,6 +542,8 @@ const createSchoolWithAdmin = async (req, res) => {
 
       return { createdSchool: tenant, createdAdmin: schoolAdmin };
     });
+
+    invalidatePlatformDashboardCache();
 
     return res.status(201).json({
       success: true,
@@ -514,7 +570,7 @@ const createSchoolWithAdmin = async (req, res) => {
 };
 
 /**
- * Cập nhật thông tin trường, trạng thái hoạt động, tên đăng nhập hoặc đặt lại mật khẩu tài khoản Admin riêng của trường.
+ * Cập nhật thông tin cấp Trường, Trạng thái, Gói Module, Hạn mức & Tài khoản Admin riêng của trường.
  */
 const updateSchoolAndAdmin = async (req, res) => {
   try {
@@ -523,7 +579,19 @@ const updateSchoolAndAdmin = async (req, res) => {
       return res.status(400).json({ success: false, message: 'ID trường học không hợp lệ' });
     }
 
-    const { name, organizationCode, contactEmail, status, adminUsername, newAdminPassword } = req.body || {};
+    const settings = await getSystemSettings();
+    const minPassLen = settings.securityPolicy?.minPasswordLength || 6;
+
+    const {
+      name,
+      organizationCode,
+      contactEmail,
+      status,
+      adminUsername,
+      newAdminPassword,
+      enabledModules,
+      quotas: rawQuotas
+    } = req.body || {};
 
     const resultData = await runSafeTransaction(async (session) => {
       const sessionOpt = session ? { session } : undefined;
@@ -554,6 +622,22 @@ const updateSchoolAndAdmin = async (req, res) => {
           tenant.authVersion = (tenant.authVersion || 0) + 1;
         }
       }
+      if (Array.isArray(enabledModules)) {
+        tenant.enabledModules = sanitizeEnabledModules(enabledModules);
+        tenant.config = { ...(tenant.config || {}), moduleGateConfigured: true };
+        tenant.markModified('config');
+      }
+      if (rawQuotas && typeof rawQuotas === 'object') {
+        const mergedQuotas = parseQuotasInput(
+          {
+            maxCampuses: rawQuotas.maxCampuses ?? tenant.quotas?.maxCampuses,
+            maxStudents: rawQuotas.maxStudents ?? tenant.quotas?.maxStudents,
+            maxStaff: rawQuotas.maxStaff ?? tenant.quotas?.maxStaff
+          },
+          settings.preschoolStandards
+        );
+        tenant.quotas = mergedQuotas;
+      }
       await tenant.save(sessionOpt);
 
       const cleanNextAdminUser = adminUsername != null ? String(adminUsername).trim() : '';
@@ -562,12 +646,12 @@ const updateSchoolAndAdmin = async (req, res) => {
       if (cleanNextAdminUser && (cleanNextAdminUser.length < 3 || cleanNextAdminUser.length > 50 || /\s/.test(cleanNextAdminUser))) {
         throw Object.assign(new Error('Tên đăng nhập Admin trường phải từ 3–50 ký tự và không chứa khoảng trắng'), { statusCode: 422 });
       }
-      if (cleanNewPass && cleanNewPass.length < 6) {
-        throw Object.assign(new Error('Mật khẩu mới của Admin trường phải từ 6 ký tự trở lên'), { statusCode: 422 });
+      if (cleanNewPass && cleanNewPass.length < minPassLen) {
+        throw Object.assign(new Error(`Mật khẩu mới của Admin trường phải từ ${minPassLen} ký tự trở lên`), { statusCode: 422 });
       }
 
       if (cleanNextAdminUser || cleanNewPass) {
-        let adminUser = await User.findOne({ tenantId: tenant._id, role: 'admin' }).sort({ createdAt: 1 }).session(session);
+        const adminUser = await User.findOne({ tenantId: tenant._id, role: 'admin' }).sort({ createdAt: 1 }).session(session);
         if (adminUser) {
           if (cleanNextAdminUser && cleanNextAdminUser !== adminUser.username) {
             const dup = await User.exists({
@@ -620,7 +704,13 @@ const updateSchoolAndAdmin = async (req, res) => {
             action: 'UPDATE_SCHOOL_CONFIG',
             targetType: 'tenant',
             targetId: String(tenant._id),
-            details: { code: tenant.code, status: tenant.status, passwordReset: Boolean(cleanNewPass) }
+            details: {
+              code: tenant.code,
+              status: tenant.status,
+              enabledModulesCount: tenant.enabledModules?.length,
+              quotas: tenant.quotas,
+              passwordReset: Boolean(cleanNewPass)
+            }
           }
         ],
         sessionOpt
@@ -629,9 +719,11 @@ const updateSchoolAndAdmin = async (req, res) => {
       return tenant;
     });
 
+    invalidatePlatformDashboardCache();
+
     return res.json({
       success: true,
-      message: 'Đã cập nhật thông tin trường học thành công',
+      message: 'Đã cập nhật cấu hình trường học & phân hệ thành công',
       data: resultData
     });
   } catch (err) {
@@ -647,7 +739,7 @@ const updateSchoolAndAdmin = async (req, res) => {
 };
 
 /**
- * Cho phép Quản trị Tổng (`Admin chung toàn bộ`) chuyển ngữ cảnh vào điều hành trực tiếp một trường cụ thể (`Admin từng trường`).
+ * Cho phép Quản trị Tổng chuyển ngữ cảnh vào điều hành trực tiếp một trường cụ thể khi cần hỗ trợ.
  */
 const enterSchoolWorkspace = async (req, res) => {
   try {
@@ -669,7 +761,6 @@ const enterSchoolWorkspace = async (req, res) => {
 
     let schoolAdmin = await User.findOne({ tenantId: tenant._id, role: 'admin', status: 'active' }).sort({ createdAt: 1 });
     if (!schoolAdmin) {
-      // Nếu tài khoản admin sẵn có đang bị inactive thì kích hoạt lại để SuperAdmin không bị kẹt lỗi trùng username
       const inactiveAdmin = await User.findOne({ tenantId: tenant._id, role: 'admin' }).sort({ createdAt: 1 });
       if (inactiveAdmin) {
         inactiveAdmin.status = 'active';
@@ -704,6 +795,10 @@ const enterSchoolWorkspace = async (req, res) => {
       details: { code: tenant.code, asSchoolAdmin: schoolAdmin.username }
     });
 
+    const resolvedModules = tenant.config?.moduleGateConfigured
+      ? sanitizeEnabledModules(tenant.enabledModules)
+      : [...ALL_ENABLED_MODULES];
+
     return res.json({
       success: true,
       message: `Đang chuyển vào không gian quản lý của ${tenant.name}`,
@@ -713,7 +808,10 @@ const enterSchoolWorkspace = async (req, res) => {
         id: tenant._id,
         code: tenant.code,
         name: tenant.name,
-        status: tenant.status
+        status: tenant.status,
+        enabledModules: resolvedModules,
+        moduleGateConfigured: Boolean(tenant.config?.moduleGateConfigured),
+        quotas: tenant.quotas || { maxCampuses: 10, maxStudents: 800, maxStaff: 200 }
       },
       user: {
         _id: schoolAdmin._id,
@@ -731,12 +829,16 @@ const enterSchoolWorkspace = async (req, res) => {
 };
 
 module.exports = {
+  getPublicSystemMeta,
   loginSuperAdmin,
   getSuperAdminMe,
   changeSuperAdminPassword,
   listAllSchoolsOverview,
+  getSchoolDetailedReportHandler,
+  getSystemSettingsHandler,
+  updateSystemSettingsHandler,
+  listPlatformAuditLogsHandler,
   createSchoolWithAdmin,
   updateSchoolAndAdmin,
   enterSchoolWorkspace
 };
-

@@ -2,6 +2,34 @@ const { verifySaasToken } = require('../utils/saasJwt');
 const User = require('../../models/zone1_system/User');
 const Tenant = require('../../models/zone1_system/Tenant');
 const RevokedSession = require('../../models/zone1_system/RevokedSession');
+const { getSystemSettings, sanitizeEnabledModules } = require('../../services/superAdminControlService');
+
+/**
+ * Ánh xạ đường dẫn API của trường sang khóa Module do SuperAdmin cấp phép.
+ */
+const resolveModuleKeyFromBaseUrl = (baseUrl = '') => {
+  const clean = String(baseUrl || '').replace(/^\/api(\/v1)?\//, '');
+  const prefix = clean.split('/')[0];
+  const map = {
+    students: 'students',
+    classrooms: 'classrooms',
+    attendance: 'attendance',
+    hr: 'hr',
+    timekeeping: 'timekeeping',
+    finance: 'finance',
+    reports: 'reports',
+    nutrition: 'nutrition',
+    notifications: 'notifications',
+    chat: 'chat',
+    'class-communication': 'chat',
+    pickups: 'pickups',
+    guard: 'guard',
+    procurement: 'procurement',
+    'parent-feedback': 'feedback',
+    'student-profile-change-requests': 'feedback'
+  };
+  return map[prefix] || null;
+};
 
 const schoolAuthMiddleware = async (req, res, next) => {
   try {
@@ -74,20 +102,23 @@ const schoolAuthMiddleware = async (req, res, next) => {
       });
     }
 
-    // Single-session revocation check (Lỗi 5)
-    if (decoded.jti) {
-      const isRevoked = await RevokedSession.exists({ jti: decoded.jti });
-      if (isRevoked) {
-        return res.status(401).json({
-          success: false,
-          code: 'SESSION_REVOKED',
-          message: 'Phiên đăng nhập đã bị thu hồi'
-        });
-      }
+    // Tối ưu hiệu năng Hot-Path: Chạy song song kiểm tra thu hồi phiên, đọc User (ẩn passwordHash),
+    // đọc Tenant và đọc Cấu hình Hệ thống trong 1 nhịp Promise.all thay vì 4 lượt tuần tự
+    const [isRevoked, user, tenant, sysSettings] = await Promise.all([
+      decoded.jti ? RevokedSession.exists({ jti: decoded.jti }) : Promise.resolve(null),
+      User.findById(decoded.sub).select('-passwordHash'),
+      decoded.tenantId ? Tenant.findById(decoded.tenantId) : Promise.resolve(null),
+      getSystemSettings()
+    ]);
+
+    if (isRevoked) {
+      return res.status(401).json({
+        success: false,
+        code: 'SESSION_REVOKED',
+        message: 'Phiên đăng nhập đã bị thu hồi'
+      });
     }
 
-    // Authoritative check on User
-    const user = await User.findById(decoded.sub);
     if (!user || user.status !== 'active' || (user.accessEndsAt && user.accessEndsAt <= new Date())) {
       return res.status(401).json({
         success: false,
@@ -104,7 +135,6 @@ const schoolAuthMiddleware = async (req, res, next) => {
       });
     }
 
-    // Verify tenant match between token and user record
     if (!user.tenantId || user.tenantId.toString() !== decoded.tenantId) {
       return res.status(403).json({
         success: false,
@@ -113,8 +143,6 @@ const schoolAuthMiddleware = async (req, res, next) => {
       });
     }
 
-    // Authoritative check on Tenant
-    const tenant = await Tenant.findById(user.tenantId);
     if (!tenant) {
       return res.status(401).json({
         success: false,
@@ -137,6 +165,29 @@ const schoolAuthMiddleware = async (req, res, next) => {
         code: 'TENANT_AUTH_REVOKED',
         message: 'Phiên làm việc của trường đã bị thu hồi'
       });
+    }
+
+    // Kiểm tra Chế độ Bảo trì Toàn Hệ thống & Phân hệ chức năng được SuperAdmin cấp phép cho trường
+    if (sysSettings.maintenanceMode?.enabled && req.baseUrl !== '/api/auth' && req.baseUrl !== '/api/v1/auth') {
+      return res.status(503).json({
+        success: false,
+        code: 'MAINTENANCE_MODE',
+        message: sysSettings.maintenanceMode.message || 'Hệ thống đang trong chế độ bảo trì toàn chuỗi.'
+      });
+    }
+
+    if (tenant.config?.moduleGateConfigured) {
+      const requiredModule = resolveModuleKeyFromBaseUrl(req.baseUrl);
+      if (requiredModule) {
+        const activeModules = sanitizeEnabledModules(tenant.enabledModules);
+        if (!activeModules.includes(requiredModule)) {
+          return res.status(403).json({
+            success: false,
+            code: 'MODULE_DISABLED_BY_SUPERADMIN',
+            message: 'Phân hệ chức năng này chưa được Quản trị Tổng kích hoạt cho trường của bạn.'
+          });
+        }
+      }
     }
 
     // Bind authoritative context (ignore any spoofed X-Tenant-Id header)

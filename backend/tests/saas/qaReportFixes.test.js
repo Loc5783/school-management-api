@@ -1498,5 +1498,81 @@ describe('QA & Security Evaluation Fixes — Full Replica Set Verification (phas
     expect(assetRes.status).toBe(201);
     expect(assetRes.body.data.originalCost).toBe(6500000);
   });
+
+  test('15. Import Excel Học sinh xử lý trọn vẹn Hyperlink Email, ngày chấm dd.MM.yyyy, khôi phục số 0 SĐT, chặn Formula Injection và nén Gzip phản hồi lớn', async () => {
+    const ExcelJS = require('exceljs');
+
+    // 15.1 Thử gửi file chứa chuỗi giả mạo công thức (=CMD...) -> Bị phát hiện ở bước xem trước
+    const badWb = new ExcelJS.Workbook();
+    const badSheet = badWb.addWorksheet('Danh sách học sinh');
+    badSheet.addRow(['Lớp', 'Họ và tên (*)', 'Ngày sinh (*)', 'Giới tính (*)']);
+    badSheet.addRow(['Chồi 1', '=CMD|"/C calc"!A0', '15.08.2022', 'Nam']);
+    const badBuf = await badWb.xlsx.writeBuffer();
+
+    const badPreview = await request(app)
+      .post('/api/students/excel/preview')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .field('classroomId', '__ALL__')
+      .attach('file', Buffer.from(badBuf), 'bad_formula.xlsx');
+    expect(badPreview.status).toBe(200);
+    expect(badPreview.body.data.canImport).toBe(false);
+    expect(badPreview.body.data.rows[0].isValid).toBe(false);
+
+    // 15.2 File hợp lệ có Hyperlink mailto:, ngày dd.MM.yyyy và SĐT mất số 0 đầu (908887766) -> Xem trước & Nhập thành công + Tự cấp TK Phụ huynh
+    const goodWb = new ExcelJS.Workbook();
+    const goodSheet = goodWb.addWorksheet('Danh sách học sinh');
+    goodSheet.addRow([
+      'Lớp',
+      'Mã định danh học sinh',
+      'Họ và tên (*)',
+      'Ngày sinh (*)',
+      'Giới tính (*)',
+      'Họ tên phụ huynh 1',
+      'Điện thoại phụ huynh 1',
+      'Hòm thư phụ huynh 1'
+    ]);
+    const row2 = goodSheet.addRow([
+      'Chồi 1',
+      '001322998877',
+      'Nguyễn Bảo Ngọc',
+      '15.08.2022',
+      'Nữ',
+      'Nguyễn Văn Khánh',
+      908887766,
+      { text: 'mailto:khanh.parent@gmail.com', hyperlink: 'mailto:khanh.parent@gmail.com' }
+    ]);
+    expect(row2.number).toBe(2);
+    const goodBuf = await goodWb.xlsx.writeBuffer();
+
+    const goodPreview = await request(app)
+      .post('/api/students/excel/preview')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .field('classroomId', '__ALL__')
+      .attach('file', Buffer.from(goodBuf), 'good_students.xlsx');
+    expect(goodPreview.status).toBe(200);
+    expect(goodPreview.body.data.canImport).toBe(true);
+    expect(goodPreview.body.data.rows[0].parent1Phone).toBe('0908887766');
+    expect(goodPreview.body.data.rows[0].parent1Email).toBe('khanh.parent@gmail.com');
+    expect(goodPreview.body.data.rows[0].birthDate).toBe('2022-08-15');
+
+    const confirmRes = await request(app)
+      .post('/api/students/excel/confirm')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .set('Idempotency-Key', 'qa-excel-edge-case-key-15')
+      .send({
+        classroomId: '__ALL__',
+        students: goodPreview.body.data.rows
+      });
+    expect(confirmRes.status).toBe(201);
+    expect(confirmRes.body.parentSyncStats.createdCount).toBe(1);
+
+    // 15.3 Kiểm tra nén HTTP Gzip hoạt động trên các phản hồi JSON lớn (>= 1.5 KB)
+    const gzipRes = await request(app)
+      .get('/api/docs/database')
+      .set('Accept-Encoding', 'gzip');
+    expect(gzipRes.status).toBe(200);
+    expect(gzipRes.headers['content-encoding']).toBe('gzip');
+    expect(gzipRes.body.success).toBe(true);
+  });
 });
 

@@ -5,6 +5,42 @@ import Icon from './Icon';
 import AppErrorBoundary from './ErrorBoundary';
 import api from '../api/axiosConfig';
 import { getUnreadChat } from '../api/chat';
+import { getPublicSystemMeta } from '../api/multiSchool';
+
+const ROUTE_MODULE_MAP = {
+  '/attendance': 'attendance',
+  '/timekeeping': 'timekeeping',
+  '/hr': 'hr',
+  '/payroll': 'hr',
+  '/my-payroll': 'hr',
+  '/my-staffing': 'hr',
+  '/my-leave-requests': 'hr',
+  '/finance': 'finance',
+  '/accounting': 'finance',
+  '/kitchen': 'nutrition',
+  '/nutrition': 'nutrition',
+  '/guard': 'guard',
+  '/pickups': 'pickups',
+  '/assets': 'procurement',
+  '/reports': 'reports',
+  '/internal-notices': 'notifications',
+  '/student-profile-change-requests': 'feedback',
+  '/parent-feedback': 'feedback',
+  '/messages': 'chat'
+};
+
+const isNavAllowedByTenantModules = (targetTo, tenantObj) => {
+  if (!tenantObj?.moduleGateConfigured || !Array.isArray(tenantObj.enabledModules)) {
+    return true;
+  }
+  const cleanPath = String(targetTo || '').split('?')[0];
+  for (const [prefix, modKey] of Object.entries(ROUTE_MODULE_MAP)) {
+    if (cleanPath === prefix || cleanPath.startsWith(`${prefix}/`)) {
+      return tenantObj.enabledModules.includes(modKey);
+    }
+  }
+  return true;
+};
 
 // Context truyền các khe cắm (Portal Slots) của Topbar từ PersistentAppShell xuống từng trang,
 // giúp giữ nguyên Sidebar & Topbar xuyên suốt quá trình chuyển trang mà không bị remount hay nhấp nháy.
@@ -443,7 +479,23 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
   const [chatUnread, setChatUnread] = useState({ total: 0, data: [] });
   const [showNotifications, setShowNotifications] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [systemBanner, setSystemBanner] = useState(null);
   const [prevPath, setPrevPath] = useState(location.pathname);
+
+  useEffect(() => {
+    let cancelled = false;
+    getPublicSystemMeta()
+      .then((res) => {
+        const banner = res.data?.data?.systemBanner;
+        if (!cancelled && banner?.enabled && banner?.message) {
+          setSystemBanner(banner);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const slotContextValue = useMemo(
     () => (isPersistentLayout ? { titleSlot, subtitleSlot, actionsSlot } : null),
     [isPersistentLayout, titleSlot, subtitleSlot, actionsSlot]
@@ -859,6 +911,7 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
   // Đảm bảo không trùng lặp route trong danh sách
   const seenPaths = new Set();
   const navItems = allNavItems.filter((item) => {
+    if (!isNavAllowedByTenantModules(item.to, tenant)) return false;
     if (user?.role === 'parent') return Boolean(item.roles?.includes('parent'));
     if (item.positions && !item.positions.includes(user?.employeeInfo?.position)) return false;
     if (item.roles && !item.roles.includes(user?.role)) return false;
@@ -880,7 +933,9 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
       >
         {sections.map((section) => {
           const visibleItems = section.items.filter(
-            (item) => !item.positions || item.positions.includes(user?.employeeInfo?.position)
+            (item) =>
+              isNavAllowedByTenantModules(item.to, tenant) &&
+              (!item.positions || item.positions.includes(user?.employeeInfo?.position))
           );
           if (!visibleItems.length) return null;
 
@@ -1232,6 +1287,42 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
             </NavLink>
           </div>
         </header>
+        {systemBanner?.enabled && systemBanner?.message && (
+          <div
+            role="status"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              padding: '10px 24px',
+              fontSize: '13.5px',
+              fontWeight: 600,
+              background:
+                systemBanner.level === 'critical'
+                  ? '#fef2f2'
+                  : systemBanner.level === 'warning'
+                    ? '#fffbeb'
+                    : '#eff6ff',
+              color:
+                systemBanner.level === 'critical'
+                  ? '#991b1b'
+                  : systemBanner.level === 'warning'
+                    ? '#92400e'
+                    : '#1e40af',
+              borderBottom:
+                systemBanner.level === 'critical'
+                  ? '1px solid #fecaca'
+                  : systemBanner.level === 'warning'
+                    ? '1px solid #fde68a'
+                    : '1px solid #bfdbfe'
+            }}
+          >
+            <Icon name="alertCircle" size={16} />
+            <span>
+              <strong>Thông báo từ Hệ thống Trung tâm:</strong> {systemBanner.message}
+            </span>
+          </div>
+        )}
         <div className="page-content">
           {isPersistentLayout ? (
             <AppShellSlotContext.Provider value={slotContextValue}>

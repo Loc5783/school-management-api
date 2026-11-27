@@ -11,6 +11,8 @@ const User = require('../src/models/zone1_system/User');
 const Tenant = require('../src/models/zone1_system/Tenant');
 const Permission = require('../src/models/zone1_system/Permission');
 const PlatformAdmin = require('../src/models/zone1_system/PlatformAdmin');
+const SystemSetting = require('../src/models/zone1_system/SystemSetting');
+const { invalidateSystemSettingsCache } = require('../src/services/superAdminControlService');
 const { ensureDefaultAdminAccount } = require('../src/services/defaultAdminBootstrapService');
 
 describe('Default Admin Tổng Bootstrap & Unified Login (Auto-create Admin Tổng admin/123456)', () => {
@@ -30,11 +32,13 @@ describe('Default Admin Tổng Bootstrap & Unified Login (Auto-create Admin Tổ
   }, 30000);
 
   afterEach(async () => {
+    invalidateSystemSettingsCache();
     await Promise.all([
       User.deleteMany({}),
       Tenant.deleteMany({}),
       Permission.deleteMany({}),
-      PlatformAdmin.deleteMany({})
+      PlatformAdmin.deleteMany({}),
+      SystemSetting.deleteMany({})
     ]);
   });
 
@@ -236,5 +240,132 @@ describe('Default Admin Tổng Bootstrap & Unified Login (Auto-create Admin Tổ
     expect(sameOriginLoginRes.status).toBe(200);
     expect(sameOriginLoginRes.body.success).toBe(true);
     expect(sameOriginLoginRes.body.isSuperAdmin).toBe(true);
+  });
+
+  test('SuperAdmin Dashboard Hiệu năng, Báo cáo 360°, Cấu hình Hệ thống, Gói Module/Hạn mức và Ranh giới Admin trường', async () => {
+    await ensureDefaultAdminAccount({ useLegacyApp: false });
+    const saasApp = assembleSaasApp({ saasMode: 'phase1e' });
+
+    const superLogin = await request(saasApp)
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: '123456' });
+    expect(superLogin.status).toBe(200);
+    const superToken = superLogin.body.token;
+
+    // 1. Tạo trường mới kèm hạn mức maxCampuses = 2 và khóa thử phân hệ 'finance'
+    const createRes = await request(saasApp)
+      .post('/api/multi-school/schools')
+      .set('Authorization', `Bearer ${superToken}`)
+      .send({
+        code: 'HOANANG-PRO',
+        name: 'Trường Mầm non Hoa Nắng Pro',
+        organizationCode: 'HOA-NANG-GROUP',
+        adminUsername: 'admin_pro',
+        adminPassword: 'PasswordPro123!',
+        enabledModules: ['students', 'classrooms', 'attendance', 'nutrition'],
+        quotas: { maxCampuses: 2, maxStudents: 150, maxStaff: 40 }
+      });
+    expect(createRes.status).toBe(201);
+    const schoolId = createRes.body.data.school._id;
+
+    // 2. Dashboard tổng hợp trả về đủ systemHealth, moduleCatalog, settings và thống kê trường
+    const dashRes = await request(saasApp)
+      .get('/api/multi-school/schools')
+      .set('Authorization', `Bearer ${superToken}`);
+    expect(dashRes.status).toBe(200);
+    expect(dashRes.body.data.systemHealth).toBeDefined();
+    expect(dashRes.body.data.systemHealth.memory.systemTotalMb).toBeGreaterThan(0);
+    expect(dashRes.body.data.moduleCatalog.length).toBeGreaterThanOrEqual(14);
+    expect(dashRes.body.data.schools[0].quotas.maxCampuses).toBe(2);
+
+    // 3. Xem Báo cáo 360° chi tiết trường học cho SuperAdmin
+    const reportRes = await request(saasApp)
+      .get(`/api/multi-school/schools/${schoolId}/report`)
+      .set('Authorization', `Bearer ${superToken}`);
+    expect(reportRes.status).toBe(200);
+    expect(reportRes.body.data.school.code).toBe('HOANANG-PRO');
+    expect(Array.isArray(reportRes.body.data.campuses)).toBe(true);
+    expect(reportRes.body.data.finance.summary).toBeDefined();
+
+    // 4. Đăng nhập Admin riêng của trường (chỉ cần username + password)
+    const schoolAdminLogin = await request(saasApp)
+      .post('/api/auth/login')
+      .send({ username: 'admin_pro', password: 'PasswordPro123!' });
+    expect(schoolAdminLogin.status).toBe(200);
+    const schoolAdminToken = schoolAdminLogin.body.token;
+
+    // 4A. Admin trường KHÔNG được sửa định danh cấp Trường (403 SCHOOL_IDENTITY_LOCKED)
+    const editSchoolBlocked = await request(saasApp)
+      .put('/api/system/school-info')
+      .set('Authorization', `Bearer ${schoolAdminToken}`)
+      .send({ name: 'Tên Tự Đổi Trái Phép' });
+    expect(editSchoolBlocked.status).toBe(403);
+    expect(editSchoolBlocked.body.code).toBe('SCHOOL_IDENTITY_LOCKED');
+
+    // 4B. Admin trường quản lý đầy đủ cấu hình Phân hiệu trong phạm vi hạn mức (2 phân hiệu)
+    const addCampus2 = await request(saasApp)
+      .post('/api/system/campuses')
+      .set('Authorization', `Bearer ${schoolAdminToken}`)
+      .send({
+        name: 'Phân hiệu 2 - Cầu Giấy',
+        address: 'Số 10 Cầu Giấy',
+        phone: '0988111222',
+        managerName: 'Cô Mai',
+        openTime: '06:45',
+        closeTime: '17:15',
+        maxClassrooms: 12,
+        notes: 'Có sân vận động riêng'
+      });
+    expect(addCampus2.status).toBe(201);
+    expect(addCampus2.body.data.openTime).toBe('06:45');
+
+    // Thêm phân hiệu thứ 3 vượt hạn mức maxCampuses = 2 -> Bị chặn 403 QUOTA_EXCEEDED
+    const addCampus3Blocked = await request(saasApp)
+      .post('/api/system/campuses')
+      .set('Authorization', `Bearer ${schoolAdminToken}`)
+      .send({ name: 'Phân hiệu 3 Vượt Hạn Mức' });
+    expect(addCampus3Blocked.status).toBe(403);
+    expect(addCampus3Blocked.body.code).toBe('QUOTA_EXCEEDED');
+
+    // 4C. Phân hệ 'finance' chưa được SuperAdmin bật -> Bị chặn 403 MODULE_DISABLED_BY_SUPERADMIN
+    const financeBlocked = await request(saasApp)
+      .get('/api/finance/tuition')
+      .set('Authorization', `Bearer ${schoolAdminToken}`);
+    expect(financeBlocked.status).toBe(403);
+    expect(financeBlocked.body.code).toBe('MODULE_DISABLED_BY_SUPERADMIN');
+
+    // 5. SuperAdmin lưu Cấu hình Chung Hệ thống (System Banner + Chế độ bảo trì) & đọc Nhật ký Audit
+    const saveSettingsRes = await request(saasApp)
+      .put('/api/multi-school/settings')
+      .set('Authorization', `Bearer ${superToken}`)
+      .send({
+        systemBanner: {
+          enabled: true,
+          level: 'warning',
+          message: 'Thông báo kiểm tra định kỳ toàn hệ thống.'
+        },
+        maintenanceMode: {
+          enabled: true,
+          message: 'Đang bảo trì nâng cấp 15 phút.'
+        }
+      });
+    expect(saveSettingsRes.status).toBe(200);
+
+    const publicMeta = await request(saasApp).get('/api/multi-school/public-meta');
+    expect(publicMeta.status).toBe(200);
+    expect(publicMeta.body.data.systemBanner.enabled).toBe(true);
+
+    // Khi bật bảo trì: trường học bị tạm ngưng 503 MAINTENANCE_MODE, nhưng SuperAdmin vẫn hoạt động bình thường
+    const maintSchoolCheck = await request(saasApp)
+      .get('/api/students')
+      .set('Authorization', `Bearer ${schoolAdminToken}`);
+    expect(maintSchoolCheck.status).toBe(503);
+    expect(maintSchoolCheck.body.code).toBe('MAINTENANCE_MODE');
+
+    const auditRes = await request(saasApp)
+      .get('/api/multi-school/audit-logs')
+      .set('Authorization', `Bearer ${superToken}`);
+    expect(auditRes.status).toBe(200);
+    expect(auditRes.body.data.length).toBeGreaterThanOrEqual(2);
   });
 });

@@ -231,8 +231,10 @@ const generateTemplateWorkbook = async (classrooms = []) => {
 const isFormulaCell = (cell) => {
   if (!cell) return false;
   if (cell.type === ExcelJS.ValueType.Formula) return true;
-  if (cell.formula) return true;
-  if (typeof cell.value === 'object' && cell.value !== null && cell.value.formula) return true;
+  if (cell.formula || cell.sharedFormula) return true;
+  const val = cell.value;
+  if (typeof val === 'object' && val !== null && (val.formula || val.sharedFormula)) return true;
+  if (typeof val === 'string' && /^[=@]/.test(val.trim())) return true;
   return false;
 };
 
@@ -243,14 +245,17 @@ const parseBirthDate = (cellValue, is1904 = false) => {
   if (cellValue instanceof Date && !Number.isNaN(cellValue.getTime())) {
     d = cellValue;
   } else if (typeof cellValue === 'number') {
-    const epochOffset = is1904 ? 24107 : 25569;
+    if (!Number.isFinite(cellValue) || cellValue < 1) {
+      return { error: 'Giá trị ngày sinh số serial Excel không hợp lệ' };
+    }
+    const epochOffset = is1904 ? 24107 : (cellValue > 60 ? 25569 : 25568);
     const utcDays = Math.floor(cellValue - epochOffset);
     d = new Date(utcDays * 86400 * 1000);
   } else if (typeof cellValue === 'string') {
     const trimmed = cellValue.trim();
     if (!trimmed) return { error: 'Ngày sinh không được để trống' };
 
-    const dmyMatch = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+    const dmyMatch = trimmed.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
     if (dmyMatch) {
       const day = Number(dmyMatch[1]);
       const month = Number(dmyMatch[2]);
@@ -260,11 +265,11 @@ const parseBirthDate = (cellValue, is1904 = false) => {
         return { error: `Ngày sinh không hợp lệ: ngày ${day} tháng ${month} năm ${year} không tồn tại` };
       }
     } else {
-      const ymdMatch = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-      if (ymdMatch) {
-        const year = Number(ymdMatch[1]);
-        const month = Number(ymdMatch[2]);
-        const day = Number(ymdMatch[3]);
+      const ymdOrIsoMatch = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/);
+      if (ymdOrIsoMatch) {
+        const year = Number(ymdOrIsoMatch[1]);
+        const month = Number(ymdOrIsoMatch[2]);
+        const day = Number(ymdOrIsoMatch[3]);
         d = new Date(Date.UTC(year, month - 1, day));
         if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day) {
           return { error: `Ngày sinh không hợp lệ: ngày ${day} tháng ${month} năm ${year} không tồn tại` };
@@ -314,7 +319,11 @@ const parseBirthDate = (cellValue, is1904 = false) => {
 const unwrapExcelObjectText = (val) => {
   if (val == null) return '';
   if (typeof val === 'string') return val.trim();
-  if (typeof val === 'number' || typeof val === 'boolean') return String(val).trim();
+  if (typeof val === 'number') {
+    if (!Number.isFinite(val)) return '';
+    return Number.isInteger(val) ? val.toFixed(0) : String(val).trim();
+  }
+  if (typeof val === 'boolean') return String(val).trim();
   if (val instanceof Date) return val.toISOString();
   if (typeof val === 'object') {
     if (Array.isArray(val.richText)) {
@@ -428,12 +437,12 @@ const validateStudentRowStrict = (item, rowNumber, _now = new Date(), is1904 = f
   // Tương thích ngược với các cột đơn contactName / contactPhone cũ + tự khôi phục số 0 đầu bị mất trong Excel
   const parent1Name = pickString(item, 'parent1Name', 'rawParent1Name') || pickString(item, 'contactName', 'rawContactName');
   const parent1Phone = normalizeExcelPhone(pickString(item, 'parent1Phone', 'rawParent1Phone') || pickString(item, 'contactPhone', 'rawContactPhone'));
-  const parent1Email = pickString(item, 'parent1Email', 'rawParent1Email').toLowerCase();
+  const parent1Email = pickString(item, 'parent1Email', 'rawParent1Email').replace(/^mailto:/i, '').trim().toLowerCase();
   const parent1RelRaw = pickString(item, 'parent1Relationship', 'rawParent1Relationship');
 
   const parent2Name = pickString(item, 'parent2Name', 'rawParent2Name');
   const parent2Phone = normalizeExcelPhone(pickString(item, 'parent2Phone', 'rawParent2Phone'));
-  const parent2Email = pickString(item, 'parent2Email', 'rawParent2Email').toLowerCase();
+  const parent2Email = pickString(item, 'parent2Email', 'rawParent2Email').replace(/^mailto:/i, '').trim().toLowerCase();
   const parent2RelRaw = pickString(item, 'parent2Relationship', 'rawParent2Relationship');
 
   // 1. Mã ID & Mã định danh

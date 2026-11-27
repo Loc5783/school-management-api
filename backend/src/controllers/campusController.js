@@ -1,24 +1,30 @@
 'use strict';
 
 /**
- * @fileoverview Bộ điều khiển quản lý Thông tin Trường học & Danh sách Phân hiệu / Cơ sở (Campuses)
+ * @fileoverview Bộ điều khiển quản lý Danh sách & Cấu hình Phân hiệu / Cơ sở (Campuses)
  * trong phạm vi một trường (`tenantId`).
  *
- * Quy tắc nghiệp vụ & xử lý ngoại lệ thực tế:
- * - Cách ly nghiêm ngặt theo `tenantId` từ ngữ cảnh xác thực (`req.tenant` / `req.user.tenantId`).
- * - Hỗ trợ đầy đủ lưu `phone` và `managerName` trên `Tenant.campuses`.
- * - Đồng bộ hai chiều cả các phân hiệu phát sinh trực tiếp từ `Classroom.campus` (auto-discovered)
- *   để người dùng sửa/xóa không bao giờ gặp lỗi `404`, đồng thời đổi tên phân hiệu không phân biệt hoa/thường
- *   và bao phủ cả các lớp cũ chưa điền `campus` khi đổi tên Cơ sở chính.
+ * Phân tách rõ ranh giới quyền hạn:
+ * - **SuperAdmin (`PlatformAdmin`)**: Quản lý định danh cấp Trường (`name`, `code`, `organizationCode`, `status`,
+ *   `enabledModules`, `quotas`) và Cấu hình chung toàn chuỗi.
+ * - **Admin từng trường (`role: 'admin'`)**: Chỉ quản lý cấu hình vận hành của các Phân hiệu / Cơ sở trực thuộc
+ *   trường mình (`address`, `phone`, `managerName`, `openTime`, `closeTime`, `maxClassrooms`, `notes`, `isActive`)
+ *   trong phạm vi hạn mức `maxCampuses` được cấp.
  */
 
 const Tenant = require('../models/zone1_system/Tenant');
 const Classroom = require('../models/zone3_school/Classroom');
 const Student = require('../models/zone3_school/Student');
 const { buildTenantFilter } = require('../services/tenantFilterService');
+const {
+  ALL_ENABLED_MODULES,
+  sanitizeEnabledModules,
+  getSystemSettings
+} = require('../services/superAdminControlService');
 const { runSafeTransaction } = require('../utils/safeTransaction');
 
 const CAMPUS_CODE_REGEX = /^[A-Z0-9_-]{2,20}$/;
+const TIME_HHMM_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 const escapeRegex = (str) => String(str || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -40,7 +46,7 @@ const normalizeCampusCode = (rawCode, fallbackName = '') => {
   return slug.length < 2 ? `CS-${slug}` : slug;
 };
 
-const ensureMainCampusPresent = (campuses = []) => {
+const ensureMainCampusPresent = (campuses = [], defaults = {}) => {
   const list = Array.isArray(campuses) ? [...campuses] : [];
   const hasMain = list.some(
     (c) =>
@@ -54,6 +60,10 @@ const ensureMainCampusPresent = (campuses = []) => {
       address: '',
       phone: '',
       managerName: '',
+      openTime: defaults.openTime || '07:00',
+      closeTime: defaults.closeTime || '17:00',
+      maxClassrooms: 20,
+      notes: '',
       isActive: true
     });
   }
@@ -61,14 +71,15 @@ const ensureMainCampusPresent = (campuses = []) => {
 };
 
 /**
- * Lấy thông tin trường hiện tại và danh sách toàn bộ Phân hiệu / Cơ sở kèm thống kê số lớp & học sinh.
+ * Lấy thông tin định danh trường (chỉ đọc) + hạn mức + danh sách toàn bộ Phân hiệu / Cơ sở kèm thống kê lớp & học sinh.
  */
 const listCampuses = async (req, res) => {
   try {
     const tenantId = req.tenantId || req.user?.tenantId;
     const tenantFilter = buildTenantFilter(req);
 
-    const [tenant, classroomGroups] = await Promise.all([
+    const [settings, tenant, classroomGroups] = await Promise.all([
+      getSystemSettings(),
       tenantId ? Tenant.findById(tenantId).lean() : Promise.resolve(null),
       Classroom.aggregate([
         { $match: { ...tenantFilter, status: 'active' } },
@@ -82,11 +93,15 @@ const listCampuses = async (req, res) => {
               ]
             },
             classroomIds: { $push: '$_id' },
-            classCount: { $sum: 1 }
+            classCount: { $sum: 1 },
+            totalCapacity: { $sum: { $ifNull: ['$capacity', 30] } }
           }
         }
       ])
     ]);
+
+    const defaultOpen = settings.preschoolStandards?.standardCheckInTime || '07:00';
+    const defaultClose = settings.preschoolStandards?.standardCheckOutTime || '16:30';
 
     const allClassIds = classroomGroups.flatMap((g) => g.classroomIds);
     const studentCountsByClass = allClassIds.length
@@ -112,15 +127,23 @@ const listCampuses = async (req, res) => {
       if (prev) {
         prev.classCount += grp.classCount;
         prev.studentCount += studentCount;
+        prev.totalCapacity += grp.totalCapacity || 0;
       } else {
-        statsByCampusName.set(key, { name, classCount: grp.classCount, studentCount });
+        statsByCampusName.set(key, {
+          name,
+          classCount: grp.classCount,
+          studentCount,
+          totalCapacity: grp.totalCapacity || 0
+        });
       }
     }
 
-    const declaredCampuses = ensureMainCampusPresent(tenant?.campuses || []);
+    const declaredCampuses = ensureMainCampusPresent(tenant?.campuses || [], {
+      openTime: defaultOpen,
+      closeTime: defaultClose
+    });
     const usedCodes = new Set(declaredCampuses.map((c) => String(c.code || '').toUpperCase()));
 
-    // Bổ sung các phân hiệu đã phát sinh trên Lớp học nhưng chưa lưu trong danh mục Tenant.campuses
     for (const [lowerName, stat] of statsByCampusName.entries()) {
       const exists = declaredCampuses.some((c) => String(c.name || '').trim().toLowerCase() === lowerName);
       if (!exists) {
@@ -137,6 +160,10 @@ const listCampuses = async (req, res) => {
           address: '',
           phone: '',
           managerName: '',
+          openTime: defaultOpen,
+          closeTime: defaultClose,
+          maxClassrooms: 20,
+          notes: '',
           isActive: true
         });
       }
@@ -152,11 +179,25 @@ const listCampuses = async (req, res) => {
         address: c.address || '',
         phone: c.phone || '',
         managerName: c.managerName || '',
+        openTime: c.openTime || defaultOpen,
+        closeTime: c.closeTime || defaultClose,
+        maxClassrooms: c.maxClassrooms || 20,
+        notes: c.notes || '',
         isActive: c.isActive !== false,
         classCount: stat?.classCount || 0,
-        studentCount: stat?.studentCount || 0
+        studentCount: stat?.studentCount || 0,
+        totalCapacity: stat?.totalCapacity || 0
       };
     });
+
+    const quotas = {
+      maxCampuses: tenant?.quotas?.maxCampuses || settings.preschoolStandards?.defaultMaxCampusesPerSchool || 10,
+      maxStudents: tenant?.quotas?.maxStudents || settings.preschoolStandards?.defaultMaxStudentsPerSchool || 800,
+      maxStaff: tenant?.quotas?.maxStaff || 200
+    };
+    const enabledModules = tenant?.config?.moduleGateConfigured
+      ? sanitizeEnabledModules(tenant.enabledModules)
+      : [...ALL_ENABLED_MODULES];
 
     return res.json({
       success: true,
@@ -168,7 +209,9 @@ const listCampuses = async (req, res) => {
               name: tenant.name,
               organizationCode: tenant.organizationCode || '',
               contactEmail: tenant.contactEmail || '',
-              status: tenant.status
+              status: tenant.status,
+              enabledModules,
+              quotas
             }
           : {
               _id: null,
@@ -176,8 +219,11 @@ const listCampuses = async (req, res) => {
               name: 'Trường Mầm non Hoa Nắng',
               organizationCode: '',
               contactEmail: '',
-              status: 'active'
+              status: 'active',
+              enabledModules: [...ALL_ENABLED_MODULES],
+              quotas
             },
+        systemStandards: settings.preschoolStandards,
         campuses: mergedCampuses
       }
     });
@@ -188,7 +234,7 @@ const listCampuses = async (req, res) => {
 };
 
 /**
- * Thêm mới một Phân hiệu / Cơ sở trực thuộc trường.
+ * Thêm mới một Phân hiệu / Cơ sở trực thuộc trường (kiểm tra hạn mức `maxCampuses` do SuperAdmin cấp).
  */
 const createCampus = async (req, res) => {
   try {
@@ -197,13 +243,27 @@ const createCampus = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Chức năng phân hiệu yêu cầu ngữ cảnh trường học xác định' });
     }
 
+    const settings = await getSystemSettings();
+    const defaultOpen = settings.preschoolStandards?.standardCheckInTime || '07:00';
+    const defaultClose = settings.preschoolStandards?.standardCheckOutTime || '16:30';
+
     const name = String(req.body?.name || '').trim();
     const address = String(req.body?.address || '').trim().slice(0, 300);
     const phone = String(req.body?.phone || '').trim().slice(0, 20);
     const managerName = String(req.body?.managerName || '').trim().slice(0, 120);
+    const openTime = req.body?.openTime ? String(req.body.openTime).trim() : defaultOpen;
+    const closeTime = req.body?.closeTime ? String(req.body.closeTime).trim() : defaultClose;
+    const maxClassrooms = req.body?.maxClassrooms != null ? Number(req.body.maxClassrooms) : 20;
+    const notes = String(req.body?.notes || '').trim().slice(0, 500);
 
     if (!name || name.length > 120) {
       return res.status(422).json({ success: false, message: 'Vui lòng nhập tên phân hiệu / cơ sở (tối đa 120 ký tự)' });
+    }
+    if (!TIME_HHMM_REGEX.test(openTime) || !TIME_HHMM_REGEX.test(closeTime)) {
+      return res.status(422).json({ success: false, message: 'Giờ mở/đóng cửa phân hiệu phải đúng định dạng HH:MM (VD: 07:00)' });
+    }
+    if (!Number.isInteger(maxClassrooms) || maxClassrooms < 1 || maxClassrooms > 200) {
+      return res.status(422).json({ success: false, message: 'Số lớp tối đa dự kiến của phân hiệu phải từ 1 đến 200' });
     }
 
     let code = normalizeCampusCode(req.body?.code, name);
@@ -214,7 +274,16 @@ const createCampus = async (req, res) => {
     const tenant = await Tenant.findById(tenantId);
     if (!tenant) return res.status(404).json({ success: false, message: 'Không tìm thấy thông tin trường học' });
 
-    tenant.campuses = ensureMainCampusPresent(tenant.campuses);
+    tenant.campuses = ensureMainCampusPresent(tenant.campuses, { openTime: defaultOpen, closeTime: defaultClose });
+
+    const maxAllowedCampuses = tenant.quotas?.maxCampuses || settings.preschoolStandards?.defaultMaxCampusesPerSchool || 10;
+    if (tenant.campuses.length >= maxAllowedCampuses) {
+      return res.status(403).json({
+        success: false,
+        code: 'QUOTA_EXCEEDED',
+        message: `Trường đã đạt giới hạn tối đa ${maxAllowedCampuses} phân hiệu theo cấu hình hệ thống. Vui lòng liên hệ Quản trị Tổng để nâng hạn mức.`
+      });
+    }
 
     const nameDup = tenant.campuses.find(
       (c) => String(c.name || '').trim().toLowerCase() === name.toLowerCase()
@@ -233,7 +302,18 @@ const createCampus = async (req, res) => {
       return res.status(409).json({ success: false, message: `Mã phân hiệu "${code}" đã tồn tại trong trường` });
     }
 
-    const createdCampus = { code, name, address, phone, managerName, isActive: true };
+    const createdCampus = {
+      code,
+      name,
+      address,
+      phone,
+      managerName,
+      openTime,
+      closeTime,
+      maxClassrooms,
+      notes,
+      isActive: true
+    };
     tenant.campuses.push(createdCampus);
     await tenant.save();
 
@@ -249,7 +329,7 @@ const createCampus = async (req, res) => {
 };
 
 /**
- * Cập nhật thông tin Phân hiệu (hỗ trợ cả phân hiệu tự phát hiện từ Classroom và đồng bộ đổi tên trên Lớp học).
+ * Cập nhật cấu hình vận hành của Phân hiệu (địa chỉ, SĐT, người phụ trách, giờ đón-trả, quy mô lớp, trạng thái).
  */
 const updateCampus = async (req, res) => {
   try {
@@ -263,10 +343,23 @@ const updateCampus = async (req, res) => {
     const address = String(req.body?.address ?? '').trim().slice(0, 300);
     const phone = String(req.body?.phone ?? '').trim().slice(0, 20);
     const managerName = String(req.body?.managerName ?? '').trim().slice(0, 120);
+    const openTime = req.body?.openTime !== undefined ? String(req.body.openTime).trim() : undefined;
+    const closeTime = req.body?.closeTime !== undefined ? String(req.body.closeTime).trim() : undefined;
+    const maxClassrooms = req.body?.maxClassrooms !== undefined ? Number(req.body.maxClassrooms) : undefined;
+    const notes = req.body?.notes !== undefined ? String(req.body.notes).trim().slice(0, 500) : undefined;
     const isActive = req.body?.isActive !== undefined ? Boolean(req.body.isActive) : undefined;
 
     if (!nextName || nextName.length > 120) {
       return res.status(422).json({ success: false, message: 'Tên phân hiệu không hợp lệ' });
+    }
+    if (openTime !== undefined && !TIME_HHMM_REGEX.test(openTime)) {
+      return res.status(422).json({ success: false, message: 'Giờ mở cửa phân hiệu phải đúng định dạng HH:MM' });
+    }
+    if (closeTime !== undefined && !TIME_HHMM_REGEX.test(closeTime)) {
+      return res.status(422).json({ success: false, message: 'Giờ đóng cửa phân hiệu phải đúng định dạng HH:MM' });
+    }
+    if (maxClassrooms !== undefined && (!Number.isInteger(maxClassrooms) || maxClassrooms < 1 || maxClassrooms > 200)) {
+      return res.status(422).json({ success: false, message: 'Số lớp tối đa của phân hiệu phải từ 1 đến 200' });
     }
 
     const updatedCampus = await runSafeTransaction(async (session) => {
@@ -276,7 +369,6 @@ const updateCampus = async (req, res) => {
       tenant.campuses = ensureMainCampusPresent(tenant.campuses);
       let idx = tenant.campuses.findIndex((c) => String(c.code || '').toUpperCase() === targetCode);
 
-      // Nếu phân hiệu được tự động phát hiện từ Lớp học (chưa lưu vào Tenant.campuses), tự khởi tạo vào mảng trước khi cập nhật
       if (idx === -1) {
         const distinctClassCampuses = await Classroom.distinct('campus', { tenantId }).session(session);
         const matchedClassCampus = distinctClassCampuses.find(
@@ -291,6 +383,10 @@ const updateCampus = async (req, res) => {
           address: '',
           phone: '',
           managerName: '',
+          openTime: '07:00',
+          closeTime: '17:00',
+          maxClassrooms: 20,
+          notes: '',
           isActive: true
         });
         idx = tenant.campuses.length - 1;
@@ -309,6 +405,10 @@ const updateCampus = async (req, res) => {
       tenant.campuses[idx].address = address;
       tenant.campuses[idx].phone = phone;
       tenant.campuses[idx].managerName = managerName;
+      if (openTime !== undefined) tenant.campuses[idx].openTime = openTime;
+      if (closeTime !== undefined) tenant.campuses[idx].closeTime = closeTime;
+      if (maxClassrooms !== undefined) tenant.campuses[idx].maxClassrooms = maxClassrooms;
+      if (notes !== undefined) tenant.campuses[idx].notes = notes;
       if (isActive !== undefined) tenant.campuses[idx].isActive = isActive;
 
       await tenant.save(session ? { session } : undefined);
@@ -340,7 +440,7 @@ const updateCampus = async (req, res) => {
 
     return res.json({
       success: true,
-      message: 'Đã cập nhật thông tin phân hiệu',
+      message: 'Đã cập nhật cấu hình phân hiệu thành công',
       data: updatedCampus
     });
   } catch (err) {
@@ -350,51 +450,15 @@ const updateCampus = async (req, res) => {
 };
 
 /**
- * Cập nhật thông tin chung của Trường hiện tại (Tên hiển thị, Email liên hệ, Mã cụm/chuỗi trường).
+ * Khóa ranh giới quyền hạn: Định danh cấp Trường thuộc độc quyền của SuperAdmin;
+ * Admin từng trường chỉ quản lý cấu hình các Phân hiệu trực thuộc trường mình.
  */
 const updateCurrentSchoolInfo = async (req, res) => {
-  try {
-    const tenantId = req.tenantId || req.user?.tenantId;
-    if (!tenantId) return res.status(400).json({ success: false, message: 'Thiếu ngữ cảnh trường học' });
-
-    const tenant = await Tenant.findById(tenantId);
-    if (!tenant) return res.status(404).json({ success: false, message: 'Không tìm thấy trường học' });
-
-    if (req.body?.name != null) {
-      const cleanName = String(req.body.name).trim();
-      if (cleanName.length < 2 || cleanName.length > 160) {
-        return res.status(422).json({ success: false, message: 'Tên trường phải từ 2 đến 160 ký tự' });
-      }
-      tenant.name = cleanName;
-    }
-    if (req.body?.contactEmail != null) {
-      const cleanEmail = String(req.body.contactEmail).trim().toLowerCase();
-      if (cleanEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
-        return res.status(422).json({ success: false, message: 'Email liên hệ của trường không đúng định dạng' });
-      }
-      tenant.contactEmail = cleanEmail;
-    }
-    if (req.body?.organizationCode != null) {
-      tenant.organizationCode = String(req.body.organizationCode).trim().toUpperCase().slice(0, 40);
-    }
-
-    await tenant.save();
-    return res.json({
-      success: true,
-      message: 'Đã cập nhật thông tin trường học',
-      data: {
-        _id: tenant._id,
-        code: tenant.code,
-        name: tenant.name,
-        organizationCode: tenant.organizationCode || '',
-        contactEmail: tenant.contactEmail || '',
-        status: tenant.status
-      }
-    });
-  } catch (err) {
-    console.error('Lỗi cập nhật thông tin trường:', err);
-    return res.status(500).json({ success: false, message: 'Không thể cập nhật thông tin trường học' });
-  }
+  return res.status(403).json({
+    success: false,
+    code: 'SCHOOL_IDENTITY_LOCKED',
+    message: 'Thông tin định danh cấp Trường (Tên trường, Mã trường, Cụm trường, Gói chức năng) do Quản trị Tổng Hệ thống (SuperAdmin) quản lý. Admin trường chỉ quản lý cấu hình các Phân hiệu / Cơ sở trực thuộc.'
+  });
 };
 
 /**

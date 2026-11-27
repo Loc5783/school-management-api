@@ -184,6 +184,16 @@ const botScannerShieldMiddleware = (req, res, next) => {
     return res.status(200).send('User-agent: *\nDisallow: /\n');
   }
 
+  // Cho phép SuperAdmin bật/tắt Lá chắn Anti-Bot thời gian thực từ trang Cấu hình Hệ thống
+  try {
+    const { isAntiBotShieldEnabledSync } = require('../services/superAdminControlService');
+    if (!isAntiBotShieldEnabledSync()) {
+      return next();
+    }
+  } catch {
+    // Mặc định luôn bật bảo vệ nếu module cấu hình chưa nạp
+  }
+
   // 2. Từ chối tức thời nếu IP đang bị tạm khóa do hành vi quét lỗ hổng hàng loạt
   const clientIp = getClientIp(req);
   if (isIpQuarantined(clientIp)) {

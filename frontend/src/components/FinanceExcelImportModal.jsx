@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import Icon from '../components/Icon';
-import StudentPagination from '../components/StudentPagination';
+import Icon from './Icon';
+import StudentPagination from './StudentPagination';
 import {
   downloadFeeScheduleTemplate,
   previewFeeScheduleImport,
@@ -251,10 +251,10 @@ export default function FinanceExcelImportModal({
 
   return createPortal(
     <div
-      className="modal-backdrop"
+      className="account-modal-backdrop"
       role="presentation"
-      onClick={() => {
-        if (!confirming && !previewing) onClose();
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !confirming && !previewing) onClose();
       }}
     >
       <div
@@ -489,7 +489,7 @@ export default function FinanceExcelImportModal({
                       ))}
                       {!paginatedRows.length && (
                         <tr>
-                          <td colSpan={isInvoice ? 8 : 6} className="history-empty">
+                          <td colSpan={isInvoice ? 9 : 7} className="history-empty">
                             Không có dòng nào phù hợp bộ lọc.
                           </td>
                         </tr>

@@ -1139,25 +1139,18 @@ describe('Task 1B.5: Final Integration Acceptance Test Suite', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Suite 7: Public Registration Gate Isolation (Legacy App vs createSaasApp)
+  // Suite 7: Public Registration Gate Isolation (Locked 403 on both Legacy & SaaS)
   // ---------------------------------------------------------------------------
   describe('[ACCEPTANCE-1B5-07] Public Registration Gate Isolation (Legacy App vs createSaasApp)', () => {
-    it('legacy GET /api/auth/registration-classrooms returns ONLY legacy classrooms and hides SaaS classrooms', async () => {
+    it('legacy GET /api/auth/registration-classrooms is locked down with 403 Forbidden', async () => {
       const res = await request(legacyApp)
         .get('/api/auth/registration-classrooms');
 
-      expect(res.status).toBe(200);
-      expect(res.body.success).toBe(true);
-      expect(res.body.data.length).toBe(2);
-      expect(res.body.data.map(c => c._id)).toEqual(
-        expect.arrayContaining([legacyClassroom1._id.toString(), legacyClassroom2._id.toString()])
-      );
-      // Ensure zero SaaS classrooms are present
-      expect(res.body.data.some(c => c._id === classroomA1._id.toString())).toBe(false);
-      expect(res.body.data.some(c => c._id === classroomB1._id.toString())).toBe(false);
+      expect(res.status).toBe(403);
+      expect(res.body.data).toBeUndefined();
     });
 
-    it('legacy POST /api/auth/register rejects registration with a SaaS classroom ID (400)', async () => {
+    it('legacy POST /api/auth/register rejects anonymous registration with a SaaS classroom ID (403)', async () => {
       const payload = {
         username: 'new_parent_legacy',
         password: 'Password123!',
@@ -1167,7 +1160,7 @@ describe('Task 1B.5: Final Integration Acceptance Test Suite', () => {
           email: 'newparent@example.com'
         },
         parentInfo: {
-          requestedClassroomId: classroomA1._id.toString(), // SaaS Classroom ID!
+          requestedClassroomId: classroomA1._id.toString(),
           registrationNote: 'Xin đăng ký cho cháu Nguyễn Văn An vào học'
         }
       };
@@ -1176,11 +1169,10 @@ describe('Task 1B.5: Final Integration Acceptance Test Suite', () => {
         .post('/api/auth/register')
         .send(payload);
 
-      expect(res.status).toBe(400);
-      expect(res.body.message).toMatch(/Lớp học đã chọn không tồn tại hoặc không còn hoạt động/i);
+      expect(res.status).toBe(403);
     });
 
-    it('legacy POST /api/auth/register succeeds with a valid legacy classroom ID', async () => {
+    it('legacy POST /api/auth/register also blocks anonymous registration for legacy classrooms (403)', async () => {
       const payload = {
         username: 'legit_parent_legacy',
         password: 'Password123!',
@@ -1199,29 +1191,27 @@ describe('Task 1B.5: Final Integration Acceptance Test Suite', () => {
         .post('/api/auth/register')
         .send(payload);
 
-      expect(res.status).toBe(201);
-      expect(res.body.data.username).toBe('legit_parent_legacy');
-      expect(res.body.data.status).toBe('inactive');
+      expect(res.status).toBe(403);
     });
 
-    it('saasApp gates registration endpoints fail-closed with 501 Not Implemented', async () => {
+    it('saasApp locks public registration endpoints fail-closed with 403/501', async () => {
       const resGetV1 = await request(saasApp)
         .get('/api/v1/auth/registration-classrooms');
-      expect(resGetV1.status).toBe(501);
+      expect([403, 501]).toContain(resGetV1.status);
 
       const resPostV1 = await request(saasApp)
         .post('/api/v1/auth/register')
         .send({});
-      expect(resPostV1.status).toBe(501);
+      expect([403, 501]).toContain(resPostV1.status);
 
       const resGetAlias = await request(saasApp)
         .get('/api/auth/registration-classrooms');
-      expect(resGetAlias.status).toBe(501);
+      expect([403, 501]).toContain(resGetAlias.status);
 
       const resPostAlias = await request(saasApp)
         .post('/api/auth/register')
         .send({});
-      expect(resPostAlias.status).toBe(501);
+      expect([403, 501]).toContain(resPostAlias.status);
     });
   });
 

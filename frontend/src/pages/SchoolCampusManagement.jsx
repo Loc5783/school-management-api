@@ -7,18 +7,38 @@ import {
   getSchoolCampuses,
   createCampus,
   updateCampus,
-  deleteCampus,
-  updateCurrentSchoolInfo
+  deleteCampus
 } from '../api/multiSchool';
-import { getStoredTenant, getStoredUser } from '../utils/storage';
+import { getStoredUser } from '../utils/storage';
 
-const emptyCampusForm = {
+const makeEmptyCampusForm = (standards = {}) => ({
   code: '',
   name: '',
   address: '',
   phone: '',
   managerName: '',
+  openTime: standards?.standardCheckInTime || '07:00',
+  closeTime: standards?.standardCheckOutTime || '16:30',
+  maxClassrooms: 20,
+  notes: '',
   isActive: true
+});
+
+const MODULE_LABELS = {
+  students: 'Hồ sơ Học sinh',
+  classrooms: 'Lớp & Phân hiệu',
+  attendance: 'Điểm danh',
+  pickups: 'Đón trả QR',
+  guard: 'Trực cổng',
+  nutrition: 'Bếp ăn & Lưu mẫu',
+  finance: 'Tài chính Học phí',
+  hr: 'Nhân sự & Lương',
+  timekeeping: 'Chấm công ISAPI',
+  procurement: 'Cơ sở vật chất',
+  feedback: 'Phản hồi Phụ huynh',
+  chat: 'Tin nhắn',
+  notifications: 'Thông báo',
+  reports: 'Báo cáo'
 };
 
 export default function SchoolCampusManagement() {
@@ -26,6 +46,7 @@ export default function SchoolCampusManagement() {
   const isAdmin = userRole === 'admin';
 
   const [school, setSchool] = useState(null);
+  const [systemStandards, setSystemStandards] = useState(null);
   const [campuses, setCampuses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState(null);
@@ -33,14 +54,9 @@ export default function SchoolCampusManagement() {
 
   const [showCampusModal, setShowCampusModal] = useState(false);
   const [editingCampus, setEditingCampus] = useState(null);
-  const [campusForm, setCampusForm] = useState(emptyCampusForm);
+  const [campusForm, setCampusForm] = useState(() => makeEmptyCampusForm());
   const [savingCampus, setSavingCampus] = useState(false);
   const [campusError, setCampusError] = useState('');
-
-  const [showSchoolModal, setShowSchoolModal] = useState(false);
-  const [schoolForm, setSchoolForm] = useState({ name: '', organizationCode: '', contactEmail: '' });
-  const [savingSchool, setSavingSchool] = useState(false);
-  const [schoolError, setSchoolError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -48,6 +64,7 @@ export default function SchoolCampusManagement() {
       const res = await getSchoolCampuses();
       const payload = res.data?.data || {};
       setSchool(payload.school || null);
+      setSystemStandards(payload.systemStandards || null);
       setCampuses(payload.campuses || []);
     } catch (err) {
       setNotice({ type: 'error', text: err.response?.data?.message || 'Không thể tải danh sách phân hiệu của trường.' });
@@ -65,7 +82,7 @@ export default function SchoolCampusManagement() {
 
   const openCreateCampus = () => {
     setEditingCampus(null);
-    setCampusForm(emptyCampusForm);
+    setCampusForm(makeEmptyCampusForm(systemStandards));
     setCampusError('');
     setShowCampusModal(true);
   };
@@ -78,6 +95,10 @@ export default function SchoolCampusManagement() {
       address: campus.address || '',
       phone: campus.phone || '',
       managerName: campus.managerName || '',
+      openTime: campus.openTime || systemStandards?.standardCheckInTime || '07:00',
+      closeTime: campus.closeTime || systemStandards?.standardCheckOutTime || '16:30',
+      maxClassrooms: campus.maxClassrooms || 20,
+      notes: campus.notes || '',
       isActive: campus.isActive !== false
     });
     setCampusError('');
@@ -90,32 +111,35 @@ export default function SchoolCampusManagement() {
     setSavingCampus(true);
     setCampusError('');
     try {
+      const payload = {
+        ...campusForm,
+        maxClassrooms: Number(campusForm.maxClassrooms) || 20
+      };
       if (editingCampus) {
-        await updateCampus(editingCampus.code, campusForm);
+        await updateCampus(editingCampus.code, payload);
       } else {
-        await createCampus(campusForm);
+        await createCampus(payload);
       }
       setShowCampusModal(false);
       await load();
       setNotice({
         type: 'success',
-        text: editingCampus ? 'Đã cập nhật thông tin phân hiệu thành công.' : 'Đã thêm phân hiệu mới cho trường.'
+        text: editingCampus ? 'Đã cập nhật cấu hình phân hiệu thành công.' : 'Đã thêm phân hiệu mới cho trường.'
       });
     } catch (err) {
-      setCampusError(err.response?.data?.message || 'Không thể lưu thông tin phân hiệu.');
+      setCampusError(err.response?.data?.message || 'Không thể lưu cấu hình phân hiệu.');
     } finally {
       setSavingCampus(false);
     }
   };
 
   useEffect(() => {
-    if (!showCampusModal && !showSchoolModal) return undefined;
+    if (!showCampusModal) return undefined;
     const originalOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const onKeyDown = (e) => {
-      if (e.key === 'Escape') {
-        if (showCampusModal && !savingCampus) setShowCampusModal(false);
-        if (showSchoolModal && !savingSchool) setShowSchoolModal(false);
+      if (e.key === 'Escape' && !savingCampus) {
+        setShowCampusModal(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -123,7 +147,7 @@ export default function SchoolCampusManagement() {
       document.body.style.overflow = originalOverflow;
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [showCampusModal, showSchoolModal, savingCampus, savingSchool]);
+  }, [showCampusModal, savingCampus]);
 
   const handleDeleteCampus = async (campus) => {
     if (deletingCode) return;
@@ -140,62 +164,31 @@ export default function SchoolCampusManagement() {
     }
   };
 
-  const openEditSchool = () => {
-    setSchoolError('');
-    setSchoolForm({
-      name: school?.name || '',
-      organizationCode: school?.organizationCode || '',
-      contactEmail: school?.contactEmail || ''
-    });
-    setShowSchoolModal(true);
-  };
-
-  const handleSaveSchool = async (e) => {
-    e.preventDefault();
-    if (savingSchool) return;
-    setSavingSchool(true);
-    setSchoolError('');
-    try {
-      const res = await updateCurrentSchoolInfo(schoolForm);
-      const updated = res.data?.data;
-      if (updated) {
-        const storedTenant = getStoredTenant();
-        if (storedTenant) {
-          localStorage.setItem('tenant', JSON.stringify({ ...storedTenant, name: updated.name }));
-          window.dispatchEvent(new Event('tenant-updated'));
-        }
-      }
-      setShowSchoolModal(false);
-      await load();
-      setNotice({ type: 'success', text: 'Đã cập nhật thông tin định danh của trường.' });
-    } catch (err) {
-      setSchoolError(err.response?.data?.message || 'Không thể cập nhật thông tin trường.');
-    } finally {
-      setSavingSchool(false);
-    }
-  };
-
   const totalClasses = campuses.reduce((sum, c) => sum + (c.classCount || 0), 0);
   const totalStudents = campuses.reduce((sum, c) => sum + (c.studentCount || 0), 0);
+  const maxCampusesQuota = school?.quotas?.maxCampuses || 10;
+  const maxStudentsQuota = school?.quotas?.maxStudents || 800;
+  const reachedCampusQuota = campuses.length >= maxCampusesQuota;
 
   return (
     <AppShell
-      title="Trường & Phân hiệu"
-      subtitle="Quản lý thông tin định danh trường học và danh sách các Phân hiệu / Cơ sở trực thuộc."
+      title="Quản lý Phân hiệu & Cơ sở trường"
+      subtitle="Quản lý cấu hình vận hành của các Phân hiệu trực thuộc trường (định danh cấp Trường và gói tính năng do Quản trị Tổng cấp phát)."
       actions={(
         <div className="toolbar-buttons">
           <button type="button" className="button button-secondary" onClick={load} disabled={loading}>
             <Icon name="refresh" size={15} /> Làm mới
           </button>
           {isAdmin && (
-            <>
-              <button type="button" className="button button-secondary" onClick={openEditSchool}>
-                <Icon name="settings" size={15} /> Sửa thông tin trường
-              </button>
-              <button type="button" className="button button-primary" onClick={openCreateCampus}>
-                <Icon name="plus" size={15} /> Thêm phân hiệu mới
-              </button>
-            </>
+            <button
+              type="button"
+              className="button button-primary"
+              disabled={reachedCampusQuota}
+              title={reachedCampusQuota ? `Trường đã đạt hạn mức ${maxCampusesQuota} phân hiệu` : undefined}
+              onClick={openCreateCampus}
+            >
+              <Icon name="plus" size={15} /> Thêm phân hiệu mới ({campuses.length}/{maxCampusesQuota})
+            </button>
           )}
         </div>
       )}
@@ -212,15 +205,15 @@ export default function SchoolCampusManagement() {
           <article>
             <span className="summary-badge blue"><Icon name="shield" size={20} /></span>
             <div>
-              <small>MÃ TRƯỜNG ĐỘC LẬP</small>
+              <small>MÃ TRƯỜNG (DO SUPERADMIN CẤP)</small>
               <strong>{school?.code || 'HOANANG'}</strong>
             </div>
           </article>
           <article>
             <span className="summary-badge amber"><Icon name="classes" size={20} /></span>
             <div>
-              <small>TỔNG PHÂN HIỆU / CƠ SỞ</small>
-              <strong>{campuses.length} cơ sở</strong>
+              <small>PHÂN HIỆU / HẠN MỨC CẤP PHÉP</small>
+              <strong>{campuses.length} / {maxCampusesQuota} cơ sở</strong>
             </div>
           </article>
           <article>
@@ -233,23 +226,47 @@ export default function SchoolCampusManagement() {
           <article>
             <span className="summary-badge purple"><Icon name="students" size={20} /></span>
             <div>
-              <small>HỌC SINH TOÀN TRƯỜNG</small>
-              <strong>{totalStudents} học sinh</strong>
+              <small>HỌC SINH / HẠN MỨC TRƯỜNG</small>
+              <strong>{totalStudents} / {maxStudentsQuota} HS</strong>
             </div>
           </article>
         </div>
 
+        {/* HỒ SƠ ĐỊNH DANH CẤP TRƯỜNG (CHỈ ĐỌC — DO SUPERADMIN QUẢN LÝ) */}
         <section className="content-card" style={{ padding: '20px 24px', marginBottom: '18px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '14px' }}>
             <div>
-              <p className="card-kicker">ĐƠN VỊ TRƯỜNG HỌC ĐANG ĐIỀU HÀNH</p>
+              <p className="card-kicker">THÔNG TIN ĐỊNH DANH & GÓI TÍNH NĂNG CẤP TRƯỜNG (CHỈ ĐỌC)</p>
               <h2 style={{ margin: '4px 0 6px', color: '#1e3a8a' }}>{school?.name || 'Trường Mầm non'}</h2>
-              <p style={{ margin: 0, color: '#475569', fontSize: '13.5px' }}>
-                Mã đăng nhập trường: <strong>{school?.code || '—'}</strong>
-                {school?.organizationCode ? <> · Cụm / Chuỗi trường: <strong>{school.organizationCode}</strong></> : null}
+              <p style={{ margin: '0 0 10px', color: '#475569', fontSize: '13.5px' }}>
+                Mã trường: <strong>{school?.code || '—'}</strong>
+                {school?.organizationCode ? <> · Cụm hệ thống: <strong>{school.organizationCode}</strong></> : null}
                 {school?.contactEmail ? <> · Liên hệ: <strong>{school.contactEmail}</strong></> : null}
+                {systemStandards?.defaultSchoolYear ? <> · Năm học chuẩn: <strong>{systemStandards.defaultSchoolYear}</strong></> : null}
               </p>
+
+              {Array.isArray(school?.enabledModules) && school.enabledModules.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                  {school.enabledModules.map((modKey) => (
+                    <span
+                      key={modKey}
+                      style={{
+                        padding: '3px 9px',
+                        borderRadius: '999px',
+                        background: '#f1f5f9',
+                        border: '1px solid #cbd5e1',
+                        color: '#334155',
+                        fontSize: '11.5px',
+                        fontWeight: 600
+                      }}
+                    >
+                      ✓ {MODULE_LABELS[modKey] || modKey}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
+
             <Link className="button button-secondary" to="/classrooms">
               <Icon name="classes" size={16} /> Mở Quản lý Lớp học theo Phân hiệu
             </Link>
@@ -259,9 +276,11 @@ export default function SchoolCampusManagement() {
         <section className="content-card student-list-card">
           <div className="list-toolbar">
             <div>
-              <p className="card-kicker">CƠ CẤU PHÂN HIỆU TRỰC THUỘC</p>
+              <p className="card-kicker">CẤU HÌNH VẬN HÀNH PHÂN HIỆU TRỰC THUỘC TRƯỜNG</p>
               <h2>Danh sách Phân hiệu / Cơ sở ({campuses.length})</h2>
-              <p>Mỗi trường có thể chia thành nhiều phân hiệu (Cơ sở chính, Phân hiệu 1, Phân hiệu 2...) để phân bổ lớp học và học sinh rõ ràng.</p>
+              <p>
+                Admin trường quản lý trực tiếp địa chỉ, người phụ trách, khung giờ đón – trả trẻ và trạng thái hoạt động của từng phân hiệu thuộc trường mình.
+              </p>
             </div>
           </div>
 
@@ -272,11 +291,11 @@ export default function SchoolCampusManagement() {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>Mã phân hiệu</th>
+                    <th>Mã cơ sở</th>
                     <th>Tên phân hiệu / Cơ sở</th>
                     <th>Địa chỉ & Điện thoại</th>
-                    <th>Người phụ trách</th>
-                    <th>Quy mô hiện tại</th>
+                    <th>Phụ trách & Giờ đón – trả</th>
+                    <th>Quy mô lớp & Học sinh</th>
                     <th>Trạng thái</th>
                     <th>Thao tác</th>
                   </tr>
@@ -285,14 +304,22 @@ export default function SchoolCampusManagement() {
                   {campuses.map((c) => (
                     <tr key={c.code || c.name}>
                       <td><strong>{c.code}</strong></td>
-                      <td><strong>{c.name}</strong></td>
+                      <td>
+                        <strong>{c.name}</strong>
+                        {c.notes && <small style={{ display: 'block', color: '#64748b' }}>{c.notes}</small>}
+                      </td>
                       <td>
                         <div>{c.address || 'Chưa cập nhật địa chỉ'}</div>
                         {c.phone && <small style={{ color: '#64748b' }}>SĐT: {c.phone}</small>}
                       </td>
-                      <td>{c.managerName || '—'}</td>
                       <td>
-                        <strong>{c.classCount || 0} lớp</strong> · <span>{c.studentCount || 0} học sinh</span>
+                        <div>{c.managerName || '—'}</div>
+                        <small style={{ color: '#475569' }}>
+                          Đón – trả: <strong>{c.openTime || '07:00'} – {c.closeTime || '16:30'}</strong>
+                        </small>
+                      </td>
+                      <td>
+                        <strong>{c.classCount || 0}/{c.maxClassrooms || 20} lớp</strong> · <span>{c.studentCount || 0} HS</span>
                       </td>
                       <td>
                         <span className={`student-status ${c.isActive !== false ? 'enrolled' : 'temporarily_absent'}`}>
@@ -301,13 +328,13 @@ export default function SchoolCampusManagement() {
                       </td>
                       <td>
                         <div className="classroom-actions">
-                          <Link className="button button-secondary" to={`/students`}>
+                          <Link className="button button-secondary" to="/students">
                             Xem HS
                           </Link>
                           {isAdmin && (
                             <>
                               <button type="button" className="button button-secondary" onClick={() => openEditCampus(c)}>
-                                Sửa
+                                Cấu hình
                               </button>
                               {c.code !== 'CS-CHINH' && (
                                 <button
@@ -339,11 +366,11 @@ export default function SchoolCampusManagement() {
               if (e.target === e.currentTarget && !savingCampus) setShowCampusModal(false);
             }}
           >
-            <form className="account-modal-card student-form" onSubmit={handleSaveCampus}>
+            <form className="account-modal-card student-form" style={{ width: 'min(680px, 96vw)' }} onSubmit={handleSaveCampus}>
               <div className="account-modal-header">
                 <div>
-                  <p className="card-kicker">{editingCampus ? 'CẬP NHẬT PHÂN HIỆU' : 'THÊM PHÂN HIỆU MỚI'}</p>
-                  <h2>{editingCampus ? `Phân hiệu: ${editingCampus.name}` : 'Khai báo Phân hiệu / Cơ sở'}</h2>
+                  <p className="card-kicker">{editingCampus ? 'CẤU HÌNH VẬN HÀNH PHÂN HIỆU' : 'THÊM PHÂN HIỆU MỚI'}</p>
+                  <h2>{editingCampus ? `Phân hiệu: ${editingCampus.name}` : 'Khai báo Phân hiệu / Cơ sở mới'}</h2>
                 </div>
                 <button type="button" className="button button-secondary" disabled={savingCampus} onClick={() => setShowCampusModal(false)}>
                   Đóng
@@ -383,7 +410,7 @@ export default function SchoolCampusManagement() {
                   />
                 </label>
                 <label>
-                  Điện thoại cơ sở
+                  Điện thoại liên hệ cơ sở
                   <input
                     maxLength={20}
                     placeholder="VD: 0243 999 8888"
@@ -391,6 +418,46 @@ export default function SchoolCampusManagement() {
                     onChange={(e) => setCampusForm({ ...campusForm, phone: e.target.value })}
                   />
                 </label>
+                <label>
+                  Giờ mở cửa đón trẻ *
+                  <input
+                    type="time"
+                    required
+                    value={campusForm.openTime}
+                    onChange={(e) => setCampusForm({ ...campusForm, openTime: e.target.value })}
+                  />
+                </label>
+                <label>
+                  Giờ đóng cửa trả trẻ *
+                  <input
+                    type="time"
+                    required
+                    value={campusForm.closeTime}
+                    onChange={(e) => setCampusForm({ ...campusForm, closeTime: e.target.value })}
+                  />
+                </label>
+                <label>
+                  Số lớp học tối đa dự kiến (1–200)
+                  <input
+                    type="number"
+                    min={1}
+                    max={200}
+                    value={campusForm.maxClassrooms}
+                    onChange={(e) => setCampusForm({ ...campusForm, maxClassrooms: e.target.value })}
+                  />
+                </label>
+                {editingCampus && editingCampus.code !== 'CS-CHINH' && (
+                  <label>
+                    Trạng thái hoạt động phân hiệu
+                    <select
+                      value={campusForm.isActive ? 'active' : 'inactive'}
+                      onChange={(e) => setCampusForm({ ...campusForm, isActive: e.target.value === 'active' })}
+                    >
+                      <option value="active">Đang hoạt động</option>
+                      <option value="inactive">Tạm ngưng tuyển sinh / hoạt động</option>
+                    </select>
+                  </label>
+                )}
                 <label className="form-wide">
                   Địa chỉ phân hiệu
                   <input
@@ -400,6 +467,15 @@ export default function SchoolCampusManagement() {
                     onChange={(e) => setCampusForm({ ...campusForm, address: e.target.value })}
                   />
                 </label>
+                <label className="form-wide">
+                  Ghi chú vận hành nội bộ cơ sở
+                  <input
+                    maxLength={500}
+                    placeholder="VD: Có sân chơi ngoài trời riêng, cổng đón số 2 đường Nguyễn Cơ Thạch..."
+                    value={campusForm.notes}
+                    onChange={(e) => setCampusForm({ ...campusForm, notes: e.target.value })}
+                  />
+                </label>
               </div>
 
               <div className="form-actions">
@@ -407,68 +483,7 @@ export default function SchoolCampusManagement() {
                   Hủy
                 </button>
                 <button type="submit" className="button button-primary" disabled={savingCampus}>
-                  {savingCampus ? 'Đang lưu...' : (editingCampus ? 'Lưu cập nhật' : 'Tạo phân hiệu')}
-                </button>
-              </div>
-            </form>
-          </div>,
-          document.body
-        )}
-
-        {showSchoolModal && createPortal(
-          <div
-            className="account-modal-backdrop"
-            role="presentation"
-            onClick={(e) => {
-              if (e.target === e.currentTarget && !savingSchool) setShowSchoolModal(false);
-            }}
-          >
-            <form className="account-modal-card student-form" onSubmit={handleSaveSchool}>
-              <div className="account-modal-header">
-                <div>
-                  <p className="card-kicker">THÔNG TIN TRƯỜNG HỌC</p>
-                  <h2>Cập nhật hồ sơ đơn vị trường</h2>
-                </div>
-                <button type="button" className="button button-secondary" disabled={savingSchool} onClick={() => setShowSchoolModal(false)}>
-                  Đóng
-                </button>
-              </div>
-              {schoolError && <div className="form-error" role="alert">{schoolError}</div>}
-              <div className="student-form-grid">
-                <label className="form-wide">
-                  Tên trường hiển thị *
-                  <input
-                    required
-                    maxLength={160}
-                    value={schoolForm.name}
-                    onChange={(e) => setSchoolForm({ ...schoolForm, name: e.target.value })}
-                  />
-                </label>
-                <label>
-                  Mã cụm / Hệ thống chuỗi trường
-                  <input
-                    maxLength={40}
-                    placeholder="VD: HE-THONG-HOA-NANG"
-                    value={schoolForm.organizationCode}
-                    onChange={(e) => setSchoolForm({ ...schoolForm, organizationCode: e.target.value.toUpperCase() })}
-                  />
-                </label>
-                <label>
-                  Email liên hệ chính thức
-                  <input
-                    type="email"
-                    placeholder="vanphong@truong.edu.vn"
-                    value={schoolForm.contactEmail}
-                    onChange={(e) => setSchoolForm({ ...schoolForm, contactEmail: e.target.value })}
-                  />
-                </label>
-              </div>
-              <div className="form-actions">
-                <button type="button" className="button button-secondary" disabled={savingSchool} onClick={() => setShowSchoolModal(false)}>
-                  Hủy
-                </button>
-                <button type="submit" className="button button-primary" disabled={savingSchool}>
-                  {savingSchool ? 'Đang lưu...' : 'Lưu thông tin trường'}
+                  {savingCampus ? 'Đang lưu...' : (editingCampus ? 'Lưu cấu hình phân hiệu' : 'Tạo phân hiệu')}
                 </button>
               </div>
             </form>
