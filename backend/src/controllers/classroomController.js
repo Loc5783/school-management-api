@@ -191,10 +191,10 @@ const assignHomeroomTeacher = async (req, res) => {
 
     const savedClassroom = await runSafeTransaction(async (session) => {
       const sessionOpt = session ? { session } : undefined;
-      // 1. Re-verify actor in transaction: must be active, within tenant, and have role in ['admin', 'hr']
+      // 1. Re-verify actor in transaction: must be active, within tenant, and have role in ['admin', 'principal', 'hr']
       const currentActor = await User.findOne({
         _id: req.user._id,
-        role: { $in: ['admin', 'hr'] },
+        role: { $in: ['admin', 'principal', 'hr'] },
         status: 'active',
         ...tenantFilter
       }).session(session);
@@ -207,7 +207,7 @@ const assignHomeroomTeacher = async (req, res) => {
       if (classroom.status !== 'active') throw error('Không thể phân công giáo viên cho lớp đã lưu trữ', 409);
 
       const before = classroom.toObject();
-      const teacherId = req.body?.teacherId;
+      const teacherId = req.body?.teacherId !== undefined ? req.body.teacherId : req.body?.homeroomTeacherId;
       if (teacherId !== null && teacherId !== undefined && teacherId !== '') {
         if (!isId(teacherId)) throw error('ID giáo viên không hợp lệ', 400);
 

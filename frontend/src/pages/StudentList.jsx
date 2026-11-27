@@ -68,7 +68,7 @@ export default function StudentList() {
 
   const change = (key, value) => setFilters((old) => ({ ...old, [key]: value, page: key === 'page' ? value : 1 }));
   const canWrite = ['admin', 'principal', 'teacher'].includes(role);
-  const canCreateDirect = ['admin', 'teacher'].includes(role);
+  const canCreateDirect = ['admin', 'principal', 'teacher'].includes(role);
 
   const handleImportSuccess = (_createdStudents, targetClassId) => {
     // Nếu đẩy theo 1 lớp cụ thể -> lọc về lớp đó; nếu đẩy danh sách tổng nhiều lớp -> hiện toàn bộ

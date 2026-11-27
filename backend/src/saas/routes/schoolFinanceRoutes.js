@@ -126,7 +126,7 @@ router.get('/debts', roleCheck(['admin', 'principal', 'accountant']), getDebtRep
 router.post('/debts/remind', roleCheck(['admin', 'accountant']), sendDebtReminders);
 router.get('/tuition/student/:studentId', roleCheck(['admin', 'principal', 'accountant', 'parent']), getTuitionByStudent);
 router.get('/tuition/class/:classroomId', roleCheck(['admin', 'principal', 'accountant']), getTuitionByClass);
-router.put('/tuition/cancel/:id', roleCheck(['admin']), periodOpen.byInvoice, cancelTuitionFee);
+router.put('/tuition/cancel/:id', roleCheck(['admin', 'principal']), periodOpen.byInvoice, cancelTuitionFee);
 router.post('/tuition/:id/adjustments', roleCheck(['admin', 'accountant']), periodOpen.byInvoice, adjustTuitionFee);
 router.get('/tuition/:id/adjustments', roleCheck(['admin', 'principal', 'accountant', 'parent']), getInvoiceAdjustments);
 

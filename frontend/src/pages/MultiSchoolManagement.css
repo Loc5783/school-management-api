@@ -515,3 +515,300 @@
   color: #991b1b;
   border-bottom-color: #fecaca;
 }
+
+/* ============================================================================
+ * Bảng chuẩn không vỡ cột (.sa-clean-table) & Giao diện Account của Từng Trường
+ * Khắc phục triệt để xung đột từ .data-table td:first-child { display: flex }
+ * và .data-table td strong { display: block } ở index.css toàn cục.
+ * ============================================================================ */
+.sa-clean-table th {
+  padding: 13px 18px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.sa-clean-table td {
+  padding: 16px 18px;
+  vertical-align: middle;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #334155;
+}
+
+.sa-clean-table td:first-child {
+  display: table-cell !important;
+  vertical-align: middle;
+  font-weight: 500;
+  color: #1e293b;
+}
+
+.sa-clean-table td strong {
+  display: inline;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.sa-clean-table td small {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+/* Cột định danh Mã & Tên Trường không bao giờ bị ép chữ dọc */
+.sa-school-identity {
+  min-width: 235px;
+  max-width: 320px;
+}
+
+.sa-school-code-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 5px;
+}
+
+.sa-school-code-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 7px;
+  background: #dbeafe;
+  color: #1e40af;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+}
+
+.sa-school-title {
+  display: block !important;
+  font-size: 14.5px;
+  font-weight: 800 !important;
+  color: #0f172a !important;
+  line-height: 1.35;
+}
+
+/* Thẻ Tài khoản của Từng Trường ngay trong bảng Quản lý Trường & Account */
+.sa-school-account-card {
+  min-width: 275px;
+  padding: 11px 13px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  border: 1px solid #dbeafe;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.sa-school-account-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sa-user-identity-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.sa-user-avatar {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  background: #e0e7ff;
+  color: #3730a3;
+  font-size: 14px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.sa-user-avatar.is-admin {
+  background: linear-gradient(135deg, #2563eb, #4f46e5);
+  color: #ffffff;
+  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.22);
+}
+
+.sa-username-code {
+  padding: 3px 8px;
+  border-radius: 7px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e3a8a;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.sa-mini-icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sa-mini-icon-btn:hover {
+  border-color: #60a5fa;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.sa-account-role-summary-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.sa-account-mini-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  font-size: 11px;
+  font-weight: 700;
+  color: #475569;
+  white-space: nowrap;
+}
+
+.sa-account-manage-btn {
+  width: 100%;
+  min-height: 33px !important;
+  font-size: 12px !important;
+  border-radius: 8px !important;
+  background: #ffffff !important;
+  border: 1px solid #93c5fd !important;
+  color: #1d4ed8 !important;
+}
+
+.sa-account-manage-btn:hover {
+  background: #eff6ff !important;
+  border-color: #3b82f6 !important;
+}
+
+/* Hộp hiển thị URL Webhook gọn đẹp */
+.sa-webhook-cell-box {
+  min-width: 225px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+}
+
+.sa-webhook-cell-box code {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #1e3a8a;
+  word-break: break-all;
+}
+
+/* Lưới nút thao tác gọn gàng 2x2 thay vì xếp chồng dọc 4 tầng */
+.sa-school-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  gap: 7px;
+  align-items: center;
+}
+
+.sa-school-actions-grid .button {
+  min-height: 33px;
+  padding: 0 11px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.sa-school-actions-grid .button-enter-wide {
+  grid-column: 1 / -1;
+}
+
+.sa-inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+
+.sa-inline-actions .button {
+  min-height: 31px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+/* Chips lọc vai trò trong Modal Quản lý Account của Từng Trường */
+.sa-account-role-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.sa-role-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sa-role-chip:hover {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.sa-role-chip.active {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #ffffff;
+}
+
+.sa-role-chip b {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  font-size: 11px;
+}
+
+.sa-role-chip.active b {
+  background: rgba(255, 255, 255, 0.24);
+  color: #ffffff;
+}
+
+.sa-account-inline-form {
+  margin-bottom: 18px;
+  padding: 18px 20px !important;
+  border-radius: 14px;
+  background: #f8fbff;
+  border: 1.5px solid #93c5fd;
+}
+

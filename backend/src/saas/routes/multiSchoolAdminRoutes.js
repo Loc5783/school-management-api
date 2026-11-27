@@ -22,7 +22,10 @@ const {
   testSchoolWebhookBySuperAdmin,
   createSchoolWithAdmin,
   updateSchoolAndAdmin,
-  enterSchoolWorkspace
+  enterSchoolWorkspace,
+  listSchoolAccountsHandler,
+  createSchoolAccountHandler,
+  updateSchoolAccountHandler
 } = require('../controllers/multiSchoolAdminController');
 
 router.get('/public-meta', getPublicSystemMeta);
@@ -33,6 +36,9 @@ router.get('/me', getSuperAdminMe);
 router.post('/me/password', authLimiter, changeSuperAdminPassword);
 router.get('/schools', listAllSchoolsOverview);
 router.get('/schools/:id/report', getSchoolDetailedReportHandler);
+router.get('/schools/:id/accounts', listSchoolAccountsHandler);
+router.post('/schools/:id/accounts', requirePlatformRole(['platform_lead']), createSchoolAccountHandler);
+router.patch('/schools/:id/accounts/:accountId', requirePlatformRole(['platform_lead']), updateSchoolAccountHandler);
 router.post('/schools/:id/test-webhook', requirePlatformRole(['platform_lead']), testSchoolWebhookBySuperAdmin);
 router.post('/schools', requirePlatformRole(['platform_lead']), createSchoolWithAdmin);
 router.put('/schools/:id', requirePlatformRole(['platform_lead']), updateSchoolAndAdmin);

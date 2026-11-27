@@ -75,7 +75,7 @@ const emptyAdjustment = () => ({ type: 'discount', amount: '', reason: '', paidD
 
 export default function FinanceManagement() {
   const role = getStoredUser().role;
-  const canCancel = role === 'admin';
+  const canCancel = ['admin', 'principal'].includes(role);
   const canManageInvoices = ['admin', 'accountant'].includes(role);
   const canCollect = canManageInvoices;
   const [searchParams, setSearchParams] = useSearchParams();

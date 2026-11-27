@@ -163,7 +163,7 @@ const getProcurementRequests = async (req, res) => {
     try {
         const { status, urgency } = req.query;
         const filter = {};
-        if (req.user.role === 'teacher') filter.requesterId = req.user._id;
+        if (['teacher', 'chef'].includes(req.user.role)) filter.requesterId = req.user._id;
         if (status) filter.status = status;
         if (urgency) filter.urgency = urgency;
         const tenantFilter = buildTenantFilter(req);
@@ -201,7 +201,7 @@ const approveProcurementRequest = async (req, res) => {
             // Ép kiểu số nếu client gửi chuỗi "1"/"2"; nếu bỏ trống, Admin hoặc đơn đã qua bước 1 sẽ tự động duyệt bước 2
             const parsedLevel = (level !== undefined && level !== null && level !== '')
                 ? Number(level)
-                : (request.status === 'approved_l1' || req.user.role === 'admin' ? 2 : 1);
+                : (request.status === 'approved_l1' || ['admin', 'principal'].includes(req.user.role) ? 2 : 1);
 
             if (parsedLevel === 1) {
                 request.approverLevel1 = req.user._id;

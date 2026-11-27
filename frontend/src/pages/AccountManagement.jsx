@@ -76,7 +76,10 @@ export default function AccountManagement() {
   const [copiedHandover, setCopiedHandover] = useState(false);
   const [modalError, setModalError] = useState('');
   const [page, setPage] = useState(1);
-  const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 0 });
+  const [pagination, setPagination] = useState({ page: 1, limit: 12, total: 0, totalPages: 0 });
+  const [searchQuery, setSearchQuery] = useState('');
+  const [roleFilter, setRoleFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState(null);
@@ -95,10 +98,16 @@ export default function AccountManagement() {
     const requestId = ++accountRequestRef.current;
     setLoading(true);
     try {
-      const response = await getInternalAccounts({ page, limit: 10 });
+      const response = await getInternalAccounts({
+        page,
+        limit: 12,
+        ...(roleFilter ? { role: roleFilter } : {}),
+        ...(statusFilter ? { status: statusFilter } : {}),
+        ...(searchQuery.trim() ? { search: searchQuery.trim() } : {})
+      });
       if (requestId !== accountRequestRef.current) return;
       setAccounts(response.data.data || []);
-      setPagination(response.data.pagination || { page: 1, limit: 10, total: 0, totalPages: 0 });
+      setPagination(response.data.pagination || { page: 1, limit: 12, total: 0, totalPages: 0 });
     } catch (error) {
       if (requestId !== accountRequestRef.current) return;
       setNotice({ type: 'error', text: error.response?.data?.message || 'Không thể tải danh sách tài khoản.' });
@@ -107,7 +116,7 @@ export default function AccountManagement() {
         setLoading(false);
       }
     }
-  }, [page]);
+  }, [page, roleFilter, statusFilter, searchQuery]);
 
   useEffect(() => {
     if (activeTab !== 'internal') return;
@@ -468,7 +477,7 @@ export default function AccountManagement() {
           <section className="content-card account-list-card full-width">
             <div className="card-heading account-list-header">
               <div>
-                <p className="card-kicker">DANH SÁCH TÀI KHOẢN</p>
+                <p className="card-kicker">DANH SÁCH TÀI KHOẢN ĐƠN VỊ TRƯỜNG</p>
                 <h2>{pagination.total} tài khoản nội bộ</h2>
               </div>
               <div className="account-header-actions">
@@ -479,13 +488,56 @@ export default function AccountManagement() {
                   onClick={openCreateModal}
                 >
                   <Icon name="plus" size={16} />
-                  Tạo tài khoản
+                  Tạo tài khoản nhân sự
                 </button>
               </div>
             </div>
 
+            <div style={{ padding: '0 23px 16px', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+              <label className="search-box" style={{ flex: '1 1 260px' }}>
+                <Icon name="search" size={16} />
+                <input
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setPage(1);
+                  }}
+                  placeholder="Tìm theo họ tên hoặc @username..."
+                />
+              </label>
+              <select
+                value={roleFilter}
+                onChange={(e) => {
+                  setRoleFilter(e.target.value);
+                  setPage(1);
+                }}
+                style={{ height: 39, padding: '0 12px', borderRadius: 9, border: '1px solid #cbd5e1', background: '#fff', fontSize: 12.5, fontWeight: 600, color: '#334155' }}
+              >
+                <option value="">Tất cả vai trò trong trường</option>
+                <option value="admin">Quản trị viên trường (Admin)</option>
+                {roleOptions.map((r) => (
+                  <option key={r.value} value={r.value}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={statusFilter}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value);
+                  setPage(1);
+                }}
+                style={{ height: 39, padding: '0 12px', borderRadius: 9, border: '1px solid #cbd5e1', background: '#fff', fontSize: 12.5, fontWeight: 600, color: '#334155' }}
+              >
+                <option value="">Tất cả trạng thái</option>
+                <option value="active">Đang hoạt động</option>
+                <option value="suspended">Tạm ngưng</option>
+                <option value="inactive">Đã thu hồi</option>
+              </select>
+            </div>
+
             {loading ? (
-              <div className="page-loader">
+              <div className="inline-loader">
                 <span className="loading-orb" />
                 Đang tải tài khoản...
               </div>
@@ -494,85 +546,128 @@ export default function AccountManagement() {
                 <table className="data-table account-table">
                   <thead>
                     <tr>
-                      <th>Nhân sự</th>
-                      <th>Tài khoản</th>
-                      <th>Vai trò</th>
-                      <th>Hồ sơ nhân sự</th>
+                      <th>Nhân sự &amp; Liên hệ</th>
+                      <th>Tên đăng nhập</th>
+                      <th>Vai trò phân quyền</th>
+                      <th>Mã nhân sự</th>
+                      <th>Đăng nhập gần nhất</th>
                       <th>Trạng thái</th>
                       <th>Thao tác</th>
                     </tr>
                   </thead>
                   <tbody>
                     {accounts.length ? (
-                      accounts.map((account) => (
-                        <tr
-                          key={account._id}
-                          className={account._id === highlightedAccountId ? 'account-row-new' : ''}
-                        >
-                          <td>
-                            <div className="account-name-cell">
-                              <strong>{account.profile?.fullName || account.username}</strong>
-                              {account._id === highlightedAccountId && (
-                                <span className="account-new-pill">Mới tạo</span>
+                      accounts.map((account) => {
+                        const avatarLetter = String(account.profile?.fullName || account.username || 'U')
+                          .trim()
+                          .charAt(0)
+                          .toUpperCase();
+                        return (
+                          <tr
+                            key={account._id}
+                            className={account._id === highlightedAccountId ? 'account-row-new' : ''}
+                          >
+                            <td>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+                                <span
+                                  className="avatar"
+                                  style={
+                                    account.role === 'admin'
+                                      ? { background: '#2563eb', color: '#fff', width: 35, height: 35 }
+                                      : { width: 35, height: 35 }
+                                  }
+                                >
+                                  {avatarLetter}
+                                </span>
+                                <div>
+                                  <div className="account-name-cell">
+                                    <strong>{account.profile?.fullName || account.username}</strong>
+                                    {account._id === highlightedAccountId && (
+                                      <span className="account-new-pill">Mới tạo</span>
+                                    )}
+                                  </div>
+                                  <small>{[account.profile?.phone, account.profile?.email].filter(Boolean).join(' · ') || 'Chưa có SĐT / Email'}</small>
+                                </div>
+                              </div>
+                            </td>
+                            <td style={{ whiteSpace: 'nowrap' }}>
+                              <code style={{ padding: '3px 8px', borderRadius: 6, background: '#f1f5f9', color: '#1e3a8a', fontWeight: 700, fontSize: 12.5 }}>
+                                @{account.username}
+                              </code>
+                            </td>
+                            <td>
+                              <span className={`account-role-badge role-${account.role}`}>
+                                {account.role === 'admin'
+                                  ? 'Admin riêng của trường'
+                                  : roleOptions.find((role) => role.value === account.role)?.label || account.role}
+                              </span>
+                            </td>
+                            <td style={{ whiteSpace: 'nowrap' }}>
+                              {account.role === 'admin' ? (
+                                <span style={{ color: '#3730a3', fontWeight: 700, fontSize: 12 }}>Quản trị trường</span>
+                              ) : account.employeeId ? (
+                                <code style={{ fontWeight: 700, color: '#0f172a' }}>{account.employeeId}</code>
+                              ) : (
+                                <span className="account-unlinked">Chưa liên kết</span>
                               )}
-                            </div>
-                            <small>{account.profile?.phone || account.profile?.email || 'Chưa có liên hệ'}</small>
-                          </td>
-                          <td>@{account.username}</td>
-                          <td>
-                            <span className="account-role-badge">
-                              {account.role === 'admin'
-                                ? 'Quản trị hệ thống'
-                                : roleOptions.find((role) => role.value === account.role)?.label || account.role}
-                            </span>
-                          </td>
-                          <td>{account.employeeId || <span className="account-unlinked">Chưa liên kết</span>}</td>
-                          <td>
-                            <span
-                              className={`student-status ${
-                                account.status === 'active' ? 'enrolled' : 'temporarily_absent'
-                              }`}
-                            >
-                              {statusOptions[account.status] || account.status}
-                            </span>
-                          </td>
-                          <td>
-                            <div className="account-row-actions">
-                              <button
-                                type="button"
-                                className="button button-secondary"
-                                onClick={(e) => openEditModal(account, e)}
-                                disabled={
-                                  saving ||
-                                  account.role === 'admin' ||
-                                  String(account._id) === String(currentUserId) ||
-                                  (['principal', 'hr'].includes(currentRole) && account.role === 'principal')
-                                }
+                            </td>
+                            <td style={{ whiteSpace: 'nowrap', fontSize: 12, color: '#64748b' }}>
+                              {account.lastLogin
+                                ? new Date(account.lastLogin).toLocaleString('vi-VN', {
+                                    day: '2-digit',
+                                    month: '2-digit',
+                                    hour: '2-digit',
+                                    minute: '2-digit'
+                                  })
+                                : 'Chưa đăng nhập'}
+                            </td>
+                            <td>
+                              <span
+                                className={`student-status ${
+                                  account.status === 'active' ? 'enrolled' : 'temporarily_absent'
+                                }`}
                               >
-                                Sửa
-                              </button>
-                              <button
-                                type="button"
-                                className="button button-danger"
-                                onClick={() => deactivate(account)}
-                                disabled={
-                                  saving ||
-                                  account.status === 'inactive' ||
-                                  account.role === 'admin' ||
-                                  String(account._id) === String(currentUserId) ||
-                                  (['principal', 'hr'].includes(currentRole) && account.role === 'principal')
-                                }
-                              >
-                                Thu hồi
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))
+                                {statusOptions[account.status] || account.status}
+                              </span>
+                            </td>
+                            <td>
+                              <div className="account-row-actions">
+                                <button
+                                  type="button"
+                                  className="button button-secondary"
+                                  onClick={(e) => openEditModal(account, e)}
+                                  disabled={
+                                    saving ||
+                                    account.role === 'admin' ||
+                                    String(account._id) === String(currentUserId) ||
+                                    (['principal', 'hr'].includes(currentRole) && account.role === 'principal')
+                                  }
+                                >
+                                  Sửa / Đổi MK
+                                </button>
+                                <button
+                                  type="button"
+                                  className="button button-danger"
+                                  onClick={() => deactivate(account)}
+                                  disabled={
+                                    saving ||
+                                    account.status === 'inactive' ||
+                                    account.role === 'admin' ||
+                                    String(account._id) === String(currentUserId) ||
+                                    (['principal', 'hr'].includes(currentRole) && account.role === 'principal')
+                                  }
+                                >
+                                  Thu hồi
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
                     ) : (
                       <tr>
-                        <td colSpan="6" className="history-empty">
-                          Chưa có tài khoản nội bộ.
+                        <td colSpan="7" className="history-empty" style={{ textAlign: 'center', padding: '28px 16px' }}>
+                          Không có tài khoản nội bộ nào khớp bộ lọc.
                         </td>
                       </tr>
                     )}

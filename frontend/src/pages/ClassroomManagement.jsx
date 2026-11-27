@@ -36,7 +36,7 @@ const blank = {
 
 export default function ClassroomManagement() {
   const role = getStoredUser().role;
-  const canManage = role === 'admin';
+  const canManage = ['admin', 'principal'].includes(role);
   const [items, setItems] = useState([]);
   const [declaredCampuses, setDeclaredCampuses] = useState([]);
   const [form, setForm] = useState(blank);

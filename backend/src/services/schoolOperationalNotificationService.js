@@ -14,6 +14,7 @@
 
 const mongoose = require('mongoose');
 const Notification = require('../models/zone1_system/Notification');
+const User = require('../models/zone1_system/User');
 const Classroom = require('../models/zone3_school/Classroom');
 const Student = require('../models/zone3_school/Student');
 const StudentAttendance = require('../models/zone3_school/StudentAttendance');
@@ -67,8 +68,8 @@ const collectSchoolOperationalAlerts = async ({ tenantId, user, req = null }) =>
   const role = user.role;
   const alerts = [];
 
-  // 1. Nhắc điểm danh học sinh hôm nay (dành cho Admin trường, Hiệu trưởng, Giáo viên của trường đó)
-  if (!isWeekend && ['admin', 'principal', 'teacher'].includes(role)) {
+  // 1. Nhắc điểm danh học sinh hôm nay (dành cho Ban Giám đốc / Hiệu trưởng & Giáo viên — KHÔNG gửi cho Admin kỹ thuật trường)
+  if (!isWeekend && ['principal', 'teacher'].includes(role)) {
     let classScopeFilter = {};
     if (role === 'teacher') {
       const teacherClassIds = await getTeacherClassroomIds(user, req);
@@ -116,8 +117,8 @@ const collectSchoolOperationalAlerts = async ({ tenantId, user, req = null }) =>
     }
   }
 
-  // 2. Nhắc đơn xin nghỉ phép của học sinh đang chờ duyệt (Admin trường, Hiệu trưởng, Giáo viên)
-  if (['admin', 'principal', 'teacher'].includes(role)) {
+  // 2. Nhắc đơn xin nghỉ phép của học sinh đang chờ duyệt (Ban Giám đốc / Hiệu trưởng & Giáo viên)
+  if (['principal', 'teacher'].includes(role)) {
     let leaveScope = {};
     if (role === 'teacher') {
       const teacherClassIds = await getTeacherClassroomIds(user, req);
@@ -135,13 +136,13 @@ const collectSchoolOperationalAlerts = async ({ tenantId, user, req = null }) =>
         type: 'leave_request',
         title: `Có ${pendingLeaves} đơn xin nghỉ học của phụ huynh chờ xử lý`,
         message: 'Vui lòng kiểm tra và phản hồi đơn xin nghỉ phép để cập nhật chuyên cần & suất ăn bán trú.',
-        link: '/attendance/leaves'
+        link: '/attendance/leave-requests'
       });
     }
   }
 
-  // 3. Cảnh báo mẫu lưu thức ăn 24h tại bếp của trường (Admin trường, Hiệu trưởng, Đầu bếp)
-  if (['admin', 'principal', 'chef'].includes(role)) {
+  // 3. Cảnh báo mẫu lưu thức ăn 24h tại bếp của trường (Ban Giám đốc / Hiệu trưởng & Đầu bếp)
+  if (['principal', 'chef'].includes(role)) {
     const alertSampleCount = await FoodSample.countDocuments({
       ...tenantFilter,
       status: { $in: ['sent_to_lab', 'investigating'] }
@@ -153,13 +154,13 @@ const collectSchoolOperationalAlerts = async ({ tenantId, user, req = null }) =>
         type: 'nutrition',
         title: 'Cảnh báo mẫu lưu thức ăn bếp ăn bán trú',
         message: `Bếp ăn của trường đang có ${alertSampleCount} mẫu lưu ở trạng thái gửi xét nghiệm / kiểm tra ATTP.`,
-        link: '/nutrition'
+        link: role === 'chef' ? '/kitchen' : '/nutrition'
       });
     }
   }
 
-  // 4. Nhắc phản hồi phụ huynh gửi riêng cho trường (Admin trường, Hiệu trưởng)
-  if (['admin', 'principal'].includes(role)) {
+  // 4. Nhắc phản hồi phụ huynh gửi riêng cho trường (dành cho Ban Giám đốc / Hiệu trưởng)
+  if (role === 'principal') {
     const openFeedbackCount = await ParentFeedback.countDocuments({
       ...tenantFilter,
       status: { $in: ['pending', 'in_progress'] }
@@ -171,12 +172,31 @@ const collectSchoolOperationalAlerts = async ({ tenantId, user, req = null }) =>
         type: 'info',
         title: `Có ${openFeedbackCount} ý kiến phụ huynh gửi nhà trường chờ phản hồi`,
         message: 'Kiểm tra mục Phản hồi phụ huynh để tiếp nhận và giải đáp kịp thời trong phạm vi nhà trường.',
-        link: role === 'principal' ? '/parent-feedback' : '/accounts?tab=parents'
+        link: '/parent-feedback'
       });
     }
   }
 
-  // 5. Nhắc sự kiện máy chấm công của trường chưa ánh xạ hồ sơ (Admin trường, HR)
+  // 5. Nhắc tài khoản Phụ huynh chờ kích hoạt / gắn con (dành riêng cho Admin hệ thống của trường)
+  if (role === 'admin') {
+    const pendingParentsCount = await User.countDocuments({
+      ...tenantFilter,
+      role: 'parent',
+      status: 'inactive'
+    });
+    if (pendingParentsCount > 0) {
+      alerts.push({
+        key: `parent-accounts-pending:${todayKey}`,
+        severity: 'info',
+        type: 'system',
+        title: `Có ${pendingParentsCount} tài khoản Phụ huynh chờ liên kết & kích hoạt`,
+        message: 'Mở mục Duyệt Tài khoản Phụ huynh để liên kết hồ sơ học sinh và kích hoạt quyền đăng nhập.',
+        link: '/accounts?tab=parents'
+      });
+    }
+  }
+
+  // 6. Nhắc sự kiện máy chấm công của trường chưa ánh xạ hồ sơ (Admin hệ thống trường & HR)
   if (['admin', 'hr'].includes(role)) {
     const unmappedCount = await RawAttendanceEvent.countDocuments({
       ...tenantFilter,
@@ -186,10 +206,10 @@ const collectSchoolOperationalAlerts = async ({ tenantId, user, req = null }) =>
       alerts.push({
         key: `device-unmapped:${todayKey}`,
         severity: 'warning',
-        type: 'attendance',
+        type: 'system',
         title: `Có ${unmappedCount} lượt quẹt máy chấm công chưa gắn hồ sơ`,
         message: 'Mở quản lý Thiết bị chấm công của trường để ánh xạ ID máy với Học sinh hoặc Nhân viên.',
-        link: '/timekeeping'
+        link: role === 'admin' ? '/devices' : '/hr?tab=devices'
       });
     }
   }

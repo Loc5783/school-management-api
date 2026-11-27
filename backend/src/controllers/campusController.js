@@ -13,6 +13,7 @@
  */
 
 const Tenant = require('../models/zone1_system/Tenant');
+const AuditLog = require('../models/zone1_system/AuditLog');
 const Classroom = require('../models/zone3_school/Classroom');
 const Student = require('../models/zone3_school/Student');
 const { buildTenantFilter } = require('../services/tenantFilterService');
@@ -199,6 +200,20 @@ const listCampuses = async (req, res) => {
       ? sanitizeEnabledModules(tenant.enabledModules)
       : [...ALL_ENABLED_MODULES];
 
+    const savedSchoolSettings = tenant?.config?.schoolSettings || {};
+    const schoolSettings = {
+      schoolYear: savedSchoolSettings.schoolYear || settings.preschoolStandards?.defaultSchoolYear || '2026-2027',
+      hotline: savedSchoolSettings.hotline || '',
+      headquartersAddress: savedSchoolSettings.headquartersAddress || mergedCampuses[0]?.address || '',
+      standardCheckInTime: savedSchoolSettings.standardCheckInTime || defaultOpen,
+      standardCheckOutTime: savedSchoolSettings.standardCheckOutTime || defaultClose,
+      lateGraceMinutes: Number.isInteger(savedSchoolSettings.lateGraceMinutes) ? savedSchoolSettings.lateGraceMinutes : 15,
+      mealCancelCutoffTime: savedSchoolSettings.mealCancelCutoffTime || '08:00',
+      requirePickupQrVerification: savedSchoolSettings.requirePickupQrVerification !== false,
+      allowParentOnlineLeave: savedSchoolSettings.allowParentOnlineLeave !== false,
+      internalAnnouncementFooter: savedSchoolSettings.internalAnnouncementFooter || ''
+    };
+
     return res.json({
       success: true,
       data: {
@@ -211,7 +226,8 @@ const listCampuses = async (req, res) => {
               contactEmail: tenant.contactEmail || '',
               status: tenant.status,
               enabledModules,
-              quotas
+              quotas,
+              schoolSettings
             }
           : {
               _id: null,
@@ -221,7 +237,8 @@ const listCampuses = async (req, res) => {
               contactEmail: '',
               status: 'active',
               enabledModules: [...ALL_ENABLED_MODULES],
-              quotas
+              quotas,
+              schoolSettings
             },
         systemStandards: settings.preschoolStandards,
         campuses: mergedCampuses
@@ -450,15 +467,151 @@ const updateCampus = async (req, res) => {
 };
 
 /**
- * Khóa ranh giới quyền hạn: Định danh cấp Trường thuộc độc quyền của SuperAdmin;
- * Admin từng trường chỉ quản lý cấu hình các Phân hiệu trực thuộc trường mình.
+ * Cho phép Admin từng trường (`role: 'admin'`) cập nhật Cài đặt Hệ thống Vận hành nội bộ của Trường & Phân hiệu
+ * (`schoolSettings`, `contactEmail`), trong khi vẫn khóa chặt các trường cấp phép nền tảng (`code`, `name`,
+ * `organizationCode`, `status`, `enabledModules`, `quotas`) chỉ thuộc thẩm quyền SuperAdmin.
  */
 const updateCurrentSchoolInfo = async (req, res) => {
-  return res.status(403).json({
-    success: false,
-    code: 'SCHOOL_IDENTITY_LOCKED',
-    message: 'Thông tin định danh cấp Trường (Tên trường, Mã trường, Cụm trường, Gói chức năng) do Quản trị Tổng Hệ thống (SuperAdmin) quản lý. Admin trường chỉ quản lý cấu hình các Phân hiệu / Cơ sở trực thuộc.'
-  });
+  try {
+    const tenantId = req.tenantId || req.user?.tenantId;
+    if (!tenantId) {
+      return res.status(400).json({ success: false, message: 'Thiếu ngữ cảnh trường học để lưu cài đặt' });
+    }
+
+    const body = req.body || {};
+    const forbiddenLicensingKeys = ['code', 'name', 'organizationCode', 'status', 'enabledModules', 'quotas'];
+    const attemptedLockedKey = forbiddenLicensingKeys.find((k) => body[k] !== undefined);
+    if (attemptedLockedKey) {
+      return res.status(403).json({
+        success: false,
+        code: 'SCHOOL_IDENTITY_LOCKED',
+        message: 'Thông tin cấp phép cấp Trường (Mã trường, Tên pháp lý, Gói phân hệ, Hạn mức Quota) do Quản trị Tổng Hệ thống (SuperAdmin) quản lý. Admin trường chỉ chỉnh sửa Cài đặt vận hành hệ thống của trường và các Phân hiệu trực thuộc.'
+      });
+    }
+
+    const tenant = await Tenant.findById(tenantId);
+    if (!tenant) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy đơn vị trường học' });
+    }
+
+    const settings = await getSystemSettings();
+    const rawSettings = body.schoolSettings && typeof body.schoolSettings === 'object' ? body.schoolSettings : body;
+    const prevSettings = tenant.config?.schoolSettings || {};
+    const nextSettings = {
+      schoolYear: prevSettings.schoolYear || settings.preschoolStandards?.defaultSchoolYear || '2026-2027',
+      hotline: prevSettings.hotline || '',
+      headquartersAddress: prevSettings.headquartersAddress || '',
+      standardCheckInTime: prevSettings.standardCheckInTime || settings.preschoolStandards?.standardCheckInTime || '07:00',
+      standardCheckOutTime: prevSettings.standardCheckOutTime || settings.preschoolStandards?.standardCheckOutTime || '16:30',
+      lateGraceMinutes: Number.isInteger(prevSettings.lateGraceMinutes) ? prevSettings.lateGraceMinutes : 15,
+      mealCancelCutoffTime: prevSettings.mealCancelCutoffTime || '08:00',
+      requirePickupQrVerification: prevSettings.requirePickupQrVerification !== false,
+      allowParentOnlineLeave: prevSettings.allowParentOnlineLeave !== false,
+      internalAnnouncementFooter: prevSettings.internalAnnouncementFooter || ''
+    };
+
+    if (body.contactEmail !== undefined || rawSettings.contactEmail !== undefined) {
+      const cleanEmail = String(body.contactEmail ?? rawSettings.contactEmail ?? '').trim().toLowerCase();
+      if (cleanEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+        return res.status(422).json({ success: false, message: 'Email liên hệ văn phòng trường không đúng định dạng' });
+      }
+      tenant.contactEmail = cleanEmail;
+    }
+
+    if (rawSettings.schoolYear !== undefined) {
+      const sy = String(rawSettings.schoolYear || '').trim();
+      if (!/^\d{4}-\d{4}$/.test(sy)) {
+        return res.status(422).json({ success: false, message: 'Năm học áp dụng phải theo định dạng YYYY-YYYY (VD: 2026-2027)' });
+      }
+      nextSettings.schoolYear = sy;
+    }
+
+    if (rawSettings.hotline !== undefined) {
+      nextSettings.hotline = String(rawSettings.hotline || '').trim().slice(0, 30);
+    }
+
+    if (rawSettings.headquartersAddress !== undefined) {
+      nextSettings.headquartersAddress = String(rawSettings.headquartersAddress || '').trim().slice(0, 300);
+    }
+
+    if (rawSettings.standardCheckInTime !== undefined) {
+      const t = String(rawSettings.standardCheckInTime || '').trim();
+      if (!TIME_HHMM_REGEX.test(t)) {
+        return res.status(422).json({ success: false, message: 'Giờ đón trẻ chuẩn của trường phải theo định dạng HH:MM' });
+      }
+      nextSettings.standardCheckInTime = t;
+    }
+
+    if (rawSettings.standardCheckOutTime !== undefined) {
+      const t = String(rawSettings.standardCheckOutTime || '').trim();
+      if (!TIME_HHMM_REGEX.test(t)) {
+        return res.status(422).json({ success: false, message: 'Giờ trả trẻ chuẩn của trường phải theo định dạng HH:MM' });
+      }
+      nextSettings.standardCheckOutTime = t;
+    }
+
+    if (rawSettings.lateGraceMinutes !== undefined) {
+      const mins = Number(rawSettings.lateGraceMinutes);
+      if (!Number.isInteger(mins) || mins < 0 || mins > 120) {
+        return res.status(422).json({ success: false, message: 'Ngưỡng phút tính đi muộn phải là số nguyên từ 0 đến 120 phút' });
+      }
+      nextSettings.lateGraceMinutes = mins;
+    }
+
+    if (rawSettings.mealCancelCutoffTime !== undefined) {
+      const t = String(rawSettings.mealCancelCutoffTime || '').trim();
+      if (!TIME_HHMM_REGEX.test(t)) {
+        return res.status(422).json({ success: false, message: 'Giờ chốt báo nghỉ cắt suất ăn phải theo định dạng HH:MM (VD: 08:00)' });
+      }
+      nextSettings.mealCancelCutoffTime = t;
+    }
+
+    if (rawSettings.requirePickupQrVerification !== undefined) {
+      nextSettings.requirePickupQrVerification = Boolean(rawSettings.requirePickupQrVerification);
+    }
+
+    if (rawSettings.allowParentOnlineLeave !== undefined) {
+      nextSettings.allowParentOnlineLeave = Boolean(rawSettings.allowParentOnlineLeave);
+    }
+
+    if (rawSettings.internalAnnouncementFooter !== undefined) {
+      nextSettings.internalAnnouncementFooter = String(rawSettings.internalAnnouncementFooter || '').trim().slice(0, 300);
+    }
+
+    tenant.config = {
+      ...(tenant.config || {}),
+      schoolSettings: nextSettings
+    };
+    tenant.markModified('config');
+    await tenant.save();
+
+    if (req.user?._id) {
+      await AuditLog.create({
+        tenantId: tenant._id,
+        actorId: req.user._id,
+        actorUsername: req.user.username || 'admin',
+        actorRole: req.user.role || 'admin',
+        action: 'SCHOOL_SYSTEM_SETTINGS_UPDATED',
+        targetType: 'Tenant',
+        targetId: tenant._id,
+        before: prevSettings,
+        after: nextSettings,
+        reason: 'Cập nhật cài đặt hệ thống vận hành của trường & phân hiệu'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Đã lưu cài đặt hệ thống vận hành của trường & phân hiệu thành công',
+      data: {
+        contactEmail: tenant.contactEmail,
+        schoolSettings: nextSettings
+      }
+    });
+  } catch (err) {
+    console.error('Lỗi cập nhật cài đặt hệ thống trường:', err);
+    return res.status(500).json({ success: false, message: 'Không thể lưu cài đặt hệ thống của trường' });
+  }
 };
 
 /**

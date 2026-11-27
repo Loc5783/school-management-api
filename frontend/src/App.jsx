@@ -25,6 +25,8 @@ const StudentDetail = lazy(() => import('./pages/StudentDetail'));
 const StudentForm = lazy(() => import('./pages/StudentForm'));
 const ClassroomManagement = lazy(() => import('./pages/ClassroomManagement'));
 const SchoolCampusManagement = lazy(() => import('./pages/SchoolCampusManagement'));
+const SchoolDeviceSettings = lazy(() => import('./pages/SchoolDeviceSettings'));
+const SchoolAuditJournalPage = lazy(() => import('./pages/SchoolAuditJournalPage'));
 const MultiSchoolManagement = lazy(() => import('./pages/MultiSchoolManagement'));
 const ParentPortal = lazy(() => import('./pages/ParentPortal'));
 const FinanceManagement = lazy(() => import('./pages/FinanceManagement'));
@@ -46,6 +48,35 @@ const MyStaffing = lazy(() => import('./pages/MyStaffing'));
 const InternalNotices = lazy(() => import('./pages/InternalNotices'));
 const StaffLeaveRequests = lazy(() => import('./pages/StaffLeaveRequests'));
 
+/**
+ * Xác định trang chủ chuẩn tương ứng với từng vai trò người dùng để chuyển hướng chính xác,
+ * đảm bảo Admin trường vào thẳng Cài đặt Hệ thống Trường & Phân hiệu (/campuses) thay vì màn hình Giám đốc.
+ */
+function getRoleHomePath(role) {
+  switch (role) {
+    case 'superadmin':
+      return '/multi-school';
+    case 'admin':
+      return '/campuses';
+    case 'principal':
+      return '/principal';
+    case 'teacher':
+      return '/dashboard';
+    case 'chef':
+      return '/kitchen';
+    case 'accountant':
+      return '/accounting';
+    case 'hr':
+      return '/hr';
+    case 'guard':
+      return '/guard';
+    case 'parent':
+      return '/parent-dashboard';
+    default:
+      return '/login';
+  }
+}
+
 function RouteLoadingFallback() {
   return (
     <div className="inline-loader" style={{ padding: '48px 0' }}>
@@ -58,7 +89,7 @@ function RouteLoadingFallback() {
 function ParentRoute({ children }) {
   const user = getStoredUser();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
-  return user.role === 'parent' ? children : <Navigate to="/dashboard" replace />;
+  return user.role === 'parent' ? children : <Navigate to={getRoleHomePath(user.role)} replace />;
 }
 
 function SuperAdminRoute({ children }) {
@@ -66,7 +97,7 @@ function SuperAdminRoute({ children }) {
   const user = getStoredSuperAdminUser() || getStoredUser();
   if (!superToken) return <Navigate to="/login" replace />;
   if (user.role !== 'superadmin' && !localStorage.getItem('superadmin_token')) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={getRoleHomePath(user.role)} replace />;
   }
   return children;
 }
@@ -74,28 +105,27 @@ function SuperAdminRoute({ children }) {
 function DashboardRoute({ children }) {
   const user = getStoredUser();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
-  if (user.role === 'superadmin') return <Navigate to="/multi-school" replace />;
-  if (user.role === 'guard') return <Navigate to="/guard" replace />;
-  if (user.role === 'parent') return <Navigate to="/parent-dashboard" replace />;
-  if (user.role === 'chef') return <Navigate to="/kitchen" replace />;
-  if (user.role === 'accountant') return <Navigate to="/accounting" replace />;
-  if (user.role === 'hr') return <Navigate to="/hr" replace />;
-  return children;
+  if (['principal', 'teacher'].includes(user.role)) {
+    return children;
+  }
+  return <Navigate to={getRoleHomePath(user.role)} replace />;
 }
 
 function StudentManagementRoute({ children }) {
   const user = getStoredUser();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
-  if (user.role === 'superadmin') return <Navigate to="/multi-school" replace />;
-  if (user.role === 'parent') return <Navigate to="/parent-portal" replace />;
-  if (user.role === 'guard') return <Navigate to="/guard" replace />;
-  return children;
+  if (['principal', 'teacher', 'hr', 'accountant'].includes(user.role)) {
+    return children;
+  }
+  return <Navigate to={getRoleHomePath(user.role)} replace />;
 }
 
 function ChatRoute({ children }) {
   const user = getStoredUser();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
-  return ['parent', 'teacher'].includes(user.role) ? children : <Navigate to="/dashboard" replace />;
+  return ['parent', 'teacher'].includes(user.role)
+    ? children
+    : <Navigate to={getRoleHomePath(user.role)} replace />;
 }
 
 function PickupRoute({ children }) {
@@ -115,32 +145,45 @@ function PickupRoute({ children }) {
     const search = searchParams.toString();
     return <Navigate to={`/attendance${search ? `?${search}` : ''}`} replace />;
   }
-  return ['parent', 'admin', 'principal'].includes(user.role) ? children : <Navigate to="/dashboard" replace />;
+  return ['parent', 'principal'].includes(user.role)
+    ? children
+    : <Navigate to={getRoleHomePath(user.role)} replace />;
 }
 
-function StaffRoute({ children }) {
+function SalariedStaffRoute({ children }) {
   const user = getStoredUser();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
-  return ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'].includes(user.role) ? children : <Navigate to="/dashboard" replace />;
+  return ['principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'].includes(user.role)
+    ? children
+    : <Navigate to={getRoleHomePath(user.role)} replace />;
+}
+
+function InternalAccountRoute({ children }) {
+  const user = getStoredUser();
+  if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
+  return ['admin', 'principal', 'teacher', 'accountant', 'chef', 'guard', 'hr'].includes(user.role)
+    ? children
+    : <Navigate to={getRoleHomePath(user.role)} replace />;
 }
 
 function ClassroomRoute({ children }) {
   const user = getStoredUser();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
-  return ['admin', 'principal'].includes(user.role) ? children : <Navigate to="/dashboard" replace />;
+  return ['admin', 'principal'].includes(user.role)
+    ? children
+    : <Navigate to={getRoleHomePath(user.role)} replace />;
 }
 
 function TeacherRoute({ children }) {
   const user = getStoredUser();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
-  return user.role === 'teacher' ? children : <Navigate to="/dashboard" replace />;
+  return user.role === 'teacher' ? children : <Navigate to={getRoleHomePath(user.role)} replace />;
 }
 
 function RoleRoute({ roles, children }) {
   const user = getStoredUser();
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
-  if (user.role === 'guard' && !roles.includes('guard')) return <Navigate to="/guard" replace />;
-  return roles.includes(user.role) ? children : <Navigate to="/dashboard" replace />;
+  return roles.includes(user.role) ? children : <Navigate to={getRoleHomePath(user.role)} replace />;
 }
 
 function ProfileRequestsRoute({ children }) {
@@ -148,15 +191,7 @@ function ProfileRequestsRoute({ children }) {
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
   if (user.role === 'admin') return <Navigate to="/accounts?tab=profile-requests" replace />;
   if (user.role === 'principal') return children;
-  return <Navigate to="/dashboard" replace />;
-}
-
-function ParentFeedbackRoute({ children }) {
-  const user = getStoredUser();
-  if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
-  if (user.role === 'admin') return <Navigate to="/staff-settings?tab=parent-feedback" replace />;
-  if (user.role === 'principal') return children;
-  return <Navigate to="/dashboard" replace />;
+  return <Navigate to={getRoleHomePath(user.role)} replace />;
 }
 
 function App() {
@@ -168,80 +203,70 @@ function App() {
           <Route path="/register" element={<Navigate to="/login" replace />} />
           <Route path="/multi-school" element={<SuperAdminRoute><MultiSchoolManagement /></SuperAdminRoute>} />
           <Route element={<PersistentAppShell />}>
+            {/* 1. Chức năng Hệ thống Trường, Phân hiệu, Tài khoản, Thiết bị & Nhật ký (Admin trường) */}
             <Route path="/parent-accounts" element={<RoleRoute roles={['admin']}><Navigate to="/accounts?tab=parents" replace /></RoleRoute>} />
             <Route path="/accounts" element={<RoleRoute roles={['admin', 'hr']}><AccountManagement /></RoleRoute>} />
-            <Route path="/principal" element={<RoleRoute roles={['admin', 'principal']}><PrincipalOverview /></RoleRoute>} />
-            <Route
-              path="/dashboard"
-              element={<DashboardRoute><Dashboard /></DashboardRoute>}
-            />
-            <Route
-              path="/attendance"
-              element={<RoleRoute roles={['admin', 'principal', 'teacher']}><AttendanceClassList /></RoleRoute>}
-            />
-            <Route
-              path="/attendance/class/:classroomId"
-              element={<RoleRoute roles={['admin', 'principal', 'teacher']}><AttendanceDetail /></RoleRoute>}
-            />
-            <Route
-              path="/attendance/reports"
-              element={<RoleRoute roles={['admin', 'principal', 'teacher']}><AttendanceAbsenceReport /></RoleRoute>}
-            />
-            <Route
-              path="/attendance/leave-requests"
-              element={<RoleRoute roles={['admin', 'principal', 'teacher']}><AttendanceLeaveManagement /></RoleRoute>}
-            />
-            <Route
-              path="/smart-attendance"
-              element={<Navigate to="/timekeeping?tab=kiosk" replace />}
-            />
-            <Route
-              path="/timekeeping"
-              element={<StaffRoute><TimekeepingHub /></StaffRoute>}
-            />
-            <Route path="/my-leave-requests" element={<StaffRoute><StaffLeaveRequests /></StaffRoute>} />
-            <Route path="/my-payroll" element={<StaffRoute><MyPayroll /></StaffRoute>} />
-            <Route path="/staff-settings" element={<StaffRoute><StaffSettings /></StaffRoute>} />
-            <Route path="/my-staffing" element={<StaffRoute><MyStaffing /></StaffRoute>} />
+            <Route path="/campuses" element={<ClassroomRoute><SchoolCampusManagement /></ClassroomRoute>} />
+            <Route path="/classrooms" element={<ClassroomRoute><ClassroomManagement /></ClassroomRoute>} />
+            <Route path="/devices" element={<RoleRoute roles={['admin', 'principal', 'hr']}><SchoolDeviceSettings /></RoleRoute>} />
+            <Route path="/audit-logs" element={<RoleRoute roles={['admin', 'principal']}><SchoolAuditJournalPage /></RoleRoute>} />
+
+            {/* 2. Điều hành Ban Giám đốc / Hiệu trưởng & Tổng quan Giáo viên */}
+            <Route path="/principal" element={<RoleRoute roles={['principal']}><PrincipalOverview /></RoleRoute>} />
+            <Route path="/dashboard" element={<DashboardRoute><Dashboard /></DashboardRoute>} />
+
+            {/* 3. Học sinh, Điểm danh & Sổ chăm sóc (Ban Giám đốc & Giáo viên) */}
+            <Route path="/attendance" element={<RoleRoute roles={['principal', 'teacher']}><AttendanceClassList /></RoleRoute>} />
+            <Route path="/attendance/class/:classroomId" element={<RoleRoute roles={['principal', 'teacher']}><AttendanceDetail /></RoleRoute>} />
+            <Route path="/attendance/reports" element={<RoleRoute roles={['principal', 'teacher']}><AttendanceAbsenceReport /></RoleRoute>} />
+            <Route path="/attendance/leave-requests" element={<RoleRoute roles={['principal', 'teacher']}><AttendanceLeaveManagement /></RoleRoute>} />
+            <Route path="/daily-care" element={<TeacherRoute><DailyCare /></TeacherRoute>} />
+            <Route path="/students" element={<StudentManagementRoute><StudentList /></StudentManagementRoute>} />
+            <Route path="/students/new" element={<RoleRoute roles={['principal', 'teacher']}><StudentForm /></RoleRoute>} />
+            <Route path="/students/:id" element={<StudentManagementRoute><StudentDetail /></StudentManagementRoute>} />
+            <Route path="/students/:id/edit" element={<RoleRoute roles={['principal', 'teacher']}><StudentForm /></RoleRoute>} />
+            <Route path="/student-profile-change-requests" element={<ProfileRequestsRoute><StudentProfileChangeRequests /></ProfileRequestsRoute>} />
+            <Route path="/parent-feedback" element={<RoleRoute roles={['principal']}><ParentFeedbackManagement /></RoleRoute>} />
+
+            {/* 4. Bếp ăn Bán trú, Cơ sở vật chất & An ninh Cổng */}
+            <Route path="/kitchen" element={<RoleRoute roles={['chef']}><ChefDashboard /></RoleRoute>} />
+            <Route path="/nutrition" element={<RoleRoute roles={['principal', 'chef', 'teacher', 'parent']}><NutritionManagement /></RoleRoute>} />
+            <Route path="/assets" element={<RoleRoute roles={['principal', 'teacher', 'chef', 'accountant']}><AssetManagement /></RoleRoute>} />
+            <Route path="/pickups" element={<PickupRoute><PickupManagement /></PickupRoute>} />
+            <Route path="/guard" element={<RoleRoute roles={['guard', 'principal']}><GuardOperations /></RoleRoute>} />
+
+            {/* 5. Tài chính Học phí & Kế toán */}
+            <Route path="/accounting" element={<RoleRoute roles={['accountant']}><AccountantDashboard /></RoleRoute>} />
+            <Route path="/accounting/expenses" element={<RoleRoute roles={['principal', 'accountant']}><AccountingExpenses /></RoleRoute>} />
+            <Route path="/accounting/operating-expenses" element={<RoleRoute roles={['principal', 'accountant']}><OperatingExpenses /></RoleRoute>} />
+            <Route path="/accounting/cashbook" element={<RoleRoute roles={['principal', 'accountant']}><AccountingCashbook /></RoleRoute>} />
+            <Route path="/accounting/report" element={<RoleRoute roles={['principal', 'accountant']}><AccountingReport /></RoleRoute>} />
+            <Route path="/finance" element={<RoleRoute roles={['principal', 'accountant']}><FinanceManagement /></RoleRoute>} />
+            <Route path="/reports" element={<RoleRoute roles={['principal', 'accountant']}><Reports /></RoleRoute>} />
+
+            {/* 6. Nhân sự, Chấm công & Tiền lương */}
+            <Route path="/hr" element={<RoleRoute roles={['principal', 'accountant', 'hr']}><EmployeeManagement /></RoleRoute>} />
+            <Route path="/employees" element={<RoleRoute roles={['principal', 'accountant', 'hr']}><EmployeeManagement /></RoleRoute>} />
+            <Route path="/payroll" element={<RoleRoute roles={['principal', 'accountant', 'hr']}><PayrollManagement /></RoleRoute>} />
+            <Route path="/timekeeping-management" element={<Navigate to="/hr?tab=timekeeping" replace />} />
+            <Route path="/smart-attendance" element={<Navigate to="/timekeeping?tab=kiosk" replace />} />
+            <Route path="/timekeeping" element={<SalariedStaffRoute><TimekeepingHub /></SalariedStaffRoute>} />
+            <Route path="/my-leave-requests" element={<SalariedStaffRoute><StaffLeaveRequests /></SalariedStaffRoute>} />
+            <Route path="/my-payroll" element={<SalariedStaffRoute><MyPayroll /></SalariedStaffRoute>} />
+            <Route path="/my-staffing" element={<SalariedStaffRoute><MyStaffing /></SalariedStaffRoute>} />
+
+            {/* 7. Thông báo nội bộ & Cài đặt tài khoản */}
+            <Route path="/internal-notices" element={<InternalAccountRoute><InternalNotices /></InternalAccountRoute>} />
+            <Route path="/staff-settings" element={<InternalAccountRoute><StaffSettings /></InternalAccountRoute>} />
             <Route path="/my-handovers" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/internal-notices" element={<StaffRoute><InternalNotices /></StaffRoute>} />
             <Route path="/my-requests" element={<Navigate to="/dashboard" replace />} />
             <Route path="/professional-reviews" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/daily-care" element={<TeacherRoute><DailyCare /></TeacherRoute>} />
-            <Route
-              path="/timekeeping-management"
-              element={<Navigate to="/hr?tab=timekeeping" replace />}
-            />
-            <Route
-              path="/nutrition"
-              element={<RoleRoute roles={['admin', 'principal', 'chef', 'teacher', 'parent']}><NutritionManagement /></RoleRoute>}
-            />
-            <Route path="/kitchen" element={<RoleRoute roles={['chef', 'admin']}><ChefDashboard /></RoleRoute>} />
-            <Route path="/accounting" element={<RoleRoute roles={['accountant']}><AccountantDashboard /></RoleRoute>} />
-            <Route path="/accounting/expenses" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><AccountingExpenses /></RoleRoute>} />
-            <Route path="/accounting/operating-expenses" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><OperatingExpenses /></RoleRoute>} />
-            <Route path="/accounting/cashbook" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><AccountingCashbook /></RoleRoute>} />
-            <Route path="/accounting/report" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><AccountingReport /></RoleRoute>} />
-            <Route path="/students" element={<StudentManagementRoute><StudentList /></StudentManagementRoute>} />
-            <Route path="/students/new" element={<RoleRoute roles={['admin', 'teacher']}><StudentForm /></RoleRoute>} />
-            <Route path="/students/:id" element={<StudentManagementRoute><StudentDetail /></StudentManagementRoute>} />
-            <Route path="/students/:id/edit" element={<RoleRoute roles={['admin', 'teacher']}><StudentForm /></RoleRoute>} />
-            <Route path="/classrooms" element={<ClassroomRoute><ClassroomManagement /></ClassroomRoute>} />
-            <Route path="/campuses" element={<ClassroomRoute><SchoolCampusManagement /></ClassroomRoute>} />
-            <Route path="/finance" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><FinanceManagement /></RoleRoute>} />
-            <Route path="/reports" element={<RoleRoute roles={['admin', 'principal', 'accountant']}><Reports /></RoleRoute>} />
-            <Route path="/assets" element={<RoleRoute roles={['admin', 'principal', 'teacher']}><AssetManagement /></RoleRoute>} />
-            <Route path="/hr" element={<RoleRoute roles={['admin', 'principal', 'accountant', 'hr']}><EmployeeManagement /></RoleRoute>} />
-            <Route path="/employees" element={<RoleRoute roles={['admin', 'principal', 'accountant', 'hr']}><EmployeeManagement /></RoleRoute>} />
-            <Route path="/payroll" element={<RoleRoute roles={['admin', 'principal', 'accountant', 'hr']}><PayrollManagement /></RoleRoute>} />
+
+            {/* 8. Cổng thông tin Phụ huynh & Tin nhắn */}
             <Route path="/parent-dashboard" element={<ParentRoute><ParentPortal /></ParentRoute>} />
             <Route path="/parent-portal" element={<ParentRoute><ParentPortal /></ParentRoute>} />
             <Route path="/parent-settings" element={<ParentRoute><ParentSettings /></ParentRoute>} />
             <Route path="/parent-care" element={<ParentRoute><ParentCare /></ParentRoute>} />
-            <Route path="/pickups" element={<PickupRoute><PickupManagement /></PickupRoute>} />
-            <Route path="/guard" element={<RoleRoute roles={['guard', 'admin']}><GuardOperations /></RoleRoute>} />
-            <Route path="/student-profile-change-requests" element={<ProfileRequestsRoute><StudentProfileChangeRequests /></ProfileRequestsRoute>} />
-            <Route path="/parent-feedback" element={<ParentFeedbackRoute><ParentFeedbackManagement /></ParentFeedbackRoute>} />
             <Route path="/messages" element={<ChatRoute><Messages /></ChatRoute>} />
           </Route>
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

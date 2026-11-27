@@ -81,7 +81,7 @@ export default function StudentDetail() {
   const lastSubmittedPayloadRef = useRef(null);
 
   const role = getStoredUser().role;
-  const manager = role === 'admin';
+  const manager = ['admin', 'principal'].includes(role);
   const canTransfer = ['admin', 'hr', 'principal'].includes(role);
   const canUpdateHealth = ['admin', 'principal', 'teacher'].includes(role);
 

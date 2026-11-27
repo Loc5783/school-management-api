@@ -10,6 +10,7 @@ import { getPublicSystemMeta } from '../api/multiSchool';
 const ROUTE_MODULE_MAP = {
   '/attendance': 'attendance',
   '/timekeeping': 'timekeeping',
+  '/devices': 'timekeeping',
   '/hr': 'hr',
   '/payroll': 'hr',
   '/my-payroll': 'hr',
@@ -95,85 +96,58 @@ const allNavItems = [
 const ADMIN_SIDEBAR_STORAGE_KEY = 'admin_sidebar_open_groups';
 
 /**
- * Bảng phân chia nhóm Menu theo màu chủ đề trực quan:
- * - student (Xanh): Toàn bộ tính năng liên quan Học sinh & Lớp học
- * - hr (Cam): Toàn bộ tính năng liên quan Giáo viên & Nhân sự
- * - personal (Vàng): Thông tin & Tác vụ Cá nhân
- * - finance (Lục): Tài chính & Kế toán
- * - ops (Tím): Bếp ăn, Tài sản & An ninh
- * - system (Xanh biển): Tổng quan, Điều hành & Trường / Phân hiệu
+ * Bảng phân chia nhóm Menu theo đúng chức trách của từng Vai trò (8 vai trò trong trường):
+ * 1. `admin` (Quản trị Hệ thống Trường & Phân hiệu): Chỉ quản lý cấu hình hệ thống của trường/phân hiệu,
+ *    khung lớp học, cấp tài khoản cho các vai trò nội bộ, kết nối thiết bị chấm công/Webhook & nhật ký hệ thống.
+ * 2. `principal` (Ban Giám đốc / Hiệu trưởng): Điều hành toàn diện học sinh, giáo viên, tài chính, bếp ăn, tài sản & phê duyệt.
+ * 3. `teacher` (Giáo viên đứng lớp): Quản lý lớp được phân công, điểm danh, sổ chăm sóc, tin nhắn phụ huynh.
+ * 4. `chef` (Đầu bếp / Dinh dưỡng): Suất nấu hôm nay, thực đơn tuần, kho thực phẩm, lưu mẫu 24h & đề xuất mua sắm bếp.
+ * 5. `accountant` (Kế toán): Học phí, công nợ, hoàn phí, đối soát lương, chi vận hành, sổ quỹ & báo cáo kế toán.
+ * 6. `hr` (Nhân sự): Hồ sơ nhân sự, cấp tài khoản nhân viên, phân công ca/lớp, bảng công, lập lương & điều chuyển HS.
+ * 7. `guard` (Bảo vệ): Ca trực cổng, quét QR đón trẻ, khách ra vào, giao nhận hàng hóa, sự cố & khẩn cấp.
+ * 8. `parent` (Phụ huynh): Theo dõi con, sổ chăm sóc, đăng ký người đón QR, học phí, đơn xin nghỉ & nhắn tin giáo viên.
  */
 const adminNavSections = [
   {
-    id: 'admin-overview',
-    label: 'ĐIỀU HÀNH & PHÂN TRƯỜNG',
-    icon: 'grid',
+    id: 'admin-campus-system',
+    label: 'CẤU HÌNH TRƯỜNG & PHÂN HIỆU',
+    icon: 'settings',
     theme: 'system',
     items: [
-      { to: '/dashboard', label: 'Tổng quan', icon: 'grid' },
-      { to: '/principal', label: 'Sổ điều hành', icon: 'chart' },
-      { to: '/campuses', label: 'Trường & Phân hiệu', icon: 'classes' },
-      { to: '/accounts', label: 'Tài khoản & vai trò', icon: 'shield' },
-      { to: '/reports', label: 'Báo cáo tổng hợp', icon: 'chart' },
+      { to: '/campuses', label: 'Phân hiệu & Cơ sở trường', icon: 'classes' },
+      { to: '/campuses?tab=settings', label: 'Cài đặt Hệ thống Trường', icon: 'settings' },
+      { to: '/classrooms', label: 'Cấu trúc Lớp theo Phân hiệu', icon: 'grid' },
     ],
   },
   {
-    id: 'admin-students',
-    label: 'HỌC SINH & LỚP HỌC',
-    icon: 'students',
-    theme: 'student',
-    items: [
-      { to: '/students', label: 'Học sinh', icon: 'students' },
-      { to: '/classrooms', label: 'Lớp học', icon: 'classes' },
-      { to: '/attendance', label: 'Điểm danh', icon: 'attendance' },
-      { to: '/pickups', label: 'Đón trả trẻ', icon: 'users' },
-    ],
-  },
-  {
-    id: 'admin-hr',
-    label: 'GIÁO VIÊN & NHÂN SỰ',
-    icon: 'users',
+    id: 'admin-accounts-rbac',
+    label: 'TÀI KHOẢN & PHÂN QUYỀN',
+    icon: 'shield',
     theme: 'hr',
     items: [
-      { to: '/hr', label: 'Nhân sự', icon: 'users' },
-      { to: '/timekeeping', label: 'Chấm công nhân sự', icon: 'clock' },
-      { to: '/payroll', label: 'Lương & Chi trả', icon: 'money' },
-      { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar' },
+      { to: '/accounts', label: 'Tài khoản Nhân sự Trường', icon: 'users' },
+      { to: '/accounts?tab=parents', label: 'Duyệt Tài khoản Phụ huynh', icon: 'shield' },
+      { to: '/accounts?tab=profile-requests', label: 'Duyệt Cập nhật Hồ sơ', icon: 'card' },
     ],
   },
   {
-    id: 'admin-finance',
-    label: 'TÀI CHÍNH & KẾ TOÁN',
-    icon: 'money',
-    theme: 'finance',
-    items: [
-      { to: '/finance', label: 'Tài chính học phí', icon: 'money' },
-      { to: '/accounting/expenses', label: 'Sổ chi mua sắm', icon: 'money' },
-      { to: '/accounting/operating-expenses', label: 'Chi vận hành', icon: 'money' },
-      { to: '/accounting/cashbook', label: 'Đối soát thu – chi', icon: 'chart' },
-      { to: '/accounting/report', label: 'Báo cáo kế toán', icon: 'chart' },
-    ],
-  },
-  {
-    id: 'admin-operations',
-    label: 'BẾP ĂN, TÀI SẢN & AN NINH',
-    icon: 'utensils',
+    id: 'admin-devices-logs',
+    label: 'THIẾT BỊ, WEBHOOK & NHẬT KÝ',
+    icon: 'clock',
     theme: 'ops',
     items: [
-      { to: '/kitchen', label: 'Bếp hôm nay', icon: 'grid' },
-      { to: '/nutrition', label: 'Bếp ăn & Bán trú', icon: 'utensils' },
-      { to: '/assets', label: 'Cơ sở vật chất', icon: 'settings' },
-      { to: '/guard', label: 'Trực cổng trường', icon: 'shield' },
+      { to: '/devices', label: 'Máy chấm công & Webhook', icon: 'clock' },
+      { to: '/audit-logs', label: 'Nhật ký Hệ thống Trường', icon: 'fileText' },
     ],
   },
   {
-    id: 'admin-personal',
-    label: 'THÔNG TIN CÁ NHÂN',
-    icon: 'users',
+    id: 'admin-security',
+    label: 'THÔNG BÁO & BẢO MẬT',
+    icon: 'lock',
     theme: 'personal',
     items: [
-      { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
-      { to: '/staff-settings', label: 'Cài đặt tài khoản', icon: 'settings' },
+      { to: '/internal-notices', label: 'Thông báo Nội bộ Trường', icon: 'bell' },
+      { to: '/staff-settings', label: 'Bảo mật Tài khoản Admin', icon: 'settings' },
     ],
   },
 ];
@@ -183,14 +157,14 @@ const PRINCIPAL_SIDEBAR_STORAGE_KEY = 'principal_sidebar_open_groups';
 const principalNavSections = [
   {
     id: 'overview-ops',
-    label: 'TỔNG QUAN & PHÂN TRƯỜNG',
+    label: 'ĐIỀU HÀNH & PHÂN TRƯỜNG',
     icon: 'grid',
     theme: 'system',
     items: [
-      { to: '/principal', label: 'Sổ điều hành', icon: 'chart' },
+      { to: '/principal', label: 'Sổ điều hành Giám đốc', icon: 'chart' },
       { to: '/dashboard', label: 'Tổng quan hôm nay', icon: 'grid' },
-      { to: '/campuses', label: 'Trường & Phân hiệu', icon: 'classes' },
-      { to: '/reports', label: 'Báo cáo nhà trường', icon: 'chart' },
+      { to: '/campuses', label: 'Hệ thống Phân hiệu', icon: 'classes' },
+      { to: '/reports', label: 'Báo cáo Nhà trường', icon: 'chart' },
     ],
   },
   {
@@ -200,7 +174,7 @@ const principalNavSections = [
     theme: 'student',
     items: [
       { to: '/students', label: 'Hồ sơ học sinh', icon: 'students' },
-      { to: '/classrooms', label: 'Lớp học', icon: 'classes' },
+      { to: '/classrooms', label: 'Quản lý lớp học', icon: 'classes' },
       { to: '/attendance/reports', label: 'Báo cáo chuyên cần', icon: 'attendance' },
       { to: '/pickups', label: 'Giám sát đón trẻ', icon: 'users' },
       { to: '/student-profile-change-requests', label: 'Duyệt hồ sơ học sinh', icon: 'card' },
@@ -213,15 +187,15 @@ const principalNavSections = [
     icon: 'users',
     theme: 'hr',
     items: [
-      { to: '/hr', label: 'Nhân sự', icon: 'users' },
+      { to: '/hr', label: 'Nhân sự & Phân công', icon: 'users' },
       { to: '/hr?tab=leave', label: 'Duyệt nghỉ phép', icon: 'calendar' },
-      { to: '/payroll', label: 'Duyệt bảng lương', icon: 'money' },
-      { to: '/internal-notices', label: 'Thông báo chỉ đạo', icon: 'calendar' },
+      { to: '/payroll?tab=approvals', label: 'Duyệt bảng lương', icon: 'money' },
+      { to: '/internal-notices', label: 'Thông báo chỉ đạo', icon: 'bell' },
     ],
   },
   {
     id: 'reports',
-    label: 'TÀI CHÍNH & DUYỆT CHI',
+    label: 'TÀI CHÍNH, BẾP & TÀI SẢN',
     icon: 'money',
     theme: 'finance',
     items: [
@@ -229,6 +203,8 @@ const principalNavSections = [
       { to: '/finance?tab=refunds', label: 'Duyệt hoàn học phí', icon: 'money' },
       { to: '/accounting/operating-expenses', label: 'Duyệt chi vận hành', icon: 'money' },
       { to: '/accounting/report', label: 'Báo cáo kế toán', icon: 'chart' },
+      { to: '/nutrition', label: 'Duyệt thực đơn & Bếp ăn', icon: 'utensils' },
+      { to: '/assets', label: 'Cơ sở vật chất & Mua sắm', icon: 'settings' },
     ],
   },
   {
@@ -237,6 +213,7 @@ const principalNavSections = [
     icon: 'users',
     theme: 'personal',
     items: [
+      { to: '/timekeeping', label: 'Chấm công của tôi', icon: 'clock' },
       { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
       { to: '/staff-settings', label: 'Cài đặt tài khoản', icon: 'settings' },
     ],
@@ -252,7 +229,7 @@ const teacherNavSections = [
     icon: 'grid',
     theme: 'system',
     items: [
-      { to: '/dashboard', label: 'Tổng quan', icon: 'grid' },
+      { to: '/dashboard', label: 'Tổng quan lớp học', icon: 'grid' },
     ],
   },
   {
@@ -261,11 +238,11 @@ const teacherNavSections = [
     icon: 'classes',
     theme: 'student',
     items: [
-      { to: '/students', label: 'Học sinh', icon: 'students' },
-      { to: '/attendance', label: 'Điểm danh', icon: 'attendance' },
+      { to: '/students', label: 'Học sinh lớp tôi', icon: 'students' },
+      { to: '/attendance', label: 'Điểm danh & Trả trẻ', icon: 'attendance' },
       { to: '/daily-care', label: 'Sổ chăm sóc lớp', icon: 'attendance' },
       { to: '/messages', label: 'Tin nhắn phụ huynh', icon: 'chat' },
-      { to: '/nutrition', label: 'Bếp ăn & Bán trú', icon: 'utensils' },
+      { to: '/nutrition', label: 'Thực đơn & Dị ứng lớp', icon: 'utensils' },
     ],
   },
   {
@@ -275,8 +252,8 @@ const teacherNavSections = [
     theme: 'hr',
     items: [
       { to: '/my-staffing', label: 'Lịch phân công của tôi', icon: 'calendar' },
-      { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar' },
-      { to: '/assets', label: 'Đề xuất mua sắm', icon: 'settings' },
+      { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'bell' },
+      { to: '/assets', label: 'Đề xuất mua sắm lớp', icon: 'settings' },
     ],
   },
   {
@@ -285,7 +262,87 @@ const teacherNavSections = [
     icon: 'users',
     theme: 'personal',
     items: [
-      { to: '/timekeeping?tab=corrections', label: 'Đơn chấm công bù', icon: 'clock' },
+      { to: '/timekeeping?tab=corrections', label: 'Chấm công & Bù công', icon: 'clock' },
+      { to: '/my-leave-requests', label: 'Nghỉ phép cá nhân', icon: 'calendar' },
+      { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
+      { to: '/staff-settings', label: 'Cài đặt tài khoản', icon: 'settings' },
+    ],
+  },
+];
+
+const CHEF_SIDEBAR_STORAGE_KEY = 'chef_sidebar_open_groups';
+
+const chefNavSections = [
+  {
+    id: 'chef-kitchen-ops',
+    label: 'VẬN HÀNH BẾP BÁN TRÚ',
+    icon: 'utensils',
+    theme: 'ops',
+    items: [
+      { to: '/kitchen', label: 'Bếp hôm nay (Suất nấu)', icon: 'grid' },
+      { to: '/nutrition', label: 'Thực đơn, Kho & Lưu mẫu 24h', icon: 'utensils' },
+      { to: '/assets', label: 'Đề xuất Mua sắm Bếp', icon: 'settings' },
+    ],
+  },
+  {
+    id: 'chef-shifts',
+    label: 'CA TRỰC & NỘI BỘ',
+    icon: 'clock',
+    theme: 'hr',
+    items: [
+      { to: '/timekeeping', label: 'Chấm công ca bếp', icon: 'clock' },
+      { to: '/my-staffing', label: 'Lịch phân công của tôi', icon: 'calendar' },
+      { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'bell' },
+    ],
+  },
+  {
+    id: 'chef-personal',
+    label: 'THÔNG TIN CÁ NHÂN',
+    icon: 'users',
+    theme: 'personal',
+    items: [
+      { to: '/my-leave-requests', label: 'Nghỉ phép cá nhân', icon: 'calendar' },
+      { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
+      { to: '/staff-settings', label: 'Cài đặt tài khoản', icon: 'settings' },
+    ],
+  },
+];
+
+const HR_SIDEBAR_STORAGE_KEY = 'hr_sidebar_open_groups';
+
+const hrNavSections = [
+  {
+    id: 'hr-core',
+    label: 'NHÂN SỰ, CHẤM CÔNG & LƯƠNG',
+    icon: 'users',
+    theme: 'hr',
+    items: [
+      { to: '/hr', label: 'Hồ sơ Nhân sự & Hợp đồng', icon: 'users' },
+      { to: '/accounts', label: 'Cấp Tài khoản Nhân viên', icon: 'shield' },
+      { to: '/hr?tab=staffing', label: 'Phân công Giáo viên & Ca', icon: 'calendar' },
+      { to: '/hr?tab=timekeeping', label: 'Chấm công toàn trường', icon: 'clock' },
+      { to: '/hr?tab=devices', label: 'Ánh xạ Máy chấm công', icon: 'settings' },
+      { to: '/hr?tab=leave', label: 'Quản lý Đơn nghỉ phép', icon: 'fileText' },
+      { to: '/payroll', label: 'Lập Bảng lương tháng', icon: 'money' },
+    ],
+  },
+  {
+    id: 'hr-coordination',
+    label: 'ĐIỀU PHỐI & TRUYỀN THÔNG',
+    icon: 'students',
+    theme: 'student',
+    items: [
+      { to: '/students', label: 'Tra cứu & Điều chuyển HS', icon: 'students' },
+      { to: '/internal-notices', label: 'Thông báo & Bảng công', icon: 'bell' },
+    ],
+  },
+  {
+    id: 'hr-personal',
+    label: 'THÔNG TIN CÁ NHÂN',
+    icon: 'users',
+    theme: 'personal',
+    items: [
+      { to: '/timekeeping', label: 'Chấm công của tôi', icon: 'clock' },
       { to: '/my-leave-requests', label: 'Nghỉ phép cá nhân', icon: 'calendar' },
       { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
       { to: '/staff-settings', label: 'Cài đặt tài khoản', icon: 'settings' },
@@ -347,7 +404,9 @@ const accountantNavSections = [
     icon: 'users',
     theme: 'personal',
     items: [
-      { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar' },
+      { to: '/timekeeping', label: 'Chấm công của tôi', icon: 'clock' },
+      { to: '/my-leave-requests', label: 'Nghỉ phép cá nhân', icon: 'calendar' },
+      { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'bell' },
       { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
       { to: '/staff-settings', label: 'Cài đặt tài khoản', icon: 'settings' },
     ],
@@ -363,11 +422,11 @@ const guardNavSections = [
     icon: 'grid',
     theme: 'hr',
     items: [
-      { to: '/guard?tab=overview', label: 'Tổng quan ca trực', icon: 'grid' },
+      { to: '/guard?tab=overview', label: 'Tổng quan ca trực & Quét QR', icon: 'grid' },
       { to: '/timekeeping', label: 'Chấm công vào/ra ca', icon: 'clock' },
       { to: '/my-staffing', label: 'Lịch phân công của tôi', icon: 'calendar' },
       { to: '/guard?tab=handover', label: 'Bàn giao ca trực', icon: 'clock' },
-      { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'calendar' },
+      { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'bell' },
     ],
   },
   {
@@ -377,6 +436,7 @@ const guardNavSections = [
     theme: 'ops',
     items: [
       { to: '/guard?tab=visitors', label: 'Khách ra/vào', icon: 'users' },
+      { to: '/guard?tab=deliveries', label: 'Giao nhận hàng & Thực phẩm', icon: 'utensils' },
       { to: '/guard?tab=incidents', label: 'Sự cố an ninh', icon: 'alertCircle' },
       { to: '/guard?tab=emergency', label: 'Xử lý khẩn cấp', icon: 'shield' },
     ],
@@ -390,6 +450,33 @@ const guardNavSections = [
       { to: '/my-leave-requests', label: 'Nghỉ phép cá nhân', icon: 'calendar' },
       { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
       { to: '/staff-settings', label: 'Cài đặt tài khoản', icon: 'settings' },
+    ],
+  },
+];
+
+const PARENT_SIDEBAR_STORAGE_KEY = 'parent_sidebar_open_groups';
+
+const parentNavSections = [
+  {
+    id: 'parent-children',
+    label: 'THEO DÕI CON HẰNG NGÀY',
+    icon: 'students',
+    theme: 'student',
+    items: [
+      { to: '/parent-dashboard', label: 'Tổng quan hôm nay', icon: 'grid' },
+      { to: '/parent-portal', label: 'Hồ sơ, Học phí & Xin nghỉ', icon: 'students' },
+      { to: '/parent-care', label: 'Sổ chăm sóc của con', icon: 'attendance' },
+      { to: '/pickups', label: 'Đăng ký đón trẻ & Mã QR', icon: 'card' },
+      { to: '/messages', label: 'Nhắn tin với Giáo viên', icon: 'chat' },
+    ],
+  },
+  {
+    id: 'parent-account',
+    label: 'TÀI KHOẢN PHỤ HUYNH',
+    icon: 'settings',
+    theme: 'personal',
+    items: [
+      { to: '/parent-settings', label: 'Cài đặt cá nhân', icon: 'settings' },
     ],
   },
 ];
@@ -440,7 +527,21 @@ const isNavItemActive = (itemTo, pathname, search) => {
     if (targetTab) {
       return currentTab === targetTab;
     }
-    return currentTab !== 'leave';
+    return !currentTab || currentTab === 'employees';
+  }
+
+  if (targetPath === '/campuses') {
+    if (targetTab) {
+      return currentTab === targetTab;
+    }
+    return !currentTab || currentTab === 'campuses';
+  }
+
+  if (targetPath === '/accounts') {
+    if (targetTab) {
+      return currentTab === targetTab;
+    }
+    return !currentTab || currentTab === 'internal';
   }
 
   if (targetTab) {
@@ -582,12 +683,12 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
   });
 
   const [adminOpenSections, setAdminOpenSections] = useState(() => {
-    let initialOpen = ['admin-overview', 'admin-students'];
+    let initialOpen = adminNavSections.map((s) => s.id);
     try {
       const saved = localStorage.getItem(ADMIN_SIDEBAR_STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
+        if (Array.isArray(parsed) && parsed.some((id) => adminNavSections.some((s) => s.id === id))) {
           initialOpen = parsed;
         }
       }
@@ -595,6 +696,60 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
       console.error('Lỗi đọc trạng thái menu quản trị:', e);
     }
     const activeSectionId = getActiveSectionId(adminNavSections, location.pathname, location.search);
+    if (activeSectionId && !initialOpen.includes(activeSectionId)) {
+      initialOpen = [...initialOpen, activeSectionId];
+    }
+    return initialOpen;
+  });
+
+  const [chefOpenSections, setChefOpenSections] = useState(() => {
+    let initialOpen = chefNavSections.map((s) => s.id);
+    try {
+      const saved = localStorage.getItem(CHEF_SIDEBAR_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) initialOpen = parsed;
+      }
+    } catch {
+      // Bỏ qua lỗi localStorage
+    }
+    const activeSectionId = getActiveSectionId(chefNavSections, location.pathname, location.search);
+    if (activeSectionId && !initialOpen.includes(activeSectionId)) {
+      initialOpen = [...initialOpen, activeSectionId];
+    }
+    return initialOpen;
+  });
+
+  const [hrOpenSections, setHrOpenSections] = useState(() => {
+    let initialOpen = hrNavSections.map((s) => s.id);
+    try {
+      const saved = localStorage.getItem(HR_SIDEBAR_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) initialOpen = parsed;
+      }
+    } catch {
+      // Bỏ qua lỗi localStorage
+    }
+    const activeSectionId = getActiveSectionId(hrNavSections, location.pathname, location.search);
+    if (activeSectionId && !initialOpen.includes(activeSectionId)) {
+      initialOpen = [...initialOpen, activeSectionId];
+    }
+    return initialOpen;
+  });
+
+  const [parentOpenSections, setParentOpenSections] = useState(() => {
+    let initialOpen = parentNavSections.map((s) => s.id);
+    try {
+      const saved = localStorage.getItem(PARENT_SIDEBAR_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) initialOpen = parsed;
+      }
+    } catch {
+      // Bỏ qua lỗi localStorage
+    }
+    const activeSectionId = getActiveSectionId(parentNavSections, location.pathname, location.search);
     if (activeSectionId && !initialOpen.includes(activeSectionId)) {
       initialOpen = [...initialOpen, activeSectionId];
     }
@@ -738,8 +893,11 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
   const isAdminRole = user?.role === 'admin';
   const isPrincipal = user?.role === 'principal';
   const isTeacher = user?.role === 'teacher';
+  const isChef = user?.role === 'chef';
+  const isHr = user?.role === 'hr';
   const isAccountant = user?.role === 'accountant';
   const isGuard = user?.role === 'guard';
+  const isParent = user?.role === 'parent';
   const currentLocationKey = `${location.pathname}${location.search}`;
   const [prevLocationKey, setPrevLocationKey] = useState(currentLocationKey);
 
@@ -781,6 +939,30 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
         }
       }
     }
+    if (isChef) {
+      const activeSectionId = getActiveSectionId(chefNavSections, location.pathname, location.search);
+      if (activeSectionId && !chefOpenSections.includes(activeSectionId)) {
+        const next = [...chefOpenSections, activeSectionId];
+        setChefOpenSections(next);
+        try {
+          localStorage.setItem(CHEF_SIDEBAR_STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          // Bỏ qua lỗi localStorage
+        }
+      }
+    }
+    if (isHr) {
+      const activeSectionId = getActiveSectionId(hrNavSections, location.pathname, location.search);
+      if (activeSectionId && !hrOpenSections.includes(activeSectionId)) {
+        const next = [...hrOpenSections, activeSectionId];
+        setHrOpenSections(next);
+        try {
+          localStorage.setItem(HR_SIDEBAR_STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          // Bỏ qua lỗi localStorage
+        }
+      }
+    }
     if (isAccountant) {
       const activeSectionId = getActiveSectionId(accountantNavSections, location.pathname, location.search);
       if (activeSectionId && !accountantOpenSections.includes(activeSectionId)) {
@@ -802,6 +984,18 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
           localStorage.setItem(GUARD_SIDEBAR_STORAGE_KEY, JSON.stringify(next));
         } catch (e) {
           console.error('Lỗi lưu trạng thái menu bảo vệ:', e);
+        }
+      }
+    }
+    if (isParent) {
+      const activeSectionId = getActiveSectionId(parentNavSections, location.pathname, location.search);
+      if (activeSectionId && !parentOpenSections.includes(activeSectionId)) {
+        const next = [...parentOpenSections, activeSectionId];
+        setParentOpenSections(next);
+        try {
+          localStorage.setItem(PARENT_SIDEBAR_STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          // Bỏ qua lỗi localStorage
         }
       }
     }
@@ -877,6 +1071,30 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
     });
   };
 
+  const toggleChefSection = (sectionId) => {
+    setChefOpenSections((prev) => {
+      const next = prev.includes(sectionId) ? prev.filter((id) => id !== sectionId) : [...prev, sectionId];
+      try { localStorage.setItem(CHEF_SIDEBAR_STORAGE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  };
+
+  const toggleHrSection = (sectionId) => {
+    setHrOpenSections((prev) => {
+      const next = prev.includes(sectionId) ? prev.filter((id) => id !== sectionId) : [...prev, sectionId];
+      try { localStorage.setItem(HR_SIDEBAR_STORAGE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  };
+
+  const toggleParentSection = (sectionId) => {
+    setParentOpenSections((prev) => {
+      const next = prev.includes(sectionId) ? prev.filter((id) => id !== sectionId) : [...prev, sectionId];
+      try { localStorage.setItem(PARENT_SIDEBAR_STORAGE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  };
+
   const toggleNotifications = async () => {
     setShowNotifications((value) => !value);
     if (!showNotifications) {
@@ -904,9 +1122,33 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
 
   const displayName = user?.profile?.fullName || user?.username || 'Quản trị viên';
   const isAdmin = user?.role === 'admin';
-  const roleLabel = { admin: 'Quản trị viên', principal: 'Hiệu trưởng', teacher: 'Giáo viên', accountant: 'Kế toán', chef: 'Nhân viên bếp', hr: 'Nhân sự', parent: 'Phụ huynh', guard: 'Bảo vệ' }[user?.role] || 'Tài khoản trường';
+  const roleLabel = {
+    admin: 'Quản trị Hệ thống Trường',
+    principal: 'Ban Giám đốc / Hiệu trưởng',
+    teacher: 'Giáo viên đứng lớp',
+    accountant: 'Kế toán học phí',
+    chef: 'Đầu bếp / Dinh dưỡng',
+    hr: 'Nhân sự & Tiền lương',
+    parent: 'Phụ huynh học sinh',
+    guard: 'Bảo vệ & An ninh'
+  }[user?.role] || 'Tài khoản trường';
   const totalUnread = unreadCount + chatUnread.total;
-  const homePath = user?.role === 'guard' ? '/guard' : user?.role === 'chef' ? '/kitchen' : user?.role === 'accountant' ? '/accounting' : user?.role === 'parent' ? '/parent-dashboard' : user?.role === 'hr' ? '/hr' : isPrincipal ? '/principal' : '/dashboard';
+  const homePath =
+    user?.role === 'admin'
+      ? '/campuses'
+      : user?.role === 'guard'
+        ? '/guard'
+        : user?.role === 'chef'
+          ? '/kitchen'
+          : user?.role === 'accountant'
+            ? '/accounting'
+            : user?.role === 'parent'
+              ? '/parent-dashboard'
+              : user?.role === 'hr'
+                ? '/hr'
+                : isPrincipal
+                  ? '/principal'
+                  : '/dashboard';
 
   // Lọc menu dựa trên permissions và vai trò
   // Đảm bảo không trùng lặp route trong danh sách
@@ -1047,6 +1289,39 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
         toggleGuardSection,
         mobile ? 'Menu chức năng bảo vệ di động' : 'Menu chức năng bảo vệ',
         'guard-nav-accordion',
+        mobile
+      );
+    }
+
+    if (isChef) {
+      return renderAccordionSections(
+        chefNavSections,
+        chefOpenSections,
+        toggleChefSection,
+        mobile ? 'Menu chức năng bếp ăn di động' : 'Menu chức năng bếp ăn',
+        'chef-nav-accordion',
+        mobile
+      );
+    }
+
+    if (isHr) {
+      return renderAccordionSections(
+        hrNavSections,
+        hrOpenSections,
+        toggleHrSection,
+        mobile ? 'Menu chức năng nhân sự di động' : 'Menu chức năng nhân sự',
+        'hr-nav-accordion',
+        mobile
+      );
+    }
+
+    if (isParent) {
+      return renderAccordionSections(
+        parentNavSections,
+        parentOpenSections,
+        toggleParentSection,
+        mobile ? 'Menu phụ huynh di động' : 'Menu phụ huynh',
+        'parent-nav-accordion',
         mobile
       );
     }

@@ -48,7 +48,7 @@ const requestStatus = (status) => ({
 
 export default function AssetManagement() {
   const role = getStoredUser().role;
-  const canManageAssets = role === 'admin';
+  const canManageAssets = ['admin', 'principal'].includes(role);
   const canReviewRequests = ['admin', 'principal'].includes(role);
   const [activeTab, setActiveTab] = useState(canManageAssets ? 'assets' : 'requests');
   const [loading, setLoading] = useState(true);

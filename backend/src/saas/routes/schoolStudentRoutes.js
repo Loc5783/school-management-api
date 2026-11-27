@@ -108,7 +108,7 @@ router.post('/', mutationGate, schoolAuthMiddleware, roleCheck(['admin', 'princi
 router.get('/:id', schoolAuthMiddleware, getStudentById);
 router.put('/:id', mutationGate, schoolAuthMiddleware, roleCheck(['admin', 'principal', 'teacher', 'parent']), updateStudent);
 router.patch('/:id/status', mutationGate, schoolAuthMiddleware, roleCheck(['admin', 'principal']), changeStudentStatus);
-router.delete('/:id', mutationGate, schoolAuthMiddleware, roleCheck(['admin']), deleteStudent);
+router.delete('/:id', mutationGate, schoolAuthMiddleware, roleCheck(['admin', 'principal']), deleteStudent);
 router.put('/:id/daily-reports', mutationGate, schoolAuthMiddleware, roleCheck(['admin', 'principal', 'teacher']), saveDailyReport);
 router.post('/:id/growth-records', mutationGate, schoolAuthMiddleware, roleCheck(['admin', 'principal', 'teacher']), saveGrowthRecord);
 router.delete('/:id/growth-records/:recordId', mutationGate, schoolAuthMiddleware, roleCheck(['admin', 'principal', 'teacher']), deleteGrowthRecord);

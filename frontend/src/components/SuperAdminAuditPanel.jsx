@@ -18,6 +18,8 @@ const PLATFORM_ACTION_LABELS = {
 };
 
 const SCHOOL_ACTION_LABELS = {
+  SCHOOL_SYSTEM_SETTINGS_UPDATED: 'Cập nhật Cài đặt Hệ thống Trường & Phân hiệu',
+  CAMPUS_CONFIG_UPDATED: 'Cập nhật Cấu hình Cơ sở / Phân hiệu',
   INTERNAL_ACCOUNT_CREATED: 'Tạo tài khoản nhân sự nội bộ (Giám đốc/GV/Bếp...)',
   INTERNAL_ACCOUNT_UPDATED: 'Cập nhật tài khoản nhân sự nội bộ',
   INTERNAL_ACCOUNT_ROLE_CHANGED: 'Đổi vai trò tài khoản nội bộ',
@@ -279,7 +281,7 @@ export default function SuperAdminAuditPanel({
           <div className="inline-loader">Đang tải dữ liệu nhật ký...</div>
         ) : (
           <div className="table-wrap">
-            <table className="data-table">
+            <table className="data-table sa-clean-table">
               <thead>
                 <tr>
                   <th>Thời gian</th>

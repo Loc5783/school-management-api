@@ -397,4 +397,242 @@ describe('E2E: SuperAdmin -> School Admin -> Staff Roles + Webhook /:schoolCode 
     expect(notifB.body.data.some((n) => String(n.tenantId) === String(schoolAId))).toBe(false);
     expect(schoolBId).toBeDefined();
   });
+
+  test('Quản lý Account từng trường trên SuperAdmin: xem theo vai trò, cấp mới, đổi mật khẩu, chống khóa Admin duy nhất & cách ly chéo trường', async () => {
+    await ensureDefaultAdminAccount({ useLegacyApp: false });
+    const superLogin = await request(saasApp)
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: '123456' });
+    const superToken = superLogin.body.token;
+
+    const schoolARes = await request(saasApp)
+      .post('/api/multi-school/schools')
+      .set('Authorization', `Bearer ${superToken}`)
+      .send({
+        code: 'ACC-SCHOOL-A',
+        name: 'Trường Mầm non Sao Mai A',
+        adminUsername: 'admin_saomai_a',
+        adminPassword: 'InitPass@123'
+      });
+    expect(schoolARes.status).toBe(201);
+    const schoolAId = schoolARes.body.data.school._id;
+    const primaryAdminAId = schoolARes.body.data.adminAccount._id;
+
+    const schoolBRes = await request(saasApp)
+      .post('/api/multi-school/schools')
+      .set('Authorization', `Bearer ${superToken}`)
+      .send({
+        code: 'ACC-SCHOOL-B',
+        name: 'Trường Mầm non Sao Mai B',
+        adminUsername: 'admin_saomai_b',
+        adminPassword: 'InitPass@456'
+      });
+    expect(schoolBRes.status).toBe(201);
+    const schoolBId = schoolBRes.body.data.school._id;
+
+    // 1. Chặn khóa tài khoản Admin duy nhất của trường đang hoạt động
+    const lockSoleAdmin = await request(saasApp)
+      .patch(`/api/multi-school/schools/${schoolBId}/accounts/${schoolBRes.body.data.adminAccount._id}`)
+      .set('Authorization', `Bearer ${superToken}`)
+      .send({ status: 'suspended' });
+    expect(lockSoleAdmin.status).toBe(422);
+
+    // 2. Chặn tuyệt đối thao tác chéo trường (dùng ID trường B để sửa tài khoản của trường A -> 404)
+    const crossTenantAttempt = await request(saasApp)
+      .patch(`/api/multi-school/schools/${schoolBId}/accounts/${primaryAdminAId}`)
+      .set('Authorization', `Bearer ${superToken}`)
+      .send({ password: 'HackedPassword@1' });
+    expect(crossTenantAttempt.status).toBe(404);
+
+    // 3. SuperAdmin cấp thêm 1 tài khoản Ban Giám đốc (principal) cho Trường A
+    const createPrincipalRes = await request(saasApp)
+      .post(`/api/multi-school/schools/${schoolAId}/accounts`)
+      .set('Authorization', `Bearer ${superToken}`)
+      .send({
+        role: 'principal',
+        username: 'hieutruong_saomai_a',
+        password: 'Principal@2026',
+        profile: { fullName: 'Cô Nguyễn Hiệu Trưởng', phone: '0988112233' }
+      });
+    expect(createPrincipalRes.status).toBe(201);
+    expect(createPrincipalRes.body.data.account.employeeCode).toBeTruthy();
+
+    // 4. Danh sách tài khoản Trường A chỉ chứa đúng 2 TK của Trường A và không lộ passwordHash
+    const listARes = await request(saasApp)
+      .get(`/api/multi-school/schools/${schoolAId}/accounts`)
+      .set('Authorization', `Bearer ${superToken}`);
+    expect(listARes.status).toBe(200);
+    expect(listARes.body.data.roleSummary.all.total).toBe(2);
+    expect(listARes.body.data.roleSummary.admin.total).toBe(1);
+    expect(listARes.body.data.roleSummary.principal.total).toBe(1);
+    expect(listARes.body.data.items.every((u) => u.passwordHash === undefined)).toBe(true);
+
+    // 5. SuperAdmin đặt lại mật khẩu mới cho Admin Trường A -> mật khẩu mới đăng nhập thành công ngay
+    const resetPassRes = await request(saasApp)
+      .patch(`/api/multi-school/schools/${schoolAId}/accounts/${primaryAdminAId}`)
+      .set('Authorization', `Bearer ${superToken}`)
+      .send({ password: 'NewAdminPass@2026' });
+    expect(resetPassRes.status).toBe(200);
+
+    const oldPassLogin = await request(saasApp)
+      .post('/api/auth/login')
+      .send({ username: 'admin_saomai_a', password: 'InitPass@123' });
+    expect(oldPassLogin.status).toBe(401);
+
+    const newPassLogin = await request(saasApp)
+      .post('/api/auth/login')
+      .send({ username: 'admin_saomai_a', password: 'NewAdminPass@2026' });
+    expect(newPassLogin.status).toBe(200);
+    expect(newPassLogin.body.tenant.code).toBe('ACC-SCHOOL-A');
+  });
+
+  test('Phân tách đúng thẩm quyền từng Role: Admin trường cấu hình hệ thống & phân hiệu; Ban Giám đốc (principal) điều hành lớp, học sinh & chuyên môn', async () => {
+    await ensureDefaultAdminAccount({ useLegacyApp: false });
+    const superLogin = await request(saasApp)
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: '123456' });
+    const superToken = superLogin.body.token;
+
+    const createRes = await request(saasApp)
+      .post('/api/multi-school/schools')
+      .set('Authorization', `Bearer ${superToken}`)
+      .send({
+        code: 'ROLE-TEST-A',
+        name: 'Trường Mầm non Hướng Dương',
+        adminUsername: 'admin_hd',
+        adminPassword: 'AdminHd@2026',
+        initialCampuses: ['Cơ sở chính', 'Phân hiệu Mỹ Đình']
+      });
+    expect(createRes.status).toBe(201);
+
+    // 1. Đăng nhập tài khoản Admin trường
+    const adminLogin = await request(saasApp)
+      .post('/api/auth/login')
+      .send({ username: 'admin_hd', password: 'AdminHd@2026' });
+    expect(adminLogin.status).toBe(200);
+    const adminToken = adminLogin.body.token;
+
+    // 1a. Admin trường LƯU ĐƯỢC Cài đặt Hệ thống Vận hành của Trường & Phân hiệu (`PUT /api/system/school-info`)
+    const saveSettingsRes = await request(saasApp)
+      .put('/api/system/school-info')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        contactEmail: 'vanphong@huongduong.edu.vn',
+        schoolSettings: {
+          schoolYear: '2026-2027',
+          hotline: '02439998888',
+          headquartersAddress: '18 Phạm Hùng, Nam Từ Liêm, Hà Nội',
+          standardCheckInTime: '06:45',
+          standardCheckOutTime: '17:00',
+          lateGraceMinutes: 20,
+          mealCancelCutoffTime: '08:15',
+          requirePickupQrVerification: true,
+          allowParentOnlineLeave: true,
+          internalAnnouncementFooter: 'Trường Mầm non Hướng Dương - 0243.999.8888'
+        }
+      });
+    expect(saveSettingsRes.status).toBe(200);
+    expect(saveSettingsRes.body.data.schoolSettings.standardCheckInTime).toBe('06:45');
+    expect(saveSettingsRes.body.data.schoolSettings.lateGraceMinutes).toBe(20);
+
+    // Đọc lại từ GET /api/system/campuses thấy đúng cài đặt vừa lưu
+    const getCampusesRes = await request(saasApp)
+      .get('/api/system/campuses')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(getCampusesRes.status).toBe(200);
+    expect(getCampusesRes.body.data.school.contactEmail).toBe('vanphong@huongduong.edu.vn');
+    expect(getCampusesRes.body.data.school.schoolSettings.hotline).toBe('02439998888');
+    expect(getCampusesRes.body.data.campuses.length).toBe(2);
+
+    // Nhưng Admin trường vẫn bị chặn nếu cố sửa định danh cấp phép của SuperAdmin (`code`, `quotas`, `enabledModules`)
+    const tamperLicenseRes = await request(saasApp)
+      .put('/api/system/school-info')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ quotas: { maxStudents: 99999 } });
+    expect(tamperLicenseRes.status).toBe(403);
+    expect(tamperLicenseRes.body.code).toBe('SCHOOL_IDENTITY_LOCKED');
+
+    // 2. Admin trường tạo đầy đủ các tài khoản theo vai trò thực tế: Giám đốc, Giáo viên, Đầu bếp, Kế toán, HR, Bảo vệ
+    const staffSpecs = [
+      { username: 'giamdoc_hd', role: 'principal', fullName: 'Bà Lê Giám Đốc' },
+      { username: 'giaovien_hd', role: 'teacher', fullName: 'Cô Trần Giáo Viên' },
+      { username: 'daubep_hd', role: 'chef', fullName: 'Anh Vũ Đầu Bếp' },
+      { username: 'ketoan_hd', role: 'accountant', fullName: 'Chị Hoàng Kế Toán' },
+      { username: 'nhansu_hd', role: 'hr', fullName: 'Chị Đỗ Nhân Sự' },
+      { username: 'baove_hd', role: 'guard', fullName: 'Chú Bùi Bảo Vệ' }
+    ];
+
+    const tokensByRole = {};
+    const usersByRole = {};
+    for (const st of staffSpecs) {
+      const cRes = await request(saasApp)
+        .post('/api/system/accounts')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          username: st.username,
+          password: 'RolePass@123',
+          role: st.role,
+          profile: { fullName: st.fullName }
+        });
+      expect(cRes.status).toBe(201);
+      usersByRole[st.role] = cRes.body.data;
+
+      const lRes = await request(saasApp)
+        .post('/api/auth/login')
+        .send({ username: st.username, password: 'RolePass@123' });
+      expect(lRes.status).toBe(200);
+      expect(lRes.body.user.role).toBe(st.role);
+      tokensByRole[st.role] = lRes.body.token;
+    }
+
+    // 3. Ban Giám đốc (`principal`) tạo lớp mới, phân công Giáo viên chủ nhiệm & tiếp nhận học sinh
+    const createClsByPrincipal = await request(saasApp)
+      .post('/api/classrooms')
+      .set('Authorization', `Bearer ${tokensByRole.principal}`)
+      .send({
+        name: 'Chồi 1',
+        campus: 'Phân hiệu Mỹ Đình',
+        ageGroup: '4-5',
+        maxSize: 25,
+        schoolYear: '2026-2027'
+      });
+    expect(createClsByPrincipal.status).toBe(201);
+    const classId = createClsByPrincipal.body.data._id;
+
+    const assignTeacherByPrincipal = await request(saasApp)
+      .put(`/api/classrooms/${classId}/homeroom-teacher`)
+      .set('Authorization', `Bearer ${tokensByRole.principal}`)
+      .send({ homeroomTeacherId: usersByRole.teacher._id });
+    expect(assignTeacherByPrincipal.status).toBe(200);
+
+    // 4. Phân quyền chéo chặt chẽ:
+    // - Giám đốc KHÔNG được tự ý sửa Cài đặt Hệ thống kỹ thuật của Admin trường (`PUT /api/system/school-info` -> 403)
+    const principalEditSysBlocked = await request(saasApp)
+      .put('/api/system/school-info')
+      .set('Authorization', `Bearer ${tokensByRole.principal}`)
+      .send({ schoolSettings: { lateGraceMinutes: 5 } });
+    expect(principalEditSysBlocked.status).toBe(403);
+
+    // - Đầu bếp xem được Bếp ăn (`/api/nutrition/menus`) nhưng bị chặn khi truy cập Tài khoản hệ thống (`/api/system/accounts` -> 403)
+    const chefMenusRes = await request(saasApp)
+      .get('/api/nutrition/menus')
+      .set('Authorization', `Bearer ${tokensByRole.chef}`);
+    expect(chefMenusRes.status).toBe(200);
+
+    const chefAccountsBlocked = await request(saasApp)
+      .get('/api/system/accounts')
+      .set('Authorization', `Bearer ${tokensByRole.chef}`);
+    expect(chefAccountsBlocked.status).toBe(403);
+
+    // - Bảo vệ xem được Trực cổng (`/api/guard/dashboard`) nhưng bị chặn khi truy cập Tài chính học phí (`/api/finance/invoices` -> 403)
+    const guardDashRes = await request(saasApp)
+      .get('/api/guard/dashboard')
+      .set('Authorization', `Bearer ${tokensByRole.guard}`);
+    expect(guardDashRes.status).toBe(200);
+
+    const guardFinanceBlocked = await request(saasApp)
+      .get('/api/finance/invoices')
+      .set('Authorization', `Bearer ${tokensByRole.guard}`);
+    expect(guardFinanceBlocked.status).toBe(403);
+  });
 });

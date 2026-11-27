@@ -839,8 +839,8 @@ const cancelTuitionFee = async (req, res) => {
         // a paid invoice that was nevertheless cancelled.
         const fee = await runStudentTransaction(async (session) => {
             const actor = await User.findOne({ _id: req.user._id, status: 'active', ...tenantFilter }).session(session);
-            if (!actor || actor.role !== 'admin') {
-                const err = new Error('Chỉ quản trị viên mới có quyền hủy hóa đơn');
+            if (!actor || !['admin', 'principal'].includes(actor.role)) {
+                const err = new Error('Chỉ Ban giám hiệu hoặc quản trị viên mới có quyền hủy hóa đơn');
                 err.statusCode = 403;
                 throw err;
             }

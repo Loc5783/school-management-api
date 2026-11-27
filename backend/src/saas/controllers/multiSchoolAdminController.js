@@ -28,7 +28,10 @@ const {
   getSchoolDetailedReport,
   listPlatformAuditLogs,
   listSchoolOperationalLogs,
-  dispatchPlatformNotificationToSchools
+  dispatchPlatformNotificationToSchools,
+  listSchoolAccountsForSuperAdmin,
+  createSchoolAccountBySuperAdmin,
+  updateSchoolAccountBySuperAdmin
 } = require('../../services/superAdminControlService');
 const { simulateSchoolWebhookEvent } = require('../../services/timekeepingWebhookService');
 const { generatePlatformAdminToken, generateSchoolUserToken } = require('../utils/saasJwt');
@@ -935,6 +938,79 @@ const enterSchoolWorkspace = async (req, res) => {
   }
 };
 
+/**
+ * Xem danh sách toàn bộ Tài khoản thuộc phạm vi 1 trường cụ thể (`tenantId`) để SuperAdmin quản lý & hỗ trợ.
+ */
+const listSchoolAccountsHandler = async (req, res) => {
+  try {
+    const result = await listSchoolAccountsForSuperAdmin(req.params.id, req.query || {});
+    return res.status(200).json({
+      success: true,
+      data: result
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.message || 'Không thể tải danh sách tài khoản của trường'
+    });
+  }
+};
+
+/**
+ * SuperAdmin cấp mới Tài khoản Admin riêng (hoặc tài khoản nhân sự hỗ trợ) cho 1 trường cụ thể.
+ */
+const createSchoolAccountHandler = async (req, res) => {
+  try {
+    const created = await createSchoolAccountBySuperAdmin(req.params.id, req.body || {}, req.platformAdmin);
+    return res.status(201).json({
+      success: true,
+      message: `Đã cấp tài khoản @${created.account.username} cho trường ${created.school.code}`,
+      data: created
+    });
+  } catch (err) {
+    if (err.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: 'Tên đăng nhập đã tồn tại trong phạm vi trường này'
+      });
+    }
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.message || 'Không thể tạo tài khoản mới cho trường'
+    });
+  }
+};
+
+/**
+ * SuperAdmin cập nhật thông tin, đổi mật khẩu hoặc khóa/mở khóa 1 tài khoản thuộc trường.
+ */
+const updateSchoolAccountHandler = async (req, res) => {
+  try {
+    const updated = await updateSchoolAccountBySuperAdmin(
+      req.params.id,
+      req.params.accountId,
+      req.body || {},
+      req.platformAdmin
+    );
+    return res.status(200).json({
+      success: true,
+      message: `Đã cập nhật tài khoản @${updated.account.username} của trường ${updated.school.code}`,
+      data: updated
+    });
+  } catch (err) {
+    if (err.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: 'Tên đăng nhập đã bị trùng trong phạm vi trường này'
+      });
+    }
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.message || 'Không thể cập nhật tài khoản của trường'
+    });
+  }
+};
+
 module.exports = {
   getPublicSystemMeta,
   loginSuperAdmin,
@@ -950,5 +1026,8 @@ module.exports = {
   testSchoolWebhookBySuperAdmin,
   createSchoolWithAdmin,
   updateSchoolAndAdmin,
-  enterSchoolWorkspace
+  enterSchoolWorkspace,
+  listSchoolAccountsHandler,
+  createSchoolAccountHandler,
+  updateSchoolAccountHandler
 };

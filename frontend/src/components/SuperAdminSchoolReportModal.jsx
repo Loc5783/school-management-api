@@ -270,7 +270,7 @@ export default function SuperAdminSchoolReportModal({
                     </div>
                   </div>
                   <div className="table-wrap">
-                    <table className="data-table">
+                    <table className="data-table sa-clean-table">
                       <thead>
                         <tr>
                           <th>Mã cơ sở</th>
@@ -319,7 +319,7 @@ export default function SuperAdminSchoolReportModal({
                     </div>
                   </div>
                   <div className="table-wrap">
-                    <table className="data-table">
+                    <table className="data-table sa-clean-table">
                       <thead>
                         <tr>
                           <th>Tài khoản</th>
@@ -370,7 +370,7 @@ export default function SuperAdminSchoolReportModal({
                     </div>
                   </div>
                   <div className="table-wrap">
-                    <table className="data-table">
+                    <table className="data-table sa-clean-table">
                       <thead>
                         <tr>
                           <th>Ngày học</th>
@@ -420,7 +420,7 @@ export default function SuperAdminSchoolReportModal({
                     </div>
                   </div>
                   <div className="table-wrap">
-                    <table className="data-table">
+                    <table className="data-table sa-clean-table">
                       <thead>
                         <tr>
                           <th>Tên lớp</th>
@@ -517,7 +517,7 @@ export default function SuperAdminSchoolReportModal({
                     </div>
                   </div>
                   <div className="table-wrap">
-                    <table className="data-table">
+                    <table className="data-table sa-clean-table">
                       <thead>
                         <tr>
                           <th>Kỳ thu (MM-YYYY)</th>
@@ -562,7 +562,7 @@ export default function SuperAdminSchoolReportModal({
                     </div>
                   </div>
                   <div className="table-wrap">
-                    <table className="data-table">
+                    <table className="data-table sa-clean-table">
                       <thead>
                         <tr>
                           <th>Kỳ lương</th>
@@ -604,7 +604,7 @@ export default function SuperAdminSchoolReportModal({
                       </div>
                     </div>
                     <div className="table-wrap">
-                      <table className="data-table">
+                      <table className="data-table sa-clean-table">
                         <thead>
                           <tr>
                             <th>Mã mẫu</th>
@@ -651,7 +651,7 @@ export default function SuperAdminSchoolReportModal({
                       </div>
                     </div>
                     <div className="table-wrap">
-                      <table className="data-table">
+                      <table className="data-table sa-clean-table">
                         <thead>
                           <tr>
                             <th>Vai trò</th>
@@ -689,7 +689,7 @@ export default function SuperAdminSchoolReportModal({
                     </div>
                   </div>
                   <div className="table-wrap">
-                    <table className="data-table">
+                    <table className="data-table sa-clean-table">
                       <thead>
                         <tr>
                           <th>Phụ huynh / Học sinh</th>

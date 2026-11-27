@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
 import {
   getSchoolCampuses,
+  updateSchoolSystemSettings,
   createCampus,
   updateCampus,
   deleteCampus
@@ -24,6 +25,20 @@ const makeEmptyCampusForm = (standards = {}) => ({
   isActive: true
 });
 
+const DEFAULT_SCHOOL_SETTINGS = {
+  contactEmail: '',
+  schoolYear: '2026-2027',
+  hotline: '',
+  headquartersAddress: '',
+  standardCheckInTime: '07:00',
+  standardCheckOutTime: '16:30',
+  lateGraceMinutes: 15,
+  mealCancelCutoffTime: '08:00',
+  requirePickupQrVerification: true,
+  allowParentOnlineLeave: true,
+  internalAnnouncementFooter: ''
+};
+
 const MODULE_LABELS = {
   students: 'Hồ sơ Học sinh',
   classrooms: 'Lớp & Phân hiệu',
@@ -41,9 +56,22 @@ const MODULE_LABELS = {
   reports: 'Báo cáo'
 };
 
+/**
+ * Trung tâm Cài đặt Hệ thống Trường & Cấu hình Phân hiệu dành cho Admin riêng của từng trường (`role === 'admin'`),
+ * đồng thời hỗ trợ chế độ xem thông tin cơ sở trực thuộc cho Ban Giám đốc (`role === 'principal'`).
+ */
 export default function SchoolCampusManagement() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const userRole = getStoredUser().role;
   const isAdmin = userRole === 'admin';
+
+  const activeTab = searchParams.get('tab') === 'settings' ? 'settings' : 'campuses';
+  const switchTab = (nextTab) => {
+    const next = new URLSearchParams(searchParams);
+    if (nextTab === 'campuses') next.delete('tab');
+    else next.set('tab', nextTab);
+    setSearchParams(next);
+  };
 
   const [school, setSchool] = useState(null);
   const [systemStandards, setSystemStandards] = useState(null);
@@ -51,7 +79,13 @@ export default function SchoolCampusManagement() {
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState(null);
   const [deletingCode, setDeletingCode] = useState('');
+  const [copiedWebhook, setCopiedWebhook] = useState(false);
 
+  // State Cài đặt Hệ thống Vận hành của Trường & Phân hiệu
+  const [settingsForm, setSettingsForm] = useState(DEFAULT_SCHOOL_SETTINGS);
+  const [savingSettings, setSavingSettings] = useState(false);
+
+  // State Modal Thêm / Sửa Phân hiệu
   const [showCampusModal, setShowCampusModal] = useState(false);
   const [editingCampus, setEditingCampus] = useState(null);
   const [campusForm, setCampusForm] = useState(() => makeEmptyCampusForm());
@@ -63,11 +97,30 @@ export default function SchoolCampusManagement() {
     try {
       const res = await getSchoolCampuses();
       const payload = res.data?.data || {};
-      setSchool(payload.school || null);
-      setSystemStandards(payload.systemStandards || null);
-      setCampuses(payload.campuses || []);
+      const loadedSchool = payload.school || null;
+      const loadedStandards = payload.systemStandards || null;
+      const loadedCampuses = payload.campuses || [];
+
+      setSchool(loadedSchool);
+      setSystemStandards(loadedStandards);
+      setCampuses(loadedCampuses);
+
+      const ss = loadedSchool?.schoolSettings || {};
+      setSettingsForm({
+        contactEmail: loadedSchool?.contactEmail || '',
+        schoolYear: ss.schoolYear || loadedStandards?.defaultSchoolYear || '2026-2027',
+        hotline: ss.hotline || '',
+        headquartersAddress: ss.headquartersAddress || loadedCampuses[0]?.address || '',
+        standardCheckInTime: ss.standardCheckInTime || loadedStandards?.standardCheckInTime || '07:00',
+        standardCheckOutTime: ss.standardCheckOutTime || loadedStandards?.standardCheckOutTime || '16:30',
+        lateGraceMinutes: ss.lateGraceMinutes ?? 15,
+        mealCancelCutoffTime: ss.mealCancelCutoffTime || '08:00',
+        requirePickupQrVerification: ss.requirePickupQrVerification !== false,
+        allowParentOnlineLeave: ss.allowParentOnlineLeave !== false,
+        internalAnnouncementFooter: ss.internalAnnouncementFooter || ''
+      });
     } catch (err) {
-      setNotice({ type: 'error', text: err.response?.data?.message || 'Không thể tải danh sách phân hiệu của trường.' });
+      setNotice({ type: 'error', text: err.response?.data?.message || 'Không thể tải cấu hình trường và phân hiệu.' });
     } finally {
       setLoading(false);
     }
@@ -80,9 +133,45 @@ export default function SchoolCampusManagement() {
     return () => window.clearTimeout(timer);
   }, [load]);
 
+  const handleSaveSchoolSettings = async (e) => {
+    e.preventDefault();
+    if (!isAdmin || savingSettings) return;
+    setSavingSettings(true);
+    setNotice(null);
+    try {
+      const res = await updateSchoolSystemSettings({
+        contactEmail: settingsForm.contactEmail.trim(),
+        schoolSettings: {
+          schoolYear: settingsForm.schoolYear.trim(),
+          hotline: settingsForm.hotline.trim(),
+          headquartersAddress: settingsForm.headquartersAddress.trim(),
+          standardCheckInTime: settingsForm.standardCheckInTime,
+          standardCheckOutTime: settingsForm.standardCheckOutTime,
+          lateGraceMinutes: Number(settingsForm.lateGraceMinutes),
+          mealCancelCutoffTime: settingsForm.mealCancelCutoffTime,
+          requirePickupQrVerification: Boolean(settingsForm.requirePickupQrVerification),
+          allowParentOnlineLeave: Boolean(settingsForm.allowParentOnlineLeave),
+          internalAnnouncementFooter: settingsForm.internalAnnouncementFooter.trim()
+        }
+      });
+      setNotice({
+        type: 'success',
+        text: res.data?.message || 'Đã lưu cài đặt hệ thống vận hành của trường & phân hiệu thành công.'
+      });
+      await load();
+    } catch (err) {
+      setNotice({
+        type: 'error',
+        text: err.response?.data?.message || 'Không thể lưu cài đặt hệ thống của trường.'
+      });
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
   const openCreateCampus = () => {
     setEditingCampus(null);
-    setCampusForm(makeEmptyCampusForm(systemStandards));
+    setCampusForm(makeEmptyCampusForm(school?.schoolSettings || systemStandards));
     setCampusError('');
     setShowCampusModal(true);
   };
@@ -95,8 +184,8 @@ export default function SchoolCampusManagement() {
       address: campus.address || '',
       phone: campus.phone || '',
       managerName: campus.managerName || '',
-      openTime: campus.openTime || systemStandards?.standardCheckInTime || '07:00',
-      closeTime: campus.closeTime || systemStandards?.standardCheckOutTime || '16:30',
+      openTime: campus.openTime || school?.schoolSettings?.standardCheckInTime || '07:00',
+      closeTime: campus.closeTime || school?.schoolSettings?.standardCheckOutTime || '16:30',
       maxClassrooms: campus.maxClassrooms || 20,
       notes: campus.notes || '',
       isActive: campus.isActive !== false
@@ -164,6 +253,18 @@ export default function SchoolCampusManagement() {
     }
   };
 
+  const copyWebhookUrl = async () => {
+    if (!school?.code) return;
+    const url = `${window.location.origin}/api/attendance/webhook/${school.code}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedWebhook(true);
+      window.setTimeout(() => setCopiedWebhook(false), 2200);
+    } catch {
+      // Bỏ qua nếu trình duyệt chặn clipboard
+    }
+  };
+
   const totalClasses = campuses.reduce((sum, c) => sum + (c.classCount || 0), 0);
   const totalStudents = campuses.reduce((sum, c) => sum + (c.studentCount || 0), 0);
   const maxCampusesQuota = school?.quotas?.maxCampuses || 10;
@@ -172,8 +273,12 @@ export default function SchoolCampusManagement() {
 
   return (
     <AppShell
-      title="Quản lý Phân hiệu & Cơ sở trường"
-      subtitle="Quản lý cấu hình vận hành của các Phân hiệu trực thuộc trường (định danh cấp Trường và gói tính năng do Quản trị Tổng cấp phát)."
+      title={isAdmin ? 'Cài đặt Hệ thống Trường & Phân hiệu' : 'Hệ thống Phân hiệu & Cơ sở Trường'}
+      subtitle={
+        isAdmin
+          ? 'Quản trị cấu hình vận hành hệ thống của trường, thiết lập các Phân hiệu trực thuộc, phân quyền tài khoản và kết nối thiết bị.'
+          : 'Theo dõi quy mô các Phân hiệu trực thuộc và thông số vận hành chuẩn của nhà trường.'
+      }
       actions={(
         <div className="toolbar-buttons">
           <button type="button" className="button button-secondary" onClick={load} disabled={loading}>
@@ -187,7 +292,7 @@ export default function SchoolCampusManagement() {
               title={reachedCampusQuota ? `Trường đã đạt hạn mức ${maxCampusesQuota} phân hiệu` : undefined}
               onClick={openCreateCampus}
             >
-              <Icon name="plus" size={15} /> Thêm phân hiệu mới ({campuses.length}/{maxCampusesQuota})
+              <Icon name="plus" size={15} /> Thêm phân hiệu ({campuses.length}/{maxCampusesQuota})
             </button>
           )}
         </div>
@@ -201,49 +306,449 @@ export default function SchoolCampusManagement() {
           </div>
         )}
 
+        {/* 4 THẺ CHỈ SỐ HỆ THỐNG CỦA ĐƠN VỊ TRƯỜNG */}
         <div className="classroom-summary-grid">
           <article>
             <span className="summary-badge blue"><Icon name="shield" size={20} /></span>
             <div>
-              <small>MÃ TRƯỜNG (DO SUPERADMIN CẤP)</small>
+              <small>MÃ ĐỊNH DANH TRƯỜNG</small>
               <strong>{school?.code || 'HOANANG'}</strong>
             </div>
           </article>
           <article>
             <span className="summary-badge amber"><Icon name="classes" size={20} /></span>
             <div>
-              <small>PHÂN HIỆU / HẠN MỨC CẤP PHÉP</small>
+              <small>PHÂN HIỆU / HẠN MỨC CẤP</small>
               <strong>{campuses.length} / {maxCampusesQuota} cơ sở</strong>
             </div>
           </article>
           <article>
             <span className="summary-badge green"><Icon name="grid" size={20} /></span>
             <div>
-              <small>LỚP ĐANG HOẠT ĐỘNG</small>
+              <small>KHUNG LỚP ĐANG MỞ</small>
               <strong>{totalClasses} lớp</strong>
             </div>
           </article>
           <article>
             <span className="summary-badge purple"><Icon name="students" size={20} /></span>
             <div>
-              <small>HỌC SINH / HẠN MỨC TRƯỜNG</small>
+              <small>SĨ SỐ / HẠN MỨC GÓI</small>
               <strong>{totalStudents} / {maxStudentsQuota} HS</strong>
             </div>
           </article>
         </div>
 
-        {/* HỒ SƠ ĐỊNH DANH CẤP TRƯỜNG (CHỈ ĐỌC — DO SUPERADMIN QUẢN LÝ) */}
-        <section className="content-card" style={{ padding: '20px 24px', marginBottom: '18px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '14px' }}>
-            <div>
-              <p className="card-kicker">THÔNG TIN ĐỊNH DANH & GÓI TÍNH NĂNG CẤP TRƯỜNG (CHỈ ĐỌC)</p>
-              <h2 style={{ margin: '4px 0 6px', color: '#1e3a8a' }}>{school?.name || 'Trường Mầm non'}</h2>
-              <p style={{ margin: '0 0 10px', color: '#475569', fontSize: '13.5px' }}>
-                Mã trường: <strong>{school?.code || '—'}</strong>
+        {/* BẢNG ĐIỀU KHIỂN QUẢN TRỊ NHANH DÀNH RIÊNG CHO ADMIN TRƯỜNG */}
+        {isAdmin && (
+          <section
+            className="content-card"
+            style={{
+              padding: '18px 22px',
+              marginBottom: '18px',
+              border: '1px solid #bfdbfe',
+              background: 'linear-gradient(135deg, #f8fbff 0%, #eff6ff 100%)'
+            }}
+          >
+            <p className="card-kicker" style={{ color: '#1d4ed8', marginBottom: 4 }}>
+              KHÔNG GIAN QUẢN TRỊ KỸ THUẬT & CẤU HÌNH ĐƠN VỊ TRƯỜNG
+            </p>
+            <h2 style={{ margin: '0 0 6px', fontSize: 17, color: '#0f172a' }}>
+              Các tác vụ quản trị của Tài khoản Admin Trường ({school?.name || 'Đơn vị trường'})
+            </h2>
+            <p style={{ margin: '0 0 14px', fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
+              Tài khoản <strong>Admin trường</strong> chuyên trách cấu hình hệ thống phân hiệu, tạo khung lớp học, kết nối máy chấm công và cấp phát tài khoản cho <strong>Ban Giám đốc, Giáo viên, Đầu bếp, Kế toán, Nhân sự, Bảo vệ</strong> vận hành nghiệp vụ.
+            </p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(215px, 1fr))', gap: 12 }}>
+              <Link
+                to="/accounts"
+                className="quick-action"
+                style={{ margin: 0, padding: '12px 14px', borderRadius: 12, background: '#fff', border: '1px solid #dbeafe' }}
+              >
+                <span className="quick-icon blue"><Icon name="users" /></span>
+                <span>
+                  <strong>Cấp Tài khoản & Vai trò</strong>
+                  <small>Tạo Giám đốc, GV, Bếp, Kế toán...</small>
+                </span>
+                <Icon name="chevronRight" size={16} />
+              </Link>
+              <Link
+                to="/classrooms"
+                className="quick-action"
+                style={{ margin: 0, padding: '12px 14px', borderRadius: 12, background: '#fff', border: '1px solid #dbeafe' }}
+              >
+                <span className="quick-icon orange"><Icon name="classes" /></span>
+                <span>
+                  <strong>Khung Lớp theo Phân hiệu</strong>
+                  <small>Khởi tạo lớp & gắn cơ sở</small>
+                </span>
+                <Icon name="chevronRight" size={16} />
+              </Link>
+              <Link
+                to="/devices"
+                className="quick-action"
+                style={{ margin: 0, padding: '12px 14px', borderRadius: 12, background: '#fff', border: '1px solid #dbeafe' }}
+              >
+                <span className="quick-icon green"><Icon name="clock" /></span>
+                <span>
+                  <strong>Máy chấm công & Webhook</strong>
+                  <small>Kết nối thiết bị & ánh xạ ID</small>
+                </span>
+                <Icon name="chevronRight" size={16} />
+              </Link>
+              <Link
+                to="/audit-logs"
+                className="quick-action"
+                style={{ margin: 0, padding: '12px 14px', borderRadius: 12, background: '#fff', border: '1px solid #dbeafe' }}
+              >
+                <span className="quick-icon violet"><Icon name="fileText" /></span>
+                <span>
+                  <strong>Nhật ký Hệ thống Trường</strong>
+                  <small>Kiểm tra lịch sử phân quyền</small>
+                </span>
+                <Icon name="chevronRight" size={16} />
+              </Link>
+            </div>
+          </section>
+        )}
+
+        {/* THANH CHUYỂN ĐỔI GIỮA QUẢN LÝ PHÂN HIỆU & CÀI ĐẶT HỆ THỐNG TRƯỜNG */}
+        <div className="account-tabs" role="tablist" style={{ marginBottom: 18 }}>
+          <button
+            type="button"
+            className={activeTab === 'campuses' ? 'active' : ''}
+            onClick={() => switchTab('campuses')}
+          >
+            <Icon name="classes" size={16} />
+            1. Danh sách & Cấu hình Phân hiệu ({campuses.length})
+          </button>
+          <button
+            type="button"
+            className={activeTab === 'settings' ? 'active' : ''}
+            onClick={() => switchTab('settings')}
+          >
+            <Icon name="settings" size={16} />
+            2. Cài đặt Hệ thống Vận hành Trường & Gói cấp phép
+          </button>
+        </div>
+
+        {/* TAB 1: DANH SÁCH & CẤU HÌNH CÁC PHÂN HIỆU TRỰC THUỘC */}
+        {activeTab === 'campuses' && (
+          <section className="content-card student-list-card">
+            <div className="list-toolbar" style={{ flexWrap: 'wrap' }}>
+              <div>
+                <p className="card-kicker">CẤU HÌNH VẬN HÀNH TỪNG PHÂN HIỆU TRỰC THUỘC TRƯỜNG</p>
+                <h2>Danh sách Phân hiệu / Cơ sở ({campuses.length})</h2>
+                <p>
+                  {isAdmin
+                    ? 'Chỉnh sửa địa chỉ, người phụ trách cơ sở, khung giờ đón – trả trẻ, sức chứa số lớp tối đa và trạng thái hoạt động của từng phân hiệu.'
+                    : 'Thông tin địa chỉ, người phụ trách và quy mô lớp học tại từng phân hiệu của nhà trường.'}
+                </p>
+              </div>
+              <Link className="button button-secondary" to="/classrooms">
+                <Icon name="classes" size={16} /> Quản lý Lớp học theo Phân hiệu
+              </Link>
+            </div>
+
+            {loading ? (
+              <div className="inline-loader">Đang tải danh sách phân hiệu...</div>
+            ) : (
+              <div className="table-wrap">
+                <table className="data-table account-table">
+                  <thead>
+                    <tr>
+                      <th>Mã cơ sở</th>
+                      <th>Tên phân hiệu / Cơ sở</th>
+                      <th>Địa chỉ &amp; Điện thoại</th>
+                      <th>Phụ trách &amp; Giờ đón – trả</th>
+                      <th>Quy mô lớp &amp; Học sinh</th>
+                      <th>Trạng thái</th>
+                      <th>Thao tác</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {campuses.map((c) => (
+                      <tr key={c.code || c.name}>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          <code style={{ padding: '3px 8px', borderRadius: 6, background: '#eff6ff', color: '#1e40af', fontWeight: 800 }}>
+                            {c.code}
+                          </code>
+                        </td>
+                        <td>
+                          <strong>{c.name}</strong>
+                          {c.notes && <small>{c.notes}</small>}
+                        </td>
+                        <td>
+                          <div>{c.address || 'Chưa cập nhật địa chỉ'}</div>
+                          {c.phone && <small>SĐT: {c.phone}</small>}
+                        </td>
+                        <td>
+                          <div>{c.managerName || '—'}</div>
+                          <small>
+                            Đón – trả: <strong>{c.openTime || '07:00'} – {c.closeTime || '16:30'}</strong>
+                          </small>
+                        </td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          <strong>{c.classCount || 0}/{c.maxClassrooms || 20}</strong> lớp · <span>{c.studentCount || 0} HS</span>
+                        </td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          <span className={`student-status ${c.isActive !== false ? 'enrolled' : 'temporarily_absent'}`}>
+                            {c.isActive !== false ? 'Đang hoạt động' : 'Tạm ngưng'}
+                          </span>
+                        </td>
+                        <td>
+                          <div className="account-row-actions">
+                            <Link className="button button-secondary" to="/classrooms">
+                              Xem Lớp
+                            </Link>
+                            {!isAdmin && (
+                              <Link className="button button-secondary" to="/students">
+                                Xem HS
+                              </Link>
+                            )}
+                            {isAdmin && (
+                              <>
+                                <button type="button" className="button button-primary" onClick={() => openEditCampus(c)}>
+                                  Cài đặt cơ sở
+                                </button>
+                                {c.code !== 'CS-CHINH' && (
+                                  <button
+                                    type="button"
+                                    className="button button-danger"
+                                    disabled={Boolean(deletingCode)}
+                                    onClick={() => handleDeleteCampus(c)}
+                                  >
+                                    {deletingCode === c.code ? 'Đang xóa...' : 'Xóa'}
+                                  </button>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* TAB 2: CÀI ĐẶT HỆ THỐNG VẬN HÀNH CỦA TRƯỜNG & THÔNG TIN CẤP PHÉP */}
+        {activeTab === 'settings' && (
+          <div style={{ display: 'grid', gap: 18 }}>
+            <section className="content-card" style={{ padding: '22px 24px' }}>
+              <div style={{ marginBottom: 16 }}>
+                <p className="card-kicker">CÀI ĐẶT THÔNG SỐ HỆ THỐNG NỘI BỘ CỦA TRƯỜNG & PHÂN HIỆU</p>
+                <h2 style={{ margin: '4px 0 6px' }}>Cấu hình vận hành chung của {school?.name || 'Nhà trường'}</h2>
+                <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>
+                  {isAdmin
+                    ? 'Admin trường trực tiếp thiết lập các thông số giờ giấc, quy tắc đón trả trẻ, chốt suất ăn và thông tin liên hệ áp dụng cho các phân hiệu trực thuộc trường.'
+                    : 'Các thông số hệ thống hiện hành do Quản trị viên hệ thống của trường thiết lập.'}
+                </p>
+              </div>
+
+              <form className="student-form" style={{ padding: 0 }} onSubmit={handleSaveSchoolSettings}>
+                <div className="student-form-grid">
+                  <label>
+                    Năm học áp dụng tại trường (YYYY-YYYY) *
+                    <input
+                      required
+                      disabled={!isAdmin}
+                      placeholder="VD: 2026-2027"
+                      value={settingsForm.schoolYear}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, schoolYear: e.target.value })}
+                    />
+                  </label>
+
+                  <label>
+                    Số điện thoại / Hotline văn phòng trường
+                    <input
+                      disabled={!isAdmin}
+                      maxLength={30}
+                      placeholder="VD: 0243 888 9999"
+                      value={settingsForm.hotline}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, hotline: e.target.value })}
+                    />
+                  </label>
+
+                  <label>
+                    Email liên hệ chính thức của trường
+                    <input
+                      type="email"
+                      disabled={!isAdmin}
+                      placeholder="vanphong@ten-truong.edu.vn"
+                      value={settingsForm.contactEmail}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, contactEmail: e.target.value })}
+                    />
+                  </label>
+
+                  <label>
+                    Địa chỉ trụ sở chính
+                    <input
+                      disabled={!isAdmin}
+                      maxLength={300}
+                      placeholder="Nhập địa chỉ trụ sở chính của trường"
+                      value={settingsForm.headquartersAddress}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, headquartersAddress: e.target.value })}
+                    />
+                  </label>
+
+                  <label>
+                    Giờ mở cửa đón trẻ chuẩn toàn trường *
+                    <input
+                      type="time"
+                      required
+                      disabled={!isAdmin}
+                      value={settingsForm.standardCheckInTime}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, standardCheckInTime: e.target.value })}
+                    />
+                  </label>
+
+                  <label>
+                    Giờ trả trẻ chuẩn toàn trường *
+                    <input
+                      type="time"
+                      required
+                      disabled={!isAdmin}
+                      value={settingsForm.standardCheckOutTime}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, standardCheckOutTime: e.target.value })}
+                    />
+                  </label>
+
+                  <label>
+                    Ngưỡng phút tính đi muộn (0–120 phút)
+                    <input
+                      type="number"
+                      min={0}
+                      max={120}
+                      disabled={!isAdmin}
+                      value={settingsForm.lateGraceMinutes}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, lateGraceMinutes: e.target.value })}
+                    />
+                  </label>
+
+                  <label>
+                    Giờ chốt báo nghỉ cắt suất ăn bếp trong ngày *
+                    <input
+                      type="time"
+                      required
+                      disabled={!isAdmin}
+                      value={settingsForm.mealCancelCutoffTime}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, mealCancelCutoffTime: e.target.value })}
+                    />
+                  </label>
+
+                  <label className="form-wide">
+                    Ghi chú chân trang trên Thông báo / Phiếu thu của trường
+                    <input
+                      disabled={!isAdmin}
+                      maxLength={300}
+                      placeholder="VD: Mọi thắc mắc vui lòng liên hệ Văn phòng Nhà trường trong giờ hành chính."
+                      value={settingsForm.internalAnnouncementFooter}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, internalAnnouncementFooter: e.target.value })}
+                    />
+                  </label>
+
+                  <div className="form-wide" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        padding: '12px 14px',
+                        borderRadius: 12,
+                        border: '1px solid #cbd5e1',
+                        background: '#f8fafc',
+                        cursor: isAdmin ? 'pointer' : 'default'
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        disabled={!isAdmin}
+                        checked={settingsForm.requirePickupQrVerification}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, requirePickupQrVerification: e.target.checked })}
+                      />
+                      <span>Bắt buộc xác thực Mã QR / OTP khi bàn giao đón trả trẻ</span>
+                    </label>
+
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        padding: '12px 14px',
+                        borderRadius: 12,
+                        border: '1px solid #cbd5e1',
+                        background: '#f8fafc',
+                        cursor: isAdmin ? 'pointer' : 'default'
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        disabled={!isAdmin}
+                        checked={settingsForm.allowParentOnlineLeave}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, allowParentOnlineLeave: e.target.checked })}
+                      />
+                      <span>Cho phép Phụ huynh gửi đơn xin nghỉ phép trực tuyến trên ứng dụng</span>
+                    </label>
+                  </div>
+                </div>
+
+                {isAdmin && (
+                  <div className="form-actions" style={{ marginTop: 18 }}>
+                    <button type="submit" className="button button-primary" disabled={savingSettings}>
+                      <Icon name="check" size={16} />
+                      {savingSettings ? 'Đang lưu cài đặt...' : 'Lưu cài đặt hệ thống trường'}
+                    </button>
+                  </div>
+                )}
+              </form>
+            </section>
+
+            {/* THÔNG TIN GÓI CẤP PHÉP TỪ SUPERADMIN & ĐƯỜNG DẪN WEBHOOK ĐỒNG BỘ */}
+            <section className="content-card" style={{ padding: '20px 24px' }}>
+              <p className="card-kicker">THÔNG TIN GÓI CẤP PHÉP PHẦN MỀM & TÍCH HỢP PHẦN CỨNG (DO SUPERADMIN CẤP)</p>
+              <h3 style={{ margin: '4px 0 8px', color: '#1e3a8a' }}>
+                {school?.name || 'Trường Mầm non'} ({school?.code || '—'})
+              </h3>
+              <p style={{ margin: '0 0 12px', color: '#475569', fontSize: 13 }}>
+                Hạn mức gói: <strong>{maxCampusesQuota} phân hiệu</strong> · <strong>{maxStudentsQuota} học sinh</strong> · <strong>{school?.quotas?.maxStaff || 200} nhân sự</strong>
                 {school?.organizationCode ? <> · Cụm hệ thống: <strong>{school.organizationCode}</strong></> : null}
-                {school?.contactEmail ? <> · Liên hệ: <strong>{school.contactEmail}</strong></> : null}
-                {systemStandards?.defaultSchoolYear ? <> · Năm học chuẩn: <strong>{systemStandards.defaultSchoolYear}</strong></> : null}
               </p>
+
+              {school?.code && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 10,
+                    flexWrap: 'wrap',
+                    padding: '10px 14px',
+                    marginBottom: 14,
+                    borderRadius: 10,
+                    background: '#f8fafc',
+                    border: '1px dashed #93c5fd'
+                  }}
+                >
+                  <span style={{ fontSize: 13 }}>
+                    Endpoint Webhook đồng bộ máy chấm công &amp; điểm danh HS:{' '}
+                    <code style={{ fontWeight: 700, color: '#1e3a8a' }}>
+                      {window.location.origin}/api/attendance/webhook/{school.code}
+                    </code>
+                  </span>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button type="button" className="button button-secondary" onClick={copyWebhookUrl}>
+                      <Icon name="copy" size={14} /> {copiedWebhook ? 'Đã sao chép!' : 'Sao chép URL'}
+                    </button>
+                    {isAdmin && (
+                      <Link className="button button-secondary" to="/devices">
+                        Cấu hình Thiết bị →
+                      </Link>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {Array.isArray(school?.enabledModules) && school.enabledModules.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
@@ -251,12 +756,12 @@ export default function SchoolCampusManagement() {
                     <span
                       key={modKey}
                       style={{
-                        padding: '3px 9px',
+                        padding: '4px 10px',
                         borderRadius: '999px',
-                        background: '#f1f5f9',
-                        border: '1px solid #cbd5e1',
-                        color: '#334155',
-                        fontSize: '11.5px',
+                        background: '#eff6ff',
+                        border: '1px solid #bfdbfe',
+                        color: '#1e40af',
+                        fontSize: '12px',
                         fontWeight: 600
                       }}
                     >
@@ -265,98 +770,9 @@ export default function SchoolCampusManagement() {
                   ))}
                 </div>
               )}
-            </div>
-
-            <Link className="button button-secondary" to="/classrooms">
-              <Icon name="classes" size={16} /> Mở Quản lý Lớp học theo Phân hiệu
-            </Link>
+            </section>
           </div>
-        </section>
-
-        <section className="content-card student-list-card">
-          <div className="list-toolbar">
-            <div>
-              <p className="card-kicker">CẤU HÌNH VẬN HÀNH PHÂN HIỆU TRỰC THUỘC TRƯỜNG</p>
-              <h2>Danh sách Phân hiệu / Cơ sở ({campuses.length})</h2>
-              <p>
-                Admin trường quản lý trực tiếp địa chỉ, người phụ trách, khung giờ đón – trả trẻ và trạng thái hoạt động của từng phân hiệu thuộc trường mình.
-              </p>
-            </div>
-          </div>
-
-          {loading ? (
-            <div className="inline-loader">Đang tải danh sách phân hiệu...</div>
-          ) : (
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Mã cơ sở</th>
-                    <th>Tên phân hiệu / Cơ sở</th>
-                    <th>Địa chỉ & Điện thoại</th>
-                    <th>Phụ trách & Giờ đón – trả</th>
-                    <th>Quy mô lớp & Học sinh</th>
-                    <th>Trạng thái</th>
-                    <th>Thao tác</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {campuses.map((c) => (
-                    <tr key={c.code || c.name}>
-                      <td><strong>{c.code}</strong></td>
-                      <td>
-                        <strong>{c.name}</strong>
-                        {c.notes && <small style={{ display: 'block', color: '#64748b' }}>{c.notes}</small>}
-                      </td>
-                      <td>
-                        <div>{c.address || 'Chưa cập nhật địa chỉ'}</div>
-                        {c.phone && <small style={{ color: '#64748b' }}>SĐT: {c.phone}</small>}
-                      </td>
-                      <td>
-                        <div>{c.managerName || '—'}</div>
-                        <small style={{ color: '#475569' }}>
-                          Đón – trả: <strong>{c.openTime || '07:00'} – {c.closeTime || '16:30'}</strong>
-                        </small>
-                      </td>
-                      <td>
-                        <strong>{c.classCount || 0}/{c.maxClassrooms || 20} lớp</strong> · <span>{c.studentCount || 0} HS</span>
-                      </td>
-                      <td>
-                        <span className={`student-status ${c.isActive !== false ? 'enrolled' : 'temporarily_absent'}`}>
-                          {c.isActive !== false ? 'Đang hoạt động' : 'Tạm ngưng'}
-                        </span>
-                      </td>
-                      <td>
-                        <div className="classroom-actions">
-                          <Link className="button button-secondary" to="/students">
-                            Xem HS
-                          </Link>
-                          {isAdmin && (
-                            <>
-                              <button type="button" className="button button-secondary" onClick={() => openEditCampus(c)}>
-                                Cấu hình
-                              </button>
-                              {c.code !== 'CS-CHINH' && (
-                                <button
-                                  type="button"
-                                  className="button button-danger"
-                                  disabled={Boolean(deletingCode)}
-                                  onClick={() => handleDeleteCampus(c)}
-                                >
-                                  {deletingCode === c.code ? 'Đang xóa...' : 'Xóa'}
-                                </button>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
+        )}
 
         {showCampusModal && createPortal(
           <div

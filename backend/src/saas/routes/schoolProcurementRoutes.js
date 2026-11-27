@@ -50,10 +50,10 @@ router.put('/requests/:id/approve', roleCheck(['admin', 'principal']), approvePr
 
 // Purchase Orders & Suppliers
 router.get('/suppliers', roleCheck(['admin', 'principal', 'accountant']), getProcurementSuppliers);
-router.post('/orders', roleCheck(['admin', 'accountant']), createPurchaseOrder);
+router.post('/orders', roleCheck(['admin', 'principal', 'accountant']), createPurchaseOrder);
 router.get('/orders', roleCheck(['admin', 'principal', 'accountant']), getPurchaseOrders);
-router.put('/orders/:id/status', roleCheck(['admin', 'accountant']), updatePurchaseOrderStatus);
-router.put('/orders/:id/details', roleCheck(['admin', 'accountant']), updatePurchaseOrderDetails);
+router.put('/orders/:id/status', roleCheck(['admin', 'principal', 'accountant']), updatePurchaseOrderStatus);
+router.put('/orders/:id/details', roleCheck(['admin', 'principal', 'accountant']), updatePurchaseOrderDetails);
 
 // Assets
 router.post('/assets', roleCheck(['admin', 'principal']), createAsset);

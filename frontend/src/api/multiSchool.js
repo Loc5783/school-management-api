@@ -17,6 +17,12 @@ export const getSuperAdminMe = () => api.get('/multi-school/me', { headers: supe
 export const changeSuperAdminPassword = (data) => api.post('/multi-school/me/password', data, { headers: superAdminHeaders() });
 export const getSuperAdminSchools = () => api.get('/multi-school/schools', { headers: superAdminHeaders() });
 export const getSuperAdminSchoolReport = (id) => api.get(`/multi-school/schools/${id}/report`, { headers: superAdminHeaders() });
+export const getSuperAdminSchoolAccounts = (schoolId, params = {}) =>
+  api.get(`/multi-school/schools/${schoolId}/accounts`, { params, headers: superAdminHeaders() });
+export const createSuperAdminSchoolAccount = (schoolId, data) =>
+  api.post(`/multi-school/schools/${schoolId}/accounts`, data, { headers: superAdminHeaders() });
+export const updateSuperAdminSchoolAccount = (schoolId, accountId, data) =>
+  api.patch(`/multi-school/schools/${schoolId}/accounts/${accountId}`, data, { headers: superAdminHeaders() });
 export const createSchoolWithAdmin = (data) => api.post('/multi-school/schools', data, { headers: superAdminHeaders() });
 export const updateSchoolAndAdmin = (id, data) => api.put(`/multi-school/schools/${id}`, data, { headers: superAdminHeaders() });
 export const enterSchoolWorkspace = (id) => api.post(`/multi-school/schools/${id}/enter`, {}, { headers: superAdminHeaders() });
@@ -27,8 +33,9 @@ export const getSuperAdminSchoolLogs = (params = {}) => api.get('/multi-school/s
 export const testSuperAdminSchoolWebhook = (id, data) => api.post(`/multi-school/schools/${id}/test-webhook`, data, { headers: superAdminHeaders() });
 export const dispatchSuperAdminNotification = (data) => api.post('/multi-school/notifications/dispatch', data, { headers: superAdminHeaders() });
 
-// API quản lý Phân hiệu / Cơ sở trong phạm vi từng trường (Admin trường)
+// API quản lý Phân hiệu / Cơ sở & Cài đặt Hệ thống Vận hành trong phạm vi từng trường (Admin trường)
 export const getSchoolCampuses = () => api.get('/system/campuses');
+export const updateSchoolSystemSettings = (data) => api.put('/system/school-info', data);
 export const createCampus = (data) => api.post('/system/campuses', data);
 export const updateCampus = (campusCode, data) => api.put(`/system/campuses/${encodeURIComponent(campusCode)}`, data);
 export const deleteCampus = (campusCode) => api.delete(`/system/campuses/${encodeURIComponent(campusCode)}`);

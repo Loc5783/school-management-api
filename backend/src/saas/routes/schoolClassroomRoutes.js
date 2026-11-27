@@ -46,7 +46,7 @@ router.put('/:id/homeroom-teacher', (req, res, next) => {
     return next('router');
   }
   next();
-}, schoolAuthMiddleware, roleCheck(['admin', 'hr']), assignHomeroomTeacher);
+}, schoolAuthMiddleware, roleCheck(['admin', 'principal', 'hr']), assignHomeroomTeacher);
 
 // Mutation gating for Classroom write endpoints (POST, PUT, DELETE)
 const mutationGate = (req, res, next) => {
@@ -59,6 +59,6 @@ const mutationGate = (req, res, next) => {
 
 router.post('/', mutationGate, schoolAuthMiddleware, roleCheck(['admin', 'principal']), createClassroom);
 router.put('/:id', mutationGate, schoolAuthMiddleware, roleCheck(['admin', 'principal']), updateClassroom);
-router.delete('/:id', mutationGate, schoolAuthMiddleware, roleCheck(['admin']), deleteClassroom);
+router.delete('/:id', mutationGate, schoolAuthMiddleware, roleCheck(['admin', 'principal']), deleteClassroom);
 
 module.exports = router;

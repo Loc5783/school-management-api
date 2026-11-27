@@ -284,7 +284,7 @@ export default function SuperAdminUsageAnalyticsPanel({
         </div>
 
         <div className="table-wrap">
-          <table className="data-table">
+          <table className="data-table sa-clean-table">
             <thead>
               <tr>
                 <th>Trường học</th>

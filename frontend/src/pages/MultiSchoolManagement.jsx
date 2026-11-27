@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import Icon from '../components/Icon';
 import { CashflowDonutChart, EconomicPeriodChart } from '../components/SuperAdminCharts';
 import SuperAdminSchoolReportModal from '../components/SuperAdminSchoolReportModal';
+import SuperAdminSchoolAccountsModal from '../components/SuperAdminSchoolAccountsModal';
 import SuperAdminUsageAnalyticsPanel from '../components/SuperAdminUsageAnalyticsPanel';
 import SuperAdminSettingsPanel from '../components/SuperAdminSettingsPanel';
 import SuperAdminAuditPanel from '../components/SuperAdminAuditPanel';
@@ -126,6 +127,7 @@ export default function MultiSchoolManagement() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [enteringId, setEnteringId] = useState('');
   const [reportSchoolId, setReportSchoolId] = useState(null);
+  const [accountModalSchool, setAccountModalSchool] = useState(null);
 
   // Điều phối chuyển sang tab Nhật ký của từng trường cụ thể
   const [auditJumpSchoolId, setAuditJumpSchoolId] = useState('all');
@@ -488,7 +490,7 @@ export default function MultiSchoolManagement() {
         } else {
           localStorage.removeItem('tenant');
         }
-        navigate('/dashboard');
+        navigate('/campuses');
       }
     } catch (err) {
       setNotice({ type: 'error', text: err.response?.data?.message || 'Không thể chuyển vào không gian trường này.' });
@@ -920,8 +922,11 @@ export default function MultiSchoolManagement() {
                           </div>
 
                           <div className="classroom-actions" style={{ flexWrap: 'wrap', marginTop: 'auto' }}>
+                            <button type="button" className="button button-secondary" onClick={() => setAccountModalSchool(s)}>
+                              Quản lý Account ({s.accountStats?.totalAccounts || 0})
+                            </button>
                             <button type="button" className="button button-secondary" onClick={() => openEditModal(s)}>
-                              Cấp / Đổi MK Admin
+                              Cấu hình gói
                             </button>
                             <button type="button" className="button button-secondary" onClick={() => openDispatchNotificationModal(s)}>
                               Gửi thông báo riêng
@@ -1085,7 +1090,7 @@ export default function MultiSchoolManagement() {
                   </div>
                 ) : (
                   <div className="table-wrap">
-                    <table className="data-table">
+                    <table className="data-table sa-clean-table">
                       <thead>
                         <tr>
                           <th>Trường học</th>
@@ -1202,142 +1207,263 @@ export default function MultiSchoolManagement() {
           )}
 
           {/* ================================================================
-              MỤC 3: QUẢN LÝ DANH SÁCH TRƯỜNG, CẤP ACCOUNT & WEBHOOK
+              MỤC 3: QUẢN LÝ DANH SÁCH TRƯỜNG, ACCOUNT TỪNG TRƯỜNG & WEBHOOK
              ================================================================ */}
           {activeSection === 'schools' && (
-            <section className="content-card student-list-card">
-              <div className="list-toolbar">
-                <div>
-                  <p className="card-kicker">QUẢN TRỊ ĐƠN VỊ TRƯỜNG, CẤP TÀI KHOẢN ADMIN RIÊNG & ĐỒNG BỘ WEBHOOK</p>
-                  <h2>Danh sách Trường học độc lập ({filteredSchools.length})</h2>
-                  <p>
-                    SuperAdmin cấp tài khoản <strong>Admin riêng</strong> cho từng trường; Admin trường đăng nhập vào sẽ tự tạo các tài khoản <strong>Ban Giám đốc/Hiệu trưởng, Giáo viên, Đầu bếp, Kế toán, Nhân sự, Bảo vệ</strong>. Máy chấm công của trường đẩy sự kiện về đuôi <code>/api/attendance/webhook/&lt;MÃ_TRƯỜNG&gt;</code>.
-                  </p>
-                </div>
+            <div>
+              {/* 4 THẺ TỔNG HỢP NHANH ACCOUNT & ĐƠN VỊ TRƯỜNG */}
+              <div className="classroom-summary-grid">
+                <article>
+                  <span><Icon name="classes" size={21} /></span>
+                  <div>
+                    <small>ĐƠN VỊ TRƯỜNG ĐỘC LẬP</small>
+                    <strong>{summary.activeSchools} / {summary.totalSchools} trường</strong>
+                  </div>
+                </article>
+                <article>
+                  <span className="summary-badge purple"><Icon name="shield" size={21} /></span>
+                  <div>
+                    <small>TÀI KHOẢN ADMIN TRƯỜNG</small>
+                    <strong>
+                      {schools.reduce((sum, item) => sum + (item.accountStats?.roleCounts?.admin || (item.primaryAdmin ? 1 : 0)), 0)} Admin riêng
+                    </strong>
+                  </div>
+                </article>
+                <article>
+                  <span className="summary-badge green"><Icon name="users" size={21} /></span>
+                  <div>
+                    <small>ACCOUNT NỘI BỘ CÁC TRƯỜNG</small>
+                    <strong>
+                      {schools.reduce((sum, item) => sum + (item.accountStats?.internalActiveAccounts || 0), 0)} tài khoản nhân sự
+                    </strong>
+                  </div>
+                </article>
+                <article>
+                  <span className="summary-badge amber"><Icon name="clock" size={21} /></span>
+                  <div>
+                    <small>PHỤ HUYNH & WEBHOOK ĐỒNG BỘ</small>
+                    <strong>
+                      {schools.reduce((sum, item) => sum + (item.accountStats?.parentAccounts || 0), 0)} PH · {summary.totalWebhookEvents || 0} lượt quẹt
+                    </strong>
+                  </div>
+                </article>
               </div>
 
-              <div className="student-filters" style={{ padding: '0 22px 16px', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                <label className="search-box" style={{ flex: '1 1 300px' }}>
-                  <Icon name="search" size={16} />
-                  <input
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Tìm theo mã trường, tên trường, cụm trường hoặc tài khoản Admin..."
-                  />
-                </label>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
-                  style={{ padding: '10px 14px', borderRadius: '10px', border: '1px solid #cbd5e1', background: '#fff' }}
-                >
-                  <option value="all">Tất cả trạng thái ({schools.length})</option>
-                  <option value="active">Đang hoạt động ({summary.activeSchools})</option>
-                  <option value="suspended">Tạm ngưng ({summary.suspendedSchools || 0})</option>
-                </select>
-              </div>
-
-              {loading ? (
-                <div className="inline-loader">Đang tải danh sách trường học...</div>
-              ) : filteredSchools.length === 0 ? (
-                <div style={{ padding: '36px 20px', textAlign: 'center', color: '#64748b' }}>
-                  Không có trường học nào khớp điều kiện tìm kiếm.
+              <section className="content-card student-list-card">
+                <div className="list-toolbar" style={{ flexWrap: 'wrap' }}>
+                  <div>
+                    <p className="card-kicker">QUẢN TRỊ ĐƠN VỊ TRƯỜNG, ACCOUNT TỪNG TRƯỜNG & ĐỒNG BỘ WEBHOOK</p>
+                    <h2>Danh sách Trường học &amp; Tài khoản theo từng trường ({filteredSchools.length})</h2>
+                    <p style={{ maxWidth: 820, lineHeight: 1.55 }}>
+                      Mỗi trường có không gian dữ liệu và <strong>Tài khoản Admin riêng</strong> độc lập. Bấm <strong>&quot;Quản lý Account&quot;</strong> ở từng trường để cấp thêm Admin, đặt lại mật khẩu bàn giao hoặc kiểm tra toàn bộ tài khoản Giám đốc, Giáo viên, Đầu bếp, Kế toán của trường đó.
+                    </p>
+                  </div>
                 </div>
-              ) : (
-                <div className="table-wrap">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Mã & Tên trường</th>
-                        <th>Admin riêng của trường</th>
-                        <th>Webhook Máy chấm công & Điểm danh</th>
-                        <th>Quy mô & Hạn mức</th>
-                        <th>Gói Phân hệ</th>
-                        <th>Trạng thái</th>
-                        <th>Thao tác SuperAdmin</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredSchools.map((s) => {
-                        const webhookUrl = `${window.location.origin}/api/attendance/webhook/${s.code}`;
-                        return (
-                          <tr key={s._id}>
-                            <td>
-                              <strong style={{ color: '#1d4ed8' }}>{s.code}</strong> · <strong>{s.name}</strong>
-                              <small style={{ display: 'block', color: '#64748b' }}>
-                                {s.campusCount}/{s.quotas?.maxCampuses || 10} phân hiệu: {(s.campusNames || []).join(', ')}
-                              </small>
-                            </td>
-                            <td>
-                              {s.primaryAdmin ? (
-                                <>
-                                  <strong>@{s.primaryAdmin.username}</strong>
-                                  <small style={{ display: 'block', color: '#64748b' }}>
-                                    {s.primaryAdmin.fullName} · {formatShortDate(s.primaryAdmin.lastLogin)}
+
+                <div className="student-filters" style={{ padding: '0 22px 16px', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                  <label className="search-box" style={{ flex: '1 1 320px' }}>
+                    <Icon name="search" size={16} />
+                    <input
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Tìm theo mã trường, tên trường, cụm trường hoặc @username Admin..."
+                    />
+                  </label>
+                  <select
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value)}
+                    style={{ padding: '10px 14px', borderRadius: '10px', border: '1px solid #cbd5e1', background: '#fff', fontWeight: 600 }}
+                  >
+                    <option value="all">Tất cả trạng thái ({schools.length})</option>
+                    <option value="active">Đang hoạt động ({summary.activeSchools})</option>
+                    <option value="suspended">Tạm ngưng ({summary.suspendedSchools || 0})</option>
+                  </select>
+                </div>
+
+                {loading ? (
+                  <div className="inline-loader">Đang tải danh sách trường học &amp; tài khoản...</div>
+                ) : filteredSchools.length === 0 ? (
+                  <div style={{ padding: '36px 20px', textAlign: 'center', color: '#64748b' }}>
+                    Không có trường học nào khớp điều kiện tìm kiếm.
+                  </div>
+                ) : (
+                  <div className="table-wrap">
+                    <table className="data-table sa-clean-table">
+                      <thead>
+                        <tr>
+                          <th>Đơn vị Trường &amp; Phân hiệu</th>
+                          <th>Tài khoản của Trường (Admin &amp; Nhân sự)</th>
+                          <th>Webhook Máy chấm công &amp; Điểm danh</th>
+                          <th>Quy mô &amp; Gói cấp phép</th>
+                          <th>Thao tác Điều hành</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredSchools.map((s) => {
+                          const webhookUrl = `${window.location.origin}/api/attendance/webhook/${s.code}`;
+                          const rc = s.accountStats?.roleCounts || {};
+                          const staffAccCount =
+                            (rc.principal || 0) +
+                            (rc.teacher || 0) +
+                            (rc.chef || 0) +
+                            (rc.accountant || 0) +
+                            (rc.hr || 0) +
+                            (rc.guard || 0);
+                          const totalAcc = s.accountStats?.totalAccounts || 0;
+                          const quotaPercent = s.quotas?.maxStudents > 0
+                            ? Math.min(100, Math.round((s.studentCount / s.quotas.maxStudents) * 100))
+                            : 0;
+
+                          return (
+                            <tr key={s._id}>
+                              <td>
+                                <div className="sa-school-identity">
+                                  <div className="sa-school-code-row">
+                                    <span className="sa-school-code-pill">{s.code}</span>
+                                    <span className={`student-status ${s.status === 'active' ? 'enrolled' : 'withdrawn'}`}>
+                                      {s.status === 'active' ? 'Hoạt động' : s.status === 'suspended' ? 'Tạm ngưng' : 'Đã đóng'}
+                                    </span>
+                                  </div>
+                                  <strong className="sa-school-title">{s.name}</strong>
+                                  <small>
+                                    {s.campusCount}/{s.quotas?.maxCampuses || 10} phân hiệu: {(s.campusNames || []).join(', ')}
                                   </small>
-                                </>
-                              ) : (
-                                <span className="account-unlinked">Chưa cấp TK</span>
-                              )}
-                            </td>
-                            <td>
-                              <code style={{ fontSize: 12, fontWeight: 700, color: '#1e3a8a' }}>
-                                /api/attendance/webhook/{s.code}
-                              </code>
-                              <div style={{ marginTop: 4, display: 'flex', gap: 6, alignItems: 'center' }}>
-                                <button
-                                  type="button"
-                                  className="button button-secondary"
-                                  style={{ padding: '2px 8px', minHeight: 25, fontSize: 11 }}
-                                  onClick={() => copyText(`tbl-wh-${s._id}`, webhookUrl)}
-                                >
-                                  {copiedKey === `tbl-wh-${s._id}` ? 'Đã chép' : 'Copy URL'}
-                                </button>
-                                <small style={{ margin: 0 }}>{s.webhook?.totalEvents || 0} lượt đẩy</small>
-                              </div>
-                            </td>
-                            <td style={{ whiteSpace: 'nowrap' }}>
-                              <div><strong>{s.studentCount}</strong> / {s.quotas?.maxStudents || 800} HS</div>
-                              <small style={{ color: '#64748b' }}>{s.classCount} lớp · {s.staffCount} nhân sự ({s.accountStats?.activeAccounts || 0} TK)</small>
-                            </td>
-                            <td style={{ whiteSpace: 'nowrap' }}>
-                              <strong>{s.enabledModules?.length || moduleCatalog.length}/{moduleCatalog.length}</strong> phân hệ
-                            </td>
-                            <td style={{ whiteSpace: 'nowrap' }}>
-                              <span className={`student-status ${s.status === 'active' ? 'enrolled' : 'withdrawn'}`}>
-                                {s.status === 'active' ? 'Hoạt động' : s.status === 'suspended' ? 'Tạm ngưng' : 'Đã đóng'}
-                              </span>
-                            </td>
-                            <td>
-                              <div className="classroom-actions" style={{ flexWrap: 'wrap' }}>
-                                <button type="button" className="button button-secondary" onClick={() => openEditModal(s)}>
-                                  Cấu hình & Cấp MK
-                                </button>
-                                <button type="button" className="button button-secondary" onClick={() => openSchoolLogs(s._id, 'school_audit')}>
-                                  Xem Log
-                                </button>
-                                <button type="button" className="button button-secondary" onClick={() => setReportSchoolId(s._id)}>
-                                  Báo cáo 360°
-                                </button>
-                                {s.status === 'active' && (
+                                  {s.contactEmail && <small>Liên hệ: {s.contactEmail}</small>}
+                                </div>
+                              </td>
+
+                              <td>
+                                <div className="sa-school-account-card">
+                                  <div className="sa-school-account-top">
+                                    {s.primaryAdmin ? (
+                                      <div className="sa-user-identity-cell">
+                                        <span className="sa-user-avatar is-admin">
+                                          {String(s.primaryAdmin.username || 'A').charAt(0).toUpperCase()}
+                                        </span>
+                                        <div style={{ minWidth: 0 }}>
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                            <code className="sa-username-code">@{s.primaryAdmin.username}</code>
+                                            <button
+                                              type="button"
+                                              className="sa-mini-icon-btn"
+                                              title="Sao chép username Admin trường"
+                                              onClick={() => copyText(`adm-${s._id}`, s.primaryAdmin.username)}
+                                            >
+                                              <Icon name={copiedKey === `adm-${s._id}` ? 'check' : 'copy'} size={12} />
+                                            </button>
+                                          </div>
+                                          <small style={{ marginTop: 3 }}>
+                                            {s.primaryAdmin.fullName} · {formatShortDate(s.primaryAdmin.lastLogin)}
+                                          </small>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <span className="account-unlinked">Chưa cấp tài khoản Admin</span>
+                                    )}
+                                  </div>
+
+                                  <div className="sa-account-role-summary-line">
+                                    <span className="sa-account-mini-tag">
+                                      Admin: <strong>{rc.admin || (s.primaryAdmin ? 1 : 0)}</strong>
+                                    </span>
+                                    <span className="sa-account-mini-tag">
+                                      Nhân sự: <strong>{staffAccCount}</strong>
+                                    </span>
+                                    <span className="sa-account-mini-tag">
+                                      Phụ huynh: <strong>{rc.parent || 0}</strong>
+                                    </span>
+                                  </div>
+
                                   <button
                                     type="button"
-                                    className="button button-primary"
-                                    disabled={Boolean(enteringId)}
-                                    onClick={() => handleEnterSchool(s)}
+                                    className="button sa-account-manage-btn"
+                                    onClick={() => setAccountModalSchool(s)}
                                   >
-                                    {enteringId === s._id ? 'Đang mở...' : 'Vào điều hành'}
+                                    <Icon name="users" size={14} /> Quản lý Account trường ({totalAcc} TK)
                                   </button>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </section>
+                                </div>
+                              </td>
+
+                              <td>
+                                <div className="sa-webhook-cell-box">
+                                  <code>/api/attendance/webhook/{s.code}</code>
+                                  <div style={{ marginTop: 7, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                                    <button
+                                      type="button"
+                                      className="button button-secondary"
+                                      style={{ padding: '2px 9px', minHeight: 27, fontSize: 11.5 }}
+                                      onClick={() => copyText(`tbl-wh-${s._id}`, webhookUrl)}
+                                    >
+                                      <Icon name="copy" size={12} /> {copiedKey === `tbl-wh-${s._id}` ? 'Đã chép' : 'Copy URL'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="button button-secondary"
+                                      style={{ padding: '2px 9px', minHeight: 27, fontSize: 11.5 }}
+                                      onClick={() => {
+                                        setWebhookTestSchool(s);
+                                        setWebhookTestCode('');
+                                        setWebhookTestName('');
+                                        setWebhookTestResult(null);
+                                      }}
+                                    >
+                                      Test
+                                    </button>
+                                    <span style={{ fontSize: 11.5, color: '#64748b', fontWeight: 600 }}>
+                                      {s.webhook?.totalEvents || 0} lượt đẩy
+                                    </span>
+                                  </div>
+                                </div>
+                              </td>
+
+                              <td style={{ minWidth: 180 }}>
+                                <div>
+                                  <strong>{s.studentCount}</strong> / {s.quotas?.maxStudents || 800} học sinh
+                                </div>
+                                <div className="superadmin-progress-track" style={{ margin: '6px 0' }}>
+                                  <div className="superadmin-progress-fill blue" style={{ width: `${quotaPercent}%` }} />
+                                </div>
+                                <small>
+                                  {s.classCount} lớp · {s.staffCount} nhân sự · <strong>{s.enabledModules?.length || moduleCatalog.length}/{moduleCatalog.length}</strong> phân hệ
+                                </small>
+                              </td>
+
+                              <td>
+                                <div className="sa-school-actions-grid">
+                                  <button type="button" className="button button-secondary" onClick={() => openEditModal(s)}>
+                                    Cấu hình gói
+                                  </button>
+                                  <button type="button" className="button button-secondary" onClick={() => setReportSchoolId(s._id)}>
+                                    Báo cáo 360°
+                                  </button>
+                                  <button type="button" className="button button-secondary" onClick={() => openSchoolLogs(s._id, 'school_audit')}>
+                                    Xem Log
+                                  </button>
+                                  <button type="button" className="button button-secondary" onClick={() => openDispatchNotificationModal(s)}>
+                                    Gửi TB
+                                  </button>
+                                  {s.status === 'active' && (
+                                    <button
+                                      type="button"
+                                      className="button button-primary button-enter-wide"
+                                      disabled={Boolean(enteringId)}
+                                      onClick={() => handleEnterSchool(s)}
+                                    >
+                                      <Icon name="arrowRight" size={14} />{' '}
+                                      {enteringId === s._id ? 'Đang mở...' : 'Vào không gian trường'}
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+            </div>
           )}
 
           {/* ================================================================
@@ -1496,6 +1622,15 @@ export default function MultiSchoolManagement() {
           onClose={() => setReportSchoolId(null)}
           onEnterWorkspace={handleEnterSchool}
           onOpenConfig={openEditModal}
+        />
+      )}
+
+      {/* MODAL QUẢN LÝ CHI TIẾT ACCOUNT CỦA TỪNG TRƯỜNG */}
+      {accountModalSchool && (
+        <SuperAdminSchoolAccountsModal
+          school={accountModalSchool}
+          onClose={() => setAccountModalSchool(null)}
+          onChanged={load}
         />
       )}
 

@@ -67,10 +67,10 @@ export default function Login() {
       }
 
       const homeByRole = {
-        admin: '/dashboard',
+        admin: '/campuses',
         principal: '/principal',
         teacher: '/dashboard',
-        parent: '/parent-portal',
+        parent: '/parent-dashboard',
         guard: '/guard',
         chef: '/kitchen',
         accountant: '/accounting',

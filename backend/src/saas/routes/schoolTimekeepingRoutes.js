@@ -108,8 +108,8 @@ router.patch('/devices/:id', roleCheck(['admin']), deviceCtrl.updateDevice);
 router.post('/devices/:id/test-connection', roleCheck(['admin']), deviceCtrl.testDeviceConn);
 router.post('/devices/:id/sync', roleCheck(['admin', 'principal']), deviceCtrl.triggerDeviceSync);
 router.get('/devices/:id/person-mappings', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.listPersonMappings);
-router.post('/devices/:id/person-mappings', roleCheck(['admin']), deviceCtrl.upsertPersonMapping);
-router.delete('/devices/:id/person-mappings/:mappingId', roleCheck(['admin']), deviceCtrl.deletePersonMapping);
+router.post('/devices/:id/person-mappings', roleCheck(['admin', 'hr']), deviceCtrl.upsertPersonMapping);
+router.delete('/devices/:id/person-mappings/:mappingId', roleCheck(['admin', 'hr']), deviceCtrl.deletePersonMapping);
 router.get('/devices/:id/sync-logs', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.getSyncLogs);
 
 module.exports = router;

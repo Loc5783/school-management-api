@@ -13,6 +13,7 @@
  */
 
 const os = require('os');
+const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
 const Tenant = require('../models/zone1_system/Tenant');
 const User = require('../models/zone1_system/User');
@@ -35,6 +36,9 @@ const TuitionFee = require('../models/zone4_finance/TuitionFee');
 const OperatingExpense = require('../models/zone4_finance/OperatingExpense');
 const FoodSample = require('../models/zone5_nutrition/FoodSample');
 const Menu = require('../models/zone5_nutrition/Menu');
+const { ensureAllPermissions } = require('./defaultAdminBootstrapService');
+const { generateNextPersonCode } = require('./personCodeService');
+const { runSafeTransaction } = require('../utils/safeTransaction');
 
 const ALL_MODULE_DEFINITIONS = [
   { key: 'students', label: 'Hồ sơ & Y tế Học sinh', required: true },
@@ -521,6 +525,13 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
           _id: '$tenantId',
           totalAccounts: { $sum: 1 },
           activeAccounts: { $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] } },
+          adminAccounts: { $sum: { $cond: [{ $eq: ['$role', 'admin'] }, 1, 0] } },
+          principalAccounts: { $sum: { $cond: [{ $eq: ['$role', 'principal'] }, 1, 0] } },
+          teacherAccounts: { $sum: { $cond: [{ $eq: ['$role', 'teacher'] }, 1, 0] } },
+          chefAccounts: { $sum: { $cond: [{ $eq: ['$role', 'chef'] }, 1, 0] } },
+          accountantAccounts: { $sum: { $cond: [{ $eq: ['$role', 'accountant'] }, 1, 0] } },
+          hrAccounts: { $sum: { $cond: [{ $eq: ['$role', 'hr'] }, 1, 0] } },
+          guardAccounts: { $sum: { $cond: [{ $eq: ['$role', 'guard'] }, 1, 0] } },
           parentAccounts: { $sum: { $cond: [{ $eq: ['$role', 'parent'] }, 1, 0] } },
           internalActiveAccounts: {
             $sum: {
@@ -910,7 +921,17 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
         internalActiveAccounts: uAct.internalActiveAccounts || 0,
         parentAccounts: uAct.parentAccounts,
         logins7dCount: uAct.logins7dCount || 0,
-        lastActivityAt: uAct.lastActivityAt
+        lastActivityAt: uAct.lastActivityAt,
+        roleCounts: {
+          admin: uAct.adminAccounts || 0,
+          principal: uAct.principalAccounts || 0,
+          teacher: uAct.teacherAccounts || 0,
+          chef: uAct.chefAccounts || 0,
+          accountant: uAct.accountantAccounts || 0,
+          hr: uAct.hrAccounts || 0,
+          guard: uAct.guardAccounts || 0,
+          parent: uAct.parentAccounts || 0
+        }
       },
       attendance: {
         todayRecorded: attToday.totalRecorded,
@@ -1824,6 +1845,519 @@ const dispatchPlatformNotificationToSchools = async (payload = {}, actor) => {
   };
 };
 
+const STAFF_POSITION_BY_ROLE = {
+  principal: 'principal',
+  teacher: 'teacher',
+  accountant: 'accountant',
+  chef: 'chef',
+  guard: 'security',
+  hr: 'hr'
+};
+
+const ALLOWED_SUPERADMIN_CREATE_ROLES = [
+  'admin',
+  'principal',
+  'teacher',
+  'chef',
+  'accountant',
+  'hr',
+  'guard'
+];
+
+const USERNAME_REGEX = /^[a-zA-Z0-9._-]{3,50}$/;
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Truy xuất danh sách toàn bộ tài khoản người dùng (`User`) thuộc phạm vi 1 trường (`tenantId`)
+ * kèm thống kê số lượng theo từng vai trò, đảm bảo không trả về `passwordHash` và không lỗi N+1.
+ *
+ * @param {string} schoolId - `_id` của đơn vị trường (`Tenant`).
+ * @param {{ role?: string, status?: string, search?: string, page?: number, limit?: number }} [query]
+ * @returns {Promise<object>}
+ */
+const listSchoolAccountsForSuperAdmin = async (schoolId, query = {}) => {
+  if (!mongoose.Types.ObjectId.isValid(schoolId)) {
+    throw Object.assign(new Error('Mã định danh trường học không hợp lệ'), { statusCode: 400 });
+  }
+
+  const tenantObjId = new mongoose.Types.ObjectId(schoolId);
+  const tenant = await Tenant.findById(tenantObjId)
+    .select('_id code name status contactEmail quotas')
+    .lean();
+  if (!tenant) {
+    throw Object.assign(new Error('Không tìm thấy đơn vị trường học'), { statusCode: 404 });
+  }
+
+  const page = Math.max(1, Math.min(500, parseInt(query.page, 10) || 1));
+  const limit = Math.max(5, Math.min(100, parseInt(query.limit, 10) || 25));
+  const skip = (page - 1) * limit;
+
+  // Bắt buộc lọc theo `tenantId` ở vị trí đầu tiên để bám sát compound index { tenantId: 1, ... }
+  const filter = { tenantId: tenantObjId };
+  const validRoles = ['admin', 'principal', 'teacher', 'chef', 'accountant', 'hr', 'guard', 'parent'];
+  if (query.role && query.role !== 'all' && validRoles.includes(String(query.role).trim())) {
+    filter.role = String(query.role).trim();
+  }
+  const validStatuses = ['active', 'suspended', 'inactive', 'locked'];
+  if (query.status && query.status !== 'all' && validStatuses.includes(String(query.status).trim())) {
+    filter.status = String(query.status).trim();
+  }
+  if (query.search && String(query.search).trim()) {
+    const escaped = String(query.search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    filter.$or = [
+      { username: { $regex: escaped, $options: 'i' } },
+      { 'profile.fullName': { $regex: escaped, $options: 'i' } },
+      { 'profile.phone': { $regex: escaped, $options: 'i' } },
+      { 'profile.email': { $regex: escaped, $options: 'i' } },
+      { 'employeeInfo.employeeId': { $regex: escaped, $options: 'i' } }
+    ];
+  }
+
+  const [roleStatsRaw, users, total] = await Promise.all([
+    User.aggregate([
+      { $match: { tenantId: tenantObjId } },
+      {
+        $group: {
+          _id: '$role',
+          total: { $sum: 1 },
+          active: { $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] } }
+        }
+      }
+    ]),
+    User.find(filter)
+      .select('username role status profile employeeInfo parentInfo createdAt lastLogin')
+      .sort({ role: 1, createdAt: 1, _id: 1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    User.countDocuments(filter)
+  ]);
+
+  const userIds = users.map((u) => u._id);
+  const linkedEmployees = userIds.length > 0
+    ? await Employee.find({ tenantId: tenantObjId, userId: { $in: userIds } })
+        .select('userId employeeCode position status')
+        .lean()
+    : [];
+  const empByUser = new Map(linkedEmployees.map((e) => [String(e.userId), e]));
+
+  const roleSummary = {
+    all: { total: 0, active: 0 },
+    admin: { total: 0, active: 0 },
+    principal: { total: 0, active: 0 },
+    teacher: { total: 0, active: 0 },
+    chef: { total: 0, active: 0 },
+    accountant: { total: 0, active: 0 },
+    hr: { total: 0, active: 0 },
+    guard: { total: 0, active: 0 },
+    parent: { total: 0, active: 0 }
+  };
+
+  for (const row of roleStatsRaw) {
+    if (row._id && roleSummary[row._id]) {
+      roleSummary[row._id] = { total: row.total || 0, active: row.active || 0 };
+    }
+    roleSummary.all.total += row.total || 0;
+    roleSummary.all.active += row.active || 0;
+  }
+
+  const items = users.map((u) => {
+    const emp = empByUser.get(String(u._id));
+    return {
+      _id: u._id,
+      username: u.username,
+      role: u.role,
+      status: u.status,
+      profile: {
+        fullName: u.profile?.fullName || u.username,
+        phone: u.profile?.phone || '',
+        email: u.profile?.email || ''
+      },
+      employeeCode: emp?.employeeCode || u.employeeInfo?.employeeId || '',
+      linkedStudentsCount: Array.isArray(u.parentInfo?.studentIds) ? u.parentInfo.studentIds.length : 0,
+      lastLogin: u.lastLogin || null,
+      createdAt: u.createdAt || null
+    };
+  });
+
+  return {
+    school: {
+      _id: tenant._id,
+      code: tenant.code,
+      name: tenant.name,
+      status: tenant.status,
+      contactEmail: tenant.contactEmail || '',
+      quotas: tenant.quotas || { maxCampuses: 10, maxStudents: 800, maxStaff: 200 }
+    },
+    roleSummary,
+    items,
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / limit))
+    }
+  };
+};
+
+/**
+ * SuperAdmin khởi tạo thêm Tài khoản Quản trị trường (`admin`) hoặc Tài khoản Nhân sự nội bộ
+ * cho đúng đơn vị trường (`tenantId`), đảm bảo tự động gắn quyền/hồ sơ nhân sự và ghi AuditLog.
+ *
+ * @param {string} schoolId
+ * @param {object} payload
+ * @param {{ _id: any, username: string }} actor
+ * @returns {Promise<object>}
+ */
+const createSchoolAccountBySuperAdmin = async (schoolId, payload = {}, actor) => {
+  if (!mongoose.Types.ObjectId.isValid(schoolId)) {
+    throw Object.assign(new Error('Mã định danh trường học không hợp lệ'), { statusCode: 400 });
+  }
+
+  const settings = await getSystemSettings();
+  const minPassLen = settings.securityPolicy?.minPasswordLength || 6;
+
+  const cleanUsername = String(payload.username || '').trim();
+  const rawPassword = String(payload.password || '');
+  const cleanRole = String(payload.role || 'admin').trim();
+  const cleanFullName = String(payload.profile?.fullName ?? payload.fullName ?? '').trim();
+  const cleanPhone = String(payload.profile?.phone ?? payload.phone ?? '').trim();
+  const cleanEmail = String(payload.profile?.email ?? payload.email ?? '').trim().toLowerCase();
+
+  if (!USERNAME_REGEX.test(cleanUsername)) {
+    throw Object.assign(
+      new Error('Tên đăng nhập chỉ gồm chữ không dấu, số, dấu chấm, gạch ngang/dưới (3–50 ký tự)'),
+      { statusCode: 422 }
+    );
+  }
+  if (rawPassword.length < minPassLen || rawPassword.length > 72) {
+    throw Object.assign(
+      new Error(`Mật khẩu khởi tạo phải từ ${minPassLen} đến 72 ký tự`),
+      { statusCode: 422 }
+    );
+  }
+  if (!ALLOWED_SUPERADMIN_CREATE_ROLES.includes(cleanRole)) {
+    throw Object.assign(new Error('Vai trò tài khoản cấp cho trường không hợp lệ'), { statusCode: 422 });
+  }
+  if (!cleanFullName || cleanFullName.length > 120) {
+    throw Object.assign(new Error('Vui lòng nhập họ và tên người sử dụng (1–120 ký tự)'), { statusCode: 422 });
+  }
+  if (cleanEmail && !EMAIL_REGEX.test(cleanEmail)) {
+    throw Object.assign(new Error('Địa chỉ email không đúng định dạng'), { statusCode: 422 });
+  }
+
+  const permissionIds = cleanRole === 'admin' ? await ensureAllPermissions() : [];
+  const passwordHash = await bcrypt.hash(rawPassword, 10);
+
+  const createdResult = await runSafeTransaction(async (session) => {
+    const sessionOpt = session ? { session } : undefined;
+    const tenant = await Tenant.findById(schoolId).session(session);
+    if (!tenant) {
+      throw Object.assign(new Error('Không tìm thấy đơn vị trường học'), { statusCode: 404 });
+    }
+
+    const exists = await User.exists({ tenantId: tenant._id, username: cleanUsername }).session(session);
+    if (exists) {
+      throw Object.assign(
+        new Error(`Tên đăng nhập "@${cleanUsername}" đã tồn tại trong trường ${tenant.code}`),
+        { statusCode: 409 }
+      );
+    }
+
+    const [createdUser] = await User.create(
+      [
+        {
+          tenantId: tenant._id,
+          username: cleanUsername,
+          passwordHash,
+          role: cleanRole,
+          permissions: permissionIds,
+          profile: {
+            fullName: cleanFullName,
+            phone: cleanPhone,
+            email: cleanEmail
+          },
+          status: 'active',
+          authVersion: 0
+        }
+      ],
+      sessionOpt
+    );
+
+    let employeeCode = '';
+    if (cleanRole !== 'admin') {
+      employeeCode = await generateNextPersonCode({ tenantId: tenant._id, session });
+      const position = STAFF_POSITION_BY_ROLE[cleanRole] || 'teacher';
+      await Employee.create(
+        [
+          {
+            tenantId: tenant._id,
+            userId: createdUser._id,
+            employeeCode,
+            fullName: cleanFullName,
+            phone: cleanPhone,
+            email: cleanEmail,
+            gender: null,
+            contractType: null,
+            startDate: null,
+            qualification: { degree: '', major: '' },
+            position,
+            payrollRole: cleanRole,
+            status: 'active',
+            salaryConfig: { baseSalary: 0, positionAllowance: 0, lunchAllowance: 0 }
+          }
+        ],
+        sessionOpt
+      );
+      createdUser.employeeInfo = {
+        employeeId: employeeCode,
+        position,
+        baseSalary: 0
+      };
+      await createdUser.save(sessionOpt);
+    }
+
+    if (actor?._id) {
+      await PlatformAuditLog.create(
+        [
+          {
+            actorId: actor._id,
+            actorUsername: actor.username || 'superadmin',
+            action: 'UPDATE_SCHOOL_CONFIG',
+            targetType: 'school_user',
+            targetId: String(createdUser._id),
+            details: {
+              code: tenant.code,
+              name: tenant.name,
+              adminUsername: createdUser.username,
+              createdRole: cleanRole
+            }
+          }
+        ],
+        sessionOpt
+      );
+    }
+
+    return {
+      school: { _id: tenant._id, code: tenant.code, name: tenant.name },
+      account: {
+        _id: createdUser._id,
+        username: createdUser.username,
+        role: createdUser.role,
+        status: createdUser.status,
+        profile: createdUser.profile,
+        employeeCode,
+        createdAt: createdUser.createdAt
+      }
+    };
+  });
+
+  invalidatePlatformDashboardCache();
+  return createdResult;
+};
+
+/**
+ * SuperAdmin cập nhật thông tin, đặt lại mật khẩu (tự động nâng `authVersion`) hoặc khóa/mở khóa
+ * một tài khoản thuộc đúng phạm vi `tenantId` của trường.
+ *
+ * @param {string} schoolId
+ * @param {string} accountId
+ * @param {object} payload
+ * @param {{ _id: any, username: string }} actor
+ * @returns {Promise<object>}
+ */
+const updateSchoolAccountBySuperAdmin = async (schoolId, accountId, payload = {}, actor) => {
+  if (!mongoose.Types.ObjectId.isValid(schoolId) || !mongoose.Types.ObjectId.isValid(accountId)) {
+    throw Object.assign(new Error('Định danh trường học hoặc tài khoản không hợp lệ'), { statusCode: 400 });
+  }
+
+  const settings = await getSystemSettings();
+  const minPassLen = settings.securityPolicy?.minPasswordLength || 6;
+
+  const updatedResult = await runSafeTransaction(async (session) => {
+    const sessionOpt = session ? { session } : undefined;
+    const tenant = await Tenant.findById(schoolId).session(session);
+    if (!tenant) {
+      throw Object.assign(new Error('Không tìm thấy đơn vị trường học'), { statusCode: 404 });
+    }
+
+    // Cách ly tuyệt đối theo tenantId: không bao giờ chạm tới User của trường khác
+    const targetUser = await User.findOne({ _id: accountId, tenantId: tenant._id }).session(session);
+    if (!targetUser) {
+      throw Object.assign(new Error('Không tìm thấy tài khoản trong phạm vi trường này'), { statusCode: 404 });
+    }
+
+    let bumpedAuth = false;
+
+    if (payload.username != null) {
+      const nextUsername = String(payload.username).trim();
+      if (!USERNAME_REGEX.test(nextUsername)) {
+        throw Object.assign(
+          new Error('Tên đăng nhập chỉ gồm chữ không dấu, số, dấu chấm, gạch ngang/dưới (3–50 ký tự)'),
+          { statusCode: 422 }
+        );
+      }
+      if (nextUsername !== targetUser.username) {
+        const dup = await User.exists({
+          tenantId: tenant._id,
+          username: nextUsername,
+          _id: { $ne: targetUser._id }
+        }).session(session);
+        if (dup) {
+          throw Object.assign(
+            new Error(`Tên đăng nhập "@${nextUsername}" đã thuộc về tài khoản khác trong trường ${tenant.code}`),
+            { statusCode: 409 }
+          );
+        }
+        targetUser.username = nextUsername;
+        bumpedAuth = true;
+      }
+    }
+
+    const nextFullName = payload.profile?.fullName ?? payload.fullName;
+    const nextPhone = payload.profile?.phone ?? payload.phone;
+    const nextEmail = payload.profile?.email ?? payload.email;
+
+    if (nextFullName != null) {
+      const cleanName = String(nextFullName).trim();
+      if (!cleanName || cleanName.length > 120) {
+        throw Object.assign(new Error('Họ và tên phải từ 1 đến 120 ký tự'), { statusCode: 422 });
+      }
+      targetUser.profile.fullName = cleanName;
+    }
+    if (nextPhone != null) {
+      targetUser.profile.phone = String(nextPhone).trim().slice(0, 25);
+    }
+    if (nextEmail != null) {
+      const cleanMail = String(nextEmail).trim().toLowerCase();
+      if (cleanMail && !EMAIL_REGEX.test(cleanMail)) {
+        throw Object.assign(new Error('Địa chỉ email không đúng định dạng'), { statusCode: 422 });
+      }
+      targetUser.profile.email = cleanMail;
+    }
+
+    if (payload.role != null && targetUser.role !== 'parent') {
+      const nextRole = String(payload.role).trim();
+      if (!ALLOWED_SUPERADMIN_CREATE_ROLES.includes(nextRole)) {
+        throw Object.assign(new Error('Vai trò cập nhật không hợp lệ'), { statusCode: 422 });
+      }
+      if (targetUser.role === 'admin' && nextRole !== 'admin') {
+        const otherActiveAdmins = await User.countDocuments({
+          tenantId: tenant._id,
+          role: 'admin',
+          status: 'active',
+          _id: { $ne: targetUser._id }
+        }).session(session);
+        if (otherActiveAdmins === 0) {
+          throw Object.assign(
+            new Error('Không thể hạ quyền tài khoản Admin duy nhất đang hoạt động của trường'),
+            { statusCode: 422 }
+          );
+        }
+      }
+      if (nextRole === 'admin' && targetUser.role !== 'admin') {
+        targetUser.permissions = await ensureAllPermissions();
+      }
+      targetUser.role = nextRole;
+      bumpedAuth = true;
+    }
+
+    if (payload.status != null) {
+      const nextStatus = String(payload.status).trim();
+      if (!['active', 'suspended', 'inactive'].includes(nextStatus)) {
+        throw Object.assign(new Error('Trạng thái tài khoản không hợp lệ'), { statusCode: 422 });
+      }
+      if (targetUser.role === 'admin' && nextStatus !== 'active' && tenant.status === 'active') {
+        const otherActiveAdmins = await User.countDocuments({
+          tenantId: tenant._id,
+          role: 'admin',
+          status: 'active',
+          _id: { $ne: targetUser._id }
+        }).session(session);
+        if (otherActiveAdmins === 0) {
+          throw Object.assign(
+            new Error('Trường đang hoạt động phải giữ tối thiểu 1 tài khoản Admin đang mở. Hãy cấp thêm Admin khác trước khi khóa.'),
+            { statusCode: 422 }
+          );
+        }
+      }
+      if (targetUser.status !== nextStatus) {
+        targetUser.status = nextStatus;
+        bumpedAuth = true;
+      }
+    }
+
+    const rawNewPass = payload.password != null ? String(payload.password) : '';
+    if (rawNewPass) {
+      if (rawNewPass.length < minPassLen || rawNewPass.length > 72) {
+        throw Object.assign(
+          new Error(`Mật khẩu mới phải từ ${minPassLen} đến 72 ký tự`),
+          { statusCode: 422 }
+        );
+      }
+      targetUser.passwordHash = await bcrypt.hash(rawNewPass, 10);
+      if (payload.status == null && targetUser.status !== 'active') {
+        targetUser.status = 'active';
+      }
+      bumpedAuth = true;
+    }
+
+    if (bumpedAuth) {
+      targetUser.authVersion = (targetUser.authVersion || 0) + 1;
+    }
+
+    await targetUser.save(sessionOpt);
+
+    // Đồng bộ sang hồ sơ Employee liên kết nếu có trong cùng trường
+    const linkedEmp = await Employee.findOne({ tenantId: tenant._id, userId: targetUser._id }).session(session);
+    if (linkedEmp) {
+      linkedEmp.fullName = targetUser.profile?.fullName || linkedEmp.fullName;
+      linkedEmp.phone = targetUser.profile?.phone || '';
+      linkedEmp.email = targetUser.profile?.email || '';
+      await linkedEmp.save(sessionOpt);
+    }
+
+    if (actor?._id) {
+      await PlatformAuditLog.create(
+        [
+          {
+            actorId: actor._id,
+            actorUsername: actor.username || 'superadmin',
+            action: 'UPDATE_SCHOOL_CONFIG',
+            targetType: 'school_user',
+            targetId: String(targetUser._id),
+            details: {
+              code: tenant.code,
+              name: tenant.name,
+              adminUsername: targetUser.username,
+              role: targetUser.role,
+              status: targetUser.status,
+              passwordReset: Boolean(rawNewPass)
+            }
+          }
+        ],
+        sessionOpt
+      );
+    }
+
+    return {
+      school: { _id: tenant._id, code: tenant.code, name: tenant.name },
+      account: {
+        _id: targetUser._id,
+        username: targetUser.username,
+        role: targetUser.role,
+        status: targetUser.status,
+        profile: targetUser.profile,
+        employeeCode: linkedEmp?.employeeCode || targetUser.employeeInfo?.employeeId || '',
+        lastLogin: targetUser.lastLogin || null
+      }
+    };
+  });
+
+  invalidatePlatformDashboardCache();
+  return updatedResult;
+};
+
 module.exports = {
   ALL_MODULE_DEFINITIONS,
   ALL_ENABLED_MODULES,
@@ -1839,6 +2373,9 @@ module.exports = {
   getSchoolDetailedReport,
   listPlatformAuditLogs,
   listSchoolOperationalLogs,
-  dispatchPlatformNotificationToSchools
+  dispatchPlatformNotificationToSchools,
+  listSchoolAccountsForSuperAdmin,
+  createSchoolAccountBySuperAdmin,
+  updateSchoolAccountBySuperAdmin
 };
 
