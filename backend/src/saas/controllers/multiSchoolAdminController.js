@@ -118,6 +118,101 @@ const getSuperAdminMe = async (req, res) => {
 };
 
 /**
+ * Cho phép tài khoản Quản trị Tổng (`admin`) tự đổi mật khẩu và/hoặc tên đăng nhập của chính mình.
+ * Tự động tăng `authVersion` để thu hồi các phiên cũ và cấp lại `token` mới ngay lập tức.
+ */
+const changeSuperAdminPassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword, newUsername } = req.body || {};
+
+    if (typeof currentPassword !== 'string' || !currentPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Vui lòng nhập mật khẩu hiện tại của Admin Tổng'
+      });
+    }
+    if (typeof newPassword !== 'string' || newPassword.length < 6) {
+      return res.status(422).json({
+        success: false,
+        message: 'Mật khẩu mới của Admin Tổng phải từ 6 ký tự trở lên'
+      });
+    }
+
+    const admin = await PlatformAdmin.findById(req.platformAdmin._id);
+    if (!admin || admin.status !== 'active') {
+      return res.status(401).json({
+        success: false,
+        message: 'Không tìm thấy phiên Quản trị Tổng hợp lệ'
+      });
+    }
+
+    const isMatch = await bcrypt.compare(currentPassword, admin.passwordHash);
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: 'Mật khẩu hiện tại không chính xác'
+      });
+    }
+
+    if (newUsername != null && String(newUsername).trim() && String(newUsername).trim() !== admin.username) {
+      const cleanNewUser = String(newUsername).trim();
+      if (!/^[a-zA-Z0-9._-]{3,50}$/.test(cleanNewUser)) {
+        return res.status(422).json({
+          success: false,
+          message: 'Tên đăng nhập mới chỉ gồm chữ không dấu, số, dấu chấm/gạch (3–50 ký tự)'
+        });
+      }
+      const duplicate = await PlatformAdmin.exists({
+        username: cleanNewUser,
+        _id: { $ne: admin._id }
+      });
+      if (duplicate) {
+        return res.status(409).json({
+          success: false,
+          message: `Tên đăng nhập "${cleanNewUser}" đã tồn tại`
+        });
+      }
+      admin.username = cleanNewUser;
+    }
+
+    admin.passwordHash = await bcrypt.hash(newPassword, BCRYPT_SALT_ROUNDS);
+    admin.authVersion = (admin.authVersion || 0) + 1;
+    await admin.save();
+
+    await PlatformAuditLog.create({
+      actorId: admin._id,
+      actorUsername: admin.username,
+      action: 'UPDATE_SUPERADMIN_CREDENTIALS',
+      targetType: 'platform_admin',
+      targetId: String(admin._id),
+      details: { username: admin.username }
+    });
+
+    const freshToken = generatePlatformAdminToken(admin);
+    return res.status(200).json({
+      success: true,
+      message: 'Đã cập nhật thông tin bảo mật tài khoản Admin Tổng thành công',
+      token: freshToken,
+      user: {
+        _id: admin._id,
+        username: admin.username,
+        role: 'superadmin',
+        platformRole: admin.role,
+        profile: {
+          fullName: 'Quản trị Tổng Hệ thống (Đa trường)'
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Lỗi đổi mật khẩu Admin Tổng:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Không thể cập nhật mật khẩu Admin Tổng'
+    });
+  }
+};
+
+/**
  * Lấy danh sách toàn bộ các trường trong chuỗi kèm thống kê Phân hiệu, Lớp, Học sinh, Nhân sự và Account Admin riêng.
  */
 const listAllSchoolsOverview = async (req, res) => {
@@ -629,6 +724,7 @@ const enterSchoolWorkspace = async (req, res) => {
 module.exports = {
   loginSuperAdmin,
   getSuperAdminMe,
+  changeSuperAdminPassword,
   listAllSchoolsOverview,
   createSchoolWithAdmin,
   updateSchoolAndAdmin,

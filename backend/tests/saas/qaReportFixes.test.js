@@ -764,14 +764,15 @@ describe('QA & Security Evaluation Fixes — Full Replica Set Verification (phas
     expect(listCampusesRes.body.data.campuses.some((c) => c.name === 'Phân hiệu 3 - Cầu Giấy')).toBe(true);
     expect(listCampusesRes.body.data.campuses.some((c) => c.name === 'Phân hiệu 2' && c.classCount >= 1)).toBe(true);
 
-    // 9.3 Quản trị Tổng Đa Trường (Admin chung toàn bộ -> Tạo trường mới kèm 1 Account Admin riêng -> Chuyển vào quản lý từng trường)
+    // 9.3 Quản trị Tổng Đa Trường (Admin chung toàn bộ mặc định 'admin' đăng nhập khi để trống Mã trường -> Tạo trường mới kèm Account riêng)
     await ensureDefaultAdminAccount({ useLegacyApp: false });
 
     const superLoginRes = await request(app)
-      .post('/api/multi-school/login')
-      .send({ username: 'superadmin', password: '123456' });
+      .post('/api/auth/login')
+      .send({ schoolCode: '', username: 'admin', password: '123456' });
     expect(superLoginRes.status).toBe(200);
     expect(superLoginRes.body.isSuperAdmin).toBe(true);
+    expect(superLoginRes.body.user.role).toBe('superadmin');
     const superToken = superLoginRes.body.token;
 
     const createSchoolRes = await request(app)

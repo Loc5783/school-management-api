@@ -127,11 +127,12 @@ const swaggerPathsPart1 = {
   '/api/auth/login': {
     post: {
       tags: ['01. Xác thực & Phiên đăng nhập (Auth)'],
-      summary: 'Đăng nhập tài khoản từng trường (Admin trường, Hiệu trưởng, GV, Kế toán, Bếp, Bảo vệ, HR, Phụ huynh)',
+      summary: 'Đăng nhập hợp nhất 1 luồng (Để trống schoolCode = Admin Tổng Đa Trường; Có schoolCode = Tài khoản Trường)',
       description:
-        '- **Nhân sự nhà trường**: Đăng nhập bằng `schoolCode` (VD: `HOANANG-A`) + `username` + `password`.\n' +
-        '- **Phụ huynh học sinh**: Tài khoản tự động tạo khi thêm học sinh/nhập Excel với `username = Số điện thoại` (VD: `0912345678`) và `password` mặc định lần đầu là `123456`.\n' +
-        '- Sao chép trường `token` trả về rồi bấm nút **Authorize** ở góc trên bên phải Swagger UI để gọi thử mọi API bên dưới.',
+        '- **Admin Tổng Đa Trường (`PlatformAdmin`)**: Để trống `schoolCode` (`""` hoặc lược bỏ) + `username` (mặc định tự tạo khi DB trống: `admin` / `123456`) → trả về `isSuperAdmin: true`, vào giao diện `/multi-school` để tạo trường mới và cấp tài khoản riêng cho từng trường.\n' +
+        '- **Nhân sự từng trường**: Nhập `schoolCode` (VD: `HOANANG-A`) + `username` + `password` của trường đó.\n' +
+        '- **Phụ huynh học sinh**: Tài khoản tự động tạo khi thêm học sinh/nhập Excel với `schoolCode` + `username = Số điện thoại` (VD: `0912345678`) và `password` mặc định lần đầu là `123456`.\n' +
+        '- Sao chép trường `token` trả về rồi bấm nút **Authorize** màu xanh lá để gọi thử mọi API bên dưới.',
       security: [],
       requestBody: {
         required: true,
@@ -140,8 +141,12 @@ const swaggerPathsPart1 = {
             type: 'object',
             required: ['username', 'password'],
             properties: {
-              schoolCode: { type: 'string', description: 'Mã định danh trường học (VD: HOANANG-A)', example: 'HOANANG-A' },
-              username: { type: 'string', description: 'Tên đăng nhập hoặc SĐT Phụ huynh', example: 'admin' },
+              schoolCode: {
+                type: 'string',
+                description: 'Để trống ("") nếu đăng nhập Admin Tổng Đa Trường; nhập mã trường (VD: HOANANG-A) nếu đăng nhập tài khoản trường',
+                example: ''
+              },
+              username: { type: 'string', description: 'Tài khoản Admin Tổng (admin), tài khoản trường hoặc SĐT Phụ huynh', example: 'admin' },
               password: { type: 'string', format: 'password', example: '123456' }
             }
           }
@@ -237,7 +242,7 @@ const swaggerPathsPart1 = {
   '/api/multi-school/login': {
     post: {
       tags: ['02. Quản trị Tổng Đa Trường (SuperAdmin)'],
-      summary: 'Đăng nhập cổng Quản trị Tổng Hệ thống Đa Trường (Mặc định khởi tạo: superadmin / 123456)',
+      summary: 'Đăng nhập trực tiếp cổng Quản trị Tổng Đa Trường (Mặc định khởi tạo: admin / 123456)',
       security: [],
       requestBody: {
         required: true,
@@ -245,7 +250,7 @@ const swaggerPathsPart1 = {
           type: 'object',
           required: ['username', 'password'],
           properties: {
-            username: { type: 'string', example: 'superadmin' },
+            username: { type: 'string', example: 'admin' },
             password: { type: 'string', example: '123456' }
           }
         })
@@ -264,6 +269,40 @@ const swaggerPathsPart1 = {
           })
         },
         401: standardErrorResponses[401]
+      }
+    }
+  },
+  '/api/multi-school/me/password': {
+    post: {
+      tags: ['02. Quản trị Tổng Đa Trường (SuperAdmin)'],
+      summary: '[SuperAdmin] Đổi mật khẩu và/hoặc tên đăng nhập của tài khoản Admin Tổng Đa Trường',
+      requestBody: {
+        required: true,
+        content: jsonContent({
+          type: 'object',
+          required: ['currentPassword', 'newPassword'],
+          properties: {
+            newUsername: { type: 'string', example: 'admin' },
+            currentPassword: { type: 'string', example: '123456' },
+            newPassword: { type: 'string', minLength: 6, example: 'AdminTong@2026' }
+          }
+        })
+      },
+      responses: {
+        200: {
+          description: 'Cập nhật mật khẩu Admin Tổng thành công, trả về JWT Token mới',
+          content: jsonContent({
+            type: 'object',
+            properties: {
+              success: { type: 'boolean', example: true },
+              message: { type: 'string' },
+              token: { type: 'string' },
+              user: { $ref: '#/components/schemas/DB_PlatformAdmin' }
+            }
+          })
+        },
+        401: standardErrorResponses[401],
+        422: standardErrorResponses[422]
       }
     }
   },

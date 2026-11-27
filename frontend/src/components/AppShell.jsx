@@ -1043,6 +1043,7 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
     } catch {
       // Bỏ qua lỗi kết nối khi logout
     } finally {
+      const wasSuperAdminSession = Boolean(localStorage.getItem('superadmin_token'));
       setUser(null);
       setTenant(null);
       localStorage.removeItem('superadmin_token');
@@ -1050,6 +1051,9 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       localStorage.removeItem('tenant');
+      if (wasSuperAdminSession) {
+        localStorage.removeItem('last_school_code');
+      }
       navigate('/login');
     }
   };

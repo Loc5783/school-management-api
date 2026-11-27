@@ -6,7 +6,8 @@ import {
   getSuperAdminSchools,
   createSchoolWithAdmin,
   updateSchoolAndAdmin,
-  enterSchoolWorkspace
+  enterSchoolWorkspace,
+  changeSuperAdminPassword
 } from '../api/multiSchool';
 import { getStoredSuperAdminUser, getStoredUser } from '../utils/storage';
 
@@ -24,7 +25,7 @@ const emptyCreateForm = {
 
 export default function MultiSchoolManagement() {
   const navigate = useNavigate();
-  const superUser = getStoredSuperAdminUser() || getStoredUser();
+  const [superUser, setSuperUser] = useState(() => getStoredSuperAdminUser() || getStoredUser());
 
   const [summary, setSummary] = useState({
     totalSchools: 0,
@@ -46,9 +47,26 @@ export default function MultiSchoolManagement() {
   const [createError, setCreateError] = useState('');
 
   const [editingSchool, setEditingSchool] = useState(null);
-  const [editForm, setEditForm] = useState({ name: '', organizationCode: '', contactEmail: '', status: 'active', newAdminPassword: '' });
+  const [editForm, setEditForm] = useState({
+    name: '',
+    organizationCode: '',
+    contactEmail: '',
+    status: 'active',
+    adminUsername: 'admin',
+    newAdminPassword: ''
+  });
   const [savingEdit, setSavingEdit] = useState(false);
   const [editError, setEditError] = useState('');
+
+  const [showSecurityModal, setShowSecurityModal] = useState(false);
+  const [securityForm, setSecurityForm] = useState({
+    newUsername: '',
+    currentPassword: '',
+    newPassword: '',
+    confirmPassword: ''
+  });
+  const [savingSecurity, setSavingSecurity] = useState(false);
+  const [securityError, setSecurityError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -63,6 +81,7 @@ export default function MultiSchoolManagement() {
         localStorage.removeItem('superadmin_user');
         localStorage.removeItem('token');
         localStorage.removeItem('user');
+        localStorage.removeItem('last_school_code');
         navigate('/login', { replace: true });
         return;
       }
@@ -85,17 +104,19 @@ export default function MultiSchoolManagement() {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     localStorage.removeItem('tenant');
+    localStorage.removeItem('last_school_code');
     navigate('/login');
   };
 
   useEffect(() => {
-    if (!showCreateModal && !editingSchool) return undefined;
+    if (!showCreateModal && !editingSchool && !showSecurityModal) return undefined;
     const originalOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const onKeyDown = (e) => {
       if (e.key === 'Escape') {
         if (showCreateModal && !creating) setShowCreateModal(false);
         if (editingSchool && !savingEdit) setEditingSchool(null);
+        if (showSecurityModal && !savingSecurity) setShowSecurityModal(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -103,7 +124,7 @@ export default function MultiSchoolManagement() {
       document.body.style.overflow = originalOverflow;
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [showCreateModal, editingSchool, creating, savingEdit]);
+  }, [showCreateModal, editingSchool, showSecurityModal, creating, savingEdit, savingSecurity]);
 
   const handleCreateSchool = async (e) => {
     e.preventDefault();
@@ -164,11 +185,58 @@ export default function MultiSchoolManagement() {
       await updateSchoolAndAdmin(editingSchool._id, editForm);
       setEditingSchool(null);
       await load();
-      setNotice({ type: 'success', text: 'Đã cập nhật cấu hình trường học & tài khoản quản trị.' });
+      setNotice({ type: 'success', text: 'Đã cập nhật cấu hình trường học & tài khoản quản trị riêng.' });
     } catch (err) {
       setEditError(err.response?.data?.message || 'Không thể lưu cập nhật.');
     } finally {
       setSavingEdit(false);
+    }
+  };
+
+  const openSecurityModal = () => {
+    setSecurityError('');
+    setSecurityForm({
+      newUsername: superUser?.username || 'admin',
+      currentPassword: '',
+      newPassword: '',
+      confirmPassword: ''
+    });
+    setShowSecurityModal(true);
+  };
+
+  const handleSaveSecurity = async (e) => {
+    e.preventDefault();
+    if (savingSecurity) return;
+    if (securityForm.newPassword.length < 6) {
+      setSecurityError('Mật khẩu mới phải từ 6 ký tự trở lên.');
+      return;
+    }
+    if (securityForm.newPassword !== securityForm.confirmPassword) {
+      setSecurityError('Mật khẩu xác nhận không trùng khớp.');
+      return;
+    }
+
+    setSavingSecurity(true);
+    setSecurityError('');
+    try {
+      const res = await changeSuperAdminPassword({
+        newUsername: securityForm.newUsername.trim(),
+        currentPassword: securityForm.currentPassword,
+        newPassword: securityForm.newPassword
+      });
+      if (res.data?.token && res.data?.user) {
+        localStorage.setItem('superadmin_token', res.data.token);
+        localStorage.setItem('superadmin_user', JSON.stringify(res.data.user));
+        localStorage.setItem('token', res.data.token);
+        localStorage.setItem('user', JSON.stringify(res.data.user));
+        setSuperUser(res.data.user);
+      }
+      setShowSecurityModal(false);
+      setNotice({ type: 'success', text: 'Đã đổi thông tin bảo mật tài khoản Admin Tổng thành công.' });
+    } catch (err) {
+      setSecurityError(err.response?.data?.message || 'Không thể cập nhật mật khẩu Admin Tổng.');
+    } finally {
+      setSavingSecurity(false);
     }
   };
 
@@ -179,7 +247,8 @@ export default function MultiSchoolManagement() {
       const res = await enterSchoolWorkspace(school._id);
       const { token, tenant, user } = res.data || {};
       if (token && user) {
-        // Giữ nguyên superadmin_token để nút "Về Quản trị Tổng Đa Trường" trên Sidebar quay lại ngay lập tức
+        // Giữ nguyên superadmin_token để nút "Về Quản trị Tổng Đa Trường" trên Sidebar quay lại ngay lập tức;
+        // KHÔNG ghi vào last_school_code để khi Admin Tổng đăng xuất vẫn về đúng form để trống Mã trường.
         const currentSuperToken = localStorage.getItem('superadmin_token') || localStorage.getItem('token');
         if (currentSuperToken) {
           localStorage.setItem('superadmin_token', currentSuperToken);
@@ -189,7 +258,6 @@ export default function MultiSchoolManagement() {
         localStorage.setItem('user', JSON.stringify(user));
         if (tenant) {
           localStorage.setItem('tenant', JSON.stringify(tenant));
-          if (tenant.code) localStorage.setItem('last_school_code', tenant.code);
         } else {
           localStorage.removeItem('tenant');
         }
@@ -248,7 +316,7 @@ export default function MultiSchoolManagement() {
           </span>
           <div>
             <span style={{ fontSize: '11px', fontWeight: 800, letterSpacing: '0.08em', color: '#bfdbfe' }}>
-              TRUNG TÂM ĐIỀU HÀNH HỆ THỐNG ĐA TRƯỜNG (ADMIN CHUNG TOÀN BỘ)
+              TRUNG TÂM ĐIỀU HÀNH HỆ THỐNG ĐA TRƯỜNG (ADMIN TỔNG)
             </span>
             <h1 style={{ margin: '2px 0 0', fontSize: '21px', fontWeight: 800, color: '#ffffff' }}>
               Quản lý Chuỗi Trường & Phân hiệu
@@ -277,10 +345,18 @@ export default function MultiSchoolManagement() {
           <button
             type="button"
             className="button button-secondary"
-            onClick={handleLogout}
-            style={{ background: 'rgba(15,23,42,0.32)', color: '#fff', borderColor: 'rgba(255,255,255,0.22)' }}
+            onClick={openSecurityModal}
+            style={{ background: 'rgba(255,255,255,0.14)', color: '#fff', borderColor: 'rgba(255,255,255,0.28)' }}
           >
-            <Icon name="logout" size={15} /> Đăng xuất (@{superUser.username || 'superadmin'})
+            <Icon name="shield" size={15} /> Đổi mật khẩu (@{superUser?.username || 'admin'})
+          </button>
+          <button
+            type="button"
+            className="button button-secondary"
+            onClick={handleLogout}
+            style={{ background: 'rgba(15,23,42,0.34)', color: '#fff', borderColor: 'rgba(255,255,255,0.22)' }}
+          >
+            <Icon name="logout" size={15} /> Đăng xuất
           </button>
         </div>
       </header>
@@ -295,28 +371,28 @@ export default function MultiSchoolManagement() {
 
         <div className="classroom-summary-grid" style={{ marginBottom: '22px' }}>
           <article>
-            <span><Icon name="shield" size={20} /></span>
+            <span className="summary-badge blue"><Icon name="shield" size={20} /></span>
             <div>
               <small>TỔNG SỐ TRƯỜNG TRONG HỆ THỐNG</small>
               <strong>{summary.activeSchools || 0} / {summary.totalSchools || 0} trường</strong>
             </div>
           </article>
           <article>
-            <span><Icon name="grid" size={20} /></span>
+            <span className="summary-badge amber"><Icon name="grid" size={20} /></span>
             <div>
               <small>TỔNG PHÂN HIỆU / CƠ SỞ</small>
               <strong>{summary.totalCampuses || 0} phân hiệu</strong>
             </div>
           </article>
           <article>
-            <span><Icon name="classes" size={20} /></span>
+            <span className="summary-badge green"><Icon name="classes" size={20} /></span>
             <div>
               <small>TỔNG LỚP HỌC TOÀN CHUỖI</small>
               <strong>{summary.totalClassrooms || 0} lớp</strong>
             </div>
           </article>
           <article>
-            <span><Icon name="students" size={20} /></span>
+            <span className="summary-badge purple"><Icon name="students" size={20} /></span>
             <div>
               <small>HỌC SINH & NHÂN SỰ TOÀN HỆ THỐNG</small>
               <strong>{summary.totalStudents || 0} HS · {summary.totalStaff || 0} NS</strong>
@@ -335,19 +411,36 @@ export default function MultiSchoolManagement() {
             </div>
           </div>
 
-          <div className="student-filters" style={{ padding: '0 22px 16px' }}>
-            <label className="search-box">
-              <Icon name="search" size={16} />
-              <input
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Tìm theo mã trường, tên trường, cụm trường hoặc tài khoản Admin..."
-              />
-            </label>
-          </div>
+          {schools.length > 0 && (
+            <div className="student-filters" style={{ padding: '0 22px 16px' }}>
+              <label className="search-box">
+                <Icon name="search" size={16} />
+                <input
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Tìm theo mã trường, tên trường, cụm trường hoặc tài khoản Admin..."
+                />
+              </label>
+            </div>
+          )}
 
           {loading ? (
             <div className="inline-loader">Đang tải dữ liệu toàn bộ hệ thống trường...</div>
+          ) : schools.length === 0 ? (
+            <div className="multi-school-empty-state">
+              <span className="multi-school-empty-icon"><Icon name="classes" size={28} /></span>
+              <h3>Hệ thống chưa có trường học nào được khởi tạo</h3>
+              <p>
+                Bạn đang đăng nhập với quyền <strong>Admin Tổng (@{superUser?.username || 'admin'})</strong>. Hãy khởi tạo trường học đầu tiên và cấp tài khoản Admin riêng cho trường đó để bắt đầu vận hành.
+              </p>
+              <button
+                type="button"
+                className="button button-primary"
+                onClick={() => { setCreateError(''); setShowCreateModal(true); }}
+              >
+                <Icon name="plus" size={16} /> Tạo trường học đầu tiên & Cấp Account riêng
+              </button>
+            </div>
           ) : (
             <div className="table-wrap">
               <table className="data-table">
@@ -355,9 +448,9 @@ export default function MultiSchoolManagement() {
                   <tr>
                     <th>Mã trường</th>
                     <th>Tên trường & Cụm</th>
-                    <th>Các Phân hiệu trực thuộc</th>
+                    <th>Phân hiệu trực thuộc</th>
                     <th>Tài khoản Admin riêng</th>
-                    <th>Quy mô vận hành</th>
+                    <th>Quy mô</th>
                     <th>Trạng thái</th>
                     <th>Điều hành</th>
                   </tr>
@@ -365,7 +458,7 @@ export default function MultiSchoolManagement() {
                 <tbody>
                   {filteredSchools.map((s) => (
                     <tr key={s._id}>
-                      <td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
                         <strong style={{ color: '#1d4ed8', fontSize: '13.5px' }}>{s.code}</strong>
                       </td>
                       <td>
@@ -393,17 +486,17 @@ export default function MultiSchoolManagement() {
                           <span className="account-unlinked">Chưa cấp TK</span>
                         )}
                       </td>
-                      <td>
-                        <div><strong>{s.classCount}</strong> lớp · <strong>{s.studentCount}</strong> học sinh</div>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        <div><strong>{s.classCount}</strong> lớp · <strong>{s.studentCount}</strong> HS</div>
                         <small style={{ color: '#64748b' }}>{s.staffCount} nhân sự</small>
                       </td>
-                      <td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
                         <span className={`student-status ${s.status === 'active' ? 'enrolled' : 'withdrawn'}`}>
                           {s.status === 'active' ? 'Hoạt động' : s.status === 'suspended' ? 'Tạm ngưng' : 'Đã đóng'}
                         </span>
                       </td>
                       <td>
-                        <div className="classroom-actions">
+                        <div className="classroom-actions" style={{ flexWrap: 'wrap' }}>
                           {s.status === 'active' && (
                             <button
                               type="button"
@@ -459,18 +552,18 @@ export default function MultiSchoolManagement() {
                 <input
                   required
                   maxLength={20}
-                  placeholder="VD: HOANANG-B"
+                  placeholder="VD: HOANANG-A"
                   value={createForm.code}
                   onChange={(e) => setCreateForm({ ...createForm, code: e.target.value.toUpperCase() })}
                 />
-                <small>Dùng để đăng nhập riêng vào trường này.</small>
+                <small>Người dùng của trường sẽ nhập mã này khi đăng nhập.</small>
               </label>
               <label>
                 Tên trường học *
                 <input
                   required
                   maxLength={160}
-                  placeholder="VD: Trường Mầm non Hoa Nắng - Quận Cầu Giấy"
+                  placeholder="VD: Trường Mầm non Hoa Nắng - Cơ sở Cầu Giấy"
                   value={createForm.name}
                   onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
                 />
@@ -488,7 +581,7 @@ export default function MultiSchoolManagement() {
                 Email liên hệ của trường
                 <input
                   type="email"
-                  placeholder="vanphong@hoanang-b.edu.vn"
+                  placeholder="vanphong@hoanang.edu.vn"
                   value={createForm.contactEmail}
                   onChange={(e) => setCreateForm({ ...createForm, contactEmail: e.target.value })}
                 />
@@ -637,6 +730,85 @@ export default function MultiSchoolManagement() {
               </button>
               <button type="submit" className="button button-primary" disabled={savingEdit}>
                 {savingEdit ? 'Đang lưu...' : 'Lưu thay đổi'}
+              </button>
+            </div>
+          </form>
+        </div>,
+        document.body
+      )}
+
+      {showSecurityModal && createPortal(
+        <div
+          className="account-modal-backdrop"
+          role="presentation"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !savingSecurity) setShowSecurityModal(false);
+          }}
+        >
+          <form className="account-modal-card student-form" style={{ width: 'min(520px, 100%)' }} onSubmit={handleSaveSecurity}>
+            <div className="account-modal-header">
+              <div>
+                <p className="card-kicker">BẢO MẬT TÀI KHOẢN ADMIN TỔNG</p>
+                <h2>Đổi mật khẩu Admin Tổng Đa Trường</h2>
+              </div>
+              <button type="button" className="button button-secondary" disabled={savingSecurity} onClick={() => setShowSecurityModal(false)}>
+                Đóng
+              </button>
+            </div>
+
+            {securityError && <div className="form-error" role="alert">{securityError}</div>}
+
+            <div className="student-form-grid">
+              <label className="form-wide">
+                Tên đăng nhập Admin Tổng *
+                <input
+                  required
+                  value={securityForm.newUsername}
+                  onChange={(e) => setSecurityForm({ ...securityForm, newUsername: e.target.value })}
+                  placeholder="VD: admin"
+                />
+                <small>Khi đăng nhập Admin Tổng ở màn hình Login, chỉ cần để trống ô Mã trường học.</small>
+              </label>
+              <label className="form-wide">
+                Mật khẩu hiện tại *
+                <input
+                  type="password"
+                  required
+                  value={securityForm.currentPassword}
+                  onChange={(e) => setSecurityForm({ ...securityForm, currentPassword: e.target.value })}
+                  placeholder="Nhập mật khẩu đang dùng (mặc định ban đầu: 123456)"
+                />
+              </label>
+              <label>
+                Mật khẩu mới *
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  value={securityForm.newPassword}
+                  onChange={(e) => setSecurityForm({ ...securityForm, newPassword: e.target.value })}
+                  placeholder="Tối thiểu 6 ký tự"
+                />
+              </label>
+              <label>
+                Nhập lại mật khẩu mới *
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  value={securityForm.confirmPassword}
+                  onChange={(e) => setSecurityForm({ ...securityForm, confirmPassword: e.target.value })}
+                  placeholder="Xác nhận mật khẩu mới"
+                />
+              </label>
+            </div>
+
+            <div className="form-actions">
+              <button type="button" className="button button-secondary" disabled={savingSecurity} onClick={() => setShowSecurityModal(false)}>
+                Hủy
+              </button>
+              <button type="submit" className="button button-primary" disabled={savingSecurity}>
+                {savingSecurity ? 'Đang cập nhật...' : 'Cập nhật mật khẩu'}
               </button>
             </div>
           </form>

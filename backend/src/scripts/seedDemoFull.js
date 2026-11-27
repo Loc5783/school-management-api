@@ -20,6 +20,7 @@ const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
 const connectDB = require('../config/database');
 const { getWorkDate, startOfWorkDate, DEFAULT_SCHOOL_TIMEZONE } = require('../utils/dateHelpers');
+const { ensureDefaultSuperAdminAccount } = require('../services/defaultAdminBootstrapService');
 
 // Zone 1: System
 const Tenant = require('../models/zone1_system/Tenant');
@@ -1026,9 +1027,13 @@ const runSeed = async () => {
     )
   ]);
 
+  await ensureDefaultSuperAdminAccount('admin', DEFAULT_DEMO_PASSWORD);
+
   console.log('\n====================================================================');
   console.log('🎉 KHỞI TẠO DỮ LIỆU GIẢ & TÀI KHOẢN MẪU HOÀN TẤT!');
   console.log('====================================================================');
+  console.log(`👑 Admin Tổng Đa Trường        : Mã trường ĐỂ TRỐNG | TK: admin | MK: ${DEFAULT_DEMO_PASSWORD}`);
+  console.log('--------------------------------------------------------------------');
   console.log(`📌 Mã trường chính (School Code): HOANANG-A  | Mật khẩu chung: ${DEFAULT_DEMO_PASSWORD}`);
   console.log('   1. Quản trị viên (Admin)     : admin');
   console.log('   2. Hiệu trưởng (Principal)   : principal');

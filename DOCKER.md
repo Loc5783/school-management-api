@@ -58,10 +58,11 @@ docker compose logs -f backend
 > ```
 > Lệnh này sẽ tự build Frontend ra Production (`frontend/dist`) rồi chạy `node server.js` — mở `http://localhost:5001` là dùng được ngay cả Frontend lẫn Backend!
 
-### Tài khoản Admin được tạo tự động khi DB trống
-- **Mã trường (School Code):** `HOANANG-A` *(đã được điền sẵn trên màn hình đăng nhập)*
+### Tài khoản Admin Tổng Đa Trường được tạo tự động khi DB trống
+- **Mã trường (School Code):** *(Để trống hoàn toàn)*
 - **Tài khoản:** `admin`
 - **Mật khẩu:** `123456`
+- Sau khi đăng nhập sẽ vào thẳng **Trung tâm Điều hành Hệ thống Đa Trường (`/multi-school`)** để Admin Tổng chủ động tạo từng trường học thực tế và cấp tài khoản Admin riêng cho từng trường.
 
 *(Tùy chọn: Nếu muốn nạp thêm bộ dữ liệu mẫu đầy đủ gồm 2 cơ sở `HOANANG-A`, `HOANANG-B` và đầy đủ 8 vai trò nhân sự/phụ huynh/học sinh để thử nghiệm, chạy lệnh `docker compose exec backend npm run seed:demo` hoặc đặt `AUTO_SEED_ON_EMPTY_DB=true` trong `backend/.env`.)*
 

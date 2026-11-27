@@ -210,28 +210,28 @@ export default function SchoolCampusManagement() {
 
         <div className="classroom-summary-grid">
           <article>
-            <span><Icon name="shield" size={20} /></span>
+            <span className="summary-badge blue"><Icon name="shield" size={20} /></span>
             <div>
               <small>MÃ TRƯỜNG ĐỘC LẬP</small>
               <strong>{school?.code || 'HOANANG'}</strong>
             </div>
           </article>
           <article>
-            <span><Icon name="classes" size={20} /></span>
+            <span className="summary-badge amber"><Icon name="classes" size={20} /></span>
             <div>
               <small>TỔNG PHÂN HIỆU / CƠ SỞ</small>
               <strong>{campuses.length} cơ sở</strong>
             </div>
           </article>
           <article>
-            <span><Icon name="grid" size={20} /></span>
+            <span className="summary-badge green"><Icon name="grid" size={20} /></span>
             <div>
               <small>LỚP ĐANG HOẠT ĐỘNG</small>
               <strong>{totalClasses} lớp</strong>
             </div>
           </article>
           <article>
-            <span><Icon name="students" size={20} /></span>
+            <span className="summary-badge purple"><Icon name="students" size={20} /></span>
             <div>
               <small>HỌC SINH TOÀN TRƯỜNG</small>
               <strong>{totalStudents} học sinh</strong>

@@ -2736,3 +2736,122 @@ input:-webkit-autofill:active {
   color: #ffffff;
   transform: translateY(-1px);
 }
+
+/* Lưới 4 thẻ KPI tổng quan cho trang Đa Trường (/multi-school) & Phân hiệu (/campuses) */
+.classroom-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.classroom-summary-grid > article {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  border-radius: 16px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.05);
+}
+
+.classroom-summary-grid > article > span {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  flex-shrink: 0;
+  border-radius: 13px;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.classroom-summary-grid > article > span.summary-badge.amber {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.classroom-summary-grid > article > span.summary-badge.green {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.classroom-summary-grid > article > span.summary-badge.purple {
+  background: #f3e8ff;
+  color: #7e22ce;
+}
+
+.classroom-summary-grid > article > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.classroom-summary-grid > article small {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #64748b;
+  text-transform: uppercase;
+}
+
+.classroom-summary-grid > article strong {
+  font-size: 20px;
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1.2;
+}
+
+@media (max-width: 1080px) {
+  .classroom-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 580px) {
+  .classroom-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Màn hình hướng dẫn khởi tạo trường đầu tiên khi DB mới tinh */
+.multi-school-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 12px;
+  padding: 48px 24px 54px;
+  margin: 8px 22px 24px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #f8fafc 0%, #eff6ff 100%);
+  border: 1.5px dashed #bfdbfe;
+}
+
+.multi-school-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 60px;
+  height: 60px;
+  border-radius: 18px;
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.multi-school-empty-state h3 {
+  margin: 4px 0 0;
+  font-size: 18px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.multi-school-empty-state p {
+  margin: 0 0 8px;
+  max-width: 540px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #475569;
+}

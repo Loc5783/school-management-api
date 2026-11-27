@@ -1,15 +1,18 @@
 'use strict';
 
 /**
- * @fileoverview Dịch vụ tự động kiểm tra và khởi tạo tài khoản Quản trị viên (`admin`) mặc định khi khởi chạy hệ thống.
+ * @fileoverview Dịch vụ tự động kiểm tra và khởi tạo tài khoản Quản trị Tổng (`admin`) mặc định khi khởi chạy hệ thống.
  *
- * Quy tắc nghiệp vụ:
- * - Khi triển khai lên môi trường mới (Docker, VPS, Cloud) mà trong cơ sở dữ liệu chưa có bất kỳ tài khoản
- *   `role: 'admin'` nào, hệ thống tự động đồng bộ danh mục quyền (`Permission`), đảm bảo có cơ sở trường học
- *   mặc định (`DEFAULT_SCHOOL_CODE`, mặc định `HOANANG-A` ở chế độ SaaS Multi-Tenant) và tạo tài khoản
- *   `admin` / `123456`.
- * - Nếu trong DB đã có ít nhất một tài khoản `admin`, dịch vụ tuyệt đối giữ nguyên (không ghi đè mật khẩu
- *   hay tạo trùng lặp) để bảo vệ mật khẩu đã đổi trên môi trường vận hành thật.
+ * Quy tắc nghiệp vụ thực tế (Multi-School SaaS):
+ * 1. Ở chế độ chuẩn Đa Trường (`useLegacyApp = false`):
+ *    - Hệ thống đồng bộ danh mục 29 quyền nền tảng (`Permission`).
+ *    - Kiểm tra bảng Quản trị Tổng (`PlatformAdmin`): nếu chưa có tài khoản Admin Tổng nào, hệ thống tự động
+ *      khởi tạo tài khoản Admin Tổng mặc định (`username: 'admin'`, mật khẩu `'123456'`, đăng nhập để trống Mã trường).
+ *    - Hệ thống KHÔNG tự tạo sẵn trường học ảo; sau khi đăng nhập bằng tài khoản Admin Tổng (`admin`), người quản trị
+ *      sẽ chủ động khởi tạo từng trường thực tế và cấp tài khoản Admin riêng cho từng trường tại giao diện `/multi-school`
+ *      (trừ khi bật tường minh cờ `AUTO_CREATE_DEFAULT_SCHOOL=true`).
+ * 2. Nếu trong DB đã có tài khoản Admin Tổng (`admin` hoặc tài khoản đã đổi tên/mật khẩu), dịch vụ tuyệt đối giữ nguyên,
+ *    không ghi đè mật khẩu khi khởi động lại máy chủ.
  */
 
 const bcrypt = require('bcryptjs');
@@ -21,13 +24,11 @@ const { generateTotpSecret, encryptTotpSecret } = require('../saas/utils/totpHel
 
 const DEFAULT_ADMIN_USERNAME = 'admin';
 const DEFAULT_ADMIN_PASSWORD = '123456';
-const DEFAULT_SUPERADMIN_USERNAME = 'superadmin';
-const DEFAULT_SUPERADMIN_PASSWORD = '123456';
 const DEFAULT_SCHOOL_CODE = 'HOANANG-A';
 const DEFAULT_SCHOOL_NAME = 'Trường Mầm non Hoa Nắng - Cơ sở A';
 const BCRYPT_SALT_ROUNDS = 10;
 
-// Danh mục đầy đủ 29 quyền chuẩn toàn hệ thống để cấp cho tài khoản admin mặc định
+// Danh mục đầy đủ 29 quyền chuẩn toàn hệ thống để cấp cho các tài khoản quản trị trường
 const DEFAULT_PERMISSIONS_CATALOG = [
   { name: 'system.manage', module: 'system', resource: 'system', action: 'manage', description: 'Quản trị hệ thống' },
   { name: 'user.manage', module: 'system', resource: 'user', action: 'manage', description: 'Quản lý người dùng' },
@@ -83,7 +84,84 @@ const ensureAllPermissions = async () => {
 };
 
 /**
- * Tìm cơ sở trường học hiện có hoặc khởi tạo cơ sở mặc định cho chế độ SaaS Multi-Tenant.
+ * Tạo chuỗi khóa mã hóa TOTP hợp lệ (đủ >= 32 ký tự theo chuẩn AES-256-GCM của `totpHelper`).
+ *
+ * @returns {string}
+ */
+const resolveSafeMfaKey = () => {
+  const rawKey = String(process.env.PLATFORM_MFA_ENCRYPTION_KEY || process.env.JWT_SECRET || '').trim();
+  if (rawKey.length >= 32) {
+    return rawKey;
+  }
+  return rawKey.padEnd(32, '0') || 'default_superadmin_totp_encryption_key_32chars';
+};
+
+/**
+ * Đảm bảo DB luôn có tài khoản Quản trị Tổng Đa Trường (`PlatformAdmin`, mặc định `admin` / `123456`).
+ *
+ * Lưu ý chuyển tiếp an toàn:
+ * - Nếu DB hoàn toàn chưa có `PlatformAdmin` nào -> Tạo `admin` / `123456`.
+ * - Nếu DB chỉ mới có tài khoản `superadmin` tự sinh từ phiên bản trước mà chưa có `admin` -> Tự bổ sung `admin` / `123456`
+ *   để người quản trị đăng nhập ngay bằng tài khoản `admin` (để trống Mã trường) mà không mất dữ liệu cũ.
+ * - Nếu đã có `admin` (hoặc tài khoản Admin Tổng đã đổi tên/mật khẩu) -> Giữ nguyên tuyệt đối, không ghi đè mật khẩu.
+ *
+ * @param {string} adminUsername
+ * @param {string} adminPassword
+ * @returns {Promise<{ created: boolean, username: string }>}
+ */
+const ensureDefaultSuperAdminAccount = async (adminUsername, adminPassword) => {
+  await PlatformAdmin.createIndexes().catch(() => {});
+
+  const existingPlatformAdmins = await PlatformAdmin.find({})
+    .select('_id username role')
+    .lean();
+
+  const hasTargetAdmin = existingPlatformAdmins.some((item) => item.username === adminUsername);
+  const onlyLegacySuperadmin =
+    existingPlatformAdmins.length === 1 &&
+    existingPlatformAdmins[0].username === 'superadmin' &&
+    adminUsername !== 'superadmin';
+
+  // Nếu đã có tài khoản Admin Tổng hợp lệ (ngoài trường hợp chỉ có 'superadmin' cũ) -> Không ghi đè
+  if (existingPlatformAdmins.length > 0 && (hasTargetAdmin || !onlyLegacySuperadmin)) {
+    return {
+      created: false,
+      username: hasTargetAdmin ? adminUsername : existingPlatformAdmins[0].username
+    };
+  }
+
+  const passwordHash = await bcrypt.hash(adminPassword, BCRYPT_SALT_ROUNDS);
+  const encryptedTotp = encryptTotpSecret(generateTotpSecret(), resolveSafeMfaKey());
+  const totpCiphertext = encryptedTotp.encrypted || encryptedTotp.ciphertext || '';
+
+  await PlatformAdmin.findOneAndUpdate(
+    { username: adminUsername },
+    {
+      $setOnInsert: {
+        username: adminUsername,
+        passwordHash,
+        role: 'platform_lead',
+        totpSecret: totpCiphertext,
+        totpSecretIv: encryptedTotp.iv,
+        totpSecretTag: encryptedTotp.tag,
+        status: 'active',
+        authVersion: 0
+      }
+    },
+    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
+  );
+
+  console.log(
+    `✅ [Bootstrap Admin Tổng] Đã sẵn sàng tài khoản Admin Tổng Đa Trường (TK: ${adminUsername} | Mã trường: để trống).`
+  );
+  return {
+    created: true,
+    username: adminUsername
+  };
+};
+
+/**
+ * Tìm cơ sở trường học hiện có hoặc khởi tạo cơ sở mặc định khi bật cờ `AUTO_CREATE_DEFAULT_SCHOOL=true`.
  *
  * @param {string} defaultSchoolCode
  * @param {string} defaultSchoolName
@@ -92,7 +170,6 @@ const ensureAllPermissions = async () => {
 const resolveOrCreateTargetTenant = async (defaultSchoolCode, defaultSchoolName) => {
   await Tenant.createIndexes().catch(() => {});
 
-  // Ưu tiên tìm theo mã trường mặc định trước
   const preferredTenant = await Tenant.findOne({ code: defaultSchoolCode })
     .select('_id code name status')
     .lean();
@@ -100,16 +177,6 @@ const resolveOrCreateTargetTenant = async (defaultSchoolCode, defaultSchoolName)
     return preferredTenant;
   }
 
-  // Nếu DB đã có sẵn một trường đang hoạt động khác thì gắn admin vào trường đó
-  const firstActiveTenant = await Tenant.findOne({ status: 'active' })
-    .sort({ createdAt: 1 })
-    .select('_id code name status')
-    .lean();
-  if (firstActiveTenant) {
-    return firstActiveTenant;
-  }
-
-  // Nếu DB hoàn toàn chưa có trường học nào -> Khởi tạo trường mặc định (upsert chống race-condition)
   const createdTenant = await Tenant.findOneAndUpdate(
     { code: defaultSchoolCode },
     {
@@ -127,86 +194,51 @@ const resolveOrCreateTargetTenant = async (defaultSchoolCode, defaultSchoolName)
 };
 
 /**
- * Tự động tạo tài khoản `admin` (`123456`) nếu kiểm tra thấy DB chưa có tài khoản admin nào.
+ * Khởi tạo tài khoản Quản trị mặc định khi máy chủ bắt đầu.
+ * - SaaS Multi-Tenant (`useLegacyApp = false`): Tạo tài khoản Admin Tổng (`PlatformAdmin`: `admin` / `123456`).
+ *   Các trường học và tài khoản Admin riêng của từng trường sẽ do Admin Tổng chủ động tạo trên giao diện `/multi-school`.
+ * - Legacy đơn trường (`useLegacyApp = true`): Tạo tài khoản `User` (`tenantId: null`, `admin` / `123456`).
  *
  * @param {Object} [options]
- * @param {boolean} [options.useLegacyApp=false] - Chạy ở chế độ Legacy đơn trường (`tenantId: null`) hay SaaS Multi-Tenant
- * @returns {Promise<{ created: boolean, skipped?: boolean, schoolCode?: string | null, username?: string }>}
+ * @param {boolean} [options.useLegacyApp=false]
+ * @param {boolean} [options.autoCreateDefaultSchool]
+ * @returns {Promise<{ created: boolean, skipped?: boolean, isSuperAdmin?: boolean, schoolCode?: string | null, username?: string }>}
  */
-/**
- * Đảm bảo có ít nhất 1 tài khoản Quản trị Tổng Hệ thống Đa Trường (`PlatformAdmin`, mặc định `superadmin` / `123456`)
- * để chủ chuỗi trường đăng nhập quản lý chung toàn bộ các trường và tạo account riêng cho từng trường.
- */
-const ensureDefaultSuperAdminAccount = async () => {
-  if (process.env.AUTO_CREATE_DEFAULT_ADMIN === 'false') return;
-  const count = await PlatformAdmin.countDocuments({});
-  if (count > 0) return;
-
-  await PlatformAdmin.createIndexes().catch(() => {});
-  const username = String(process.env.DEFAULT_SUPERADMIN_USERNAME || DEFAULT_SUPERADMIN_USERNAME).trim();
-  const password = String(process.env.DEFAULT_SUPERADMIN_PASSWORD || DEFAULT_SUPERADMIN_PASSWORD);
-  const passwordHash = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
-  const fallbackMfaKey = process.env.PLATFORM_MFA_ENCRYPTION_KEY || process.env.JWT_SECRET || 'default_superadmin_totp_encryption_key_32chars';
-  const encryptedTotp = encryptTotpSecret(generateTotpSecret(), fallbackMfaKey);
-
-  await PlatformAdmin.findOneAndUpdate(
-    { username },
-    {
-      $setOnInsert: {
-        username,
-        passwordHash,
-        role: 'platform_lead',
-        totpSecret: encryptedTotp.ciphertext,
-        totpSecretIv: encryptedTotp.iv,
-        totpSecretTag: encryptedTotp.tag,
-        status: 'active',
-        authVersion: 0
-      }
-    },
-    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
-  );
-  console.log(`✅ [Bootstrap SuperAdmin] Đã sẵn sàng tài khoản Quản trị Tổng Đa Trường (TK: ${username}).`);
-};
-
 const ensureDefaultAdminAccount = async (options = {}) => {
   if (process.env.AUTO_CREATE_DEFAULT_ADMIN === 'false') {
     return { created: false, skipped: true };
   }
 
   const useLegacyApp = Boolean(options.useLegacyApp ?? (process.env.USE_LEGACY_APP === 'true'));
-  if (!useLegacyApp) {
-    await ensureDefaultSuperAdminAccount().catch((err) => {
-      console.warn('⚠️ [Bootstrap SuperAdmin] Không thể khởi tạo superadmin mặc định:', err.message);
-    });
-  }
-  const adminUsername = String(process.env.DEFAULT_ADMIN_USERNAME || DEFAULT_ADMIN_USERNAME).trim();
-  const adminPassword = String(process.env.DEFAULT_ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD);
-  const defaultSchoolCode = String(process.env.DEFAULT_SCHOOL_CODE || DEFAULT_SCHOOL_CODE).trim().toUpperCase();
-  const defaultSchoolName = String(process.env.DEFAULT_SCHOOL_NAME || DEFAULT_SCHOOL_NAME).trim();
+  const adminUsername = String(
+    process.env.DEFAULT_SUPERADMIN_USERNAME || process.env.DEFAULT_ADMIN_USERNAME || DEFAULT_ADMIN_USERNAME
+  ).trim();
+  const adminPassword = String(
+    process.env.DEFAULT_SUPERADMIN_PASSWORD || process.env.DEFAULT_ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD
+  );
 
-  // Bước 1: Kiểm tra nhanh bằng .lean() xem DB đã có tài khoản admin nào chưa
-  const adminQuery = useLegacyApp
-    ? { tenantId: { $in: [null, undefined] }, role: 'admin' }
-    : { tenantId: { $ne: null }, role: 'admin' };
-
-  const existingAdmin = await User.findOne(adminQuery)
-    .select('_id username tenantId')
-    .lean();
-
-  if (existingAdmin) {
-    return {
-      created: false,
-      username: existingAdmin.username
-    };
-  }
-
-  // Bước 2: Đảm bảo index User và danh mục quyền hệ thống trước khi ghi
-  await User.createIndexes().catch(() => {});
+  // Luôn đồng bộ sẵn danh mục 29 quyền nền tảng để sẵn sàng khi Admin Tổng tạo trường mới
   const permissionIds = await ensureAllPermissions();
-  const passwordHash = await bcrypt.hash(adminPassword, BCRYPT_SALT_ROUNDS);
 
-  // Bước 3A: Chế độ Legacy (không dùng tenantId)
+  // Chế độ 1: Legacy đơn trường (không dùng Multi-Tenant)
   if (useLegacyApp) {
+    await User.createIndexes().catch(() => {});
+
+    const existingLegacyAdmin = await User.findOne({
+      tenantId: { $in: [null, undefined] },
+      role: 'admin'
+    })
+      .select('_id username')
+      .lean();
+
+    if (existingLegacyAdmin) {
+      return {
+        created: false,
+        schoolCode: null,
+        username: existingLegacyAdmin.username
+      };
+    }
+
     const conflictUser = await User.findOne({
       tenantId: { $in: [null, undefined] },
       username: adminUsername
@@ -215,10 +247,13 @@ const ensureDefaultAdminAccount = async (options = {}) => {
       .lean();
 
     if (conflictUser && conflictUser.role !== 'admin') {
-      console.warn(`⚠️ [Bootstrap Admin] Tên đăng nhập "${adminUsername}" đã tồn tại với vai trò "${conflictUser.role}", không thể tự tạo admin mặc định.`);
+      console.warn(
+        `⚠️ [Bootstrap Admin] Tên đăng nhập "${adminUsername}" đã tồn tại với vai trò "${conflictUser.role}", không thể tự tạo admin mặc định.`
+      );
       return { created: false, skipped: true };
     }
 
+    const passwordHash = await bcrypt.hash(adminPassword, BCRYPT_SALT_ROUNDS);
     await User.findOneAndUpdate(
       { tenantId: null, username: adminUsername },
       {
@@ -244,52 +279,59 @@ const ensureDefaultAdminAccount = async (options = {}) => {
     return { created: true, schoolCode: null, username: adminUsername };
   }
 
-  // Bước 3B: Chế độ chuẩn SaaS Multi-Tenant (gắn với cơ sở trường học)
-  const targetTenant = await resolveOrCreateTargetTenant(defaultSchoolCode, defaultSchoolName);
+  // Chế độ 2: Chuẩn SaaS Multi-Tenant — Tự động đảm bảo có tài khoản Admin Tổng (`admin`)
+  const superAdminResult = await ensureDefaultSuperAdminAccount(adminUsername, adminPassword);
 
-  const conflictTenantUser = await User.findOne({
-    tenantId: targetTenant._id,
-    username: adminUsername
-  })
-    .select('_id role')
-    .lean();
-
-  if (conflictTenantUser && conflictTenantUser.role !== 'admin') {
-    console.warn(`⚠️ [Bootstrap Admin] Tên đăng nhập "${adminUsername}" tại trường ${targetTenant.code} đã thuộc vai trò "${conflictTenantUser.role}", bỏ qua tạo tự động.`);
-    return { created: false, skipped: true };
-  }
-
-  await User.findOneAndUpdate(
-    { tenantId: targetTenant._id, username: adminUsername },
-    {
-      $setOnInsert: {
-        tenantId: targetTenant._id,
-        username: adminUsername,
-        passwordHash,
-        role: 'admin',
-        permissions: permissionIds,
-        profile: {
-          fullName: 'Quản trị viên Hệ thống',
-          phone: '0900000000',
-          email: 'admin@hoanang.edu.vn'
-        },
-        status: 'active',
-        authVersion: 0
-      }
-    },
-    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
+  // Chỉ tự tạo sẵn 1 trường mẫu nếu cấu hình yêu cầu tường minh (`AUTO_CREATE_DEFAULT_SCHOOL=true`)
+  const shouldAutoCreateSchool = Boolean(
+    options.autoCreateDefaultSchool ?? (process.env.AUTO_CREATE_DEFAULT_SCHOOL === 'true')
   );
 
-  console.log(`✅ [Bootstrap Admin] DB chưa có admin -> Đã tự động tạo tài khoản quản trị mặc định (Mã trường: ${targetTenant.code} | TK: ${adminUsername}).`);
+  if (shouldAutoCreateSchool) {
+    await User.createIndexes().catch(() => {});
+    const defaultSchoolCode = String(process.env.DEFAULT_SCHOOL_CODE || DEFAULT_SCHOOL_CODE).trim().toUpperCase();
+    const defaultSchoolName = String(process.env.DEFAULT_SCHOOL_NAME || DEFAULT_SCHOOL_NAME).trim();
+    const targetTenant = await resolveOrCreateTargetTenant(defaultSchoolCode, defaultSchoolName);
+
+    const existingSchoolAdmin = await User.findOne({ tenantId: targetTenant._id, role: 'admin' })
+      .select('_id username')
+      .lean();
+
+    if (!existingSchoolAdmin) {
+      const schoolAdminPassHash = await bcrypt.hash(adminPassword, BCRYPT_SALT_ROUNDS);
+      await User.findOneAndUpdate(
+        { tenantId: targetTenant._id, username: adminUsername },
+        {
+          $setOnInsert: {
+            tenantId: targetTenant._id,
+            username: adminUsername,
+            passwordHash: schoolAdminPassHash,
+            role: 'admin',
+            permissions: permissionIds,
+            profile: {
+              fullName: `Quản trị viên ${targetTenant.name}`,
+              phone: '0900000000',
+              email: 'admin@hoanang.edu.vn'
+            },
+            status: 'active',
+            authVersion: 0
+          }
+        },
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
+      );
+    }
+  }
+
   return {
-    created: true,
-    schoolCode: targetTenant.code,
-    username: adminUsername
+    created: superAdminResult.created,
+    isSuperAdmin: true,
+    schoolCode: null,
+    username: superAdminResult.username
   };
 };
 
 module.exports = {
   ensureDefaultAdminAccount,
+  ensureDefaultSuperAdminAccount,
   ensureAllPermissions
 };
-

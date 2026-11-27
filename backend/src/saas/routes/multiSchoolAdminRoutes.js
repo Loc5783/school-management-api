@@ -9,6 +9,7 @@ const {
 const {
   loginSuperAdmin,
   getSuperAdminMe,
+  changeSuperAdminPassword,
   listAllSchoolsOverview,
   createSchoolWithAdmin,
   updateSchoolAndAdmin,
@@ -19,6 +20,7 @@ router.post('/login', loginSuperAdmin);
 
 router.use(platformAuthMiddleware);
 router.get('/me', getSuperAdminMe);
+router.post('/me/password', changeSuperAdminPassword);
 router.get('/schools', listAllSchoolsOverview);
 router.post('/schools', requirePlatformRole(['platform_lead']), createSchoolWithAdmin);
 router.put('/schools/:id', requirePlatformRole(['platform_lead']), updateSchoolAndAdmin);
