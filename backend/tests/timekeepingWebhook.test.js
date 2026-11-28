@@ -38,7 +38,7 @@ describe('Attendance Hikvision Webhook E2E (Bước 1 & Bước 2: Học sinh + 
     delete process.env.TIMEKEEPING_WEBHOOK_TOKEN;
     saasApp = assembleSaasApp({ saasMode: 'phase1e' });
     legacyApp = createApp();
-  });
+  }, 30000);
 
   afterAll(async () => {
     delete process.env.TIMEKEEPING_WEBHOOK_TOKEN;
@@ -46,7 +46,7 @@ describe('Attendance Hikvision Webhook E2E (Bước 1 & Bước 2: Học sinh + 
     if (replSet) {
       await replSet.stop();
     }
-  });
+  }, 30000);
 
   beforeEach(async () => {
     delete process.env.TIMEKEEPING_WEBHOOK_TOKEN;

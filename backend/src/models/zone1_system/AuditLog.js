@@ -78,7 +78,9 @@ const AuditLogSchema = new mongoose.Schema({
       'EVALUATION_PERIOD_OPENED',
       'EVALUATION_PERIOD_CLOSED',
       'SCHOOL_SYSTEM_SETTINGS_UPDATED',
-      'CAMPUS_CONFIG_UPDATED'
+      'CAMPUS_CONFIG_UPDATED',
+      'TIMEKEEPING_DEVICE_MANAGED',
+      'BIOMETRIC_SYNC_EXECUTED'
     ],
     required: true
   },

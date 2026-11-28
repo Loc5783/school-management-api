@@ -1,14 +1,33 @@
 'use strict';
 
+/**
+ * @fileoverview Tầng giao tiếp chuẩn Hikvision ISAPI (HTTP/HTTPS Digest Authentication RFC 2617/7616).
+ * Hỗ trợ:
+ * - Chống SSRF & bảo vệ danh sách IP cấm (`FORBIDDEN_IPS`).
+ * - Quét tự động máy chấm công Hikvision trong mạng LAN nội bộ (`discoverHikvisionDevicesOnLan`).
+ * - Đọc thông tin phần cứng & dung lượng bộ nhớ 500 slot (`getDeviceInfo`, `getDeviceCapacityUsage`).
+ * - Đồng bộ 1 chiều an toàn Nhân sự & Học sinh + Ảnh khuôn mặt `<200KB` (`upsertPersonAndFaceOnDevice`).
+ * - Kéo danh sách người dùng & tải ảnh khuôn mặt gốc từ máy về Web (`fetchAllDeviceUsersWithFaces`, `downloadDeviceFaceBuffer`).
+ * - Giải phóng slot nghỉ việc/thôi học (`deletePersonsFromDevice`) & Mở khóa cửa từ xa (`remoteUnlockDoor`).
+ */
+
 const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
+const os = require('os');
+const net = require('net');
 
 // Strict SSRF IP Validation: Only allow standard private LAN subnets
 const PRIVATE_IPV4_REGEX = /^(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})$/;
+const PRIVATE_SUBNET_PREFIX_REGEX = /^(10\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}|192\.168\.\d{1,3})$/;
 
 // CRITICAL SAFETY GUARD: Specifically forbid device 192.168.1.22
 const FORBIDDEN_IPS = Object.freeze(['192.168.1.22']);
+const MAX_HIKVISION_FACE_BYTES = 200 * 1024; // 200KB hardware limit
+
+// Bộ nhớ đệm Digest Nonce ngắn hạn (90s) theo endpoint giúp giảm 50% số gói tin khứ hồi khi đồng bộ hàng loạt
+const digestChallengeCache = new Map();
+const DIGEST_CACHE_TTL_MS = 90 * 1000;
 
 class HikvisionError extends Error {
   constructor(message, code, statusCode = 500) {
@@ -64,6 +83,7 @@ function validateDeviceHost(host, options = {}) {
 function formatHikvisionTime(dateInput, timezone = 'Asia/Ho_Chi_Minh') {
   const date = dateInput instanceof Date ? dateInput : new Date(dateInput);
   if (isNaN(date.getTime())) return '';
+  void timezone;
   const offsetMinutes = 7 * 60; // Asia/Ho_Chi_Minh is UTC+7
   const localTime = new Date(date.getTime() + offsetMinutes * 60000);
   const yyyy = localTime.getUTCFullYear();
@@ -93,9 +113,6 @@ function parseDigestChallenge(headerValue) {
   return params;
 }
 
-/**
- * Generates MD5 hex hash.
- */
 function md5(str) {
   return crypto.createHash('md5').update(str).digest('hex');
 }
@@ -127,7 +144,7 @@ function buildDigestAuthHeader({ username, password, method, uri, challenge, nc 
   ];
 
   if (qop && qop.toLowerCase().includes('auth')) {
-    parts.push(`qop=auth`);
+    parts.push('qop=auth');
     parts.push(`nc=${ncString}`);
     parts.push(`cnonce="${clientNonce}"`);
   }
@@ -139,9 +156,20 @@ function buildDigestAuthHeader({ username, password, method, uri, challenge, nc 
 }
 
 /**
- * Low-level HTTP/HTTPS request with Digest Authentication and TLS safety.
+ * Low-level HTTP/HTTPS request supporting both UTF-8 text/JSON/XML and binary Buffers (multipart/form-data & JPEG downloads).
  */
-function rawHttpRequest({ protocol, host, port, method, path: reqPath, headers = {}, body = null, timeout = 5000, allowSelfSigned = true }) {
+function rawHttpRequest({
+  protocol,
+  host,
+  port,
+  method,
+  path: reqPath,
+  headers = {},
+  body = null,
+  timeout = 5000,
+  allowSelfSigned = true,
+  responseType = 'text'
+}) {
   return new Promise((resolve, reject) => {
     const isHttps = protocol === 'https:';
     const client = isHttps ? https : http;
@@ -163,19 +191,30 @@ function rawHttpRequest({ protocol, host, port, method, path: reqPath, headers =
       });
     }
 
-    if (body) {
-      const payload = typeof body === 'string' ? body : JSON.stringify(body);
-      options.headers['Content-Length'] = Buffer.byteLength(payload);
+    let payloadBuffer = null;
+    if (body !== null && body !== undefined) {
+      if (Buffer.isBuffer(body)) {
+        payloadBuffer = body;
+      } else if (typeof body === 'string') {
+        payloadBuffer = Buffer.from(body, 'utf8');
+      } else {
+        payloadBuffer = Buffer.from(JSON.stringify(body), 'utf8');
+      }
+      options.headers['Content-Length'] = payloadBuffer.length;
     }
 
     const req = client.request(options, (res) => {
-      let rawData = '';
-      res.on('data', (chunk) => { rawData += chunk; });
+      const chunks = [];
+      res.on('data', (chunk) => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
       res.on('end', () => {
+        const fullBuffer = Buffer.concat(chunks);
         resolve({
           statusCode: res.statusCode,
           headers: res.headers,
-          data: rawData
+          data: responseType === 'buffer' ? fullBuffer : fullBuffer.toString('utf8'),
+          buffer: fullBuffer
         });
       });
     });
@@ -193,9 +232,8 @@ function rawHttpRequest({ protocol, host, port, method, path: reqPath, headers =
       }
     });
 
-    if (body) {
-      const payload = typeof body === 'string' ? body : JSON.stringify(body);
-      req.write(payload);
+    if (payloadBuffer) {
+      req.write(payloadBuffer);
     }
     req.end();
   });
@@ -203,7 +241,6 @@ function rawHttpRequest({ protocol, host, port, method, path: reqPath, headers =
 
 /**
  * Safe recursive XML parser for Hikvision responses without external dependencies.
- * Handles nested tags, repeated sibling items into Arrays, and XML entity escaping.
  */
 function parseXml(xmlText) {
   if (!xmlText || typeof xmlText !== 'string') return {};
@@ -255,9 +292,9 @@ function parseXml(xmlText) {
 }
 
 /**
- * Sends a request with 2-step Digest Authentication and normalized error classification.
+ * Sends a single ISAPI request with 2-step Digest Authentication and normalized error classification.
  */
-async function sendIsapiRequest(deviceConfig, { method = 'GET', path: reqPath, body = null, headers = {} }) {
+async function executeSingleIsapiAttempt(deviceConfig, { method = 'GET', path: reqPath, body = null, headers = {}, responseType = 'text' }) {
   const host = validateDeviceHost(deviceConfig.host, { allowLoopbackInTest: deviceConfig._allowLoopbackForTesting });
   const isHttps = deviceConfig.httpsPort !== 80 && (deviceConfig.useHttps !== false);
   const protocol = isHttps ? 'https:' : 'http:';
@@ -277,7 +314,9 @@ async function sendIsapiRequest(deviceConfig, { method = 'GET', path: reqPath, b
     'User-Agent': 'HoaNang-SchoolManagement/1.0',
     ...headers
   };
-  if (body) {
+
+  const hasExplicitContentType = Object.keys(reqHeaders).some((k) => k.toLowerCase() === 'content-type');
+  if (body !== null && body !== undefined && !Buffer.isBuffer(body) && !hasExplicitContentType) {
     if (typeof body === 'string' && body.trim().startsWith('<')) {
       reqHeaders['Content-Type'] = 'application/xml; charset=UTF-8';
     } else {
@@ -285,7 +324,26 @@ async function sendIsapiRequest(deviceConfig, { method = 'GET', path: reqPath, b
     }
   }
 
-  // Step 1: Initial probe request without auth (or device might challenge with 401)
+  const cacheKey = `${protocol}//${host}:${port}:${username}`;
+  const cachedDigest = digestChallengeCache.get(cacheKey);
+  const nowTs = Date.now();
+  let usedCachedDigest = false;
+
+  if (cachedDigest && nowTs - cachedDigest.updatedAt < DIGEST_CACHE_TTL_MS) {
+    cachedDigest.nc += 1;
+    cachedDigest.updatedAt = nowTs;
+    reqHeaders['Authorization'] = buildDigestAuthHeader({
+      username,
+      password,
+      method,
+      uri: reqPath,
+      challenge: cachedDigest.challenge,
+      nc: cachedDigest.nc
+    });
+    usedCachedDigest = true;
+  }
+
+  // Step 1: Send request (with cached Digest if available, otherwise initial probe)
   let response = await rawHttpRequest({
     protocol,
     host,
@@ -295,11 +353,15 @@ async function sendIsapiRequest(deviceConfig, { method = 'GET', path: reqPath, b
     headers: reqHeaders,
     body,
     timeout,
-    allowSelfSigned
+    allowSelfSigned,
+    responseType
   });
 
-  // Step 2: Handle 401 Digest Challenge
+  // Step 2: Handle 401 Digest Challenge (initial handshake or rotated stale nonce)
   if (response.statusCode === 401) {
+    if (usedCachedDigest) {
+      digestChallengeCache.delete(cacheKey);
+    }
     const authHeader = response.headers['www-authenticate'] || response.headers['WWW-Authenticate'];
     const challenge = parseDigestChallenge(authHeader);
 
@@ -318,7 +380,6 @@ async function sendIsapiRequest(deviceConfig, { method = 'GET', path: reqPath, b
 
     reqHeaders['Authorization'] = digestAuth;
 
-    // Send authenticated request
     response = await rawHttpRequest({
       protocol,
       host,
@@ -328,15 +389,22 @@ async function sendIsapiRequest(deviceConfig, { method = 'GET', path: reqPath, b
       headers: reqHeaders,
       body,
       timeout,
-      allowSelfSigned
+      allowSelfSigned,
+      responseType
     });
 
     if (response.statusCode === 401 || response.statusCode === 403) {
+      digestChallengeCache.delete(cacheKey);
       throw new HikvisionError('Xác thực thiết bị thất bại (Sai username hoặc password)', 'DEVICE_AUTH_FAILED', response.statusCode);
     }
+
+    digestChallengeCache.set(cacheKey, {
+      challenge,
+      nc: 1,
+      updatedAt: Date.now()
+    });
   }
 
-  // Explicit HTTP Status Classification
   if (response.statusCode === 400) {
     throw new HikvisionError('Thiết bị từ chối yêu cầu (Bad Request)', 'DEVICE_BAD_REQUEST', 400);
   }
@@ -353,7 +421,15 @@ async function sendIsapiRequest(deviceConfig, { method = 'GET', path: reqPath, b
     throw new HikvisionError(`Lỗi giao tiếp thiết bị: HTTP ${response.statusCode}`, 'DEVICE_HTTP_ERROR', response.statusCode);
   }
 
-  // Parse payload (try JSON, then XML fallback)
+  if (responseType === 'buffer') {
+    return {
+      statusCode: response.statusCode,
+      headers: response.headers,
+      data: response.buffer,
+      buffer: response.buffer
+    };
+  }
+
   let parsed = null;
   const rawData = response.data || '';
   if (rawData.trim()) {
@@ -370,6 +446,35 @@ async function sendIsapiRequest(deviceConfig, { method = 'GET', path: reqPath, b
     data: parsed,
     rawText: rawData
   };
+}
+
+/**
+ * Sends a request with 2-step Digest Authentication and optional HTTP <-> HTTPS fallback when configured.
+ */
+async function sendIsapiRequest(deviceConfig, reqOptions) {
+  try {
+    return await executeSingleIsapiAttempt(deviceConfig, reqOptions);
+  } catch (primaryErr) {
+    if (
+      deviceConfig.allowProtocolFallback &&
+      (primaryErr.code === 'DEVICE_OFFLINE' || primaryErr.code === 'DEVICE_CONNECTION_ERROR')
+    ) {
+      const currentIsHttps = deviceConfig.httpsPort !== 80 && (deviceConfig.useHttps !== false);
+      const fallbackConfig = {
+        ...deviceConfig,
+        useHttps: !currentIsHttps,
+        httpPort: deviceConfig.httpPort || 80,
+        httpsPort: deviceConfig.httpsPort || 443,
+        allowProtocolFallback: false
+      };
+      try {
+        return await executeSingleIsapiAttempt(fallbackConfig, reqOptions);
+      } catch {
+        throw primaryErr;
+      }
+    }
+    throw primaryErr;
+  }
 }
 
 /**
@@ -395,6 +500,63 @@ async function getDeviceInfo(deviceConfig) {
 }
 
 /**
+ * Đọc số lượng người dùng và khuôn mặt thực tế đang lưu trong máy Hikvision (giới hạn 500 slot/máy).
+ */
+async function getDeviceCapacityUsage(deviceConfig, fallbackMaxCapacity = 500) {
+  let currentStoredUsers = 0;
+  let currentStoredFaces = 0;
+  let maxUserCapacity = Number(fallbackMaxCapacity) || 500;
+
+  try {
+    const countRes = await sendIsapiRequest(deviceConfig, {
+      method: 'GET',
+      path: '/ISAPI/AccessControl/UserInfo/Count?format=json'
+    });
+    const userCount = countRes.data?.UserInfoCount?.userNumber;
+    if (typeof userCount === 'number' || (typeof userCount === 'string' && userCount !== '')) {
+      currentStoredUsers = Number(userCount) || 0;
+    }
+  } catch {
+    // Một số firmware cũ không hỗ trợ endpoint Count
+  }
+
+  try {
+    const faceCountRes = await sendIsapiRequest(deviceConfig, {
+      method: 'GET',
+      path: '/ISAPI/Intelligent/FDLib/Count?format=json'
+    });
+    const faceNum =
+      faceCountRes.data?.FDRecordDataInfo?.[0]?.recordDataNumber ??
+      faceCountRes.data?.FDRecordDataInfo?.recordDataNumber ??
+      faceCountRes.data?.recordDataNumber;
+    if (faceNum !== undefined) {
+      currentStoredFaces = Number(faceNum) || 0;
+    }
+  } catch {
+    // Bỏ qua nếu thiết bị không trả FDLib/Count
+  }
+
+  try {
+    const capRes = await sendIsapiRequest(deviceConfig, {
+      method: 'GET',
+      path: '/ISAPI/AccessControl/UserInfo/capabilities?format=json'
+    });
+    const maxCap = capRes.data?.UserInfo?.maxRecordNum || capRes.data?.maxRecordNum;
+    if (Number(maxCap) > 0) {
+      maxUserCapacity = Number(maxCap);
+    }
+  } catch {
+    // Giữ nguyên fallbackMaxCapacity (500)
+  }
+
+  return {
+    currentStoredUsers,
+    currentStoredFaces,
+    maxUserCapacity
+  };
+}
+
+/**
  * Retrieves access control event capabilities (/ISAPI/AccessControl/AcsEvent/capabilities).
  */
 async function getAcsEventCapabilities(deviceConfig) {
@@ -411,17 +573,6 @@ async function getAcsEventCapabilities(deviceConfig) {
 
 /**
  * Searches access control events via ISAPI (/ISAPI/AccessControl/AcsEvent).
- * Multi-page pagination until all totalMatches are collected or safetyCap is reached.
- *
- * @param {Object} deviceConfig
- * @param {Object} options {
- *   startTime,
- *   endTime,
- *   searchResultPosition = 0,
- *   pageSize = 30,
- *   safetyCap = 1000,
- *   maxPages = 100
- * }
  */
 async function getAcsEvents(deviceConfig, options = {}) {
   const {
@@ -433,7 +584,7 @@ async function getAcsEvents(deviceConfig, options = {}) {
   } = options;
 
   let currentPosition = options.searchResultPosition !== undefined ? Number(options.searchResultPosition) : 0;
-  let allEvents = [];
+  const allEvents = [];
   let totalMatches = 0;
   let lastResponseStatus = 'OK';
   let pageCount = 0;
@@ -444,7 +595,6 @@ async function getAcsEvents(deviceConfig, options = {}) {
 
   while (true) {
     if (seenPositions.has(currentPosition)) {
-      // Loop detected: searchResultPosition has stopped progressing
       break;
     }
     seenPositions.add(currentPosition);
@@ -462,8 +612,7 @@ async function getAcsEvents(deviceConfig, options = {}) {
     }
 
     const limitThisPage = Math.min(pageSize, remainingToCap);
-
-    const searchID = options.searchID || (options.startTime && typeof options.startTime === 'string' && options.startTime.includes('TEST') ? options.startTime : "1");
+    const searchID = options.searchID || (options.startTime && typeof options.startTime === 'string' && options.startTime.includes('TEST') ? options.startTime : '1');
     const requestBody = {
       AcsEventCond: {
         searchID,
@@ -485,7 +634,6 @@ async function getAcsEvents(deviceConfig, options = {}) {
         body: requestBody
       });
     } catch (err) {
-      // If JSON format fails with 400/404, fallback to XML format
       if (err.statusCode === 400 || err.statusCode === 404) {
         const xmlBody = `<?xml version="1.0" encoding="utf-8"?>
 <AcsEventCond xmlns="http://www.isapi.org/ver20/XMLSchema" version="2.0">
@@ -527,7 +675,6 @@ async function getAcsEvents(deviceConfig, options = {}) {
       const eventKey = `${serialNo}-${item.time}-${item.employeeNoString || item.cardNo || ''}`;
 
       if (seenEventKeys.has(eventKey)) {
-        // Repeated event returned by device across pages
         continue;
       }
       seenEventKeys.add(eventKey);
@@ -548,23 +695,19 @@ async function getAcsEvents(deviceConfig, options = {}) {
     }
 
     if (newItemsAddedThisPage === 0) {
-      // Device returned identical duplicate slice, stop pagination
       break;
     }
 
     currentPosition += rawList.length;
 
-    // Check if we reached all totalMatches
     if (totalMatches > 0 && allEvents.length >= totalMatches) {
       break;
     }
 
-    // If device returned fewer than requested limit, no further items exist
     if (rawList.length < limitThisPage) {
       break;
     }
 
-    // If we reached safetyCap
     if (allEvents.length >= safetyCap) {
       if (totalMatches > allEvents.length) {
         truncated = true;
@@ -596,7 +739,7 @@ async function searchPersonInfo(deviceConfig, options = {}) {
 
   const requestBody = {
     UserInfoSearchCond: {
-      searchID: "1",
+      searchID: '1',
       searchResultPosition,
       maxResults
     }
@@ -632,7 +775,637 @@ async function searchPersonInfo(deviceConfig, options = {}) {
   };
 }
 
+/**
+ * Đọc toàn bộ danh sách người dùng và đường dẫn ảnh khuôn mặt (`faceURL`) từ bộ nhớ máy Hikvision
+ * phục vụ tính năng "Kéo Ảnh Khuôn Mặt & Hồ Sơ từ Máy về Web".
+ */
+async function fetchAllDeviceUsersWithFaces(deviceConfig) {
+  const allUsers = [];
+  let searchResultPosition = 0;
+  const maxResults = 30;
+
+  for (let page = 0; page < 30; page += 1) {
+    const res = await sendIsapiRequest(deviceConfig, {
+      method: 'POST',
+      path: '/ISAPI/AccessControl/UserInfo/Search?format=json',
+      body: {
+        UserInfoSearchCond: {
+          searchID: `school_pull_${Date.now()}_${page}`,
+          searchResultPosition,
+          maxResults
+        }
+      }
+    });
+
+    const root = res.data?.UserInfoSearch || res.data || {};
+    let list = root.UserInfo || [];
+    if (!Array.isArray(list)) list = list ? [list] : [];
+
+    for (const u of list) {
+      if (u && u.employeeNo) {
+        allUsers.push({
+          employeeNo: String(u.employeeNo).trim(),
+          name: String(u.name || '').trim(),
+          userType: u.userType || 'normal',
+          numOfCard: Number(u.numOfCard || 0),
+          numOfFP: Number(u.numOfFP || 0),
+          numOfFace: Number(u.numOfFace || 0),
+          faceURL: u.faceURL ? String(u.faceURL).trim() : ''
+        });
+      }
+    }
+
+    const statusStr = String(root.responseStatusStrg || '').toUpperCase();
+    const totalMatches = Number(root.totalMatches || 0);
+    searchResultPosition += list.length;
+
+    if (
+      list.length === 0 ||
+      statusStr === 'OK' ||
+      statusStr === 'NO MATCH' ||
+      (totalMatches > 0 && searchResultPosition >= totalMatches)
+    ) {
+      break;
+    }
+  }
+
+  // Bổ sung tra cứu FDLib cho những người có numOfFace > 0 nhưng firmware không trả kèm faceURL trong UserInfo
+  const missingFaceEmpNos = allUsers
+    .filter((u) => u.numOfFace > 0 && !u.faceURL)
+    .map((u) => u.employeeNo);
+
+  if (missingFaceEmpNos.length > 0) {
+    const faceUrlMap = new Map();
+    let fdPos = 0;
+    for (let page = 0; page < 25; page += 1) {
+      try {
+        const fdRes = await sendIsapiRequest(deviceConfig, {
+          method: 'POST',
+          path: '/ISAPI/Intelligent/FDLib/FDSearch?format=json',
+          body: {
+            searchResultPosition: fdPos,
+            maxResults: 30,
+            faceLibType: 'blackFD',
+            FDID: '1'
+          }
+        });
+        const rawMatches = fdRes.data?.MatchList;
+        const matches = Array.isArray(rawMatches) ? rawMatches : rawMatches ? [rawMatches] : [];
+        for (const m of matches) {
+          const fpid = String(m?.FPID || m?.employeeNo || '').trim();
+          const url = String(m?.faceURL || m?.picURL || '').trim();
+          if (fpid && url) faceUrlMap.set(fpid, url);
+        }
+        const st = String(fdRes.data?.responseStatusStrg || '').toUpperCase();
+        const total = Number(fdRes.data?.totalMatches || 0);
+        fdPos += matches.length;
+        if (matches.length === 0 || st === 'OK' || st === 'NO MATCH' || (total > 0 && fdPos >= total)) {
+          break;
+        }
+      } catch {
+        break;
+      }
+    }
+
+    for (const empNo of missingFaceEmpNos) {
+      if (faceUrlMap.has(empNo)) continue;
+      try {
+        const singleRes = await sendIsapiRequest(deviceConfig, {
+          method: 'POST',
+          path: '/ISAPI/Intelligent/FDLib/FDSearch?format=json',
+          body: {
+            searchResultPosition: 0,
+            maxResults: 5,
+            faceLibType: 'blackFD',
+            FDID: '1',
+            FPID: empNo
+          }
+        });
+        const rawMatches = singleRes.data?.MatchList;
+        const matches = Array.isArray(rawMatches) ? rawMatches : rawMatches ? [rawMatches] : [];
+        const first = matches.find((m) => m?.faceURL || m?.picURL);
+        if (first) {
+          faceUrlMap.set(empNo, String(first.faceURL || first.picURL).trim());
+        }
+      } catch {
+        // Bỏ qua nếu firmware không hỗ trợ tìm đơn lẻ theo FPID
+      }
+    }
+
+    for (const u of allUsers) {
+      if (!u.faceURL && faceUrlMap.has(u.employeeNo)) {
+        u.faceURL = faceUrlMap.get(u.employeeNo);
+      }
+    }
+  }
+
+  return allUsers;
+}
+
+/**
+ * Tải nhị phân ảnh khuôn mặt (JPEG/PNG <= 200KB) từ đường dẫn `faceURL` trên máy Hikvision qua Digest Auth.
+ */
+async function downloadDeviceFaceBuffer(deviceConfig, rawFaceUrl) {
+  if (!rawFaceUrl) return null;
+  const cleanUrl = String(rawFaceUrl).trim();
+  if (!cleanUrl) return null;
+
+  let reqPath = cleanUrl;
+  const targetConfig = { ...deviceConfig };
+
+  if (cleanUrl.startsWith('http://') || cleanUrl.startsWith('https://')) {
+    try {
+      const parsed = new URL(cleanUrl);
+      reqPath = `${parsed.pathname}${parsed.search || ''}`;
+      if (parsed.protocol === 'https:') {
+        targetConfig.useHttps = true;
+        if (parsed.port) targetConfig.httpsPort = Number(parsed.port);
+      } else {
+        targetConfig.useHttps = false;
+        if (parsed.port) targetConfig.httpPort = Number(parsed.port);
+      }
+    } catch {
+      const idx = cleanUrl.indexOf('/', cleanUrl.indexOf('//') + 2);
+      reqPath = idx !== -1 ? cleanUrl.slice(idx) : '/';
+    }
+  } else if (!reqPath.startsWith('/')) {
+    reqPath = `/${reqPath}`;
+  }
+
+  const res = await sendIsapiRequest(targetConfig, {
+    method: 'GET',
+    path: reqPath,
+    responseType: 'buffer'
+  });
+
+  const buf = res.buffer;
+  if (!Buffer.isBuffer(buf) || buf.length < 120 || buf.length > MAX_HIKVISION_FACE_BYTES) {
+    return null;
+  }
+
+  const isJpeg = buf[0] === 0xff && buf[1] === 0xd8;
+  const isPng = buf[0] === 0x89 && buf[1] === 0x50;
+  if (!isJpeg && !isPng) {
+    return null;
+  }
+
+  return {
+    buffer: buf,
+    mimeType: isPng ? 'image/png' : 'image/jpeg',
+    sizeBytes: buf.length
+  };
+}
+
+/**
+ * Đẩy 1 chiều AN TOÀN (Non-Destructive) hồ sơ Nhân sự / Học sinh + Ảnh khuôn mặt (< 200KB) xuống máy Hikvision:
+ * - Nếu mã đã tồn tại trên máy: gọi `PUT /ISAPI/AccessControl/UserInfo/Modify?format=json` để bảo toàn 100% vân tay/thẻ từ/khuôn mặt gốc.
+ * - Nếu chưa có trên máy: gọi `POST /ISAPI/AccessControl/UserInfo/Record?format=json` (fallback sang Modify / SetUp).
+ * - Nếu có `faceBuffer` hợp lệ (<= 200KB): nạp lên thư viện FDLib (`PUT /ISAPI/Intelligent/FDLib/FDSetUp?format=json`).
+ */
+async function upsertPersonAndFaceOnDevice(deviceConfig, { personCode, fullName, faceBuffer = null, existingOnDevice = null }) {
+  const cleanCode = String(personCode || '').trim();
+  if (!cleanCode) {
+    throw new HikvisionError('Thiếu mã chấm công (personCode) khi đồng bộ xuống máy', 'MISSING_PERSON_CODE', 400);
+  }
+
+  const cleanName = String(fullName || cleanCode).trim().slice(0, 64);
+  let foundExisting = existingOnDevice;
+
+  if (!foundExisting) {
+    try {
+      const searchRes = await searchPersonInfo(deviceConfig, {
+        searchResultPosition: 0,
+        maxResults: 1,
+        employeeNoString: cleanCode
+      });
+      foundExisting = searchRes.persons.find((p) => p.employeeNo === cleanCode) || null;
+    } catch {
+      foundExisting = null;
+    }
+  }
+
+  const userInfoPayload = {
+    UserInfo: {
+      employeeNo: cleanCode,
+      name: cleanName,
+      userType: 'normal',
+      Valid: {
+        enable: true,
+        beginTime: '2020-01-01T00:00:00',
+        endTime: '2037-12-31T23:59:59',
+        timeType: 'local'
+      },
+      doorRight: '1',
+      RightPlan: [
+        {
+          doorNo: 1,
+          planTemplateNo: '1'
+        }
+      ]
+    }
+  };
+
+  let userSynced = false;
+  if (foundExisting) {
+    await sendIsapiRequest(deviceConfig, {
+      method: 'PUT',
+      path: '/ISAPI/AccessControl/UserInfo/Modify?format=json',
+      body: userInfoPayload
+    });
+    userSynced = true;
+  } else {
+    const candidateEndpoints = [
+      { method: 'POST', path: '/ISAPI/AccessControl/UserInfo/Record?format=json' },
+      { method: 'PUT', path: '/ISAPI/AccessControl/UserInfo/Modify?format=json' },
+      { method: 'PUT', path: '/ISAPI/AccessControl/UserInfo/SetUp?format=json' }
+    ];
+    let lastErr = null;
+    for (const ep of candidateEndpoints) {
+      try {
+        await sendIsapiRequest(deviceConfig, {
+          method: ep.method,
+          path: ep.path,
+          body: userInfoPayload
+        });
+        userSynced = true;
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (err.code === 'DEVICE_AUTH_FAILED' || err.code === 'DEVICE_OFFLINE' || err.code === 'DEVICE_TIMEOUT') {
+          throw err;
+        }
+      }
+    }
+    if (!userSynced && lastErr) {
+      throw lastErr;
+    }
+  }
+
+  let faceSynced = Boolean(foundExisting && Number(foundExisting.numOfFace) > 0);
+
+  if (userSynced && Buffer.isBuffer(faceBuffer) && faceBuffer.length > 0 && faceBuffer.length <= MAX_HIKVISION_FACE_BYTES) {
+    const boundary = `----HikvisionFaceSyncBoundary${crypto.randomBytes(6).toString('hex')}`;
+    const faceDataJson = JSON.stringify({
+      faceLibType: 'blackFD',
+      FDID: '1',
+      FPID: cleanCode
+    });
+
+    const part1 = Buffer.from(
+      `--${boundary}\r\n` +
+      'Content-Disposition: form-data; name="FaceDataRecord"\r\n' +
+      'Content-Type: application/json\r\n\r\n' +
+      `${faceDataJson}\r\n`,
+      'utf8'
+    );
+    const part2Header = Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="img"; filename="${cleanCode}.jpg"\r\n` +
+      'Content-Type: image/jpeg\r\n\r\n',
+      'utf8'
+    );
+    const closing = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
+    const multipartBody = Buffer.concat([part1, part2Header, faceBuffer, closing]);
+
+    try {
+      await sendIsapiRequest(deviceConfig, {
+        method: 'PUT',
+        path: '/ISAPI/Intelligent/FDLib/FDSetUp?format=json',
+        body: multipartBody,
+        headers: {
+          'Content-Type': `multipart/form-data; boundary=${boundary}`
+        }
+      });
+      faceSynced = true;
+    } catch {
+      try {
+        await sendIsapiRequest(deviceConfig, {
+          method: 'POST',
+          path: '/ISAPI/Intelligent/FDLib/FaceDataRecord?format=json',
+          body: multipartBody,
+          headers: {
+            'Content-Type': `multipart/form-data; boundary=${boundary}`
+          }
+        });
+        faceSynced = true;
+      } catch {
+        // Giữ nguyên trạng thái faceSynced hiện có nếu FDLib từ chối ảnh
+      }
+    }
+  }
+
+  return {
+    success: userSynced,
+    faceSynced,
+    preservedBiometrics: Boolean(foundExisting)
+  };
+}
+
+/**
+ * Xóa danh sách mã chấm công đã nghỉ việc / thôi học khỏi bộ nhớ máy Hikvision để thu hồi slot (giới hạn 500 slot/máy).
+ */
+async function deletePersonsFromDevice(deviceConfig, personCodes = []) {
+  const cleanCodes = (Array.isArray(personCodes) ? personCodes : [personCodes])
+    .map((c) => String(c || '').trim())
+    .filter(Boolean);
+
+  if (cleanCodes.length === 0) {
+    return { success: true, removedCount: 0 };
+  }
+
+  // Hikvision khuyến nghị xóa theo từng lô <= 30 mã/request
+  let totalRemoved = 0;
+  const batchSize = 30;
+  for (let i = 0; i < cleanCodes.length; i += batchSize) {
+    const slice = cleanCodes.slice(i, i + batchSize);
+    await sendIsapiRequest(deviceConfig, {
+      method: 'PUT',
+      path: '/ISAPI/AccessControl/UserInfo/Delete?format=json',
+      body: {
+        UserInfoDelCond: {
+          EmployeeNoList: slice.map((code) => ({ employeeNo: code }))
+        }
+      }
+    });
+    totalRemoved += slice.length;
+  }
+
+  return {
+    success: true,
+    removedCount: totalRemoved
+  };
+}
+
+/**
+ * Điều khiển mở chốt cửa vật lý từ xa (`Door 1`) trên thiết bị Hikvision.
+ */
+async function remoteUnlockDoor(deviceConfig, doorNo = 1) {
+  const safeDoorNo = Math.max(1, Math.min(8, Number(doorNo) || 1));
+  const xmlPayload = '<RemoteControlDoor><cmd>open</cmd></RemoteControlDoor>';
+  await sendIsapiRequest(deviceConfig, {
+    method: 'PUT',
+    path: `/ISAPI/AccessControl/RemoteControl/door/${safeDoorNo}`,
+    body: xmlPayload,
+    headers: { 'Content-Type': 'application/xml; charset=UTF-8' }
+  });
+  return {
+    success: true,
+    doorNo: safeDoorNo
+  };
+}
+
+/**
+ * Kiểm tra nhanh cổng TCP trong mạng LAN khi quét tự động thiết bị Hikvision.
+ */
+function checkTcpPortFast(ip, port = 80, timeoutMs = 300) {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let settled = false;
+    const finish = (ok) => {
+      if (!settled) {
+        settled = true;
+        socket.destroy();
+        resolve(ok);
+      }
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
+    socket.connect(port, ip);
+  });
+}
+
+async function probeHikvisionEndpoint(ip, port = 80) {
+  if (FORBIDDEN_IPS.includes(ip)) return null;
+  try {
+    const protocol = port === 443 ? 'https:' : 'http:';
+    const res = await rawHttpRequest({
+      protocol,
+      host: ip,
+      port,
+      method: 'GET',
+      path: '/ISAPI/System/deviceInfo',
+      timeout: 1000,
+      allowSelfSigned: true
+    });
+    const wwwAuth = String(res.headers?.['www-authenticate'] || '');
+    const serverHeader = String(res.headers?.['server'] || '');
+    const bodyStr = String(res.data || '');
+
+    const isHikvision =
+      (res.statusCode === 401 && wwwAuth.toLowerCase().includes('digest')) ||
+      serverHeader.toLowerCase().includes('hikvision') ||
+      serverHeader.toLowerCase().includes('dnvrs') ||
+      serverHeader.toLowerCase().includes('webs') ||
+      bodyStr.includes('Hikvision') ||
+      bodyStr.includes('DeviceInfo');
+
+    if (!isHikvision) return null;
+
+    const realmMatch = wwwAuth.match(/realm="([^"]+)"/i);
+    return {
+      host: ip,
+      port,
+      transportScheme: port === 443 ? 'https' : 'http',
+      deviceHint: realmMatch?.[1] || serverHeader || 'Hikvision ISAPI Terminal'
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Phân tích đầu vào quét mạng LAN linh hoạt:
+ * Hỗ trợ để trống (tự dò card mạng + subnet các máy đã lưu), prefix 3 cụm (`192.168.1`),
+ * CIDR (`192.168.1.0/24`), dải IP (`192.168.1.10-50` hoặc `192.168.1.10-192.168.1.50`), hoặc 1 IP cụ thể (`192.168.1.8`).
+ */
+function resolveLanScanCandidateIps(subnetPrefix, existingDevices = []) {
+  const candidates = new Set();
+  const scannedLabels = [];
+
+  if (subnetPrefix && String(subnetPrefix).trim()) {
+    const raw = String(subnetPrefix).trim();
+
+    // Dạng CIDR: 192.168.1.0/24
+    const cidrMatch = raw.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}\/\d{1,2}$/);
+    // Dạng dải IP ngắn: 192.168.1.10-50 hoặc đầy đủ: 192.168.1.10-192.168.1.50
+    const rangeMatch = raw.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3})\.(\d{1,3})\s*-\s*(?:\1\.)?(\d{1,3})$/);
+    // Dạng 1 IP lẻ: 192.168.1.8
+    const singleIpMatch = PRIVATE_IPV4_REGEX.test(raw) ? raw : null;
+    // Dạng 3 cụm đầu: 192.168.1 hoặc 192.168.1.*
+    const prefixClean = raw.replace(/\.\*$/, '').replace(/\.$/, '');
+
+    if (cidrMatch && PRIVATE_SUBNET_PREFIX_REGEX.test(cidrMatch[1])) {
+      const p = cidrMatch[1];
+      scannedLabels.push(`${p}.1 - ${p}.254`);
+      for (let i = 1; i <= 254; i += 1) candidates.add(`${p}.${i}`);
+    } else if (rangeMatch && PRIVATE_SUBNET_PREFIX_REGEX.test(rangeMatch[1])) {
+      const p = rangeMatch[1];
+      const start = Math.max(1, Math.min(254, Number(rangeMatch[2])));
+      const end = Math.max(start, Math.min(254, Number(rangeMatch[3])));
+      scannedLabels.push(`${p}.${start} - ${p}.${end}`);
+      for (let i = start; i <= end; i += 1) candidates.add(`${p}.${i}`);
+    } else if (singleIpMatch) {
+      if (FORBIDDEN_IPS.includes(singleIpMatch)) {
+        throw new HikvisionError(
+          `Truy cập IP ${singleIpMatch} bị cấm tuyệt đối theo chính sách an toàn của dự án`,
+          'FORBIDDEN_DEVICE_IP',
+          403
+        );
+      }
+      scannedLabels.push(singleIpMatch);
+      candidates.add(singleIpMatch);
+    } else if (PRIVATE_SUBNET_PREFIX_REGEX.test(prefixClean)) {
+      scannedLabels.push(`${prefixClean}.1 - ${prefixClean}.254`);
+      for (let i = 1; i <= 254; i += 1) candidates.add(`${prefixClean}.${i}`);
+    } else {
+      throw new HikvisionError(
+        'Dải mạng quét LAN không hợp lệ. Hãy nhập dạng 192.168.1, 192.168.1.0/24, 192.168.1.1-50 hoặc IP cụ thể 192.168.1.8',
+        'INVALID_SUBNET_PREFIX',
+        400
+      );
+    }
+  } else {
+    const prefixes = new Set();
+    const interfaces = os.networkInterfaces();
+    for (const ifaceList of Object.values(interfaces)) {
+      for (const iface of ifaceList || []) {
+        if (iface.family === 'IPv4' && !iface.internal && iface.address && PRIVATE_IPV4_REGEX.test(iface.address)) {
+          const parts = iface.address.split('.');
+          prefixes.add(`${parts[0]}.${parts[1]}.${parts[2]}`);
+        }
+      }
+    }
+    // Bổ sung thêm các dải subnet từ những máy chấm công đã từng lưu của trường (hỗ trợ nhiều phân hiệu VLAN)
+    for (const dev of existingDevices) {
+      if (dev?.host && PRIVATE_IPV4_REGEX.test(String(dev.host).trim())) {
+        const parts = String(dev.host).trim().split('.');
+        prefixes.add(`${parts[0]}.${parts[1]}.${parts[2]}`);
+      }
+    }
+    if (prefixes.size === 0) {
+      prefixes.add('192.168.1');
+    }
+    for (const p of prefixes) {
+      scannedLabels.push(`${p}.1 - ${p}.254`);
+      for (let i = 1; i <= 254; i += 1) candidates.add(`${p}.${i}`);
+    }
+  }
+
+  for (const forbidden of FORBIDDEN_IPS) {
+    candidates.delete(forbidden);
+  }
+
+  return {
+    candidateIps: Array.from(candidates),
+    scannedSubnets: scannedLabels
+  };
+}
+
+/**
+ * Quét tự động các máy chấm công Hikvision trong mạng LAN nội bộ (cổng 80, 443, 8080),
+ * hỗ trợ xác thực thử nếu truyền kèm tài khoản/mật khẩu để đọc luôn Model, Serial & Dung lượng 500 slot.
+ */
+async function discoverHikvisionDevicesOnLan({
+  subnetPrefix = null,
+  existingDevices = [],
+  probeUsername = '',
+  probePassword = ''
+} = {}) {
+  const { candidateIps, scannedSubnets } = resolveLanScanCandidateIps(subnetPrefix, existingDevices);
+
+  const openTargets = [];
+  const batchSize = 64;
+  for (let i = 0; i < candidateIps.length; i += batchSize) {
+    const slice = candidateIps.slice(i, i + batchSize);
+    const batchRes = await Promise.all(
+      slice.map(async (ip) => {
+        const [open80, open443, open8080] = await Promise.all([
+          checkTcpPortFast(ip, 80, 260),
+          checkTcpPortFast(ip, 443, 260),
+          checkTcpPortFast(ip, 8080, 260)
+        ]);
+        if (open80) return { ip, port: 80 };
+        if (open443) return { ip, port: 443 };
+        if (open8080) return { ip, port: 8080 };
+        return null;
+      })
+    );
+    for (const item of batchRes) {
+      if (item) openTargets.push(item);
+    }
+  }
+
+  const probed = await Promise.all(
+    openTargets.map(({ ip, port }) => probeHikvisionEndpoint(ip, port))
+  );
+
+  const savedByHost = new Map();
+  for (const dev of existingDevices) {
+    if (dev?.host) {
+      savedByHost.set(String(dev.host).trim(), dev);
+    }
+  }
+
+  const validHits = probed.filter(Boolean);
+
+  const discoveredDevices = await Promise.all(
+    validHits.map(async (item) => {
+      const matched = savedByHost.get(item.host);
+      const enriched = {
+        ...item,
+        model: matched?.model || 'DS-K1T320MX',
+        serialNumber: matched?.serialNumber || '',
+        currentStoredUsers: null,
+        maxUserCapacity: 500,
+        authVerified: false,
+        alreadySaved: Boolean(matched),
+        savedDeviceId: matched?._id ? String(matched._id) : null,
+        savedName: matched?.name || '',
+        savedCampus: matched?.campus || ''
+      };
+
+      // Nếu người dùng nhập sẵn mật khẩu thiết bị khi quét -> Đọc trực tiếp Model, Serial & Dung lượng luôn!
+      if (probePassword && String(probePassword).trim()) {
+        try {
+          const probeCfg = {
+            host: item.host,
+            httpPort: item.transportScheme === 'http' ? item.port : 80,
+            httpsPort: item.transportScheme === 'https' ? item.port : 443,
+            useHttps: item.transportScheme === 'https',
+            username: String(probeUsername || 'admin').trim() || 'admin',
+            password: String(probePassword),
+            timeoutMs: 2500
+          };
+          const [info, cap] = await Promise.all([
+            getDeviceInfo(probeCfg),
+            getDeviceCapacityUsage(probeCfg, 500)
+          ]);
+          if (info.model) enriched.model = info.model;
+          if (info.serialNumber) enriched.serialNumber = info.serialNumber;
+          enriched.currentStoredUsers = cap.currentStoredUsers;
+          enriched.maxUserCapacity = cap.maxUserCapacity || 500;
+          enriched.authVerified = true;
+        } catch {
+          // Vẫn trả về thiết bị quét thấy dù mật khẩu thử chưa khớp
+        }
+      }
+
+      return enriched;
+    })
+  );
+
+  return {
+    scannedSubnets,
+    openTcpCount: openTargets.length,
+    discoveredDevices
+  };
+}
+
 module.exports = {
+  MAX_HIKVISION_FACE_BYTES,
+  FORBIDDEN_IPS,
   HikvisionError,
   validateDeviceHost,
   formatHikvisionTime,
@@ -641,7 +1414,14 @@ module.exports = {
   parseXml,
   sendIsapiRequest,
   getDeviceInfo,
+  getDeviceCapacityUsage,
   getAcsEventCapabilities,
   getAcsEvents,
-  searchPersonInfo
+  searchPersonInfo,
+  fetchAllDeviceUsersWithFaces,
+  downloadDeviceFaceBuffer,
+  upsertPersonAndFaceOnDevice,
+  deletePersonsFromDevice,
+  remoteUnlockDoor,
+  discoverHikvisionDevicesOnLan
 };

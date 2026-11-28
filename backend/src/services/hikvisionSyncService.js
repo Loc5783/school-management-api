@@ -9,6 +9,7 @@ const Tenant = require('../models/zone1_system/Tenant');
 const hikvisionIsapiService = require('./hikvisionIsapiService');
 const { ingestDeviceEvent } = require('./attendanceDeviceService');
 const { DEFAULT_SCHOOL_TIMEZONE, getWorkDate } = require('../utils/dateHelpers');
+const { decryptDeviceCredentials } = require('../utils/deviceCredentialCrypto');
 
 // Fast in-process single-flight lock map
 const activeSyncJobs = new Set();
@@ -68,15 +69,18 @@ async function resolveDeviceCredentials(device) {
 
   const prefix = validateTenantCredentialKey(tenantCode, device.credentialKey);
 
-  const username = process.env[`${prefix}_USERNAME`];
-  const password = process.env[`${prefix}_PASSWORD`];
+  const envUsername = process.env[`${prefix}_USERNAME`];
+  const envPassword = process.env[`${prefix}_PASSWORD`];
   const baseUrl = process.env[`${prefix}_BASE_URL`];
   const allowSelfSignedStr = process.env[`${prefix}_ALLOW_SELF_SIGNED`];
 
+  const tenantIdRef = device.tenantId?._id || device.tenantId;
+  const decrypted = decryptDeviceCredentials(tenantIdRef, device.encryptedAuth);
+
   return {
     prefix,
-    username,
-    password,
+    username: envUsername || decrypted?.username,
+    password: envPassword || decrypted?.password,
     baseUrl,
     allowSelfSigned: allowSelfSignedStr !== 'false'
   };
@@ -87,11 +91,13 @@ async function resolveDeviceCredentials(device) {
  */
 async function buildDeviceConfig(device, overrideCreds = {}) {
   const creds = await resolveDeviceCredentials(device);
+  const preferHttp = device.transportScheme === 'http' || device.httpsPort === 80;
   return {
     host: device.host,
     httpPort: device.httpPort || 80,
     httpsPort: device.httpsPort || 443,
-    useHttps: device.protocol === 'ISAPI' && device.httpsPort !== 80,
+    useHttps: device.protocol === 'ISAPI' && !preferHttp,
+    allowProtocolFallback: Boolean(device.allowProtocolFallback),
     allowSelfSigned: device.allowSelfSigned !== false && creds.allowSelfSigned !== false,
     timeoutMs: device.timeoutMs || 5000,
     username: overrideCreds.username || creds.username,
@@ -381,6 +387,7 @@ async function syncDeviceEvents(device, options = {}) {
           // Mapped Person (Employee or Student)
           const ingestPayload = {
             deviceId: device.deviceCode,
+            deviceObjectId: device._id,
             externalEventId,
             tenantId: device.tenantId,
             externalPersonId,
@@ -390,6 +397,8 @@ async function syncDeviceEvents(device, options = {}) {
             vendorEventCode: String(ev.minor || ''),
             syncBatchId,
             occurredAt,
+            calculateImmediately: true,
+            enableMorningLateCheck: true,
             timezone: device.timezone || DEFAULT_SCHOOL_TIMEZONE,
             rawPayload: {
               major: ev.major,
@@ -419,6 +428,7 @@ async function syncDeviceEvents(device, options = {}) {
           // Unmapped Person: Store safely in RawAttendanceEvent with mappingStatus: UNMAPPED
           const ingestRes = await ingestDeviceEvent({
             deviceId: device.deviceCode,
+            deviceObjectId: device._id,
             externalEventId,
             tenantId: device.tenantId,
             externalPersonId,
@@ -428,8 +438,8 @@ async function syncDeviceEvents(device, options = {}) {
             vendorEventCode: String(ev.minor || ''),
             syncBatchId,
             occurredAt,
-            mappingStatus: 'UNMAPPED',
-            subjectType: 'UNKNOWN',
+            calculateImmediately: true,
+            enableMorningLateCheck: true,
             employeeName: ev.name || `Chưa ánh xạ (${externalPersonId})`,
             timezone: device.timezone || DEFAULT_SCHOOL_TIMEZONE,
             rawPayload: {
@@ -442,8 +452,10 @@ async function syncDeviceEvents(device, options = {}) {
 
           if (ingestRes.duplicate) {
             duplicateCount++;
-          } else {
+          } else if (ingestRes.unmapped || ingestRes.event?.mappingStatus === 'UNMAPPED') {
             unmappedCount++;
+          } else {
+            ingestedCount++;
           }
         }
 

@@ -11,11 +11,13 @@ const Student = require('../models/zone3_school/Student');
 const Tenant = require('../models/zone1_system/Tenant');
 const { testDeviceConnection, syncDeviceEvents } = require('../services/hikvisionSyncService');
 const { validateDeviceHost } = require('../services/hikvisionIsapiService');
+const biometricSyncService = require('../services/hikvisionBiometricSyncService');
 const { ingestStudentDeviceAttendance } = require('../services/attendanceDeviceService');
 const { simulateSchoolWebhookEvent } = require('../services/timekeepingWebhookService');
 const { calculateAttendanceForUserDate } = require('../services/attendanceCalculationService');
 const { createTrustedTenantContext } = require('../services/tenantFilterService');
 const { getWorkDate, DEFAULT_SCHOOL_TIMEZONE } = require('../utils/dateHelpers');
+const { encryptDeviceCredentials } = require('../utils/deviceCredentialCrypto');
 
 /**
  * Enforces authenticated tenant context.
@@ -34,25 +36,29 @@ function assertTenantContext(req) {
 
 /**
  * Helper to sanitize device DTO, stripping secret fields:
- * apiKeyHash, credentialKey, syncLease.
+ * apiKeyHash, credentialKey, syncLease, encryptedAuth.
  * Attaches non-sensitive boolean flags: credentialConfigured, credentialStatus.
  */
 function sanitizeDevice(doc) {
   if (!doc) return null;
   const obj = doc.toObject ? doc.toObject() : { ...doc };
   const prefix = obj.credentialKey;
-  let credentialConfigured = false;
+  let hasEnvCreds = false;
   if (prefix) {
     const username = process.env[`${prefix}_USERNAME`];
     const password = process.env[`${prefix}_PASSWORD`];
-    credentialConfigured = Boolean(username && password);
+    hasEnvCreds = Boolean(username && password);
   }
+  const hasEncryptedDeviceCreds = Boolean(obj.encryptedAuth?.cipherText);
+  const credentialConfigured = hasEnvCreds || hasEncryptedDeviceCreds;
+
   obj.credentialConfigured = credentialConfigured;
   obj.credentialStatus = credentialConfigured ? 'CONFIGURED' : 'MISSING';
 
   delete obj.apiKeyHash;
   delete obj.credentialKey;
   delete obj.syncLease;
+  delete obj.encryptedAuth;
   return obj;
 }
 
@@ -111,7 +117,7 @@ async function listDevices(req, res) {
 }
 
 /**
- * Create a new device registration.
+ * Create a new device registration (supports campus, 500-slot strategy & AES-256-GCM encrypted ISAPI auth).
  */
 async function createDevice(req, res) {
   try {
@@ -119,17 +125,26 @@ async function createDevice(req, res) {
     const {
       deviceCode,
       name,
+      campus = 'Cơ sở chính',
+      location = 'Sảnh đón trẻ',
       vendor = 'HIKVISION',
       model = 'DS-K1T320MX',
       host,
       httpPort = 80,
       httpsPort = 443,
       sdkPort = 8000,
+      transportScheme,
       protocol = 'ISAPI',
       timezone = 'Asia/Ho_Chi_Minh',
       apiKey,
       serialNumber,
-      allowSelfSigned = true
+      allowSelfSigned = true,
+      maxUserCapacity = 500,
+      syncAllocationMode = 'BY_CAMPUS_PRIORITY',
+      syncTargetScope = 'ALL',
+      autoSyncOnChange = true,
+      deviceUsername,
+      devicePassword
     } = req.body;
 
     // Strict contract: Client is NOT allowed to specify or send credentialKey
@@ -184,7 +199,7 @@ async function createDevice(req, res) {
     }
 
     // Hash apiKey if provided
-    let apiKeyHash = undefined;
+    let apiKeyHash;
     if (apiKey && String(apiKey).trim()) {
       apiKeyHash = crypto.createHash('sha256').update(String(apiKey).trim()).digest('hex');
       const keyConflict = await TimekeepingDevice.findOne({ apiKeyHash });
@@ -196,10 +211,23 @@ async function createDevice(req, res) {
       }
     }
 
+    const cleanUsername = String(deviceUsername || 'admin').trim() || 'admin';
+    const encryptedAuth =
+      devicePassword && String(devicePassword).trim()
+        ? encryptDeviceCredentials(tenantId, cleanUsername, String(devicePassword))
+        : undefined;
+
+    const resolvedScheme =
+      transportScheme === 'http' || transportScheme === 'https'
+        ? transportScheme
+        : 'https';
+
     const device = new TimekeepingDevice({
       tenantId,
       deviceCode: String(deviceCode).trim().toUpperCase(),
       name: String(name).trim(),
+      campus: String(campus || 'Cơ sở chính').trim() || 'Cơ sở chính',
+      location: String(location || 'Sảnh đón trẻ').trim(),
       vendor,
       model: String(model).trim(),
       serialNumber: serialNumber ? String(serialNumber).trim() : undefined,
@@ -207,16 +235,39 @@ async function createDevice(req, res) {
       httpPort: Number(httpPort) || 80,
       httpsPort: Number(httpsPort) || 443,
       sdkPort: Number(sdkPort) || 8000,
+      transportScheme: resolvedScheme,
       protocol,
       timezone,
       credentialKey,
+      authUsernameHint: cleanUsername,
+      ...(encryptedAuth ? { encryptedAuth } : {}),
+      maxUserCapacity: Math.max(10, Math.min(50000, Number(maxUserCapacity) || 500)),
+      syncAllocationMode: ['BY_CAMPUS_PRIORITY', 'TODAY_ATTENDANCE_FIRST', 'ALL_ACTIVE'].includes(syncAllocationMode)
+        ? syncAllocationMode
+        : 'BY_CAMPUS_PRIORITY',
+      syncTargetScope: ['ALL', 'EMPLOYEE_ONLY', 'STUDENT_ONLY'].includes(syncTargetScope)
+        ? syncTargetScope
+        : 'ALL',
+      autoSyncOnChange: autoSyncOnChange !== false,
       apiKeyHash,
       allowSelfSigned: Boolean(allowSelfSigned),
       createdBy: req.user?._id
     });
 
     await device.save();
-    return res.status(201).json({ success: true, data: sanitizeDevice(device) });
+
+    // Nếu người dùng nhập luôn mật khẩu ISAPI khi thêm máy -> Tự động kiểm tra dung lượng ngay lập tức (không chặn lưu nếu offline)
+    let health = null;
+    if (encryptedAuth) {
+      health = await biometricSyncService.checkDeviceCapacityAndHealth(tenantId, device._id).catch(() => null);
+    }
+
+    const freshDevice = health ? await TimekeepingDevice.findById(device._id) : device;
+    return res.status(201).json({
+      success: true,
+      data: sanitizeDevice(freshDevice),
+      ...(health ? { health } : {})
+    });
   } catch (err) {
     return res.status(err.statusCode || 500).json({
       success: false,
@@ -287,16 +338,25 @@ async function updateDevice(req, res) {
 
     const {
       name,
+      campus,
+      location,
       model,
       serialNumber,
       host,
       httpPort,
       httpsPort,
       sdkPort,
+      transportScheme,
       enabled,
       timezone,
       apiKey,
-      allowSelfSigned
+      allowSelfSigned,
+      maxUserCapacity,
+      syncAllocationMode,
+      syncTargetScope,
+      autoSyncOnChange,
+      deviceUsername,
+      devicePassword
     } = req.body;
 
     if (host) {
@@ -304,6 +364,8 @@ async function updateDevice(req, res) {
       device.host = host.trim();
     }
     if (name) device.name = String(name).trim();
+    if (campus !== undefined) device.campus = String(campus || 'Cơ sở chính').trim() || 'Cơ sở chính';
+    if (location !== undefined) device.location = String(location || '').trim();
     if (model) device.model = String(model).trim();
     if (serialNumber !== undefined) {
       const cleanSerial = String(serialNumber).trim();
@@ -325,9 +387,35 @@ async function updateDevice(req, res) {
     if (httpPort !== undefined) device.httpPort = Number(httpPort);
     if (httpsPort !== undefined) device.httpsPort = Number(httpsPort);
     if (sdkPort !== undefined) device.sdkPort = Number(sdkPort);
+    if (transportScheme === 'http' || transportScheme === 'https') {
+      device.transportScheme = transportScheme;
+    }
     if (enabled !== undefined) device.enabled = Boolean(enabled);
     if (timezone) device.timezone = timezone;
     if (allowSelfSigned !== undefined) device.allowSelfSigned = Boolean(allowSelfSigned);
+    if (maxUserCapacity !== undefined) {
+      device.maxUserCapacity = Math.max(10, Math.min(50000, Number(maxUserCapacity) || 500));
+    }
+    if (['BY_CAMPUS_PRIORITY', 'TODAY_ATTENDANCE_FIRST', 'ALL_ACTIVE'].includes(syncAllocationMode)) {
+      device.syncAllocationMode = syncAllocationMode;
+    }
+    if (['ALL', 'EMPLOYEE_ONLY', 'STUDENT_ONLY'].includes(syncTargetScope)) {
+      device.syncTargetScope = syncTargetScope;
+    }
+    if (autoSyncOnChange !== undefined) {
+      device.autoSyncOnChange = Boolean(autoSyncOnChange);
+    }
+
+    if (deviceUsername !== undefined) {
+      device.authUsernameHint = String(deviceUsername || 'admin').trim() || 'admin';
+    }
+    if (devicePassword && String(devicePassword).trim()) {
+      device.encryptedAuth = encryptDeviceCredentials(
+        tenantId,
+        device.authUsernameHint || 'admin',
+        String(devicePassword)
+      );
+    }
 
     if (apiKey !== undefined) {
       if (apiKey && String(apiKey).trim()) {
@@ -351,6 +439,33 @@ async function updateDevice(req, res) {
       success: false,
       code: err.code,
       message: err.message || 'Lỗi cập nhật thiết bị'
+    });
+  }
+}
+
+/**
+ * Delete a timekeeping device within current tenant.
+ */
+async function deleteDevice(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'ID thiết bị không hợp lệ' });
+    }
+    const deleted = await TimekeepingDevice.findOneAndDelete({ _id: req.params.id, tenantId });
+    if (!deleted) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy thiết bị trong trường này' });
+    }
+    await AttendanceDevicePersonMapping.deleteMany({ tenantId, deviceId: deleted._id });
+    return res.json({
+      success: true,
+      message: `Đã xóa máy chấm công "${deleted.name}" khỏi phân hiệu ${deleted.campus || 'Cơ sở chính'}`
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      code: err.code || 'DELETE_DEVICE_FAILED',
+      message: err.message || 'Lỗi xóa thiết bị'
     });
   }
 }
@@ -381,7 +496,7 @@ async function testDeviceConn(req, res) {
 }
 
 /**
- * Trigger manual sync job (Admin, Principal).
+ * Trigger manual event sync job (Admin, Principal).
  */
 async function triggerDeviceSync(req, res) {
   try {
@@ -444,7 +559,7 @@ async function listPersonMappings(req, res) {
 }
 
 /**
- * Create or update a person mapping (Admin only).
+ * Create or update a person mapping.
  */
 async function upsertPersonMapping(req, res) {
   try {
@@ -469,13 +584,11 @@ async function upsertPersonMapping(req, res) {
       return res.status(400).json({ success: false, message: 'subjectType phải là EMPLOYEE hoặc STUDENT' });
     }
 
-    // Verify device belongs to this tenant
     const device = await TimekeepingDevice.findOne({ _id: deviceId, tenantId });
     if (!device) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy thiết bị trong trường này' });
     }
 
-    // Tenant boundary verification on target subject
     let verifiedUser = null;
     let verifiedStudent = null;
 
@@ -504,7 +617,6 @@ async function upsertPersonMapping(req, res) {
       }
     }
 
-    // Check conflict: subject mapped to another external ID on this device
     const conflictSubject = await AttendanceDevicePersonMapping.findOne({
       tenantId: device.tenantId,
       deviceId: device._id,
@@ -519,7 +631,6 @@ async function upsertPersonMapping(req, res) {
       });
     }
 
-    // Upsert mapping
     const mapping = await AttendanceDevicePersonMapping.findOneAndUpdate(
       {
         tenantId: device.tenantId,
@@ -543,7 +654,6 @@ async function upsertPersonMapping(req, res) {
       { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
 
-    // Tự động xử lý bù (backfill) các sự kiện UNMAPPED trước đó của mã máy này sang đúng Học sinh / Nhân viên vừa gán
     const cleanExtId = String(externalPersonId).trim();
     const unmappedEvents = await RawAttendanceEvent.find({
       tenantId: device.tenantId,
@@ -630,7 +740,7 @@ async function deletePersonMapping(req, res) {
     }
 
     return res.json({ success: true, message: 'Đã xóa bản ghi ánh xạ' });
-  } catch (err) {
+  } catch {
     return res.status(500).json({ success: false, message: 'Lỗi xóa ánh xạ người' });
   }
 }
@@ -666,7 +776,7 @@ async function getSyncLogs(req, res) {
 }
 
 /**
- * Get unmapped events for this device to help admin map persons easily.
+ * Get unmapped events for this device.
  */
 async function getUnmappedEvents(req, res) {
   try {
@@ -695,8 +805,7 @@ async function getUnmappedEvents(req, res) {
 }
 
 /**
- * Giả lập tín hiệu máy chấm công đẩy về Webhook đuôi `/:schoolCode` của chính trường hiện tại,
- * giúp Admin/Hiệu trưởng kiểm tra tức thì luồng đồng bộ Điểm danh Học sinh & Chấm công Nhân sự.
+ * Giả lập tín hiệu máy chấm công đẩy về Webhook đuôi `/:schoolCode` của chính trường hiện tại.
  */
 async function simulateWebhook(req, res) {
   try {
@@ -740,6 +849,320 @@ async function simulateWebhook(req, res) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// CÁC API ĐỒNG BỘ 1 CHIỀU HIKVISION ISAPI, 500-SLOT & ẢNH KHUÔN MẶT (<200KB) THEO PHÂN HIỆU
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function getBiometricOverview(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const data = await biometricSyncService.getBiometricOverview(tenantId, req.query || {}, sanitizeDevice);
+    return res.json({ success: true, data });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      code: err.code || 'BIOMETRIC_OVERVIEW_FAILED',
+      message: err.message || 'Lỗi tải tổng quan máy chấm công & danh sách khuôn mặt'
+    });
+  }
+}
+
+async function discoverLanDevices(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const result = await biometricSyncService.scanLanDevicesForTenant(tenantId, {
+      subnetPrefix: req.body?.subnetPrefix || null,
+      probeUsername: req.body?.probeUsername || '',
+      probePassword: req.body?.probePassword || ''
+    });
+    return res.json({
+      success: true,
+      data: result,
+      message:
+        result.discoveredDevices.length > 0
+          ? `Đã phát hiện ${result.discoveredDevices.length} thiết bị Hikvision trong mạng LAN!`
+          : `Đã quét dải mạng ${result.scannedSubnets.join(', ')} nhưng chưa phát hiện thiết bị mới.`
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      code: err.code || 'LAN_DISCOVERY_FAILED',
+      message: err.message || 'Không thể quét mạng LAN'
+    });
+  }
+}
+
+async function checkDeviceCapacity(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const health = await biometricSyncService.checkDeviceCapacityAndHealth(tenantId, req.params.id);
+    return res.json({
+      success: Boolean(health.online),
+      data: health,
+      message: health.message
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      code: err.code || 'CAPACITY_CHECK_FAILED',
+      message: err.message || 'Lỗi kiểm tra dung lượng bộ nhớ máy chấm công'
+    });
+  }
+}
+
+async function pullUsersFromDevice(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const overwriteExistingFaces =
+      req.body?.overwriteExistingFaces !== undefined ? Boolean(req.body.overwriteExistingFaces) : true;
+
+    const result = await biometricSyncService.pullUsersAndFacesFromDevice(tenantId, req.params.id, {
+      overwriteExistingFaces,
+      actorId: req.user?._id
+    });
+
+    return res.json({
+      success: true,
+      data: result,
+      message: `Đã kéo từ máy "${result.deviceName}": khớp ${result.matchedCount}/${result.totalOnDevice} hồ sơ, lưu thành công ${result.pulledFaceCount} ảnh khuôn mặt (<200KB) về Web!`
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      code: err.code || 'PULL_DEVICE_USERS_FAILED',
+      message: err.message || 'Lỗi kéo dữ liệu người dùng & khuôn mặt từ máy chấm công'
+    });
+  }
+}
+
+async function pushSmartSyncToDevice(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const report = await biometricSyncService.syncSmartToDevices(tenantId, {
+      deviceId: req.params.id,
+      fastDelta: req.body?.fastDelta !== false,
+      forceFullSync: Boolean(req.body?.forceFullSync),
+      actorId: req.user?._id
+    });
+    const first = report.deviceReports[0] || {};
+    return res.json({
+      success: Boolean(first.success),
+      data: report,
+      message: first.message || 'Đã đồng bộ 1 chiều an toàn xuống máy chấm công!'
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      code: err.code || 'PUSH_SYNC_FAILED',
+      message: err.message || 'Lỗi đồng bộ dữ liệu xuống máy chấm công'
+    });
+  }
+}
+
+async function syncAllDevicesSmart(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const report = await biometricSyncService.syncSmartToDevices(tenantId, {
+      deviceId: req.body?.deviceId || null,
+      campus: req.body?.campus || null,
+      fastDelta: req.body?.fastDelta !== false,
+      forceFullSync: Boolean(req.body?.forceFullSync),
+      actorId: req.user?._id
+    });
+    return res.json({
+      success: true,
+      data: report,
+      message: `Đã đẩy đồng bộ nhanh (tối đa 500 slot/máy) tới ${report.syncedDevices}/${report.totalDevices} máy chấm công!`
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      code: err.code || 'SYNC_ALL_FAILED',
+      message: err.message || 'Lỗi đồng bộ toàn cụm máy chấm công'
+    });
+  }
+}
+
+async function pullAllDevicesFast(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const report = await biometricSyncService.pullAllFromDevices(tenantId, {
+      deviceId: req.body?.deviceId || null,
+      campus: req.body?.campus || null,
+      overwriteExistingFaces: req.body?.overwriteExistingFaces !== undefined ? Boolean(req.body.overwriteExistingFaces) : false,
+      includeEvents: req.body?.includeEvents !== false,
+      actorId: req.user?._id
+    });
+    return res.json({
+      success: report.pulledDevices > 0,
+      data: report,
+      message: `Đã kéo nhanh từ ${report.pulledDevices}/${report.totalDevices} máy về Web: ${report.totalMatchedUsers} hồ sơ khớp, ${report.totalPulledFaces} ảnh mặt, ${report.totalEventsIngested} lượt chấm công/điểm danh mới!`
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      code: err.code || 'PULL_ALL_FAILED',
+      message: err.message || 'Lỗi kéo nhanh dữ liệu từ cụm máy chấm công về Web'
+    });
+  }
+}
+
+async function quickBidirectionalSync(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const deviceId = req.params.id || req.body?.deviceId || null;
+    const report = await biometricSyncService.quickBidirectionalSync(tenantId, {
+      deviceId,
+      campus: req.body?.campus || null,
+      actorId: req.user?._id
+    });
+    const sec = Math.max(0.1, Math.round((report.durationMs / 1000) * 10) / 10);
+    return res.json({
+      success: true,
+      data: report,
+      message: `Đồng bộ nhanh 2 chiều hoàn tất trong ${sec}s! Kéo về: ${report.pullSummary.eventsIngested} lượt chấm công & ${report.pullSummary.pulledFaces} ảnh mặt • Đẩy xuống: ${report.pushSummary.syncedDevices}/${report.pushSummary.totalDevices} máy.`
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      code: err.code || 'BIDIRECTIONAL_SYNC_FAILED',
+      message: err.message || 'Lỗi đồng bộ nhanh 2 chiều với máy chấm công'
+    });
+  }
+}
+
+async function linkPulledDeviceUser(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const result = await biometricSyncService.linkPulledDeviceUserToSubject(tenantId, req.params.id, {
+      externalPersonId: req.body?.externalPersonId,
+      subjectType: req.body?.subjectType,
+      subjectId: req.body?.subjectId,
+      faceDataUrl: req.body?.faceDataUrl || '',
+      actorId: req.user?._id
+    });
+    return res.json({
+      success: true,
+      data: result,
+      message: `Đã ghép mã máy "${result.externalPersonId}" -> "${result.fullName}" (${result.personCode})${result.faceSaved ? ' và lưu luôn ảnh khuôn mặt <200KB' : ''}!`
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      code: err.code || 'LINK_PULLED_USER_FAILED',
+      message: err.message || 'Không thể ghép hồ sơ từ máy chấm công'
+    });
+  }
+}
+
+async function pruneDeviceInactiveSlots(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const result = await biometricSyncService.pruneInactiveUsersOnDevice(tenantId, req.params.id);
+    return res.json({
+      success: true,
+      data: result,
+      message: result.message
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      code: err.code || 'PRUNE_SLOTS_FAILED',
+      message: err.message || 'Lỗi giải phóng slot nghỉ việc/thôi học trên máy'
+    });
+  }
+}
+
+async function unlockDeviceDoor(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const doorNo = Number(req.body?.doorNo) || 1;
+    const result = await biometricSyncService.unlockDoorOnDevice(tenantId, req.params.id, doorNo);
+    return res.json(result);
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      code: err.code || 'UNLOCK_DOOR_FAILED',
+      message: err.message || 'Thiết bị không phản hồi lệnh mở khóa cửa từ xa'
+    });
+  }
+}
+
+async function uploadBiometricFace(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const { subjectType, subjectId } = req.params;
+    const { imageBase64, source = 'UPLOAD' } = req.body || {};
+
+    const saved = await biometricSyncService.saveBiometricFacePhoto({
+      tenantId,
+      subjectType,
+      subjectId,
+      imageBase64,
+      source,
+      actorId: req.user?._id
+    });
+
+    return res.json({
+      success: true,
+      data: saved,
+      message: `Đã lưu ảnh quét mặt chuẩn Hikvision (${saved.sizeKB} KB < 200 KB) cho ${saved.fullName}!`
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      code: err.code || 'UPLOAD_FACE_FAILED',
+      message: err.message || 'Lỗi lưu ảnh khuôn mặt chấm công'
+    });
+  }
+}
+
+async function removeBiometricFace(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const { subjectType, subjectId } = req.params;
+    await biometricSyncService.deleteBiometricFacePhoto({ tenantId, subjectType, subjectId });
+    return res.json({
+      success: true,
+      message: 'Đã xóa ảnh khuôn mặt chấm công trên Web'
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      code: err.code || 'DELETE_FACE_FAILED',
+      message: err.message || 'Lỗi xóa ảnh khuôn mặt chấm công'
+    });
+  }
+}
+
+async function pushSingleBiometricPerson(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const { subjectType, subjectId } = req.params;
+    const result = await biometricSyncService.pushSinglePersonToCampusDevices(tenantId, {
+      subjectType,
+      subjectId,
+      targetDeviceId: req.body?.deviceId || null,
+      actorId: req.user?._id
+    });
+
+    return res.json({
+      success: result.syncedDevices > 0,
+      data: result,
+      message:
+        result.syncedDevices > 0
+          ? `Đã đẩy hồ sơ "${result.fullName}" (${result.personCode}) xuống ${result.syncedDevices}/${result.totalDevices} máy chấm công tại ${result.campus}!`
+          : `Không thể đẩy hồ sơ xuống máy chấm công (${result.results[0]?.message || 'Thiết bị ngoại tuyến'})`
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      code: err.code || 'PUSH_SINGLE_PERSON_FAILED',
+      message: err.message || 'Không thể đẩy hồ sơ xuống máy chấm công'
+    });
+  }
+}
+
 module.exports = {
   assertTenantContext,
   sanitizeDevice,
@@ -747,6 +1170,7 @@ module.exports = {
   createDevice,
   getDeviceById,
   updateDevice,
+  deleteDevice,
   testDeviceConn,
   triggerDeviceSync,
   listPersonMappings,
@@ -754,5 +1178,19 @@ module.exports = {
   deletePersonMapping,
   getSyncLogs,
   getUnmappedEvents,
-  simulateWebhook
+  simulateWebhook,
+  getBiometricOverview,
+  discoverLanDevices,
+  checkDeviceCapacity,
+  pullUsersFromDevice,
+  pushSmartSyncToDevice,
+  syncAllDevicesSmart,
+  pullAllDevicesFast,
+  quickBidirectionalSync,
+  linkPulledDeviceUser,
+  pruneDeviceInactiveSlots,
+  unlockDeviceDoor,
+  uploadBiometricFace,
+  removeBiometricFace,
+  pushSingleBiometricPerson
 };

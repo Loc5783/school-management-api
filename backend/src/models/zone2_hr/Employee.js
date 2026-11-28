@@ -42,6 +42,13 @@ const EmployeeSchema = new mongoose.Schema({
         ref: 'Department'
     },
     departmentName: String,
+    // Phân hiệu / Cơ sở làm việc chính trong trường (hỗ trợ đồng bộ máy chấm công theo từng phân hiệu)
+    campus: {
+        type: String,
+        trim: true,
+        maxlength: 120,
+        default: 'Cơ sở chính'
+    },
     position: {
         type: String,
         enum: ['principal', 'vice_principal', 'head_teacher', 'teacher', 'assistant_teacher', 'accountant', 'chef', 'hr', 'nurse', 'security', 'cleaner'],
@@ -107,5 +114,6 @@ EmployeeSchema.index({ userId: 1 }, { unique: true, sparse: true });
 EmployeeSchema.index({ status: 1 });
 EmployeeSchema.index({ position: 1 });
 EmployeeSchema.index({ payrollRole: 1, status: 1 });
+EmployeeSchema.index({ tenantId: 1, campus: 1, status: 1 });
 
 module.exports = mongoose.model('Employee', EmployeeSchema);

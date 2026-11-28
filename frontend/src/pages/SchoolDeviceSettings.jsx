@@ -2,17 +2,16 @@ import AppShell from '../components/AppShell';
 import TimekeepingDeviceManagement from '../components/TimekeepingDeviceManagement';
 
 /**
- * Trang chuyên biệt cấu hình Thiết bị Máy chấm công ISAPI & Đồng bộ Webhook
- * dành cho Quản trị viên Hệ thống của Trường (`admin`) mà không cần đi vào phân hệ lương HR.
+ * Trang chuyên biệt Quản lý Cụm Máy Chấm Công Hikvision ISAPI, Phân bổ 500 Slot theo Phân hiệu
+ * và Đồng bộ Ảnh Khuôn Mặt Chấm Công (<200KB) dành cho Quản trị viên Hệ thống Trường (`admin`).
  */
 export default function SchoolDeviceSettings() {
   return (
     <AppShell
-      title="Thiết bị Chấm công & Đồng bộ Webhook"
-      subtitle="Cấu hình thiết bị nhận diện khuôn mặt/vân tay ISAPI, ánh xạ mã định danh và kiểm tra luồng đồng bộ Webhook riêng của trường."
+      title="Đồng bộ Máy Chấm Công & Khuôn Mặt Theo Phân Hiệu"
+      subtitle="Quét tự động máy Hikvision trong mạng LAN, quản lý dung lượng 500 slot/máy theo từng cơ sở, chụp/nén ảnh khuôn mặt <200KB và đồng bộ 1 chiều an toàn."
     >
       <TimekeepingDeviceManagement />
     </AppShell>
   );
 }
-

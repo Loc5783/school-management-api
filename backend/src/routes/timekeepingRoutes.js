@@ -64,14 +64,31 @@ router.post('/recalculate/:date', roleCheck(approvalRoles), recalculateAttendanc
 
 router.get('/device-events', roleCheck(approvalRoles), getDeviceEvents);
 
-// Timekeeping Device & Person Mapping Management Endpoints
+// Timekeeping Device, 500-Slot Biometric ISAPI Sync & Person Mapping Management Endpoints
+router.get('/biometric-overview', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.getBiometricOverview);
+router.put('/biometric-faces/:subjectType/:subjectId', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.uploadBiometricFace);
+router.delete('/biometric-faces/:subjectType/:subjectId', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.removeBiometricFace);
+router.post('/biometric-faces/:subjectType/:subjectId/push', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.pushSingleBiometricPerson);
+
 router.get('/devices', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.listDevices);
 router.post('/devices', roleCheck(['admin']), deviceCtrl.createDevice);
+router.post('/devices/discover-lan', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.discoverLanDevices);
+router.post('/devices/sync-all', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.syncAllDevicesSmart);
+router.post('/devices/pull-all', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.pullAllDevicesFast);
+router.post('/devices/quick-bidirectional-sync', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.quickBidirectionalSync);
 router.post('/devices/simulate-webhook', roleCheck(['admin', 'principal']), deviceCtrl.simulateWebhook);
 router.get('/devices-unmapped', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.getUnmappedEvents);
 router.get('/devices/:id', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.getDeviceById);
 router.patch('/devices/:id', roleCheck(['admin']), deviceCtrl.updateDevice);
+router.delete('/devices/:id', roleCheck(['admin']), deviceCtrl.deleteDevice);
 router.post('/devices/:id/test-connection', roleCheck(['admin']), deviceCtrl.testDeviceConn);
+router.post('/devices/:id/check-capacity', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.checkDeviceCapacity);
+router.post('/devices/:id/pull-users', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.pullUsersFromDevice);
+router.post('/devices/:id/link-pulled-user', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.linkPulledDeviceUser);
+router.post('/devices/:id/push-sync', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.pushSmartSyncToDevice);
+router.post('/devices/:id/quick-bidirectional-sync', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.quickBidirectionalSync);
+router.post('/devices/:id/prune-inactive', roleCheck(['admin', 'principal']), deviceCtrl.pruneDeviceInactiveSlots);
+router.post('/devices/:id/unlock-door', roleCheck(['admin', 'principal']), deviceCtrl.unlockDeviceDoor);
 router.post('/devices/:id/sync', roleCheck(['admin', 'principal']), deviceCtrl.triggerDeviceSync);
 router.get('/devices/:id/person-mappings', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.listPersonMappings);
 router.post('/devices/:id/person-mappings', roleCheck(['admin']), deviceCtrl.upsertPersonMapping);

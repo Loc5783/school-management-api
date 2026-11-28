@@ -20,6 +20,20 @@ const TimekeepingDeviceSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  // Phân hiệu / Cơ sở lắp đặt thiết bị trong trường ('ALL' nếu là cổng dùng chung toàn trường)
+  campus: {
+    type: String,
+    trim: true,
+    maxlength: 120,
+    default: 'Cơ sở chính'
+  },
+  // Vị trí vật lý chi tiết tại phân hiệu (VD: Sảnh đón trẻ Tầng 1, Cổng phụ Khu B)
+  location: {
+    type: String,
+    trim: true,
+    maxlength: 160,
+    default: 'Sảnh đón trẻ'
+  },
   vendor: {
     type: String,
     enum: ['HIKVISION', 'GENERIC'],
@@ -33,6 +47,11 @@ const TimekeepingDeviceSchema = new mongoose.Schema({
   serialNumber: {
     type: String,
     trim: true
+  },
+  macAddress: {
+    type: String,
+    trim: true,
+    default: ''
   },
   host: {
     type: String,
@@ -50,6 +69,12 @@ const TimekeepingDeviceSchema = new mongoose.Schema({
   sdkPort: {
     type: Number,
     default: 8000
+  },
+  // Giao thức truyền tải HTTP hoặc HTTPS khi kết nối ISAPI LAN (mặc định https để giữ tương thích ngược với bộ test cũ)
+  transportScheme: {
+    type: String,
+    enum: ['http', 'https'],
+    default: 'https'
   },
   protocol: {
     type: String,
@@ -73,6 +98,46 @@ const TimekeepingDeviceSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  // ─── QUẢN LÝ DUNG LƯỢNG BỘ NHỚ 500 SLOT / MÁY & PHÂN BỔ THEO PHÂN HIỆU ───
+  maxUserCapacity: {
+    type: Number,
+    min: 10,
+    max: 50000,
+    default: 500
+  },
+  currentStoredUsers: {
+    type: Number,
+    default: 0
+  },
+  currentStoredFaces: {
+    type: Number,
+    default: 0
+  },
+  syncAllocationMode: {
+    type: String,
+    enum: ['BY_CAMPUS_PRIORITY', 'TODAY_ATTENDANCE_FIRST', 'ALL_ACTIVE'],
+    default: 'BY_CAMPUS_PRIORITY'
+  },
+  syncTargetScope: {
+    type: String,
+    enum: ['ALL', 'EMPLOYEE_ONLY', 'STUDENT_ONLY'],
+    default: 'ALL'
+  },
+  autoSyncOnChange: {
+    type: Boolean,
+    default: true
+  },
+  lastSyncSummary: {
+    totalTargets: { type: Number, default: 0 },
+    syncedUsers: { type: Number, default: 0 },
+    syncedFaces: { type: Number, default: 0 },
+    syncedStaffCount: { type: Number, default: 0 },
+    syncedStudentCount: { type: Number, default: 0 },
+    prunedInactiveCount: { type: Number, default: 0 },
+    failedCount: { type: Number, default: 0 },
+    message: { type: String, default: '' },
+    syncedAt: { type: Date, default: null }
+  },
   lastSeenAt: {
     type: Date
   },
@@ -90,10 +155,21 @@ const TimekeepingDeviceSchema = new mongoose.Schema({
     trim: true
   },
   // Key name in environment variables, e.g. "HIKVISION_HOANANG_A"
-  // Credentials are NEVER stored directly in MongoDB document.
   credentialKey: {
     type: String,
     trim: true
+  },
+  // Tên tài khoản quản trị máy (hiển thị gợi ý không nhạy cảm, mặc định 'admin')
+  authUsernameHint: {
+    type: String,
+    trim: true,
+    default: 'admin'
+  },
+  // Thông tin xác thực ISAPI được mã hóa AES-256-GCM gắn AAD theo tenantId (tuyệt đối không lộ ra JSON/API)
+  encryptedAuth: {
+    iv: { type: String, default: '' },
+    tag: { type: String, default: '' },
+    cipherText: { type: String, default: '' }
   },
   // Hash of API key if the device pushes data directly to our webhook
   apiKeyHash: {
@@ -130,6 +206,7 @@ const TimekeepingDeviceSchema = new mongoose.Schema({
       delete ret.apiKeyHash;
       delete ret.credentialKey;
       delete ret.syncLease;
+      delete ret.encryptedAuth;
       return ret;
     }
   }
@@ -153,6 +230,7 @@ TimekeepingDeviceSchema.index({ apiKeyHash: 1 }, {
 });
 
 TimekeepingDeviceSchema.index({ tenantId: 1, enabled: 1 });
+TimekeepingDeviceSchema.index({ tenantId: 1, campus: 1 });
 TimekeepingDeviceSchema.index({ tenantId: 1, host: 1 });
 
 module.exports = mongoose.model('TimekeepingDevice', TimekeepingDeviceSchema);
