@@ -530,14 +530,19 @@ function Modal({ title, subtitle, onClose, children }) {
   }, [onClose]);
 
   return createPortal(
-    <div className="asset-modal-backdrop" role="presentation" onClick={(e) => { if (e.target === e.currentTarget && onClose) onClose(); }}>
+    <div className="asset-modal-backdrop" role="presentation">
       <section className="asset-modal" role="dialog" aria-modal="true">
-        <header>
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
           <div>
             <p className="card-kicker">CƠ SỞ VẬT CHẤT</p>
             <h2>{title}</h2>
             <p>{subtitle}</p>
           </div>
+          {onClose && (
+            <button type="button" className="button button-secondary" onClick={onClose}>
+              Đóng
+            </button>
+          )}
         </header>
         {children}
       </section>

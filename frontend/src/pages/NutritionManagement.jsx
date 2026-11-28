@@ -683,22 +683,29 @@ export default function NutritionManagement() {
     }
   };
 
+  const [workflowBusyAction, setWorkflowBusyAction] = useState('');
+
   const handleMenuWorkflow = async (action) => {
-    if (!currentMenu) return;
+    if (!currentMenu || workflowBusyAction) return;
     try {
       let response;
-      if (action === 'submit') response = await submitMenuForApproval(currentMenu._id);
-      if (action === 'approve') response = await approveMenu(currentMenu._id);
       if (action === 'return') {
         const reason = window.prompt('Lý do trả thực đơn để chỉnh sửa:');
         if (!reason?.trim()) return;
+        setWorkflowBusyAction(action);
         response = await returnMenuForRevision(currentMenu._id, { reason });
+      } else {
+        setWorkflowBusyAction(action);
+        if (action === 'submit') response = await submitMenuForApproval(currentMenu._id);
+        if (action === 'approve') response = await approveMenu(currentMenu._id);
+        if (action === 'archive') response = await archiveMenu(currentMenu._id);
       }
-      if (action === 'archive') response = await archiveMenu(currentMenu._id);
       setCurrentMenu(response.data.data);
       showFeedback('success', response.data.message);
     } catch (err) {
       showFeedback('error', err.response?.data?.message || 'Không thể cập nhật trạng thái thực đơn');
+    } finally {
+      setWorkflowBusyAction('');
     }
   };
 
@@ -1227,9 +1234,50 @@ export default function NutritionManagement() {
               <div className="mb-4 bg-white border border-gray-200 rounded-xl p-4 flex flex-wrap gap-3 items-center justify-between">
                 <div className="text-sm"><span className="text-gray-500">Trạng thái: </span><strong>{({ draft: 'Bản nháp', pending_approval: 'Chờ phê duyệt', published: 'Đã công bố', archived: 'Đã lưu trữ' })[currentMenu.status] || currentMenu.status}</strong>{currentMenu.approvalNote && <span className="ml-2 text-xs text-gray-500">— {currentMenu.approvalNote}</span>}</div>
                 <div className="flex gap-2">
-                  {currentMenu.status === 'draft' && canManageMenuContent && <button type="button" onClick={() => handleMenuWorkflow('submit')} className="btn-primary text-xs">Gửi duyệt</button>}
-                  {currentMenu.status === 'pending_approval' && canApproveMenus && <><button type="button" onClick={() => handleMenuWorkflow('approve')} className="btn-primary text-xs">Phê duyệt & công bố</button><button type="button" onClick={() => handleMenuWorkflow('return')} className="btn-secondary text-xs">Trả chỉnh sửa</button></>}
-                  {currentMenu.status === 'published' && canApproveMenus && <button type="button" onClick={() => handleMenuWorkflow('archive')} className="btn-secondary text-xs">Lưu trữ</button>}
+                  {currentMenu.status === 'draft' && canManageMenuContent && (
+                    <button
+                      type="button"
+                      disabled={Boolean(workflowBusyAction)}
+                      aria-busy={workflowBusyAction === 'submit'}
+                      onClick={() => handleMenuWorkflow('submit')}
+                      className="btn-primary text-xs"
+                    >
+                      {workflowBusyAction === 'submit' ? 'Đang gửi duyệt...' : 'Gửi duyệt'}
+                    </button>
+                  )}
+                  {currentMenu.status === 'pending_approval' && canApproveMenus && (
+                    <>
+                      <button
+                        type="button"
+                        disabled={Boolean(workflowBusyAction)}
+                        aria-busy={workflowBusyAction === 'approve'}
+                        onClick={() => handleMenuWorkflow('approve')}
+                        className="btn-primary text-xs"
+                      >
+                        {workflowBusyAction === 'approve' ? 'Đang phê duyệt...' : 'Phê duyệt & công bố'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={Boolean(workflowBusyAction)}
+                        aria-busy={workflowBusyAction === 'return'}
+                        onClick={() => handleMenuWorkflow('return')}
+                        className="btn-secondary text-xs"
+                      >
+                        {workflowBusyAction === 'return' ? 'Đang trả về...' : 'Trả chỉnh sửa'}
+                      </button>
+                    </>
+                  )}
+                  {currentMenu.status === 'published' && canApproveMenus && (
+                    <button
+                      type="button"
+                      disabled={Boolean(workflowBusyAction)}
+                      aria-busy={workflowBusyAction === 'archive'}
+                      onClick={() => handleMenuWorkflow('archive')}
+                      className="btn-secondary text-xs"
+                    >
+                      {workflowBusyAction === 'archive' ? 'Đang lưu trữ...' : 'Lưu trữ'}
+                    </button>
+                  )}
                 </div>
               </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

@@ -17,6 +17,7 @@ import {
   completeConnectorDevicePush,
   configureTimekeepingDeviceWebhook
 } from '../api/timekeeping';
+import { beginTrackedActionNetworkCall } from '../utils/actionProgressGuard';
 
 export const LOCAL_CONNECTOR_BASE_URL = 'http://127.0.0.1:18686';
 export const RECOMMENDED_CONNECTOR_VERSION = '2.2.0';
@@ -36,6 +37,10 @@ let cachedGrant = null;
 async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  const finishProgress = beginTrackedActionNetworkCall({
+    url,
+    method: options.method || 'GET'
+  });
   try {
     const res = await window.fetch(url, {
       ...options,
@@ -48,6 +53,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
     wrapped.isLocalConnectorError = true;
     throw wrapped;
   } finally {
+    finishProgress();
     window.clearTimeout(timer);
   }
 }
@@ -287,26 +293,31 @@ export async function checkCapacityViaLocalConnector(deviceId) {
   });
   const task = prepRes.data?.data;
   const info = await callLocalConnectorPost('/device/inspect', task, 15000);
-  // Đồng bộ thông tin thiết bị (model, serialNumber, dung lượng) lên Server
+  // Đồng bộ thông tin thiết bị (model, serialNumber, dung lượng) lên Server mà KHÔNG xóa bản chụp hồ sơ trên máy
   const syncRes = await ingestConnectorDevicePull(deviceId, {
     deviceInfo: info,
     users: [],
     events: [],
-    overwriteExistingFaces: false
+    overwriteExistingFaces: false,
+    inspectOnly: true
   }).catch(() => null);
 
   return {
     deviceInfo: info,
     message:
       syncRes?.data?.message ||
-      `Máy "${task.device?.name}" đang kết nối tốt trong mạng trường: hiện lưu ${info.currentStoredUsers}/${info.maxUserCapacity || 500} hồ sơ.`
+      `Máy "${task.device?.name}" đang kết nối tốt trong mạng trường: bộ nhớ hiện lưu ${info.currentStoredUsers}/${info.maxUserCapacity || 500} hồ sơ.`
   };
 }
 
 /**
  * Kéo danh sách người dùng + ảnh khuôn mặt (<200KB) + lượt điểm danh từ máy Hikvision trong LAN về Web.
  */
-export async function pullDeviceUsersViaLocalConnector(deviceId, overwriteExistingFaces = true) {
+export async function pullDeviceUsersViaLocalConnector(
+  deviceId,
+  overwriteExistingFaces = true,
+  syncNamesFromDevice = true
+) {
   const prepRes = await prepareConnectorDeviceAction(deviceId, {
     action: 'PULL',
     clientOrigin: window.location.origin
@@ -317,7 +328,8 @@ export async function pullDeviceUsersViaLocalConnector(deviceId, overwriteExisti
     deviceInfo: pulled.deviceInfo,
     users: pulled.users || [],
     events: pulled.events || [],
-    overwriteExistingFaces
+    overwriteExistingFaces,
+    syncNamesFromDevice
   });
   return ingestRes.data;
 }

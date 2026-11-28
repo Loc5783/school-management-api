@@ -32,6 +32,30 @@ const TenantSchema = new mongoose.Schema({
     lowercase: true,
     default: ''
   },
+  contactPhone: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  address: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  representativeName: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  subscriptionPlan: {
+    type: String,
+    enum: ['trial', 'standard', 'professional', 'enterprise'],
+    default: 'professional'
+  },
+  licenseExpiresAt: {
+    type: Date,
+    default: null
+  },
   // Mã hệ thống/cụm trường (ví dụ: 'HOANANG') để nhóm nhiều trường hoặc phân hiệu độc lập
   organizationCode: {
     type: String,

@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axiosConfig';
 import Icon from '../components/Icon';
+import { getHomePathForUser } from '../utils/roleWorkspaceConfig';
 
 export default function Login() {
   const [username, setUsername] = useState('');
@@ -66,17 +67,7 @@ export default function Login() {
         localStorage.removeItem('tenant');
       }
 
-      const homeByRole = {
-        admin: '/campuses',
-        principal: '/principal',
-        teacher: '/dashboard',
-        parent: '/parent-dashboard',
-        guard: '/guard',
-        chef: '/kitchen',
-        accountant: '/accounting',
-        hr: '/hr'
-      };
-      navigate(homeByRole[res.data.user?.role] || '/dashboard');
+      navigate(getHomePathForUser(res.data.user));
     } catch (err) {
       const errCode = err.response?.data?.code;
       if (errCode === 'SCHOOL_CODE_REQUIRED') {

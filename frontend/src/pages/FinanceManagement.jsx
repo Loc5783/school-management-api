@@ -514,15 +514,22 @@ export default function FinanceManagement() {
     }
   };
 
+  const [cancellingId, setCancellingId] = useState('');
+  const [remindingDebts, setRemindingDebts] = useState(false);
+
   const handleCancel = async (invoice) => {
+    if (cancellingId) return;
     const reason = window.prompt(`Nhập lý do hủy hóa đơn của ${invoice.studentName}:`);
     if (reason === null) return;
+    setCancellingId(invoice._id);
     try {
       const res = await cancelInvoice(invoice._id, reason);
       setNotice(res.data.message || 'Đã hủy hóa đơn.');
       await load();
     } catch (err) {
       setError(err.response?.data?.message || 'Không thể hủy hóa đơn.');
+    } finally {
+      setCancellingId('');
     }
   };
 
@@ -537,13 +544,16 @@ export default function FinanceManagement() {
     ].filter(([, amount]) => Number(amount) !== 0);
 
   const remindDebts = async (overdueOnly) => {
-    if (!debtSummary.invoices) return;
+    if (!debtSummary.invoices || remindingDebts) return;
     if (!window.confirm(`Gửi nhắc ${overdueOnly ? 'các khoản quá hạn' : 'toàn bộ công nợ'} kỳ ${filters.period} cho phụ huynh đã liên kết? Mỗi khoản chỉ được nhắc một lần trong ngày.`)) return;
+    setRemindingDebts(true);
     try {
       const res = await sendDebtReminders({ period: filters.period, classroomId: filters.classroomId, overdueOnly });
       setNotice(`${res.data.message}${res.data.data?.unlinkedInvoices ? ` ${res.data.data.unlinkedInvoices} hóa đơn chưa có phụ huynh liên kết nên không gửi được.` : ''}`);
     } catch (err) {
       setError(err.response?.data?.message || 'Không thể gửi nhắc nợ.');
+    } finally {
+      setRemindingDebts(false);
     }
   };
 
@@ -741,7 +751,14 @@ export default function FinanceManagement() {
                               <button className="button button-primary" onClick={() => openPayment(item)}>Thu tiền</button>
                             )}
                             {canCancel && item.status === 'unpaid' && (
-                              <button className="button button-danger" onClick={() => handleCancel(item)}>Hủy</button>
+                              <button
+                                className="button button-danger"
+                                disabled={Boolean(cancellingId)}
+                                aria-busy={cancellingId === item._id}
+                                onClick={() => handleCancel(item)}
+                              >
+                                {cancellingId === item._id ? 'Đang hủy...' : 'Hủy'}
+                              </button>
                             )}
                           </div>
                         </td>
@@ -1060,8 +1077,24 @@ export default function FinanceManagement() {
               <button type="button" className="button button-secondary" onClick={handleExportDebts} disabled={exporting}><Icon name="download" size={16} />{exporting ? 'Đang xuất...' : 'Xuất Excel'}</button>
               {canManageInvoices && (
                 <>
-                  <button className="button button-secondary" onClick={() => remindDebts(false)}>Nhắc toàn bộ</button>
-                  <button className="button button-primary" onClick={() => remindDebts(true)} disabled={!debtSummary.overdueDebt}>Nhắc quá hạn</button>
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    disabled={remindingDebts}
+                    aria-busy={remindingDebts}
+                    onClick={() => remindDebts(false)}
+                  >
+                    {remindingDebts ? 'Đang gửi nhắc...' : 'Nhắc toàn bộ'}
+                  </button>
+                  <button
+                    type="button"
+                    className="button button-primary"
+                    disabled={!debtSummary.overdueDebt || remindingDebts}
+                    aria-busy={remindingDebts}
+                    onClick={() => remindDebts(true)}
+                  >
+                    {remindingDebts ? 'Đang gửi nhắc...' : 'Nhắc quá hạn'}
+                  </button>
                 </>
               )}
             </div>
@@ -1195,8 +1228,14 @@ export default function FinanceManagement() {
         document.body
       )}
 
+      {/* Modal chỉ xem Chi tiết Hóa đơn (không sửa/xóa -> bấm ra ngoài tắt) */}
       {invoiceDetail && createPortal(
-        <div className="modal-backdrop">
+        <div
+          className="modal-backdrop"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setInvoiceDetail(null);
+          }}
+        >
           <section className="content-card student-form finance-invoice-detail">
             <div className="card-heading">
               <div>
@@ -1361,8 +1400,14 @@ export default function FinanceManagement() {
         document.body
       )}
 
+      {/* Modal chỉ xem Biên lai Thu học phí (không sửa/xóa -> bấm ra ngoài tắt) */}
       {receipt && createPortal(
-        <div className="modal-backdrop">
+        <div
+          className="modal-backdrop"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setReceipt(null);
+          }}
+        >
           <section className="content-card student-form finance-receipt">
             <div className="card-heading">
               <div><p className="card-kicker">BIÊN LAI THU HỌC PHÍ</p><h2>{receipt.receiptNumber}</h2></div>

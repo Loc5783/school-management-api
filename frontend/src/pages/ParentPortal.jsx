@@ -854,7 +854,15 @@ export default function ParentPortal() {
           )}
           </>}
           {onlinePaymentInvoice && (
-            <div className="modal-backdrop parent-payment-backdrop" role="dialog" aria-modal="true" aria-labelledby="online-payment-title">
+            <div
+              className="modal-backdrop parent-payment-backdrop"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="online-payment-title"
+              onClick={(e) => {
+                if (e.target === e.currentTarget) setOnlinePaymentInvoice(null);
+              }}
+            >
               <section className="content-card parent-payment-coming-soon">
                 <button type="button" className="parent-payment-close" onClick={() => setOnlinePaymentInvoice(null)} aria-label="Đóng">×</button>
                 <span className="parent-payment-icon"><Icon name="money" size={27} /></span>

@@ -19,6 +19,7 @@
 const bcrypt = require('bcryptjs');
 const Tenant = require('../../models/zone1_system/Tenant');
 const User = require('../../models/zone1_system/User');
+const Employee = require('../../models/zone2_hr/Employee');
 const PlatformAdmin = require('../../models/zone1_system/PlatformAdmin');
 const RevokedSession = require('../../models/zone1_system/RevokedSession');
 const { generateSchoolUserToken, generatePlatformAdminToken } = require('../utils/saasJwt');
@@ -42,6 +43,27 @@ const buildSuperAdminPayload = (platformAdmin) => ({
   }
 });
 
+const resolveEnrichedEmployeeInfo = async (user) => {
+  const baseInfo = user?.employeeInfo?.toObject ? user.employeeInfo.toObject() : (user?.employeeInfo || {});
+  if (!user?._id || user.role === 'parent' || user.role === 'superadmin') {
+    return baseInfo;
+  }
+  const empFilter = user.tenantId ? { userId: user._id, tenantId: user.tenantId } : { userId: user._id, tenantId: null };
+  const linkedEmp = await Employee.findOne(empFilter)
+    .select('employeeCode position campus departmentName')
+    .lean();
+  if (!linkedEmp) {
+    return baseInfo;
+  }
+  return {
+    ...baseInfo,
+    employeeId: linkedEmp.employeeCode || baseInfo.employeeId || '',
+    position: linkedEmp.position || baseInfo.position || '',
+    campus: linkedEmp.campus || baseInfo.campus || '',
+    departmentName: linkedEmp.departmentName || baseInfo.departmentName || ''
+  };
+};
+
 const buildSchoolUserPayload = async (user, tenant) => {
   const settings = await getSystemSettings();
   if (settings.maintenanceMode?.enabled) {
@@ -57,6 +79,8 @@ const buildSchoolUserPayload = async (user, tenant) => {
   } else {
     await User.updateOne({ _id: user._id }, { $set: { lastLogin: user.lastLogin } });
   }
+
+  const employeeInfo = await resolveEnrichedEmployeeInfo(user);
 
   const sessionHours = settings.securityPolicy?.sessionTimeoutHours;
   const expiresIn = Number.isInteger(sessionHours) && sessionHours >= 1 && sessionHours <= 72
@@ -86,6 +110,7 @@ const buildSchoolUserPayload = async (user, tenant) => {
       username: user.username,
       role: user.role,
       profile: user.profile,
+      employeeInfo,
       tenantId: tenant._id,
       schoolCode: tenant.code
     }
@@ -346,6 +371,7 @@ const getMe = async (req, res) => {
   try {
     const user = req.user.toObject ? req.user.toObject() : req.user;
     delete user.passwordHash;
+    user.employeeInfo = await resolveEnrichedEmployeeInfo(user);
 
     const resolvedModules = req.tenant
       ? (req.tenant.config?.moduleGateConfigured

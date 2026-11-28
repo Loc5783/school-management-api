@@ -3,9 +3,11 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 import { PersistentAppShell } from './components/AppShell';
 import Login from './pages/Login';
 import { getStoredSuperAdminUser, getStoredUser } from './utils/storage';
+import { getHomePathForUser, isNonSecuritySupportStaff } from './utils/roleWorkspaceConfig';
 
 // Tách gói tải theo tuyến đường (Route-level Code Splitting) giúp giảm ~75% dung lượng JS tải lần đầu
 const AccountManagement = lazy(() => import('./pages/AccountManagement'));
+const StaffOperationalWorkspace = lazy(() => import('./pages/StaffOperationalWorkspace'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const PrincipalOverview = lazy(() => import('./pages/PrincipalOverview'));
 const AttendanceClassList = lazy(() => import('./pages/AttendanceClassList'));
@@ -52,29 +54,11 @@ const StaffLeaveRequests = lazy(() => import('./pages/StaffLeaveRequests'));
  * Xác định trang chủ chuẩn tương ứng với từng vai trò người dùng để chuyển hướng chính xác,
  * đảm bảo Admin trường vào thẳng Cài đặt Hệ thống Trường & Phân hiệu (/campuses) thay vì màn hình Giám đốc.
  */
-function getRoleHomePath(role) {
-  switch (role) {
-    case 'superadmin':
-      return '/multi-school';
-    case 'admin':
-      return '/campuses';
-    case 'principal':
-      return '/principal';
-    case 'teacher':
-      return '/dashboard';
-    case 'chef':
-      return '/kitchen';
-    case 'accountant':
-      return '/accounting';
-    case 'hr':
-      return '/hr';
-    case 'guard':
-      return '/guard';
-    case 'parent':
-      return '/parent-dashboard';
-    default:
-      return '/login';
+function getRoleHomePath(roleOrUser) {
+  if (roleOrUser && typeof roleOrUser === 'object') {
+    return getHomePathForUser(roleOrUser);
   }
+  return getHomePathForUser(getStoredUser()?.role === roleOrUser ? getStoredUser() : { role: roleOrUser });
 }
 
 function RouteLoadingFallback() {
@@ -191,7 +175,19 @@ function ProfileRequestsRoute({ children }) {
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
   if (user.role === 'admin') return <Navigate to="/accounts?tab=profile-requests" replace />;
   if (user.role === 'principal') return children;
-  return <Navigate to={getRoleHomePath(user.role)} replace />;
+  return <Navigate to={getRoleHomePath(user)} replace />;
+}
+
+/**
+ * Ngăn nhân viên Y tế / Lao công / Kỹ thuật / Tài xế (cùng dùng nhóm role `guard` cho chấm công)
+ * bị mở nhầm vào màn hình Trực cổng QR của Bảo vệ: tự động chuyển sang Không gian Nhân viên riêng.
+ */
+function GuardWorkspaceGate({ children }) {
+  const user = getStoredUser();
+  if (isNonSecuritySupportStaff(user)) {
+    return <Navigate to="/staff-workspace" replace />;
+  }
+  return children;
 }
 
 function App() {
@@ -233,7 +229,17 @@ function App() {
             <Route path="/nutrition" element={<RoleRoute roles={['principal', 'chef', 'teacher', 'parent']}><NutritionManagement /></RoleRoute>} />
             <Route path="/assets" element={<RoleRoute roles={['principal', 'teacher', 'chef', 'accountant']}><AssetManagement /></RoleRoute>} />
             <Route path="/pickups" element={<PickupRoute><PickupManagement /></PickupRoute>} />
-            <Route path="/guard" element={<RoleRoute roles={['guard', 'principal']}><GuardOperations /></RoleRoute>} />
+            <Route
+              path="/guard"
+              element={
+                <RoleRoute roles={['guard', 'principal']}>
+                  <GuardWorkspaceGate>
+                    <GuardOperations />
+                  </GuardWorkspaceGate>
+                </RoleRoute>
+              }
+            />
+            <Route path="/staff-workspace" element={<SalariedStaffRoute><StaffOperationalWorkspace /></SalariedStaffRoute>} />
 
             {/* 5. Tài chính Học phí & Kế toán */}
             <Route path="/accounting" element={<RoleRoute roles={['accountant']}><AccountantDashboard /></RoleRoute>} />

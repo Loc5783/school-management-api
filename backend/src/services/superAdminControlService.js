@@ -41,24 +41,122 @@ const { generateNextPersonCode } = require('./personCodeService');
 const { runSafeTransaction } = require('../utils/safeTransaction');
 
 const ALL_MODULE_DEFINITIONS = [
-  { key: 'students', label: 'Hồ sơ & Y tế Học sinh', required: true },
-  { key: 'classrooms', label: 'Quản lý Lớp & Phân hiệu', required: true },
-  { key: 'attendance', label: 'Điểm danh & Đơn xin nghỉ', required: false },
-  { key: 'pickups', label: 'Đón trả trẻ & Mã QR', required: false },
-  { key: 'guard', label: 'An ninh Trực cổng & Bưu phẩm', required: false },
-  { key: 'nutrition', label: 'Bếp ăn, Thực đơn & Lưu mẫu 24h', required: false },
-  { key: 'finance', label: 'Học phí, Kế toán & Sổ quỹ', required: false },
-  { key: 'hr', label: 'Nhân sự & Bảng lương', required: false },
-  { key: 'timekeeping', label: 'Chấm công & Thiết bị ISAPI', required: false },
-  { key: 'procurement', label: 'Mua sắm & Cơ sở vật chất', required: false },
-  { key: 'feedback', label: 'Phản hồi Phụ huynh & Duyệt hồ sơ', required: false },
-  { key: 'chat', label: 'Tin nhắn Nhà trường – Phụ huynh', required: false },
-  { key: 'notifications', label: 'Thông báo Nội bộ & Nhắc việc', required: false },
-  { key: 'reports', label: 'Báo cáo & Thống kê Điều hành', required: false }
+  {
+    key: 'classrooms',
+    group: 'Lớp học & Học sinh',
+    label: 'Quản lý Lớp học của trường',
+    desc: 'Cho phép trường tự tạo, sửa, xóa lớp học, cấu hình nhóm tuổi, sĩ số & phân công giáo viên đứng lớp',
+    required: false
+  },
+  {
+    key: 'students',
+    group: 'Lớp học & Học sinh',
+    label: 'Quản lý Hồ sơ & Y tế Học sinh',
+    desc: 'Tiếp nhận học sinh mới, nhập Excel, theo dõi dị ứng, sức khỏe & điều chuyển lớp trong trường',
+    required: false
+  },
+  {
+    key: 'attendance',
+    group: 'Lớp học & Học sinh',
+    label: 'Điểm danh Lớp & Đơn xin nghỉ',
+    desc: 'Điểm danh đón/trả trẻ hằng ngày, thống kê vắng mặt & duyệt đơn xin nghỉ phép',
+    required: false
+  },
+  {
+    key: 'daily_care',
+    group: 'Lớp học & Học sinh',
+    label: 'Sổ chăm sóc bé hằng ngày',
+    desc: 'Cập nhật tình hình ăn, ngủ, vệ sinh, nhận xét cuối ngày gửi cho Phụ huynh',
+    required: false
+  },
+  {
+    key: 'pickups',
+    group: 'An ninh, Bán trú & Chấm công',
+    label: 'Đón trả trẻ & Xác thực Mã QR',
+    desc: 'Quản lý người đón hợp lệ, cấp mã QR đón trẻ & đối chiếu an toàn bàn giao',
+    required: false
+  },
+  {
+    key: 'guard',
+    group: 'An ninh, Bán trú & Chấm công',
+    label: 'An ninh Trực cổng & Khách ra vào',
+    desc: 'Sổ trực cổng bảo vệ, ghi nhận khách thăm, giao nhận thực phẩm & sự cố an ninh',
+    required: false
+  },
+  {
+    key: 'nutrition',
+    group: 'An ninh, Bán trú & Chấm công',
+    label: 'Bếp ăn Bán trú, Thực đơn & Lưu mẫu 24h',
+    desc: 'Chốt suất nấu theo điểm danh thực tế, thực đơn tuần, kho thực phẩm & lưu mẫu 24h',
+    required: false
+  },
+  {
+    key: 'timekeeping',
+    group: 'An ninh, Bán trú & Chấm công',
+    label: 'Máy chấm công Khuôn mặt & Cầu nối LAN',
+    desc: 'Kết nối máy chấm công Hikvision tại trường, kéo/đẩy ảnh khuôn mặt 2 chiều & Webhook',
+    required: false
+  },
+  {
+    key: 'accounts',
+    group: 'Nhân sự, Phân quyền & Tài chính',
+    label: 'Cấp phát Tài khoản & Phân quyền nội bộ',
+    desc: 'Cho phép trường tự cấp tài khoản Hiệu trưởng, Giáo viên, Kế toán, HR, Bếp, Nhân viên & Phụ huynh',
+    required: false
+  },
+  {
+    key: 'hr',
+    group: 'Nhân sự, Phân quyền & Tài chính',
+    label: 'Hồ sơ Nhân sự, Phân ca & Bảng lương',
+    desc: 'Quản lý hợp đồng lao động, phân công ca trực/dạy thay, đơn nghỉ phép & tính lương tháng',
+    required: false
+  },
+  {
+    key: 'finance',
+    group: 'Nhân sự, Phân quyền & Tài chính',
+    label: 'Thu Học phí, Kế toán & Sổ quỹ',
+    desc: 'Thiết lập biểu phí, phát hành hóa đơn, gạch nợ, hoàn tiền ăn, chi vận hành & đối soát sổ quỹ',
+    required: false
+  },
+  {
+    key: 'procurement',
+    group: 'Nhân sự, Phân quyền & Tài chính',
+    label: 'Cơ sở vật chất & Mua sắm vật tư',
+    desc: 'Quản lý danh mục tài sản lớp học/bếp, đề xuất mua sắm học cụ & theo dõi bảo trì',
+    required: false
+  },
+  {
+    key: 'reports',
+    group: 'Điều hành Giám đốc & Tương tác Phụ huynh',
+    label: 'Sổ điều hành Giám đốc & Báo cáo tổng hợp',
+    desc: 'Bảng điều hành Hiệu trưởng, giao việc bộ phận, chỉ đạo nội bộ & báo cáo toàn trường',
+    required: false
+  },
+  {
+    key: 'chat',
+    group: 'Điều hành Giám đốc & Tương tác Phụ huynh',
+    label: 'Tin nhắn trực tiếp Giáo viên – Phụ huynh',
+    desc: 'Kênh nhắn tin trao đổi trực tiếp 1-1 giữa giáo viên lớp và phụ huynh học sinh',
+    required: false
+  },
+  {
+    key: 'feedback',
+    group: 'Điều hành Giám đốc & Tương tác Phụ huynh',
+    label: 'Phản hồi Phụ huynh & Duyệt sửa hồ sơ',
+    desc: 'Tiếp nhận góp ý từ phụ huynh và phê duyệt yêu cầu điều chỉnh thông tin học sinh',
+    required: false
+  },
+  {
+    key: 'notifications',
+    group: 'Điều hành Giám đốc & Tương tác Phụ huynh',
+    label: 'Bảng tin & Thông báo Nội bộ trường',
+    desc: 'Đăng thông báo nội bộ toàn trường và gửi nhắc việc qua chuông thông báo thời gian thực',
+    required: false
+  }
 ];
 
 const ALL_ENABLED_MODULES = ALL_MODULE_DEFINITIONS.map((m) => m.key);
-const REQUIRED_CORE_MODULES = ALL_MODULE_DEFINITIONS.filter((m) => m.required).map((m) => m.key);
+const REQUIRED_CORE_MODULES = [];
 
 const SETTINGS_CACHE_TTL_MS = 15 * 1000;
 const DASHBOARD_CACHE_TTL_MS = 5 * 1000;
@@ -109,13 +207,23 @@ const DEFAULT_SYSTEM_SETTINGS = {
  * @param {string[] | undefined} rawModules
  * @returns {string[]}
  */
-const sanitizeEnabledModules = (rawModules) => {
+const sanitizeEnabledModules = (rawModules, { preserveExplicitSelection = false } = {}) => {
   if (!Array.isArray(rawModules)) return [...ALL_ENABLED_MODULES];
   const validSet = new Set(ALL_ENABLED_MODULES);
   const selected = new Set(REQUIRED_CORE_MODULES);
   for (const item of rawModules) {
     const key = String(item || '').trim();
     if (validSet.has(key)) selected.add(key);
+  }
+  // Tương thích ngược cho các trường cũ lưu 14 module trước khi tách riêng 'accounts' & 'daily_care'
+  if (!preserveExplicitSelection) {
+    if (selected.size >= 12 && !rawModules.includes('accounts') && !rawModules.includes('daily_care')) {
+      selected.add('accounts');
+      selected.add('daily_care');
+    }
+  }
+  if (selected.size === 0) {
+    selected.add('students');
   }
   return ALL_ENABLED_MODULES.filter((k) => selected.has(k));
 };
@@ -899,6 +1007,11 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
       name: t.name,
       organizationCode: t.organizationCode || '',
       contactEmail: t.contactEmail || '',
+      contactPhone: t.contactPhone || t.campuses?.[0]?.phone || '',
+      address: t.address || t.campuses?.[0]?.address || '',
+      representativeName: t.representativeName || t.campuses?.[0]?.managerName || '',
+      subscriptionPlan: t.subscriptionPlan || 'professional',
+      licenseExpiresAt: t.licenseExpiresAt || null,
       status: t.status,
       enabledModules,
       moduleGateConfigured: Boolean(t.config?.moduleGateConfigured),

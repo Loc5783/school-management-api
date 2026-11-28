@@ -15,7 +15,26 @@ const text = (value, max, label, required = false) => {
   if ((required && !result) || result.length > max) throw fail(`${label} phải có từ ${required ? 1 : 0} đến ${max} ký tự`);
   return result;
 };
-const positions = new Set(['principal', 'vice_principal', 'head_teacher', 'teacher', 'assistant_teacher', 'accountant', 'chef', 'hr', 'nurse', 'security', 'cleaner']);
+const positions = new Set([
+  'principal',
+  'vice_principal',
+  'youth_leader',
+  'head_teacher',
+  'teacher',
+  'assistant_teacher',
+  'chief_accountant',
+  'accountant',
+  'head_chef',
+  'chef',
+  'kitchen_helper',
+  'hr',
+  'office_admin',
+  'nurse',
+  'security',
+  'cleaner',
+  'maintenance',
+  'driver'
+]);
 const normalizeRequirement = (body) => {
   if (!['degree', 'certificate', 'training', 'health', 'other'].includes(body.category)) throw fail('Loại giấy tờ không hợp lệ');
   if (!Array.isArray(body.positions) || !body.positions.length || body.positions.some((p) => !positions.has(p))) throw fail('Cần chọn ít nhất một vị trí áp dụng hợp lệ');

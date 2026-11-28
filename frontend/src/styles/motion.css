@@ -616,27 +616,150 @@ a:focus-visible {
 }
 
 /* ============================================================================
- * 11. ACCESSIBILITY: PREFERS-REDUCED-MOTION
+ * 11. ACTION BUTTON PROGRESS ANIMATION & ANTI-DOUBLE-CLICK VISUAL SYSTEM
  * ============================================================================
- * Khi người dùng thiết lập prefers-reduced-motion trong hệ điều hành,
- * toàn bộ animations và transforms sẽ bị vô hiệu hóa hoặc thu gọn về 0.01ms.
+ * Mọi nút thực hiện tiến trình (đang gọi API / lưu dữ liệu / đồng bộ / xuất file):
+ * 1. Khóa cứng con trỏ (pointer-events: none) không thể bấm lần 2.
+ * 2. Thay thế icon tĩnh đầu nút bằng vòng xoay tiến trình mượt mà (không giật kích thước).
+ * 3. Hiệu ứng dải sáng tiến trình (shimmer sweep) giúp người dùng biết rõ tác vụ đang chạy.
+ */
+@keyframes hnActionBtnSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes hnActionBtnSweep {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+button[data-hn-net-busy='true'],
+button[data-hn-react-busy='true'],
+button[aria-busy='true'],
+button.is-busy {
+  position: relative !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+  cursor: wait !important;
+  user-select: none !important;
+  opacity: 0.92 !important;
+  transform: none !important;
+}
+
+/* Ẩn icon SVG tĩnh đầu tiên của nút để nhường đúng vị trí cho vòng xoay tiến trình */
+button[data-hn-net-busy='true']:not(:has(.loading-orb, .hik-spinner, .hn-btn-spinner)) > svg:first-child,
+button[data-hn-react-busy='true']:not(:has(.loading-orb, .hik-spinner, .hn-btn-spinner)) > svg:first-child,
+button[aria-busy='true']:not(:has(.loading-orb, .hik-spinner, .hn-btn-spinner)) > svg:first-child,
+button.is-busy:not(:has(.loading-orb, .hik-spinner, .hn-btn-spinner)) > svg:first-child {
+  display: none !important;
+}
+
+/* Vòng xoay tiến trình đồng tâm cho mọi nút đang chạy tác vụ */
+button[data-hn-net-busy='true']:not(:has(.loading-orb, .hik-spinner, .hn-btn-spinner))::before,
+button[data-hn-react-busy='true']:not(:has(.loading-orb, .hik-spinner, .hn-btn-spinner))::before,
+button[aria-busy='true']:not(:has(.loading-orb, .hik-spinner, .hn-btn-spinner))::before,
+button.is-busy:not(:has(.loading-orb, .hik-spinner, .hn-btn-spinner))::before {
+  content: '';
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+  flex-shrink: 0;
+  vertical-align: -2px;
+  border-radius: 50%;
+  border: 2.2px solid currentColor;
+  border-right-color: transparent;
+  animation: hnActionBtnSpin 0.65s linear infinite !important;
+}
+
+.button[data-hn-net-busy='true']::before,
+.button[data-hn-react-busy='true']::before,
+.button[aria-busy='true']::before,
+.btn-primary[data-hn-net-busy='true']::before,
+.btn-primary[data-hn-react-busy='true']::before,
+.btn-primary[aria-busy='true']::before,
+.btn-secondary[data-hn-net-busy='true']::before,
+.btn-secondary[data-hn-react-busy='true']::before,
+.btn-secondary[aria-busy='true']::before,
+.hik-btn[data-hn-net-busy='true']::before,
+.hik-btn[data-hn-react-busy='true']::before,
+.hik-btn[aria-busy='true']::before {
+  margin-right: 0;
+}
+
+/* Dải sáng tiến trình lướt ngang bề mặt nút */
+button[data-hn-net-busy='true']::after,
+button[data-hn-react-busy='true']::after,
+button[aria-busy='true']::after,
+button.is-busy::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    110deg,
+    transparent 20%,
+    rgba(255, 255, 255, 0.34) 48%,
+    transparent 76%
+  );
+  background-size: 220% 100%;
+  animation: hnActionBtnSweep 1.15s ease-in-out infinite;
+}
+
+.button-secondary[data-hn-net-busy='true']::after,
+.button-secondary[data-hn-react-busy='true']::after,
+.button-secondary[aria-busy='true']::after,
+.btn-secondary[data-hn-net-busy='true']::after,
+.btn-secondary[data-hn-react-busy='true']::after,
+.btn-secondary[aria-busy='true']::after,
+.hik-btn-secondary[data-hn-net-busy='true']::after,
+.hik-btn-secondary[data-hn-react-busy='true']::after,
+.hik-btn-secondary[aria-busy='true']::after {
+  background: linear-gradient(
+    110deg,
+    transparent 20%,
+    rgba(37, 99, 235, 0.13) 48%,
+    transparent 76%
+  );
+  background-size: 220% 100%;
+}
+
+/* ============================================================================
+ * 12. ACCESSIBILITY: PREFERS-REDUCED-MOTION
+ * ============================================================================
+ * Thu gọn hiệu ứng trang trí lớn khi hệ điều hành bật prefers-reduced-motion,
+ * NHƯNG BẮT BUỘC giữ nguyên vòng xoay chỉ báo tiến trình chức năng (loading/busy spinner)
+ * để người dùng trên máy tính Windows tắt hiệu ứng cửa sổ vẫn thấy rõ tác vụ đang chạy.
  */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  .stat-card,
+  .quick-action,
+  .sidebar .nav-link,
+  .brand .brand-mark,
+  .button-primary,
+  .button-secondary,
+  .preview-metric-card,
+  .modal-content,
+  .dialog-content,
+  .notification-popover {
     animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
     transform: none !important;
   }
-  .stat-card:hover,
-  .quick-action:hover,
-  .sidebar .nav-link:hover,
-  .brand:hover .brand-mark,
-  .button-primary:hover,
-  .preview-metric-card:hover {
-    transform: none !important;
+
+  .loading-orb,
+  button[data-hn-net-busy='true']::before,
+  button[data-hn-react-busy='true']::before,
+  button[aria-busy='true']::before,
+  button.is-busy::before {
+    animation: hnActionBtnSpin 0.8s linear infinite !important;
   }
 }

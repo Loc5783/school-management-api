@@ -266,9 +266,7 @@ export default function StudentExcelImportModal({ isOpen, onClose, defaultClassr
   const currentPreviewRows = previewRows.slice((previewPage - 1) * pageSize, previewPage * pageSize);
 
   return createPortal(
-    <div className="account-modal-backdrop" role="presentation" onClick={(e) => {
-      if (e.target === e.currentTarget && !confirming && !previewing) onClose();
-    }}>
+    <div className="account-modal-backdrop" role="presentation">
       <div
         className="account-modal-card student-excel-import-dialog"
         role="dialog"

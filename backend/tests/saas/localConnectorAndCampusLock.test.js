@@ -624,7 +624,7 @@ describe('Local LAN Connector (127.0.0.1), Dynamic Domain Ed25519, Campus Serial
     expect(completePush.status).toBe(200);
     expect(completePush.body.message).toContain('Đã đồng bộ thành công');
 
-    // Bổ sung 1 nhân sự có sẵn trên máy phần cứng để kiểm tra luồng KÉO (Pull) về Web
+    // Bổ sung 1 nhân sự đã có trên Web (GV-CA-01) VÀ 1 nhân sự mới chỉ đăng ký trực tiếp trên máy (ID "77" - Co Le Minh Anh)
     mockHardwareUsers.set('GV-CA-01', {
       employeeNo: 'GV-CA-01',
       name: 'Co Pham Thu Ha',
@@ -633,6 +633,15 @@ describe('Local LAN Connector (127.0.0.1), Dynamic Domain Ed25519, Campus Serial
       faceURL: '/LOCALS/pic/GV-CA-01.jpg'
     });
     mockHardwareFaces.set('GV-CA-01', createValidTinyJpegBuffer(520));
+
+    mockHardwareUsers.set('77', {
+      employeeNo: '77',
+      name: 'Co Le Minh Anh',
+      userType: 'normal',
+      numOfFace: 1,
+      faceURL: '/LOCALS/pic/77.jpg'
+    });
+    mockHardwareFaces.set('77', createValidTinyJpegBuffer(610));
 
     const prepPull = await request(app)
       .post(`/api/v1/timekeeping/devices/${lockedDeviceAId}/connector-prepare`)
@@ -654,7 +663,7 @@ describe('Local LAN Connector (127.0.0.1), Dynamic Domain Ed25519, Campus Serial
       }
     });
     expect(connectorPull.status).toBe(200);
-    expect(connectorPull.body.data.users.length).toBeGreaterThanOrEqual(2);
+    expect(connectorPull.body.data.users.length).toBeGreaterThanOrEqual(3);
     expect(connectorPull.body.data.events.length).toBe(1);
 
     const ingestPull = await request(app)
@@ -663,6 +672,37 @@ describe('Local LAN Connector (127.0.0.1), Dynamic Domain Ed25519, Campus Serial
       .send(connectorPull.body.data);
     expect(ingestPull.status).toBe(200);
     expect(ingestPull.body.data.pulledFaceCount).toBeGreaterThanOrEqual(1);
+
+    // Kiểm tra biometric-overview trả về đầy đủ danh sách hồ sơ đang lưu trong máy (deviceStoredPeople)
+    const overviewBeforeImport = await request(app)
+      .get('/api/v1/timekeeping/biometric-overview')
+      .set('Authorization', `Bearer ${tokenCampusAdminA}`);
+    expect(overviewBeforeImport.status).toBe(200);
+    const stored77 = overviewBeforeImport.body.data.deviceStoredPeople.find((x) => x.externalPersonId === '77');
+    expect(stored77).toBeTruthy();
+    expect(stored77.nameOnDevice).toBe('Co Le Minh Anh');
+    expect(stored77.faceDataUrl).toContain('data:image/jpeg;base64,');
+    expect(stored77.isMatchedOnWeb).toBe(false);
+
+    // Bấm 1 chạm "Lấy Ảnh & Tên từ máy về Web" cho ID "77" -> Tự động lưu cả Họ tên + Ảnh khuôn mặt vào danh sách Web!
+    const importRes = await request(app)
+      .post(`/api/v1/timekeeping/devices/${lockedDeviceAId}/import-to-web`)
+      .set('Authorization', `Bearer ${tokenCampusAdminA}`)
+      .send({ externalPersonIds: ['77'] });
+    expect(importRes.status).toBe(200);
+    expect(importRes.body.data.importedNewCount).toBe(1);
+    expect(importRes.body.data.savedFacesCount).toBe(1);
+
+    const overviewAfterImport = await request(app)
+      .get('/api/v1/timekeeping/biometric-overview')
+      .set('Authorization', `Bearer ${tokenCampusAdminA}`);
+    expect(overviewAfterImport.status).toBe(200);
+    const stored77After = overviewAfterImport.body.data.deviceStoredPeople.find((x) => x.externalPersonId === '77');
+    expect(stored77After.isMatchedOnWeb).toBe(true);
+    const importedInRoster = overviewAfterImport.body.data.roster.find((x) => x.fullName === 'Co Le Minh Anh');
+    expect(importedInRoster).toBeTruthy();
+    expect(importedInRoster.hasBiometricFace).toBe(true);
+    expect(importedInRoster.isOnDevice).toBe(true);
     expect(ingestPull.body.data.eventsIngested).toBe(1);
 
     const attRecord = await StudentAttendance.findOne({ tenantId: tenantA._id, studentId: studentA._id }).lean();

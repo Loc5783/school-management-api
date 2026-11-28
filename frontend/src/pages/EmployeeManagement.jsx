@@ -34,13 +34,22 @@ const salaryInMonth = (form) => Number(form.baseSalary || 0) * (form.salaryUnit 
 const positionText = {
   principal: 'Hiệu trưởng',
   vice_principal: 'Phó hiệu trưởng',
-  teacher: 'Giáo viên',
+  youth_leader: 'Tổng phụ trách',
+  teacher: 'Giáo viên chủ nhiệm',
   head_teacher: 'Tổ trưởng chuyên môn',
-  assistant_teacher: 'Trợ giảng',
-  accountant: 'Kế toán',
-  chef: 'Nhân viên bếp',
+  assistant_teacher: 'Giáo viên phụ lớp / Bảo mẫu',
+  chief_accountant: 'Kế toán trưởng',
+  accountant: 'Kế toán học phí',
+  head_chef: 'Trưởng bếp bán trú',
+  chef: 'Đầu bếp chính',
+  kitchen_helper: 'Phụ bếp / Cấp dưỡng',
   hr: 'Nhân sự (HR)',
-  security: 'Bảo vệ'
+  office_admin: 'Hành chính - Văn thư',
+  security: 'Bảo vệ & An ninh',
+  nurse: 'Nhân viên Y tế',
+  cleaner: 'Lao công / Tạp vụ',
+  maintenance: 'Kỹ thuật / Bảo trì',
+  driver: 'Tài xế đưa đón'
 };
 
 const roleText = {
@@ -798,13 +807,6 @@ export default function EmployeeManagement() {
         <div
           className="account-modal-backdrop"
           role="presentation"
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !saving) {
-              setShowForm(false);
-              setEditingEmployee(null);
-              setForm(emptyEmployeeForm);
-            }
-          }}
         >
           <form className="account-modal-card student-form hr-modal" style={{ width: 'min(740px, 100%)' }} onSubmit={submitEmployee}>
             <div className="account-modal-header">

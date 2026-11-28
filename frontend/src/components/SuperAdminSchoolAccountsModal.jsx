@@ -285,9 +285,6 @@ export default function SuperAdminSchoolAccountsModal({ school, onClose, onChang
     <div
       className="account-modal-backdrop"
       role="presentation"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && !submitting) onClose?.();
-      }}
     >
       <div
         className="account-modal-card sa-school-accounts-modal"

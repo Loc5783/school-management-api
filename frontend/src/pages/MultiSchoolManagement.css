@@ -48,12 +48,35 @@
   flex-shrink: 0;
 }
 
-.superadmin-kpi-icon.blue { background: #dbeafe; color: #1d4ed8; }
-.superadmin-kpi-icon.amber { background: #fef3c7; color: #b45309; }
-.superadmin-kpi-icon.green { background: #dcfce7; color: #15803d; }
-.superadmin-kpi-icon.purple { background: #ede9fe; color: #6d28d9; }
-.superadmin-kpi-icon.rose { background: #ffe4e6; color: #be123c; }
-.superadmin-kpi-icon.teal { background: #ccfbf1; color: #0f766e; }
+.superadmin-kpi-icon.blue {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.superadmin-kpi-icon.amber {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.superadmin-kpi-icon.green {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.superadmin-kpi-icon.purple {
+  background: #ede9fe;
+  color: #6d28d9;
+}
+
+.superadmin-kpi-icon.rose {
+  background: #ffe4e6;
+  color: #be123c;
+}
+
+.superadmin-kpi-icon.teal {
+  background: #ccfbf1;
+  color: #0f766e;
+}
 
 .superadmin-kpi-body {
   min-width: 0;
@@ -147,10 +170,21 @@
   transition: width 0.25s ease;
 }
 
-.superadmin-progress-fill.blue { background: #2563eb; }
-.superadmin-progress-fill.green { background: #16a34a; }
-.superadmin-progress-fill.amber { background: #d97706; }
-.superadmin-progress-fill.rose { background: #e11d48; }
+.superadmin-progress-fill.blue {
+  background: #2563eb;
+}
+
+.superadmin-progress-fill.green {
+  background: #16a34a;
+}
+
+.superadmin-progress-fill.amber {
+  background: #d97706;
+}
+
+.superadmin-progress-fill.rose {
+  background: #e11d48;
+}
 
 .superadmin-alert-list {
   display: flex;
@@ -188,29 +222,333 @@
 }
 
 /* ============================================================================
- * Lưới chọn Phân hệ Module trong Modal Tạo/Sửa Trường (Đã fix thẳng hàng Checkbox)
+ * Lưới chọn Phân hệ & Quyền Quản lý trong Modal Tạo/Sửa Trường (Chia nhóm rõ ràng)
  * ============================================================================ */
+.sa-modal-wide {
+  width: min(940px, 96vw) !important;
+  max-height: calc(100dvh - 32px) !important;
+}
+
+.sa-form-section-card {
+  padding: 16px 18px;
+  border-radius: 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  display: grid;
+  gap: 12px;
+}
+
+.sa-form-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.sa-form-section-head strong {
+  font-size: 13px;
+  font-weight: 800;
+  color: #0f172a;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.sa-form-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.sa-form-grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 860px) {
+
+  .sa-form-grid-3,
+  .sa-form-grid-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+
+  .sa-form-grid-3,
+  .sa-form-grid-4 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sa-preset-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+}
+
+.sa-preset-btn {
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #334155;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sa-preset-btn:hover {
+  border-color: #3b82f6;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.sa-module-group-block {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+}
+
+.sa-module-group-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 9px;
+  font-size: 12px;
+  font-weight: 800;
+  color: #1e3a8a;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
 .superadmin-module-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(225px, 1fr));
-  gap: 10px;
-  margin-top: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  margin-top: 6px;
+}
+
+@media (max-width: 680px) {
+  .superadmin-module-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .superadmin-module-Option {
   display: flex !important;
-  align-items: center !important;
+  flex-direction: row !important;
+  align-items: flex-start !important;
+  justify-content: flex-start !important;
   gap: 10px;
-  min-height: 44px;
-  padding: 9px 12px;
+  min-height: 54px;
+  padding: 10px 12px;
   border-radius: 11px;
-  border: 1px solid #cbd5e1;
+  border: 1.5px solid #e2e8f0;
   background: #f8fafc;
-  font-size: 13px !important;
+  font-size: 12.5px !important;
   font-weight: 600 !important;
   color: #1e293b !important;
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.superadmin-module-Option input[type='checkbox'] {
+  width: 17px !important;
+  height: 17px !important;
+  min-height: 17px !important;
+  margin: 2px 0 0 !important;
+  padding: 0 !important;
+  accent-color: #2563eb;
+  flex-shrink: 0;
+}
+
+/* ============================================================================
+ * Giao diện Trang Cấu hình Nền tảng SaaS (SuperAdminSettingsPanel)
+ * ============================================================================ */
+.hn-section-icon.rose {
+  background: #ffe4e6;
+  color: #e11d48;
+}
+
+.hn-section-icon.purple {
+  background: #ede9fe;
+  color: #7c3aed;
+}
+
+.hn-switch-card {
+  flex-direction: row !important;
+  align-items: flex-start !important;
+}
+
+.hn-switch-card.is-danger-on {
+  border-color: #fda4af !important;
+  background: linear-gradient(135deg, #fff1f2 0%, #ffe4e6 100%) !important;
+}
+
+.hn-switch-card.is-danger-on .hn-switch-copy strong {
+  color: #9f1239;
+}
+
+.hn-switch-card.is-danger-on .hn-switch-copy span {
+  color: #be123c;
+}
+
+.hn-switch-card.is-danger-on .hn-switch-pill {
+  background: #e11d48 !important;
+}
+
+.hn-switch-card.is-danger-on .hn-switch-pill::after {
+  transform: translateX(19px);
+}
+
+.sa-banner-preview-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 15px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1e40af;
+}
+
+.sa-banner-preview-strip.warning {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.sa-banner-preview-strip.critical {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.sa-target-schools-box {
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: #f8fafc;
+  border: 1.5px solid #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sa-target-schools-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sa-target-schools-head strong {
+  font-size: 13px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.sa-target-school-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 9px;
+}
+
+.sa-target-school-card {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 10px;
+  padding: 10px 13px;
+  border-radius: 11px;
+  border: 1.5px solid #e2e8f0;
+  background: #ffffff;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.sa-target-school-card:hover {
+  border-color: #93c5fd;
+  background: #f8fbff;
+}
+
+.sa-target-school-card.checked {
+  border-color: #3b82f6;
+  background: #eff6ff;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.08);
+}
+
+.sa-target-school-card input[type='checkbox'] {
+  width: 17px !important;
+  height: 17px !important;
+  min-height: 17px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  accent-color: #2563eb;
+  flex-shrink: 0;
+}
+
+.sa-target-school-meta {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sa-target-school-meta strong {
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f172a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sa-target-school-meta small {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #1d4ed8;
+}
+
+.sa-password-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.sa-password-input-wrap input {
+  padding-right: 68px !important;
+}
+
+.sa-password-eye-btn {
+  position: absolute;
+  right: 8px;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.sa-password-eye-btn:hover {
+  background: #eff6ff;
+  border-color: #93c5fd;
+  color: #1d4ed8;
 }
 
 .superadmin-module-Option:hover {
@@ -220,18 +558,33 @@
 
 .superadmin-module-Option.checked {
   background: #eff6ff;
-  border-color: #60a5fa;
+  border-color: #3b82f6;
   color: #1e3a8a !important;
-}
-
-.superadmin-module-Option.locked {
-  opacity: 0.86;
-  cursor: not-allowed;
 }
 
 .superadmin-module-Option span {
   flex: 1;
   line-height: 1.35;
+}
+
+.sa-module-item-desc {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #64748b;
+  line-height: 1.35;
+}
+
+.sa-plan-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #ede9fe;
+  color: #6d28d9;
 }
 
 /* ============================================================================
@@ -392,11 +745,25 @@
   transition: width 0.25s ease;
 }
 
-.sa-hbar-fill.blue { background: #2563eb; }
-.sa-hbar-fill.green { background: #16a34a; }
-.sa-hbar-fill.purple { background: #7c3aed; }
-.sa-hbar-fill.teal { background: #0d9488; }
-.sa-hbar-fill.light-amber { background: #fde68a; }
+.sa-hbar-fill.blue {
+  background: #2563eb;
+}
+
+.sa-hbar-fill.green {
+  background: #16a34a;
+}
+
+.sa-hbar-fill.purple {
+  background: #7c3aed;
+}
+
+.sa-hbar-fill.teal {
+  background: #0d9488;
+}
+
+.sa-hbar-fill.light-amber {
+  background: #fde68a;
+}
 
 /* ============================================================================
  * Bảng Hỗ trợ Nhanh Các Trường (Quick Support Strip)
@@ -811,4 +1178,3 @@
   background: #f8fbff;
   border: 1.5px solid #93c5fd;
 }
-

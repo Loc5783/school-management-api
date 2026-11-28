@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 const TimekeepingDevice = require('../models/zone2_hr/TimekeepingDevice');
 const AttendanceDevicePersonMapping = require('../models/zone2_hr/AttendanceDevicePersonMapping');
+const DeviceStoredPerson = require('../models/zone2_hr/DeviceStoredPerson');
 const DeviceSyncLog = require('../models/zone2_hr/DeviceSyncLog');
 const RawAttendanceEvent = require('../models/zone2_hr/RawAttendanceEvent');
 const User = require('../models/zone1_system/User');
@@ -165,7 +166,9 @@ async function createDevice(req, res) {
       syncTargetScope = 'ALL',
       autoSyncOnChange = true,
       deviceUsername,
-      devicePassword
+      devicePassword,
+      connectorVerifiedInfo = null,
+      upsertExistingSameCampus = false
     } = req.body;
 
     // Strict contract: Client is NOT allowed to specify or send credentialKey
@@ -212,34 +215,11 @@ async function createDevice(req, res) {
     const cleanCode = String(tenantCode || '').toUpperCase().replace(/[^A-Z0-9_]/g, '_');
     const credentialKey = `HIKVISION_${cleanCode}`;
 
-    // Check deviceCode uniqueness within tenant
-    const existing = await TimekeepingDevice.findOne({
-      tenantId,
-      deviceCode: String(deviceCode).trim().toUpperCase()
-    });
-    if (existing) {
-      return res.status(409).json({
-        success: false,
-        message: `Mã thiết bị "${deviceCode}" đã tồn tại trong trường này`
-      });
-    }
-
-    // Check serialNumber uniqueness within tenant AND global cross-campus hardware lock
+    // Check serialNumber global cross-campus hardware lock FIRST
     let normalizedSerial;
-    if (serialNumber && String(serialNumber).trim()) {
-      const cleanSerial = String(serialNumber).trim();
-      const existingSerialSameTenant = await TimekeepingDevice.findOne({
-        tenantId,
-        serialNumber: cleanSerial
-      });
-      if (existingSerialSameTenant) {
-        return res.status(409).json({
-          success: false,
-          code: 'DUPLICATE_SERIAL_SAME_CAMPUS',
-          message: `Số serial "${cleanSerial}" đã tồn tại trong phân hiệu trường này`
-        });
-      }
-
+    const rawSn = serialNumber || connectorVerifiedInfo?.serialNumber;
+    if (rawSn && String(rawSn).trim()) {
+      const cleanSerial = String(rawSn).trim();
       const existingSerialOtherCampus = await TimekeepingDevice.findOne({
         serialNumber: cleanSerial,
         tenantId: { $ne: tenantId }
@@ -248,10 +228,100 @@ async function createDevice(req, res) {
         return res.status(409).json({
           success: false,
           code: 'SERIAL_LOCKED_OTHER_CAMPUS',
-          message: `Thiết bị có mã phần cứng (số serial "${cleanSerial}") hiện đang được khóa bảo mật cho một phân hiệu trường khác. Để bảo vệ dữ liệu học sinh không bị kéo hoặc đẩy nhầm trường, chỉ Kỹ thuật viên Nhà cung cấp phần mềm mới có thể gỡ khóa chuyển phân hiệu cho thiết bị này.`
+          message: `Thiết bị này hiện đang được khóa bảo mật cho một phân hiệu trường khác. Để bảo vệ dữ liệu học sinh không bị kéo hoặc đẩy nhầm trường, chỉ Kỹ thuật viên Nhà cung cấp phần mềm mới có thể gỡ khóa chuyển phân hiệu cho thiết bị này.`
         });
       }
       normalizedSerial = cleanSerial;
+    }
+
+    const cleanUsername = String(deviceUsername || 'admin').trim() || 'admin';
+    const encryptedAuth =
+      devicePassword && String(devicePassword).trim()
+        ? encryptDeviceCredentials(tenantId, cleanUsername, String(devicePassword))
+        : undefined;
+
+    const resolvedScheme =
+      transportScheme === 'http' || transportScheme === 'https'
+        ? transportScheme
+        : 'https';
+
+    // Nếu kết nối lại máy đã từng lưu trong cùng phân hiệu (Bước 2 Quét LAN) -> Cập nhật mượt mà thay vì báo lỗi trùng mã
+    if (upsertExistingSameCampus) {
+      const sameCampusConditions = [{ deviceCode: cleanDeviceCode }, { host: host.trim() }];
+      if (normalizedSerial) {
+        sameCampusConditions.push({ serialNumber: normalizedSerial });
+      }
+      const existingSameCampus = await TimekeepingDevice.findOne({
+        tenantId,
+        $or: sameCampusConditions
+      });
+      if (existingSameCampus) {
+        existingSameCampus.name = String(name).trim();
+        existingSameCampus.campus = String(campus || 'Cơ sở chính').trim() || 'Cơ sở chính';
+        existingSameCampus.location = String(location || 'Sảnh đón trẻ').trim();
+        existingSameCampus.model = String(connectorVerifiedInfo?.model || model).trim();
+        existingSameCampus.host = host.trim();
+        existingSameCampus.httpPort = Number(httpPort) || 80;
+        existingSameCampus.httpsPort = Number(httpsPort) || 443;
+        existingSameCampus.transportScheme = resolvedScheme;
+        existingSameCampus.authUsernameHint = cleanUsername;
+        if (encryptedAuth) {
+          existingSameCampus.encryptedAuth = encryptedAuth;
+        }
+        if (normalizedSerial) {
+          existingSameCampus.serialNumber = normalizedSerial;
+          if (!existingSameCampus.serialLockedAt) {
+            existingSameCampus.serialLockedAt = new Date();
+          }
+        }
+        if (connectorVerifiedInfo) {
+          if (connectorVerifiedInfo.macAddress) existingSameCampus.macAddress = connectorVerifiedInfo.macAddress;
+          if (connectorVerifiedInfo.maxUserCapacity) {
+            existingSameCampus.maxUserCapacity = Number(connectorVerifiedInfo.maxUserCapacity) || 500;
+          }
+          if (connectorVerifiedInfo.currentStoredUsers !== undefined) {
+            existingSameCampus.currentStoredUsers = Number(connectorVerifiedInfo.currentStoredUsers) || 0;
+          }
+          if (connectorVerifiedInfo.currentStoredFaces !== undefined) {
+            existingSameCampus.currentStoredFaces = Number(connectorVerifiedInfo.currentStoredFaces) || 0;
+          }
+          existingSameCampus.status = 'ONLINE';
+          existingSameCampus.lastSeenAt = new Date();
+          existingSameCampus.statusMessage = `Đang trực tuyến • Bộ nhớ lưu ${existingSameCampus.currentStoredUsers || 0}/${existingSameCampus.maxUserCapacity || 500} hồ sơ`;
+        }
+        existingSameCampus.updatedBy = req.user?._id;
+        await existingSameCampus.save();
+        return res.status(200).json({
+          success: true,
+          data: sanitizeDevice(existingSameCampus)
+        });
+      }
+    }
+
+    // Check deviceCode uniqueness within tenant
+    const existing = await TimekeepingDevice.findOne({
+      tenantId,
+      deviceCode: cleanDeviceCode
+    });
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        message: `Mã thiết bị "${deviceCode}" đã tồn tại trong trường này`
+      });
+    }
+
+    if (normalizedSerial) {
+      const existingSerialSameTenant = await TimekeepingDevice.findOne({
+        tenantId,
+        serialNumber: normalizedSerial
+      });
+      if (existingSerialSameTenant) {
+        return res.status(409).json({
+          success: false,
+          code: 'DUPLICATE_SERIAL_SAME_CAMPUS',
+          message: `Máy chấm công có số serial này đã được lưu sẵn trong danh sách phân hiệu (${existingSerialSameTenant.name})`
+        });
+      }
     }
 
     // Hash apiKey if provided
@@ -267,25 +337,14 @@ async function createDevice(req, res) {
       }
     }
 
-    const cleanUsername = String(deviceUsername || 'admin').trim() || 'admin';
-    const encryptedAuth =
-      devicePassword && String(devicePassword).trim()
-        ? encryptDeviceCredentials(tenantId, cleanUsername, String(devicePassword))
-        : undefined;
-
-    const resolvedScheme =
-      transportScheme === 'http' || transportScheme === 'https'
-        ? transportScheme
-        : 'https';
-
     const device = new TimekeepingDevice({
       tenantId,
-      deviceCode: String(deviceCode).trim().toUpperCase(),
+      deviceCode: cleanDeviceCode,
       name: String(name).trim(),
       campus: String(campus || 'Cơ sở chính').trim() || 'Cơ sở chính',
       location: String(location || 'Sảnh đón trẻ').trim(),
       vendor,
-      model: String(model).trim(),
+      model: String(connectorVerifiedInfo?.model || model).trim(),
       serialNumber: normalizedSerial,
       ...(normalizedSerial
         ? {
@@ -293,6 +352,7 @@ async function createDevice(req, res) {
             serialLockedByVendor: Boolean(req.isVendorSupport)
           }
         : {}),
+      macAddress: String(connectorVerifiedInfo?.macAddress || '').trim(),
       host: host.trim(),
       httpPort: Number(httpPort) || 80,
       httpsPort: Number(httpsPort) || 443,
@@ -303,7 +363,19 @@ async function createDevice(req, res) {
       credentialKey,
       authUsernameHint: cleanUsername,
       ...(encryptedAuth ? { encryptedAuth } : {}),
-      maxUserCapacity: Math.max(10, Math.min(50000, Number(maxUserCapacity) || 500)),
+      maxUserCapacity: Math.max(
+        10,
+        Math.min(50000, Number(connectorVerifiedInfo?.maxUserCapacity || maxUserCapacity) || 500)
+      ),
+      ...(connectorVerifiedInfo
+        ? {
+            status: 'ONLINE',
+            lastSeenAt: new Date(),
+            currentStoredUsers: Number(connectorVerifiedInfo.currentStoredUsers) || 0,
+            currentStoredFaces: Number(connectorVerifiedInfo.currentStoredFaces) || 0,
+            statusMessage: `Đang trực tuyến • Bộ nhớ lưu ${Number(connectorVerifiedInfo.currentStoredUsers) || 0}/${Number(connectorVerifiedInfo.maxUserCapacity || maxUserCapacity) || 500} hồ sơ`
+          }
+        : {}),
       syncAllocationMode: ['BY_CAMPUS_PRIORITY', 'TODAY_ATTENDANCE_FIRST', 'ALL_ACTIVE'].includes(syncAllocationMode)
         ? syncAllocationMode
         : 'BY_CAMPUS_PRIORITY',
@@ -318,9 +390,9 @@ async function createDevice(req, res) {
 
     await device.save();
 
-    // Nếu người dùng nhập luôn mật khẩu ISAPI khi thêm máy -> Tự động kiểm tra dung lượng ngay lập tức (không chặn lưu nếu offline)
+    // Chỉ gọi kiểm tra trực tiếp từ Backend nếu KHÔNG đi qua Local Connector (tránh Cloud VPS chờ timeout khi ping IP LAN nội bộ)
     let health = null;
-    if (encryptedAuth) {
+    if (encryptedAuth && !connectorVerifiedInfo) {
       health = await biometricSyncService.checkDeviceCapacityAndHealth(tenantId, device._id).catch(() => null);
     }
 
@@ -552,7 +624,10 @@ async function deleteDevice(req, res) {
     if (!deleted) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy thiết bị trong trường này' });
     }
-    await AttendanceDevicePersonMapping.deleteMany({ tenantId, deviceId: deleted._id });
+    await Promise.all([
+      AttendanceDevicePersonMapping.deleteMany({ tenantId, deviceId: deleted._id }),
+      DeviceStoredPerson.deleteMany({ tenantId, deviceId: deleted._id })
+    ]);
     return res.json({
       success: true,
       message: `Đã xóa máy chấm công "${deleted.name}" khỏi phân hiệu ${deleted.campus || 'Cơ sở chính'}`
@@ -1163,6 +1238,30 @@ async function linkPulledDeviceUser(req, res) {
   }
 }
 
+async function importPulledUsersToWeb(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const result = await biometricSyncService.importPulledUsersToWebRoster(tenantId, req.params.id, {
+      externalPersonIds: req.body?.externalPersonIds || [],
+      importAll: Boolean(req.body?.importAll),
+      overwriteName: req.body?.overwriteName !== false,
+      overwriteFace: req.body?.overwriteFace !== false,
+      actorId: req.user?._id
+    });
+    return res.json({
+      success: true,
+      data: result,
+      message: result.message
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      code: err.code || 'IMPORT_DEVICE_USERS_FAILED',
+      message: formatFriendlyVietnameseHardwareNotice(err)
+    });
+  }
+}
+
 async function pruneDeviceInactiveSlots(req, res) {
   try {
     const tenantId = assertTenantContext(req);
@@ -1561,6 +1660,7 @@ module.exports = {
   pullAllDevicesFast,
   quickBidirectionalSync,
   linkPulledDeviceUser,
+  importPulledUsersToWeb,
   pruneDeviceInactiveSlots,
   unlockDeviceDoor,
   uploadBiometricFace,

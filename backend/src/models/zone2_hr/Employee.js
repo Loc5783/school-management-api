@@ -51,7 +51,26 @@ const EmployeeSchema = new mongoose.Schema({
     },
     position: {
         type: String,
-        enum: ['principal', 'vice_principal', 'head_teacher', 'teacher', 'assistant_teacher', 'accountant', 'chef', 'hr', 'nurse', 'security', 'cleaner'],
+        enum: [
+            'principal',
+            'vice_principal',
+            'youth_leader',
+            'head_teacher',
+            'teacher',
+            'assistant_teacher',
+            'chief_accountant',
+            'accountant',
+            'head_chef',
+            'chef',
+            'kitchen_helper',
+            'hr',
+            'office_admin',
+            'nurse',
+            'security',
+            'cleaner',
+            'maintenance',
+            'driver'
+        ],
         required: true,
         default: 'teacher'
     },

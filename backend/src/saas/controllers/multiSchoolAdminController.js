@@ -475,10 +475,16 @@ const createSchoolWithAdmin = async (req, res) => {
       name,
       organizationCode = '',
       contactEmail = '',
+      contactPhone = '',
+      address = '',
+      representativeName = '',
+      subscriptionPlan = 'professional',
+      licenseExpiresAt = null,
       adminUsername,
       adminPassword,
       adminFullName = '',
       adminPhone = '',
+      adminEmail = '',
       initialCampuses = [],
       enabledModules,
       quotas: rawQuotas
@@ -521,8 +527,19 @@ const createSchoolWithAdmin = async (req, res) => {
       });
     }
 
+    const cleanPhone = String(contactPhone || adminPhone || '').trim().slice(0, 25);
+    const cleanAddress = String(address || '').trim().slice(0, 300);
+    const cleanRepName = String(representativeName || adminFullName || '').trim().slice(0, 120);
+    const validPlans = ['trial', 'standard', 'professional', 'enterprise'];
+    const cleanPlan = validPlans.includes(subscriptionPlan) ? subscriptionPlan : 'professional';
+    const parsedLicenseExpires = licenseExpiresAt ? new Date(licenseExpiresAt) : null;
+    const safeLicenseExpires =
+      parsedLicenseExpires && !Number.isNaN(parsedLicenseExpires.getTime()) ? parsedLicenseExpires : null;
+
     const quotas = parseQuotasInput(rawQuotas, settings.preschoolStandards);
-    const cleanModules = sanitizeEnabledModules(enabledModules || ALL_ENABLED_MODULES);
+    const cleanModules = Array.isArray(enabledModules)
+      ? sanitizeEnabledModules(enabledModules, { preserveExplicitSelection: true })
+      : [...ALL_ENABLED_MODULES];
     const permissionIds = await ensureAllPermissions();
     const passwordHash = await bcrypt.hash(cleanAdminPass, BCRYPT_SALT_ROUNDS);
 
@@ -550,9 +567,9 @@ const createSchoolWithAdmin = async (req, res) => {
         parsedCampuses.push({
           code: cCode,
           name: cName,
-          address: (typeof item === 'object' && item?.address) ? String(item.address).trim().slice(0, 300) : '',
-          phone: (typeof item === 'object' && item?.phone) ? String(item.phone).trim().slice(0, 20) : '',
-          managerName: (typeof item === 'object' && item?.managerName) ? String(item.managerName).trim().slice(0, 120) : '',
+          address: (typeof item === 'object' && item?.address) ? String(item.address).trim().slice(0, 300) : (idx === 0 ? cleanAddress : ''),
+          phone: (typeof item === 'object' && item?.phone) ? String(item.phone).trim().slice(0, 20) : (idx === 0 ? cleanPhone : ''),
+          managerName: (typeof item === 'object' && item?.managerName) ? String(item.managerName).trim().slice(0, 120) : (idx === 0 ? cleanRepName : ''),
           openTime: defaultOpen,
           closeTime: defaultClose,
           maxClassrooms: 20,
@@ -566,9 +583,9 @@ const createSchoolWithAdmin = async (req, res) => {
       parsedCampuses.push({
         code: 'CS-CHINH',
         name: 'Cơ sở chính',
-        address: '',
-        phone: '',
-        managerName: '',
+        address: cleanAddress,
+        phone: cleanPhone,
+        managerName: cleanRepName,
         openTime: defaultOpen,
         closeTime: defaultClose,
         maxClassrooms: 20,
@@ -598,6 +615,11 @@ const createSchoolWithAdmin = async (req, res) => {
             name: cleanName,
             organizationCode: String(organizationCode || '').trim().toUpperCase().slice(0, 40),
             contactEmail: cleanEmail,
+            contactPhone: cleanPhone,
+            address: cleanAddress,
+            representativeName: cleanRepName,
+            subscriptionPlan: cleanPlan,
+            licenseExpiresAt: safeLicenseExpires,
             campuses: parsedCampuses,
             enabledModules: cleanModules,
             quotas,
@@ -609,6 +631,7 @@ const createSchoolWithAdmin = async (req, res) => {
         sessionOpt
       );
 
+      const cleanAdminEmail = String(adminEmail || cleanEmail || '').trim().toLowerCase();
       const [schoolAdmin] = await User.create(
         [
           {
@@ -618,9 +641,9 @@ const createSchoolWithAdmin = async (req, res) => {
             role: 'admin',
             permissions: permissionIds,
             profile: {
-              fullName: String(adminFullName || '').trim() || `Quản trị viên ${cleanName}`,
-              phone: String(adminPhone || '').trim(),
-              email: cleanEmail
+              fullName: String(adminFullName || cleanRepName || '').trim() || `Quản trị viên ${cleanName}`,
+              phone: String(adminPhone || cleanPhone || '').trim(),
+              email: cleanAdminEmail
             },
             status: 'active',
             authVersion: 0
@@ -696,8 +719,15 @@ const updateSchoolAndAdmin = async (req, res) => {
       name,
       organizationCode,
       contactEmail,
+      contactPhone,
+      address,
+      representativeName,
+      subscriptionPlan,
+      licenseExpiresAt,
       status,
       adminUsername,
+      adminFullName,
+      adminPhone,
       newAdminPassword,
       enabledModules,
       quotas: rawQuotas
@@ -723,6 +753,37 @@ const updateSchoolAndAdmin = async (req, res) => {
         }
         tenant.contactEmail = cleanEmail;
       }
+      if (contactPhone != null) {
+        tenant.contactPhone = String(contactPhone).trim().slice(0, 25);
+        if (Array.isArray(tenant.campuses) && tenant.campuses[0] && !tenant.campuses[0].phone) {
+          tenant.campuses[0].phone = tenant.contactPhone;
+        }
+      }
+      if (address != null) {
+        tenant.address = String(address).trim().slice(0, 300);
+        if (Array.isArray(tenant.campuses) && tenant.campuses[0] && !tenant.campuses[0].address) {
+          tenant.campuses[0].address = tenant.address;
+        }
+      }
+      if (representativeName != null) {
+        tenant.representativeName = String(representativeName).trim().slice(0, 120);
+        if (Array.isArray(tenant.campuses) && tenant.campuses[0] && !tenant.campuses[0].managerName) {
+          tenant.campuses[0].managerName = tenant.representativeName;
+        }
+      }
+      if (subscriptionPlan != null && ['trial', 'standard', 'professional', 'enterprise'].includes(subscriptionPlan)) {
+        tenant.subscriptionPlan = subscriptionPlan;
+      }
+      if (licenseExpiresAt !== undefined) {
+        if (!licenseExpiresAt) {
+          tenant.licenseExpiresAt = null;
+        } else {
+          const parsedExp = new Date(licenseExpiresAt);
+          if (!Number.isNaN(parsedExp.getTime())) {
+            tenant.licenseExpiresAt = parsedExp;
+          }
+        }
+      }
       if (status != null) {
         if (!['active', 'suspended', 'terminated'].includes(status)) {
           throw Object.assign(new Error('Trạng thái trường không hợp lệ'), { statusCode: 422 });
@@ -733,7 +794,7 @@ const updateSchoolAndAdmin = async (req, res) => {
         }
       }
       if (Array.isArray(enabledModules)) {
-        tenant.enabledModules = sanitizeEnabledModules(enabledModules);
+        tenant.enabledModules = sanitizeEnabledModules(enabledModules, { preserveExplicitSelection: true });
         tenant.config = { ...(tenant.config || {}), moduleGateConfigured: true };
         tenant.markModified('config');
       }
@@ -760,7 +821,7 @@ const updateSchoolAndAdmin = async (req, res) => {
         throw Object.assign(new Error(`Mật khẩu mới của Admin trường phải từ ${minPassLen} ký tự trở lên`), { statusCode: 422 });
       }
 
-      if (cleanNextAdminUser || cleanNewPass) {
+      if (cleanNextAdminUser || cleanNewPass || adminFullName != null || adminPhone != null) {
         const adminUser = await User.findOne({ tenantId: tenant._id, role: 'admin' }).sort({ createdAt: 1 }).session(session);
         if (adminUser) {
           if (cleanNextAdminUser && cleanNextAdminUser !== adminUser.username) {
@@ -773,6 +834,12 @@ const updateSchoolAndAdmin = async (req, res) => {
               throw Object.assign(new Error(`Tên đăng nhập "@${cleanNextAdminUser}" đã được sử dụng trong trường này`), { statusCode: 409 });
             }
             adminUser.username = cleanNextAdminUser;
+          }
+          if (adminFullName != null && String(adminFullName).trim()) {
+            adminUser.profile.fullName = String(adminFullName).trim().slice(0, 120);
+          }
+          if (adminPhone != null) {
+            adminUser.profile.phone = String(adminPhone).trim().slice(0, 25);
           }
           if (cleanNewPass) {
             adminUser.passwordHash = await bcrypt.hash(cleanNewPass, BCRYPT_SALT_ROUNDS);

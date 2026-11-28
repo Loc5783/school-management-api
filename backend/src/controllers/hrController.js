@@ -31,15 +31,15 @@ const STAFF_ACCOUNT_ROLES = ['admin', 'principal', 'teacher', 'accountant', 'che
 const ROLE_POSITIONS = {
     admin: new Set(['principal', 'vice_principal']),
     principal: new Set(['principal', 'vice_principal']),
-    teacher: new Set(['teacher', 'head_teacher', 'assistant_teacher']),
-    accountant: new Set(['accountant']),
-    chef: new Set(['chef']),
-    guard: new Set(['security']),
-    hr: new Set(['hr'])
+    teacher: new Set(['teacher', 'head_teacher', 'assistant_teacher', 'youth_leader']),
+    accountant: new Set(['accountant', 'chief_accountant']),
+    chef: new Set(['head_chef', 'chef', 'kitchen_helper']),
+    guard: new Set(['security', 'nurse', 'cleaner', 'maintenance', 'driver']),
+    hr: new Set(['hr', 'office_admin'])
 };
 const DEFAULT_POSITION_BY_ROLE = { admin: 'principal', principal: 'principal', teacher: 'teacher', accountant: 'accountant', chef: 'chef', guard: 'security', hr: 'hr' };
 const DEFAULT_PAYROLL_ROLE_BY_ACCOUNT_ROLE = { admin: 'principal', principal: 'principal', teacher: 'teacher', accountant: 'accountant', chef: 'chef', guard: 'guard', hr: 'hr' };
-const EMPLOYEE_CODE_PREFIX_BY_ROLE = { admin: 'HT', principal: 'HT', teacher: 'GV', accountant: 'KT', chef: 'BEP', guard: 'BV', hr: 'NS' };
+const EMPLOYEE_CODE_PREFIX_BY_ROLE = { admin: 'HT', principal: 'HT', teacher: 'GV', accountant: 'KT', chef: 'BEP', guard: 'NV', hr: 'NS' };
 const EMPLOYEE_FIELDS = ['employeeCode', 'fullName', 'phone', 'email', 'address', 'departmentId', 'position', 'payrollRole', 'salaryConfig', 'startDate', 'contractType', 'contractNumber', 'contractSignedDate', 'contractStartDate', 'endDate', 'status'];
 const PROFILE_HISTORY_FIELDS = ['employeeCode', 'fullName', 'phone', 'email', 'address', 'position', 'payrollRole', 'startDate', 'contractType', 'contractNumber', 'contractSignedDate', 'contractStartDate', 'endDate', 'status'];
 const profileSnapshot = (employee) => Object.fromEntries(PROFILE_HISTORY_FIELDS.map((key) => [key, employee?.[key] ?? null]).concat([
@@ -70,8 +70,24 @@ const isValidObjectId = (value) => mongoose.isValidObjectId(value);
 const pickEmployeeFields = (body = {}) => Object.fromEntries(EMPLOYEE_FIELDS.filter((field) => Object.hasOwn(body, field)).map((field) => [field, body[field]]));
 const PAYROLL_ROLES = new Set(['principal', 'teacher', 'accountant', 'chef', 'guard', 'hr']);
 const payrollRoleFromPosition = (position) => ({
-    principal: 'principal', vice_principal: 'principal', head_teacher: 'teacher', teacher: 'teacher', assistant_teacher: 'teacher',
-    accountant: 'accountant', chef: 'chef', security: 'guard', hr: 'hr'
+    principal: 'principal',
+    vice_principal: 'principal',
+    youth_leader: 'teacher',
+    head_teacher: 'teacher',
+    teacher: 'teacher',
+    assistant_teacher: 'teacher',
+    chief_accountant: 'accountant',
+    accountant: 'accountant',
+    head_chef: 'chef',
+    chef: 'chef',
+    kitchen_helper: 'chef',
+    security: 'guard',
+    nurse: 'guard',
+    cleaner: 'guard',
+    maintenance: 'guard',
+    driver: 'guard',
+    hr: 'hr',
+    office_admin: 'hr'
 }[position] || 'teacher');
 
 const runHrTransaction = async (operation) =>

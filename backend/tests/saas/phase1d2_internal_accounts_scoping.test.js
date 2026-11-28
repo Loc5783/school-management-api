@@ -2106,5 +2106,83 @@ describe('Task 1D.2 — Quản Lý Tài Khoản Nội Bộ và Đồng Bộ Empl
       expect(resGet1c.status).toBe(501);
       expect(resGet1c.body.code).toBe('MODULE_NOT_IMPLEMENTED_IN_PHASE_1A');
     });
+
+    test('G.1: Cấp phát chức danh chi tiết (Tổng phụ trách, Trưởng bếp, Lao công, Y tế) và trả includeMeta=1 không lộ mức lương', async () => {
+      // Tạo sẵn 1 nhân sự Lao công chưa có tài khoản có mức lương 7.500.000đ
+      const unlinkedCleaner = await Employee.create({
+        tenantId: tenantA._id,
+        userId: null,
+        employeeCode: 'TV-2026-009',
+        fullName: 'Cô Phạm Thị Sạch',
+        phone: '0988111222',
+        position: 'cleaner',
+        payrollRole: 'guard',
+        status: 'active',
+        salaryConfig: { baseSalary: 7500000 }
+      });
+
+      const metaRes = await request(saasApp)
+        .get('/api/v1/system/accounts?includeMeta=1')
+        .set('Authorization', `Bearer ${tokenAdminA}`);
+
+      expect(metaRes.status).toBe(200);
+      expect(metaRes.body.summary).toBeDefined();
+      expect(Array.isArray(metaRes.body.unlinkedEmployees)).toBe(true);
+      const foundCandidate = metaRes.body.unlinkedEmployees.find((e) => e.employeeCode === 'TV-2026-009');
+      expect(foundCandidate).toBeDefined();
+      expect(foundCandidate.position).toBe('cleaner');
+      // Không được lộ salaryConfig ở API cấp tài khoản
+      expect(foundCandidate.salaryConfig).toBeUndefined();
+
+      // Cấp tài khoản gắn hồ sơ Lao công sẵn có
+      const createCleanerAcc = await request(saasApp)
+        .post('/api/v1/system/accounts')
+        .set('Authorization', `Bearer ${tokenAdminA}`)
+        .send({
+          username: 'tv.sach',
+          password: 'Password123@#',
+          role: 'guard',
+          position: 'cleaner',
+          existingEmployeeId: String(unlinkedCleaner._id),
+          campus: 'Cơ sở chính',
+          departmentName: 'Tổ Môi trường',
+          profile: {
+            fullName: 'Cô Phạm Thị Sạch',
+            phone: '0988111222',
+            email: 'sach.pt@truonga.edu.vn'
+          }
+        });
+
+      expect(createCleanerAcc.status).toBe(201);
+      expect(createCleanerAcc.body.data.position).toBe('cleaner');
+      expect(createCleanerAcc.body.data.employeeId).toBe('TV-2026-009');
+
+      // Cấp mới tài khoản Tổng phụ trách (youth_leader) và Trưởng bếp (head_chef)
+      const createSupervisor = await request(saasApp)
+        .post('/api/v1/system/accounts')
+        .set('Authorization', `Bearer ${tokenAdminA}`)
+        .send({
+          username: 'tpt.minh',
+          password: 'Password123@#',
+          role: 'teacher',
+          position: 'youth_leader',
+          profile: { fullName: 'Thầy Hoàng Minh', phone: '0912333444' }
+        });
+      expect(createSupervisor.status).toBe(201);
+      expect(createSupervisor.body.data.position).toBe('youth_leader');
+
+      const createHeadChef = await request(saasApp)
+        .post('/api/v1/system/accounts')
+        .set('Authorization', `Bearer ${tokenHrA}`)
+        .send({
+          username: 'tbep.lan',
+          password: 'Password123@#',
+          role: 'chef',
+          position: 'head_chef',
+          profile: { fullName: 'Cô Trần Thị Lan', phone: '0912555666' }
+        });
+      expect(createHeadChef.status).toBe(201);
+      expect(createHeadChef.body.data.position).toBe('head_chef');
+    });
   });
 });

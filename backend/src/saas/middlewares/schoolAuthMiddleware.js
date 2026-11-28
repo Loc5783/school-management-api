@@ -7,13 +7,18 @@ const { getSystemSettings, sanitizeEnabledModules } = require('../../services/su
 /**
  * Ánh xạ đường dẫn API của trường sang khóa Module do SuperAdmin cấp phép.
  */
-const resolveModuleKeyFromBaseUrl = (baseUrl = '') => {
+const resolveModuleKeyFromBaseUrl = (baseUrl = '', reqPath = '') => {
   const clean = String(baseUrl || '').replace(/^\/api(\/v1)?\//, '');
   const prefix = clean.split('/')[0];
+  if (prefix === 'system' && String(reqPath || '').startsWith('/accounts')) {
+    return 'accounts';
+  }
   const map = {
     students: 'students',
     classrooms: 'classrooms',
     attendance: 'attendance',
+    'daily-care': 'daily_care',
+    'parent-care': 'daily_care',
     hr: 'hr',
     timekeeping: 'timekeeping',
     finance: 'finance',
@@ -181,7 +186,7 @@ const schoolAuthMiddleware = async (req, res, next) => {
     }
 
     if (tenant.config?.moduleGateConfigured) {
-      const requiredModule = resolveModuleKeyFromBaseUrl(req.baseUrl);
+      const requiredModule = resolveModuleKeyFromBaseUrl(req.baseUrl, req.path);
       if (requiredModule) {
         const activeModules = sanitizeEnabledModules(tenant.enabledModules);
         if (!activeModules.includes(requiredModule)) {

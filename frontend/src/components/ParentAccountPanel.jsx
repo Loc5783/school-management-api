@@ -379,7 +379,7 @@ export default function ParentAccountManagement({ embedded = false }) {
       )}
 
       {showCreateModal && (
-        <div className="modal-backdrop" onClick={() => !creating && setShowCreateModal(false)} role="presentation">
+        <div className="modal-backdrop" role="presentation">
           <form
             className="content-card student-form hr-modal"
             onClick={(e) => e.stopPropagation()}

@@ -3,6 +3,7 @@ const AuditLog = require('../models/zone1_system/AuditLog');
 const Student = require('../models/zone3_school/Student');
 const User = require('../models/zone1_system/User');
 const Employee = require('../models/zone2_hr/Employee');
+const BiometricFaceProfile = require('../models/zone2_hr/BiometricFaceProfile');
 const Classroom = require('../models/zone3_school/Classroom');
 const { hashPassword } = require('../utils/passwordHash');
 const { assertPersonCodeAvailable, generateNextPersonCode } = require('../services/personCodeService');
@@ -18,11 +19,21 @@ const internalRoles = ['admin', ...assignableStaffRoles];
 const usernamePattern = /^[a-zA-Z0-9._-]{3,50}$/;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const phonePattern = /^[0-9+().\s-]{8,20}$/;
-const positionByRole = { principal: 'principal', teacher: 'teacher', accountant: 'accountant', chef: 'chef', guard: 'security', hr: 'hr' };
+const positionByRole = {
+  principal: 'principal',
+  teacher: 'teacher',
+  accountant: 'accountant',
+  chef: 'chef',
+  guard: 'security',
+  hr: 'hr'
+};
 const validPositionsByRole = {
   principal: ['principal', 'vice_principal'],
-  teacher: ['teacher', 'head_teacher', 'assistant_teacher'],
-  accountant: ['accountant'], chef: ['chef'], guard: ['security'], hr: ['hr']
+  teacher: ['teacher', 'head_teacher', 'assistant_teacher', 'youth_leader'],
+  accountant: ['accountant', 'chief_accountant'],
+  chef: ['head_chef', 'chef', 'kitchen_helper'],
+  guard: ['security', 'nurse', 'cleaner', 'maintenance', 'driver'],
+  hr: ['hr', 'office_admin']
 };
 
 const serializeParent = (user) => ({
@@ -46,10 +57,14 @@ const serializeParent = (user) => ({
   lastLogin: user.lastLogin
 });
 
-const serializeInternalAccount = (user, employee = null) => ({
+const serializeInternalAccount = (user, employee = null, faceDataUrl = '') => ({
   _id: user._id,
   username: user.username,
   role: user.role,
+  position: employee?.position || (employee ? positionByRole[user.role] : (user.employeeInfo?.position || '')),
+  campus: employee?.campus || '',
+  departmentName: employee?.departmentName || '',
+  faceDataUrl: faceDataUrl || '',
   profile: {
     fullName: user.profile?.fullName,
     phone: user.profile?.phone,
@@ -315,11 +330,18 @@ const listInternalAccounts = async (req, res) => {
       filter.role = req.query.role;
     }
 
+    if (req.query.position && typeof req.query.position === 'string' && req.query.position.trim()) {
+      filter['employeeInfo.position'] = req.query.position.trim();
+    }
+
     if (req.query.search && typeof req.query.search === 'string' && req.query.search.trim()) {
       const escaped = req.query.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       filter.$or = [
         { username: { $regex: escaped, $options: 'i' } },
-        { 'profile.fullName': { $regex: escaped, $options: 'i' } }
+        { 'profile.fullName': { $regex: escaped, $options: 'i' } },
+        { 'profile.phone': { $regex: escaped, $options: 'i' } },
+        { 'profile.email': { $regex: escaped, $options: 'i' } },
+        { 'employeeInfo.employeeId': { $regex: escaped, $options: 'i' } }
       ];
     }
 
@@ -338,14 +360,117 @@ const listInternalAccounts = async (req, res) => {
       userId: { $in: accountIds },
       ...tenantFilter
     })
-      .select('userId employeeCode')
+      .select('userId employeeCode position campus departmentName')
       .lean();
 
     const employeeByUserId = new Map(employees.map((employee) => [String(employee.userId), employee]));
 
+    // Nếu trang quản trị yêu cầu kèm dữ liệu đa phương tiện (includeMeta=1): tải ảnh khuôn mặt chấm công + thống kê tổng + ứng viên chưa gắn TK (0 rò rỉ lương)
+    const faceByEmployeeDocId = new Map();
+    let summary = undefined;
+    let unlinkedEmployees = undefined;
+
+    if (req.query.includeMeta === '1') {
+      const hasObjectIdTenant = Boolean(tenantFilter.tenantId && mongoose.isValidObjectId(tenantFilter.tenantId));
+      const empDocIds = employees.map((e) => String(e._id));
+
+      const [faceProfiles, roleStatusStats, rawUnlinked] = await Promise.all([
+        hasObjectIdTenant && empDocIds.length > 0
+          ? BiometricFaceProfile.find({
+              tenantId: tenantFilter.tenantId,
+              subjectType: 'EMPLOYEE',
+              subjectId: { $in: empDocIds }
+            })
+              .select('subjectId faceDataUrl')
+              .lean()
+          : Promise.resolve([]),
+        User.aggregate([
+          { $match: { role: { $in: internalRoles }, ...tenantFilter } },
+          {
+            $group: {
+              _id: { role: '$role', status: '$status' },
+              count: { $sum: 1 }
+            }
+          }
+        ]),
+        Employee.find({
+          userId: null,
+          status: { $ne: 'resigned' },
+          ...tenantFilter
+        })
+          .select('_id employeeCode fullName phone email position campus departmentName')
+          .sort({ fullName: 1 })
+          .limit(200)
+          .lean()
+      ]);
+
+      faceProfiles.forEach((fp) => {
+        if (fp.faceDataUrl) {
+          faceByEmployeeDocId.set(String(fp.subjectId), fp.faceDataUrl);
+        }
+      });
+
+      const unlinkedIds = rawUnlinked.map((e) => String(e._id));
+      const unlinkedFaceMap = new Map();
+      if (hasObjectIdTenant && unlinkedIds.length > 0) {
+        const unlinkedFaces = await BiometricFaceProfile.find({
+          tenantId: tenantFilter.tenantId,
+          subjectType: 'EMPLOYEE',
+          subjectId: { $in: unlinkedIds }
+        })
+          .select('subjectId faceDataUrl')
+          .lean();
+        unlinkedFaces.forEach((fp) => {
+          if (fp.faceDataUrl) unlinkedFaceMap.set(String(fp.subjectId), fp.faceDataUrl);
+        });
+      }
+
+      unlinkedEmployees = rawUnlinked.map((emp) => ({
+        _id: emp._id,
+        employeeCode: emp.employeeCode,
+        fullName: emp.fullName,
+        phone: emp.phone || '',
+        email: emp.email || '',
+        position: emp.position || 'teacher',
+        campus: emp.campus || 'Cơ sở chính',
+        departmentName: emp.departmentName || '',
+        faceDataUrl: unlinkedFaceMap.get(String(emp._id)) || ''
+      }));
+
+      const stats = {
+        totalAll: 0,
+        activeCount: 0,
+        suspendedCount: 0,
+        inactiveCount: 0,
+        unlinkedEmployeeCount: unlinkedEmployees.length,
+        byRole: { admin: 0, principal: 0, teacher: 0, accountant: 0, hr: 0, chef: 0, guard: 0 }
+      };
+      roleStatusStats.forEach((row) => {
+        const c = Number(row.count || 0);
+        stats.totalAll += c;
+        if (row._id?.status === 'active') stats.activeCount += c;
+        else if (row._id?.status === 'suspended') stats.suspendedCount += c;
+        else if (row._id?.status === 'inactive') stats.inactiveCount += c;
+        if (row._id?.role && stats.byRole[row._id.role] !== undefined) {
+          stats.byRole[row._id.role] += c;
+        }
+      });
+      summary = stats;
+    }
+
     return res.json({
       success: true,
-      data: accounts.map((account) => serializeInternalAccount(account, employeeByUserId.get(String(account._id)))),
+      data: accounts.map((account) => {
+        const emp = employeeByUserId.get(String(account._id)) || null;
+        // Bảo mật cách ly multi-tenant: nếu user không có Employee hợp lệ thuộc cùng tenant (VD dữ liệu bị lệch), không dùng employeeInfo rò rỉ
+        const safeAccount = !emp && account.role !== 'admin'
+          ? { ...account, employeeInfo: { ...account.employeeInfo, position: '' } }
+          : account;
+        const faceUrl = emp ? (faceByEmployeeDocId.get(String(emp._id)) || '') : '';
+        return serializeInternalAccount(safeAccount, emp, faceUrl);
+      }),
+      ...(summary ? { summary } : {}),
+      ...(unlinkedEmployees ? { unlinkedEmployees } : {}),
       pagination: {
         page,
         limit,
@@ -368,9 +493,16 @@ const createInternalAccount = async (req, res) => {
     const tenantFilter = buildTenantFilter(req, { throwOnInvalid: true });
     const targetTenantId = tenantContext.isSaaS ? tenantContext.tenantId : null;
 
-    const { username, password, profile = {}, role, existingEmployeeId } = req.body;
+    const { username, password, profile = {}, role, existingEmployeeId, position, campus, departmentName } = req.body;
     const validationError = validateInternalAccount({ username, password, profile, role }, req.user);
     if (validationError) return res.status(422).json({ success: false, message: validationError });
+
+    const requestedPosition = position ? String(position).trim() : '';
+    if (requestedPosition && !validPositionsByRole[role]?.includes(requestedPosition)) {
+      return res.status(422).json({ success: false, message: 'Chức danh công việc không phù hợp với nhóm vai trò đã chọn' });
+    }
+    const cleanCampus = campus ? String(campus).trim().slice(0, 120) : '';
+    const cleanDepartmentName = departmentName ? String(departmentName).trim().slice(0, 120) : '';
 
     if (existingEmployeeId !== undefined && existingEmployeeId !== null && existingEmployeeId !== '' && !mongoose.isValidObjectId(existingEmployeeId)) {
       return res.status(400).json({ success: false, message: 'ID hồ sơ nhân sự liên kết không hợp lệ' });
@@ -437,8 +569,12 @@ const createInternalAccount = async (req, res) => {
         resolvedEmployee.fullName = createdAccount.profile.fullName;
         if (createdAccount.profile.phone) resolvedEmployee.phone = createdAccount.profile.phone;
         if (createdAccount.profile.email) resolvedEmployee.email = createdAccount.profile.email;
+        if (cleanCampus) resolvedEmployee.campus = cleanCampus;
+        if (cleanDepartmentName) resolvedEmployee.departmentName = cleanDepartmentName;
         resolvedEmployee.payrollRole = role;
-        if (!validPositionsByRole[role]?.includes(resolvedEmployee.position)) {
+        if (requestedPosition) {
+          resolvedEmployee.position = requestedPosition;
+        } else if (!validPositionsByRole[role]?.includes(resolvedEmployee.position)) {
           resolvedEmployee.position = positionByRole[role] || 'teacher';
         }
         await resolvedEmployee.save(txOpts(session));
@@ -454,11 +590,13 @@ const createInternalAccount = async (req, res) => {
           fullName: createdAccount.profile.fullName,
           phone: createdAccount.profile.phone,
           email: createdAccount.profile.email,
+          ...(cleanCampus ? { campus: cleanCampus } : {}),
+          ...(cleanDepartmentName ? { departmentName: cleanDepartmentName } : {}),
           gender: null,
           contractType: null,
           startDate: null,
           qualification: { degree: '', major: '' },
-          position: positionByRole[role] || 'teacher',
+          position: requestedPosition || positionByRole[role] || 'teacher',
           payrollRole: role,
           status: 'active',
           salaryConfig: { baseSalary: 0, positionAllowance: 0, lunchAllowance: 0 }
@@ -545,7 +683,14 @@ const updateInternalAccount = async (req, res) => {
     const targetError = canManageInternalTarget(req.user, account);
     if (targetError) return res.status(409).json({ success: false, message: targetError });
 
-    const { username, password, profile = {}, role, status } = req.body;
+    const { username, password, profile = {}, role, status, position, campus, departmentName } = req.body;
+    const effectiveCheckRole = role !== undefined ? role : account.role;
+    const requestedUpdatePosition = position !== undefined && position !== null && String(position).trim()
+      ? String(position).trim()
+      : '';
+    if (requestedUpdatePosition && !validPositionsByRole[effectiveCheckRole]?.includes(requestedUpdatePosition)) {
+      return res.status(422).json({ success: false, message: 'Chức danh công việc không phù hợp với nhóm vai trò đã chọn' });
+    }
     if (username !== undefined && (typeof username !== 'string' || !usernamePattern.test(username.trim()))) {
       return res.status(422).json({ success: false, message: 'Tên đăng nhập không hợp lệ' });
     }
@@ -763,12 +908,22 @@ const updateInternalAccount = async (req, res) => {
         employee.fullName = target.profile.fullName;
         employee.phone = target.profile.phone || '';
         employee.email = target.profile.email || '';
+        if (campus !== undefined && String(campus).trim()) {
+          employee.campus = String(campus).trim().slice(0, 120);
+        }
+        if (departmentName !== undefined) {
+          employee.departmentName = String(departmentName || '').trim().slice(0, 120);
+        }
         employee.payrollRole = target.role;
-        if (!validPositionsByRole[target.role].includes(employee.position)) {
+        if (requestedUpdatePosition) {
+          employee.position = requestedUpdatePosition;
+        } else if (!validPositionsByRole[target.role].includes(employee.position)) {
           employee.position = positionByRole[target.role];
         }
         target.set('employeeInfo.position', employee.position);
         await employee.save({ session });
+      } else if (requestedUpdatePosition) {
+        target.set('employeeInfo.position', requestedUpdatePosition);
       }
 
       await target.save({ session });

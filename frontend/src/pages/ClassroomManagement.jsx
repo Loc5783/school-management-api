@@ -331,7 +331,7 @@ export default function ClassroomManagement() {
 
       {/* Render Modal qua Portal ra document.body để luôn phủ kín màn hình, không bao giờ bị kéo che */}
       {showForm && createPortal(
-        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) closeForm(); }}>
+        <div className="modal-backdrop" role="presentation">
           <form className="content-card classroom-form classroom-modal" onSubmit={submit}>
             <div className="card-heading">
               <div>
@@ -399,7 +399,7 @@ export default function ClassroomManagement() {
       )}
 
       {teacherAssignment && createPortal(
-        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !assigningTeacher) setTeacherAssignment(null); }}>
+        <div className="modal-backdrop" role="presentation">
           <form className="content-card classroom-form classroom-modal" onSubmit={submitTeacherAssignment}>
             <div className="card-heading">
               <div>

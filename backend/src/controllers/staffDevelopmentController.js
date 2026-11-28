@@ -12,7 +12,7 @@ const handle = (fn) => async (req, res) => {
   }
 };
 const versionOf = (record, value) => { if (!Number.isInteger(value) || value !== record.__v) throw fail('Dữ liệu đã thay đổi. Hãy tải lại.', 409); };
-const isTeacher = (position) => ['teacher', 'head_teacher', 'assistant_teacher'].includes(position);
+const isTeacher = (position) => ['teacher', 'head_teacher', 'assistant_teacher', 'youth_leader'].includes(position);
 const requireEmployee = async (id, session) => {
   checkId(id);
   const employee = await Employee.findOne({ _id: id, status: { $in: ['active', 'on_leave'] }, userId: { $ne: null } }).session(session);

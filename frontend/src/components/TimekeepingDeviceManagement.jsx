@@ -12,6 +12,7 @@ import {
   checkTimekeepingDeviceCapacity,
   pullTimekeepingDeviceUsers,
   linkPulledTimekeepingUser,
+  importPulledUsersFromDeviceToWeb,
   pushSmartSyncToDevice,
   syncAllTimekeepingDevicesSmart,
   pullAllTimekeepingDevicesFast,
@@ -73,26 +74,40 @@ const TARGET_SCOPES = {
 };
 
 function buildAutoDeviceCode(hostStr) {
-  const clean = String(hostStr || '')
+  const cleanIp = String(hostStr || '')
     .trim()
     .replace(/^https?:\/\//i, '')
     .split(':')[0]
-    .replace(/[^a-zA-Z0-9]/g, '-')
-    .toUpperCase();
-  return clean ? `HIK-${clean}` : `HIK-${Date.now().toString(36).toUpperCase()}`;
+    .split('/')[0];
+  const parts = cleanIp.split('.').filter(Boolean);
+  if (parts.length === 4 && parts.every((p) => /^\d+$/.test(p))) {
+    return `MCC-${parts[2]}-${parts[3]}`;
+  }
+  const clean = cleanIp.replace(/[^a-zA-Z0-9]/g, '-').toUpperCase().slice(0, 20);
+  return clean ? `MCC-${clean}` : `MCC-${Date.now().toString(36).toUpperCase()}`;
+}
+
+function formatReadableSerial(serialNumber) {
+  const sn = String(serialNumber || '').trim();
+  if (!sn) return '';
+  // Tách phần đuôi định danh duy nhất của Hikvision (VD: ENLA5403347 / ENGM5583841) để gọn và không bị cắt ngang chữ
+  const tailMatch = sn.match(/([A-Z]{2,4}\d{6,10})$/i);
+  if (tailMatch) return tailMatch[1].toUpperCase();
+  if (sn.length <= 14) return sn;
+  return sn.slice(-11);
 }
 
 function getDeviceStatusMeta(status) {
   if (status === 'ONLINE') {
-    return { label: 'Đang kết nối tốt', cls: 'hik-status-online' };
+    return { label: 'Đang trực tuyến', cls: 'hik-status-online' };
   }
   if (status === 'AUTH_FAILED') {
-    return { label: 'Chưa đúng mật khẩu máy', cls: 'hik-status-auth' };
+    return { label: 'Sai mật khẩu máy', cls: 'hik-status-auth' };
   }
   if (status === 'OFFLINE' || status === 'ERROR') {
-    return { label: 'Chưa liên lạc được máy', cls: 'hik-status-offline' };
+    return { label: 'Chưa kết nối được', cls: 'hik-status-offline' };
   }
-  return { label: 'Chưa kiểm tra kết nối', cls: 'hik-status-unverified' };
+  return { label: 'Chưa kiểm tra', cls: 'hik-status-unverified' };
 }
 
 export default function TimekeepingDeviceManagement() {
@@ -118,13 +133,21 @@ export default function TimekeepingDeviceManagement() {
   const [vendorSerialForm, setVendorSerialForm] = useState({ newSerialNumber: '', targetSchoolCode: '' });
   const [savingVendorSerial, setSavingVendorSerial] = useState(false);
 
-  // Bộ lọc Phân hiệu & Bảng danh sách khuôn mặt
+  // Bộ lọc Phân hiệu & Bảng danh sách khuôn mặt trên Web
   const [selectedCampus, setSelectedCampus] = useState('ALL');
   const [subjectFilter, setSubjectFilter] = useState('ALL');
   const [faceStatusFilter, setFaceStatusFilter] = useState('ALL');
+  const [syncStatusFilter, setSyncStatusFilter] = useState('ALL');
   const [searchInput, setSearchInput] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
   const [rosterPage, setRosterPage] = useState(1);
+
+  // Bộ lọc cho Bảng Hồ Sơ Thực Tế Đang Lưu Trong Máy Chấm Công
+  const [machineFilterId, setMachineFilterId] = useState('ALL');
+  const [machineMatchFilter, setMachineMatchFilter] = useState('ALL');
+  const [machineSearch, setMachineSearch] = useState('');
+  const [importingKey, setImportingKey] = useState('');
+  const machineSectionRef = useRef(null);
 
   // Dữ liệu tổng quan từ Backend
   const [campuses, setCampuses] = useState(['Cơ sở chính']);
@@ -136,9 +159,12 @@ export default function TimekeepingDeviceManagement() {
     activeStaffCount: 0,
     activeStudentCount: 0,
     withBiometricFaceCount: 0,
-    reclaimableInactiveCount: 0
+    reclaimableInactiveCount: 0,
+    storedOnDevicesCount: 0,
+    unmatchedOnDevicesCount: 0
   });
   const [devices, setDevices] = useState([]);
+  const [deviceStoredPeople, setDeviceStoredPeople] = useState([]);
   const [roster, setRoster] = useState([]);
   const [quickLinkCandidates, setQuickLinkCandidates] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 50, totalItems: 0, totalPages: 1 });
@@ -147,10 +173,8 @@ export default function TimekeepingDeviceManagement() {
   const loadSeqRef = useRef(0);
   const [notice, setNotice] = useState('');
   const [noticeType, setNoticeType] = useState('info');
+  const toastTimerRef = useRef(null);
   const [copiedUrl, setCopiedUrl] = useState(false);
-
-  // Phân khu hiển thị chính giúp giao diện gọn gàng, thuận tiện cho người quản lý ('devices' | 'roster' | 'webhook')
-  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState('devices');
 
   // Quét mạng LAN (Bước 1: Quét tìm thiết bị không bắt nhập mật khẩu; Bước 2: Chọn máy rồi mới nhập mật khẩu kết nối)
   const [scanningLan, setScanningLan] = useState(false);
@@ -169,14 +193,15 @@ export default function TimekeepingDeviceManagement() {
   });
   const [connectModalError, setConnectModalError] = useState('');
   const [connectingDiscovered, setConnectingDiscovered] = useState(false);
+  const [connectStepLabel, setConnectStepLabel] = useState('');
 
   // Form Thêm / Sửa máy chấm công
   const [showDeviceForm, setShowDeviceForm] = useState(false);
   const [editingDeviceId, setEditingDeviceId] = useState(null);
   const [savingDevice, setSavingDevice] = useState(false);
   const [deviceForm, setDeviceForm] = useState({
-    deviceCode: 'HIK-192-168-1-8',
-    name: 'Máy chấm công Hikvision (192.168.1.8)',
+    deviceCode: 'MCC-1-8',
+    name: 'Máy chấm công Cổng chính (192.168.1.8)',
     campus: 'Cơ sở chính',
     location: 'Sảnh đón trẻ Tầng 1',
     model: 'DS-K1T320MX',
@@ -197,14 +222,12 @@ export default function TimekeepingDeviceManagement() {
   const [biSyncingAll, setBiSyncingAll] = useState(false);
   const [deviceActionBusy, setDeviceActionBusy] = useState({});
   const [personActionBusy, setPersonActionBusy] = useState({});
-  const [lastPullReport, setLastPullReport] = useState(null);
   const [unmatchedLinkChoice, setUnmatchedLinkChoice] = useState({});
   const [linkingExtKey, setLinkingExtKey] = useState('');
   const [cameraTarget, setCameraTarget] = useState(null);
 
-  // Hộp xác nhận an toàn trước khi can thiệp phần cứng
+  // Hộp xác nhận an toàn trước khi đẩy toàn bộ / xóa / mở cửa
   const [confirmState, setConfirmState] = useState(null);
-  const [overwriteFacesOnPull, setOverwriteFacesOnPull] = useState(true);
   const [forceFullPush, setForceFullPush] = useState(false);
 
   // Các modal phụ trợ (Webhook Simulator, Nhật ký Webhook, Ánh xạ thủ công, Nhật ký Event Sync)
@@ -243,6 +266,12 @@ export default function TimekeepingDeviceManagement() {
   const showToast = useCallback((msg, type = 'success') => {
     setNotice(msg);
     setNoticeType(type);
+    if (toastTimerRef.current) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = window.setTimeout(() => {
+      setNotice('');
+    }, type === 'error' ? 9000 : 6500);
   }, []);
 
   const loadOverview = useCallback(async () => {
@@ -254,6 +283,7 @@ export default function TimekeepingDeviceManagement() {
         campus: selectedCampus,
         subjectType: subjectFilter,
         faceStatus: faceStatusFilter,
+        syncStatus: syncStatusFilter !== 'ALL' ? syncStatusFilter : undefined,
         search: appliedSearch || undefined,
         page: rosterPage,
         limit: 50
@@ -275,6 +305,7 @@ export default function TimekeepingDeviceManagement() {
         setKpi(payload.kpi);
       }
       setDevices(payload.devices || []);
+      setDeviceStoredPeople(payload.deviceStoredPeople || []);
       setRoster(payload.roster || []);
       setQuickLinkCandidates(payload.quickLinkCandidates || []);
       if (payload.pagination) {
@@ -288,7 +319,7 @@ export default function TimekeepingDeviceManagement() {
         setLoading(false);
       }
     }
-  }, [selectedCampus, subjectFilter, faceStatusFilter, appliedSearch, rosterPage, showToast]);
+  }, [selectedCampus, subjectFilter, faceStatusFilter, syncStatusFilter, appliedSearch, rosterPage, showToast]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -417,13 +448,15 @@ export default function TimekeepingDeviceManagement() {
       if (scanTimerRef.current) {
         window.clearInterval(scanTimerRef.current);
       }
+      if (toastTimerRef.current) {
+        window.clearTimeout(toastTimerRef.current);
+      }
     };
   }, []);
 
   // ─── 1. QUÉT TỰ ĐỘNG TRONG MẠNG LAN (BƯỚC 1: QUÉT KHÔNG CẦN MẬT KHẨU -> BƯỚC 2: CHỌN MÁY RỒI NHẬP MẬT KHẨU) ───
   const handleScanLan = async () => {
     if (scanningLan) return;
-    setActiveWorkspaceTab('devices');
     setScanningLan(true);
     setScanProgress(8);
     setScanStatusText('Đang kiểm tra kết nối mạng nội bộ tại máy tính trường...');
@@ -525,9 +558,10 @@ export default function TimekeepingDeviceManagement() {
       return;
     }
     setConnectModalError('');
+    setConnectStepLabel('');
     setConnectModalTarget(item);
     setConnectForm({
-      name: `Máy chấm công Cổng chính (${item.host})`,
+      name: `Máy chấm công (${item.host})`,
       location: 'Sảnh đón trẻ',
       username: 'admin',
       password: '',
@@ -547,27 +581,30 @@ export default function TimekeepingDeviceManagement() {
     const targetCampus = selectedCampus !== 'ALL' ? selectedCampus : (campuses[0] || 'Cơ sở chính');
     setConnectingDiscovered(true);
     setConnectModalError('');
+    setConnectStepLabel('Bước 1/3: Đang xác thực mật khẩu máy chấm công...');
 
     try {
       const bridgeUp = await refreshConnectorHealth();
       let verifiedModel = item.model || 'DS-K1T320MX';
       let verifiedSerial = item.serialNumber || '';
       let verifiedCapacity = item.maxUserCapacity || 500;
+      let inspectedInfo = null;
 
       // Xác thực mật khẩu trực tiếp với máy chấm công ngay trong mạng LAN trước khi lưu
       if (bridgeUp) {
-        const inspected = await verifyDiscoveredDeviceCredentialsViaConnector({
+        inspectedInfo = await verifyDiscoveredDeviceCredentialsViaConnector({
           host: item.host,
           port: item.port || 80,
           transportScheme: item.transportScheme || 'http',
           username: connectForm.username.trim() || 'admin',
           password: connectForm.password
         });
-        if (inspected?.model) verifiedModel = inspected.model;
-        if (inspected?.serialNumber) verifiedSerial = inspected.serialNumber;
-        if (inspected?.maxUserCapacity) verifiedCapacity = inspected.maxUserCapacity;
+        if (inspectedInfo?.model) verifiedModel = inspectedInfo.model;
+        if (inspectedInfo?.serialNumber) verifiedSerial = inspectedInfo.serialNumber;
+        if (inspectedInfo?.maxUserCapacity) verifiedCapacity = inspectedInfo.maxUserCapacity;
       }
 
+      setConnectStepLabel('Bước 2/3: Đang gắn & khóa bảo mật máy với phân hiệu...');
       const cleanDeviceName = connectForm.name.trim() || `Máy chấm công (${item.host})`;
       const createRes = await createTimekeepingDevice({
         deviceCode: buildAutoDeviceCode(item.host),
@@ -585,19 +622,24 @@ export default function TimekeepingDeviceManagement() {
         syncTargetScope: 'ALL',
         autoSyncOnChange: true,
         deviceUsername: connectForm.username.trim() || 'admin',
-        devicePassword: connectForm.password
+        devicePassword: connectForm.password,
+        connectorVerifiedInfo: inspectedInfo,
+        upsertExistingSameCampus: true
       });
 
       const createdDev = createRes.data?.data;
+      let pullMessage = '';
       if (createdDev?._id) {
+        setConnectStepLabel('Bước 3/3: Đang đọc danh sách hồ sơ & ảnh khuôn mặt lưu trong máy...');
         if (bridgeUp) {
-          const pullRes = await pullDeviceUsersViaLocalConnector(createdDev._id, false).catch(() => null);
-          if (pullRes?.data) setLastPullReport(pullRes.data);
+          const pullRes = await pullDeviceUsersViaLocalConnector(createdDev._id, true, false).catch(() => null);
+          pullMessage = pullRes?.message || '';
           await updateWebhookDomainViaLocalConnector(createdDev._id).catch(() => null);
         } else {
-          const pullRes = await pullTimekeepingDeviceUsers(createdDev._id, false).catch(() => null);
-          if (pullRes?.data?.data) setLastPullReport(pullRes.data.data);
+          const pullRes = await pullTimekeepingDeviceUsers(createdDev._id, true).catch(() => null);
+          pullMessage = pullRes?.data?.message || '';
         }
+        setMachineFilterId(createdDev._id);
       }
 
       setLanScanResult((prev) =>
@@ -621,11 +663,13 @@ export default function TimekeepingDeviceManagement() {
       );
 
       setConnectModalTarget(null);
+      setConnectStepLabel('');
+      await loadOverview();
       showToast(
-        `Đã kết nối máy chấm công "${cleanDeviceName}" (${item.host}), khóa bảo mật mã phần cứng với phân hiệu và đồng bộ danh sách về phần mềm thành công!`,
+        pullMessage ||
+          `Đã kết nối máy "${cleanDeviceName}" (${item.host}) và đọc xong toàn bộ danh sách hồ sơ đang lưu trong máy!`,
         'success'
       );
-      await loadOverview();
     } catch (err) {
       setConnectModalError(
         toFriendlyVietnameseNotice(
@@ -635,17 +679,17 @@ export default function TimekeepingDeviceManagement() {
       );
     } finally {
       setConnectingDiscovered(false);
+      setConnectStepLabel('');
     }
   };
 
   // ─── 2. THÊM / CẬP NHẬT / XÓA THIẾT BỊ ───
   const openAddDeviceForm = () => {
-    setActiveWorkspaceTab('devices');
     setEditingDeviceId(null);
     const defaultCampus = selectedCampus !== 'ALL' ? selectedCampus : (campuses[0] || 'Cơ sở chính');
     setDeviceForm({
-      deviceCode: 'HIK-192-168-1-8',
-      name: 'Máy chấm công Hikvision (192.168.1.8)',
+      deviceCode: 'MCC-1-8',
+      name: 'Máy chấm công Cổng chính (192.168.1.8)',
       campus: defaultCampus,
       location: 'Sảnh đón trẻ Tầng 1',
       model: 'DS-K1T320MX',
@@ -663,7 +707,6 @@ export default function TimekeepingDeviceManagement() {
   };
 
   const openEditDeviceForm = (dev) => {
-    setActiveWorkspaceTab('devices');
     setEditingDeviceId(dev._id);
     const scheme = dev.transportScheme || (dev.httpsPort === 80 ? 'http' : 'https');
     setDeviceForm({
@@ -853,32 +896,14 @@ export default function TimekeepingDeviceManagement() {
       setDeviceActionBusy((prev) => ({ ...prev, [targetDev._id]: 'bisync' }));
       try {
         if (isBridgeUp) {
-          const pullOut = await pullDeviceUsersViaLocalConnector(targetDev._id, false);
+          const pullOut = await pullDeviceUsersViaLocalConnector(targetDev._id, true, true);
           const pushOut = await pushRosterViaLocalConnector(targetDev._id, { fastDelta: true });
-          if (pullOut?.data) {
-            setLastPullReport(pullOut.data);
-          }
           showToast(
-            `Đã đồng bộ 2 chiều xong với "${targetDev.name}": kéo về ${pullOut?.data?.pulledFaceCount || 0} ảnh khuôn mặt & đẩy cập nhật ${pushOut?.data?.syncedUsers || 0} hồ sơ xuống máy!`,
+            `Đã đồng bộ 2 chiều xong với "${targetDev.name}": đọc ${pullOut?.data?.totalOnDevice || 0} hồ sơ từ máy & đồng bộ ${pushOut?.data?.syncedUsers || 0} hồ sơ từ Web xuống máy!`,
             'success'
           );
         } else {
           const res = await quickBidirectionalSyncSingleDevice(targetDev._id);
-          const pullSummary = res.data?.data?.pullSummary;
-          if (pullSummary) {
-            setLastPullReport({
-              deviceName: targetDev.name,
-              campus: targetDev.campus,
-              host: targetDev.host,
-              totalOnDevice: pullSummary.matchedUsers + (pullSummary.unmatchedOnDevice?.length || 0),
-              totalFacesOnDevice: pullSummary.pulledFaces,
-              matchedCount: pullSummary.matchedUsers,
-              pulledFaceCount: pullSummary.pulledFaces,
-              eventsIngested: pullSummary.eventsIngested,
-              syncedPeople: pullSummary.syncedPeople || [],
-              unmatchedOnDevice: pullSummary.unmatchedOnDevice || []
-            });
-          }
           showToast(res.data?.message || 'Đã đồng bộ 2 chiều thành công!', 'success');
         }
         await loadOverview();
@@ -893,47 +918,24 @@ export default function TimekeepingDeviceManagement() {
     setBiSyncingAll(true);
     try {
       if (isBridgeUp) {
-        let pulledFaces = 0;
         let syncedMachines = 0;
-        let combinedUnmatched = [];
+        let totalPulled = 0;
+        let totalPushed = 0;
         for (const dev of devices) {
-          const pOut = await pullDeviceUsersViaLocalConnector(dev._id, false);
-          await pushRosterViaLocalConnector(dev._id, { fastDelta: true });
-          pulledFaces += pOut?.data?.pulledFaceCount || 0;
-          combinedUnmatched = [...combinedUnmatched, ...(pOut?.data?.unmatchedOnDevice || [])];
+          const pOut = await pullDeviceUsersViaLocalConnector(dev._id, true, true);
+          const pushOut = await pushRosterViaLocalConnector(dev._id, { fastDelta: true });
+          totalPulled += pOut?.data?.totalOnDevice || 0;
+          totalPushed += pushOut?.data?.syncedUsers || 0;
           syncedMachines += 1;
         }
-        setLastPullReport({
-          deviceName: `Cụm ${syncedMachines} máy của phân hiệu`,
-          campus: campuses[0] || 'Phân hiệu hiện tại',
-          host: `${syncedMachines} máy`,
-          matchedCount: kpi.activeWithCodeCount,
-          pulledFaceCount: pulledFaces,
-          unmatchedOnDevice: combinedUnmatched.slice(0, 20)
-        });
         showToast(
-          `Đã đồng bộ 2 chiều hoàn tất cho ${syncedMachines} máy chấm công trong mạng của trường!`,
+          `Đã đồng bộ 2 chiều hoàn tất cho ${syncedMachines} máy chấm công: đọc ${totalPulled} hồ sơ từ máy & đồng bộ ${totalPushed} lượt hồ sơ từ Web xuống máy!`,
           'success'
         );
       } else {
         const res = await quickBidirectionalSyncDevices({
           campus: selectedCampus !== 'ALL' ? selectedCampus : undefined
         });
-        const pullSummary = res.data?.data?.pullSummary;
-        if (pullSummary) {
-          setLastPullReport({
-            deviceName: selectedCampus === 'ALL' ? 'Toàn cụm máy của phân hiệu' : `Cụm máy ${selectedCampus}`,
-            campus: selectedCampus === 'ALL' ? 'Phân hiệu hiện tại' : selectedCampus,
-            host: `${pullSummary.pulledDevices}/${pullSummary.totalDevices} máy`,
-            totalOnDevice: pullSummary.matchedUsers + (pullSummary.unmatchedOnDevice?.length || 0),
-            totalFacesOnDevice: pullSummary.pulledFaces,
-            matchedCount: pullSummary.matchedUsers,
-            pulledFaceCount: pullSummary.pulledFaces,
-            eventsIngested: pullSummary.eventsIngested,
-            syncedPeople: pullSummary.syncedPeople || [],
-            unmatchedOnDevice: pullSummary.unmatchedOnDevice || []
-          });
-        }
         showToast(res.data?.message || 'Đã đồng bộ 2 chiều toàn cụm máy!', 'success');
       }
       await loadOverview();
@@ -953,56 +955,28 @@ export default function TimekeepingDeviceManagement() {
         return;
       }
       if (isBridgeUp) {
+        let totalOnMachines = 0;
         let totalFaces = 0;
-        let totalMatched = 0;
-        let totalEvents = 0;
-        const allUnmatched = [];
         for (const dev of devices) {
-          const out = await pullDeviceUsersViaLocalConnector(dev._id, false);
-          totalFaces += out?.data?.pulledFaceCount || 0;
-          totalMatched += out?.data?.matchedCount || 0;
-          totalEvents += out?.data?.eventsIngested || 0;
-          if (Array.isArray(out?.data?.unmatchedOnDevice)) {
-            allUnmatched.push(...out.data.unmatchedOnDevice);
-          }
+          const out = await pullDeviceUsersViaLocalConnector(dev._id, true, true);
+          totalOnMachines += out?.data?.totalOnDevice || 0;
+          totalFaces += out?.data?.totalFacesOnDevice || out?.data?.pulledFaceCount || 0;
         }
-        setLastPullReport({
-          deviceName: `Cụm ${devices.length} máy của phân hiệu`,
-          campus: campuses[0] || 'Phân hiệu',
-          host: `${devices.length} máy`,
-          matchedCount: totalMatched,
-          pulledFaceCount: totalFaces,
-          eventsIngested: totalEvents,
-          unmatchedOnDevice: allUnmatched.slice(0, 25)
-        });
+        setMachineFilterId('ALL');
+        await loadOverview();
         showToast(
-          `Đã kéo thành công từ ${devices.length} máy chấm công về phần mềm: khớp ${totalMatched} hồ sơ, lưu ${totalFaces} ảnh khuôn mặt!`,
+          `Đã kéo thành công ${totalOnMachines} hồ sơ (${totalFaces} ảnh khuôn mặt) từ ${devices.length} máy chấm công! Bạn có thể xem và bấm "Lấy Ảnh & Tên về Web" ở bảng bên dưới.`,
           'success'
         );
       } else {
         const res = await pullAllTimekeepingDevicesFast({
           campus: selectedCampus !== 'ALL' ? selectedCampus : undefined,
-          overwriteExistingFaces: false,
+          overwriteExistingFaces: true,
           includeEvents: true
         });
-        const d = res.data?.data;
-        if (d) {
-          setLastPullReport({
-            deviceName: 'Cụm máy chấm công phân hiệu',
-            campus: selectedCampus === 'ALL' ? 'Phân hiệu hiện tại' : selectedCampus,
-            host: `${d.pulledDevices}/${d.totalDevices} máy`,
-            totalOnDevice: d.totalMatchedUsers + (d.unmatchedOnDevice?.length || 0),
-            totalFacesOnDevice: d.totalPulledFaces,
-            matchedCount: d.totalMatchedUsers,
-            pulledFaceCount: d.totalPulledFaces,
-            eventsIngested: d.totalEventsIngested,
-            syncedPeople: d.syncedPeople || [],
-            unmatchedOnDevice: d.unmatchedOnDevice || []
-          });
-        }
+        await loadOverview();
         showToast(res.data?.message || 'Đã kéo xong dữ liệu từ máy chấm công về phần mềm!', 'success');
       }
-      await loadOverview();
     } catch (err) {
       showToast(toFriendlyVietnameseNotice(err, 'Chưa kéo được dữ liệu từ cụm máy chấm công.'), 'error');
     } finally {
@@ -1036,26 +1010,9 @@ export default function TimekeepingDeviceManagement() {
     }
   };
 
-  const askPullUsersFromDevice = (dev) => {
-    setOverwriteFacesOnPull(true);
-    setConfirmState({
-      tone: 'primary',
-      mode: 'PULL_USERS',
-      deviceId: dev._id,
-      badge: 'KÉO NHANH TỪ MÁY CHẤM CÔNG VỀ HỆ THỐNG WEB',
-      title: `Kéo Ảnh Khuôn Mặt, Hồ Sơ & Lượt Chấm Công từ "${dev.name}" (${dev.host})?`,
-      description: `Hệ thống chạy đa luồng kết nối ISAPI tới máy tại "${dev.campus || 'Cơ sở chính'}" để kéo danh sách người dùng, ảnh khuôn mặt gốc (<200KB) và toàn bộ lượt chấm công lưu trong máy về Web.`,
-      bullets: [
-        'Tự động đối chiếu thông minh theo Bảng ánh xạ ID máy, Mã Nhân viên, Mã Học sinh hoặc Họ tên trong cùng phân hiệu.',
-        'Những hồ sơ mới đăng ký trực tiếp trên máy (chưa khớp mã) sẽ hiện ngay bên dưới để bạn bấm Ghép 1 chạm.',
-        'Ảnh kéo về lưu riêng vào kho "Ảnh quét mặt chấm công", tuyệt đối KHÔNG ghi đè lên Avatar hiển thị trên Web.'
-      ],
-      confirmLabel: 'Tiến hành Kéo nhanh về Web'
-    });
-  };
-
-  const executePullFromDevice = async (deviceId, overwrite) => {
-    setDeviceActionBusy((prev) => ({ ...prev, [deviceId]: 'pull' }));
+  // Kéo trực tiếp 1 chạm Ảnh + Tên + Hồ sơ từ 1 máy chấm công về Web (không bật popup rườm rà)
+  const handleDirectPullFromDevice = async (dev) => {
+    setDeviceActionBusy((prev) => ({ ...prev, [dev._id]: 'pull' }));
     try {
       const isBridgeUp = await refreshConnectorHealth();
       if (!isBridgeUp && isPublicCloudWebOrigin()) {
@@ -1063,66 +1020,103 @@ export default function TimekeepingDeviceManagement() {
         return;
       }
       if (isBridgeUp) {
-        const out = await pullDeviceUsersViaLocalConnector(deviceId, overwrite);
-        setLastPullReport(out?.data || null);
-        showToast(out?.message || 'Đã kéo thành công danh sách hồ sơ & ảnh khuôn mặt từ máy về phần mềm!', 'success');
+        const out = await pullDeviceUsersViaLocalConnector(dev._id, true, true);
+        setMachineFilterId(dev._id);
+        await loadOverview();
+        showToast(
+          out?.message ||
+            `Đã kéo dữ liệu hồ sơ, tên & ảnh khuôn mặt từ máy "${dev.name}" về phần mềm!`,
+          'success'
+        );
       } else {
         const [userRes, eventRes] = await Promise.all([
-          pullTimekeepingDeviceUsers(deviceId, overwrite),
-          syncTimekeepingDevice(deviceId).catch(() => null)
+          pullTimekeepingDeviceUsers(dev._id, true),
+          syncTimekeepingDevice(dev._id).catch(() => null)
         ]);
-        const pullData = userRes.data?.data || {};
         const ingestedEvents = eventRes?.data?.summary?.ingested || 0;
-        setLastPullReport({
-          ...pullData,
-          eventsIngested: ingestedEvents
-        });
+        setMachineFilterId(dev._id);
+        await loadOverview();
         showToast(
-          `${userRes.data?.message || 'Đã kéo hồ sơ & ảnh khuôn mặt về phần mềm'}${
+          `${userRes.data?.message || 'Đã kéo hồ sơ & ảnh khuôn mặt từ máy về phần mềm'}${
             ingestedEvents > 0 ? ` • Cập nhật thêm ${ingestedEvents} lượt điểm danh mới!` : ''
           }`,
           'success'
         );
       }
-      await loadOverview();
+      window.setTimeout(() => {
+        machineSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }, 120);
     } catch (err) {
       showToast(toFriendlyVietnameseNotice(err, 'Chưa kéo được dữ liệu từ máy chấm công.'), 'error');
     } finally {
-      setDeviceActionBusy((prev) => ({ ...prev, [deviceId]: null }));
+      setDeviceActionBusy((prev) => ({ ...prev, [dev._id]: null }));
     }
   };
 
-  const handleQuickLinkUnmatchedUser = async (unmatchedItem) => {
-    const key = `${unmatchedItem.deviceId}:${unmatchedItem.employeeNo}`;
+  // Lấy trực tiếp Ảnh & Tên của 1 người hoặc tất cả người trên máy lưu thẳng vào danh sách Web
+  const handleImportFromMachineToWeb = async ({ deviceId, externalPersonIds = [], importAll = false }) => {
+    const busyKey = importAll ? `ALL:${deviceId}` : `${deviceId}:${externalPersonIds[0] || ''}`;
+    if (importingKey) return;
+    setImportingKey(busyKey);
+    try {
+      if (deviceId === 'ALL_DEVICES') {
+        let totalNew = 0;
+        let totalUpdated = 0;
+        let totalFaces = 0;
+        for (const dev of devices) {
+          const r = await importPulledUsersFromDeviceToWeb(dev._id, {
+            importAll: true,
+            overwriteName: true,
+            overwriteFace: true
+          }).catch(() => null);
+          if (r?.data?.data) {
+            totalNew += r.data.data.importedNewCount || 0;
+            totalUpdated += r.data.data.updatedExistingCount || 0;
+            totalFaces += r.data.data.savedFacesCount || 0;
+          }
+        }
+        await loadOverview();
+        showToast(
+          `Đã lấy dữ liệu từ tất cả máy về Web: thêm mới ${totalNew} hồ sơ, cập nhật ${totalUpdated} hồ sơ và lưu ${totalFaces} ảnh khuôn mặt!`,
+          'success'
+        );
+      } else {
+        const res = await importPulledUsersFromDeviceToWeb(deviceId, {
+          externalPersonIds,
+          importAll,
+          overwriteName: true,
+          overwriteFace: true
+        });
+        await loadOverview();
+        showToast(res.data?.message || 'Đã lấy Ảnh & Họ tên từ máy chấm công về danh sách Web!', 'success');
+      }
+    } catch (err) {
+      showToast(toFriendlyVietnameseNotice(err, 'Chưa lấy được hồ sơ từ máy về danh sách Web.'), 'error');
+    } finally {
+      setImportingKey('');
+    }
+  };
+
+  const handleQuickLinkUnmatchedUser = async (storedItem) => {
+    const key = `${storedItem.deviceId}:${storedItem.externalPersonId}`;
     const chosenVal = unmatchedLinkChoice[key];
     if (!chosenVal) {
-      showToast('Vui lòng chọn Nhân sự hoặc Học sinh tương ứng ở ô bên cạnh trước khi bấm Ghép.', 'info');
+      showToast('Bạn hãy chọn Học sinh hoặc Nhân sự ở ô bên cạnh trước khi bấm Ghép nhé.', 'info');
       return;
     }
     const [subjectType, subjectId] = chosenVal.split('::');
     setLinkingExtKey(key);
     try {
-      const res = await linkPulledTimekeepingUser(unmatchedItem.deviceId, {
-        externalPersonId: unmatchedItem.employeeNo,
+      const res = await linkPulledTimekeepingUser(storedItem.deviceId, {
+        externalPersonId: storedItem.externalPersonId,
         subjectType,
         subjectId,
-        faceDataUrl: unmatchedItem.faceDataUrl || ''
+        faceDataUrl: storedItem.faceDataUrl || ''
       });
       showToast(res.data?.message || 'Đã ghép hồ sơ và lưu ảnh khuôn mặt thành công!', 'success');
-      setLastPullReport((prev) =>
-        prev
-          ? {
-              ...prev,
-              matchedCount: (prev.matchedCount || 0) + 1,
-              unmatchedOnDevice: (prev.unmatchedOnDevice || []).filter(
-                (u) => !(u.deviceId === unmatchedItem.deviceId && u.employeeNo === unmatchedItem.employeeNo)
-              )
-            }
-          : null
-      );
       await loadOverview();
     } catch (err) {
-      showToast(err.response?.data?.message || 'Lỗi khi ghép hồ sơ từ máy chấm công', 'error');
+      showToast(toFriendlyVietnameseNotice(err, 'Chưa ghép được hồ sơ từ máy chấm công.'), 'error');
     } finally {
       setLinkingExtKey('');
     }
@@ -1501,24 +1495,47 @@ export default function TimekeepingDeviceManagement() {
     }
   };
 
+  const filteredDevicePeople = deviceStoredPeople.filter((sp) => {
+    if (machineFilterId !== 'ALL' && sp.deviceId !== machineFilterId) return false;
+    if (machineMatchFilter === 'UNMATCHED' && sp.isMatchedOnWeb) return false;
+    if (machineMatchFilter === 'MATCHED' && !sp.isMatchedOnWeb) return false;
+    if (machineSearch.trim()) {
+      const q = machineSearch.trim().toLowerCase();
+      const hay = `${sp.externalPersonId} ${sp.nameOnDevice} ${sp.deviceName} ${sp.matchedPersonCode} ${sp.matchedFullName}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const unmatchedDevicePeopleCount = deviceStoredPeople.filter((sp) => {
+    if (machineFilterId !== 'ALL' && sp.deviceId !== machineFilterId) return false;
+    return !sp.isMatchedOnWeb;
+  }).length;
+
   return (
     <div className="hik-sync-workspace">
-      {notice && (
-        <div
-          className={`hik-alert hik-fade-in ${
-            noticeType === 'error'
-              ? 'hik-alert-error'
-              : noticeType === 'success'
-                ? 'hik-alert-success'
-                : 'hik-alert-info'
-          }`}
-        >
-          <span>{notice}</span>
-          <button type="button" className="hik-alert-close" onClick={() => setNotice('')} aria-label="Đóng thông báo">
-            <Icon name="close" size={14} />
-          </button>
-        </div>
-      )}
+      {/* Thông báo nổi góc trên bên phải để người quản lý luôn thấy rõ kết quả dù đang cuộn ở vị trí nào */}
+      {notice &&
+        createPortal(
+          <div
+            className={`hik-floating-toast ${
+              noticeType === 'error' ? 'error' : noticeType === 'success' ? 'success' : 'info'
+            }`}
+            role="status"
+            aria-live="polite"
+          >
+            <div style={{ minWidth: 0 }}>{notice}</div>
+            <button
+              type="button"
+              className="hik-alert-close"
+              onClick={() => setNotice('')}
+              aria-label="Đóng thông báo"
+            >
+              <Icon name="close" size={14} />
+            </button>
+          </div>,
+          document.body
+        )}
 
       {/* ─── DẢI TRẠNG THÁI CẦU NỐI NỘI BỘ 127.0.0.1:18686 TẠI MÁY TÍNH PHÂN HIỆU ─── */}
       <section
@@ -1596,1346 +1613,1270 @@ export default function TimekeepingDeviceManagement() {
         </div>
       </section>
 
-      {/* ─── 4 THẺ CHỈ SỐ TỔNG QUAN PHÂN HIỆU (LUÔN HIỂN THỊ GỌN TRÊN ĐẦU TRANG) ─── */}
-      <div className="hik-kpi-grid">
-        <div
-          className="hik-kpi-card hik-kpi-slate"
-          style={{ cursor: 'pointer' }}
-          onClick={() => setActiveWorkspaceTab('devices')}
-          role="presentation"
-        >
-          <p className="hik-kpi-label">Thiết bị chấm công tại trường</p>
-          <p className="hik-kpi-value">
-            {kpi.totalDevices} máy ({kpi.totalSlotCapacity} vị trí)
-          </p>
-          <p className="hik-kpi-sub">
-            {selectedCampus === 'ALL' ? `Phân hiệu: ${storedTenant?.name || campuses[0] || 'Toàn trường'}` : `Cơ sở: ${selectedCampus}`}
-          </p>
-        </div>
-
-        <div
-          className="hik-kpi-card hik-kpi-indigo"
-          style={{ cursor: 'pointer' }}
-          onClick={() => setActiveWorkspaceTab('roster')}
-          role="presentation"
-        >
-          <p className="hik-kpi-label">Nhân sự &amp; Học sinh hoạt động</p>
-          <p className="hik-kpi-value">{kpi.activeWithCodeCount} / 500 vị trí mỗi máy</p>
-          <p className="hik-kpi-sub">
-            {kpi.activeStaffCount} nhân sự • {kpi.activeStudentCount} học sinh đang học
-          </p>
-        </div>
-
-        <div
-          className="hik-kpi-card hik-kpi-emerald"
-          style={{ cursor: 'pointer' }}
-          onClick={() => setActiveWorkspaceTab('roster')}
-          role="presentation"
-        >
-          <p className="hik-kpi-label">Hồ sơ đã có ảnh khuôn mặt</p>
-          <p className="hik-kpi-value">{kpi.withBiometricFaceCount} ảnh khuôn mặt</p>
-          <p className="hik-kpi-sub">Chân dung rõ mặt, tự động căn chỉnh chuẩn</p>
-        </div>
-
-        <div
-          className="hik-kpi-card hik-kpi-rose"
-          style={{ cursor: 'pointer' }}
-          onClick={() => setActiveWorkspaceTab('devices')}
-          role="presentation"
-        >
-          <p className="hik-kpi-label">Nghỉ việc / Thôi học (Dọn bộ nhớ)</p>
-          <p className="hik-kpi-value">{kpi.reclaimableInactiveCount} vị trí có thể thu hồi</p>
-          <p className="hik-kpi-sub">Sẵn sàng giải phóng khỏi bộ nhớ máy</p>
-        </div>
-      </div>
-
-      {/* ─── THANH ĐIỀU HƯỚNG 3 PHÂN KHU RÕ RÀNG CHO NGƯỜI QUẢN LÝ ─── */}
-      <nav className="hik-workspace-tabs" aria-label="Phân khu quản lý máy chấm công">
-        <button
-          type="button"
-          className={`hik-workspace-tab ${activeWorkspaceTab === 'devices' ? 'active' : ''}`}
-          onClick={() => setActiveWorkspaceTab('devices')}
-        >
-          <Icon name="server" size={15} />
-          <span>Thiết bị &amp; Đồng bộ Mạng Trường</span>
-          <span className="hik-tab-badge">{devices.length}</span>
-        </button>
-
-        <button
-          type="button"
-          className={`hik-workspace-tab ${activeWorkspaceTab === 'roster' ? 'active' : ''}`}
-          onClick={() => setActiveWorkspaceTab('roster')}
-        >
-          <Icon name="camera" size={15} />
-          <span>Ảnh Khuôn Mặt Học Sinh &amp; Nhân Sự</span>
-          <span className="hik-tab-badge">{pagination.totalItems}</span>
-        </button>
-
-        <button
-          type="button"
-          className={`hik-workspace-tab ${activeWorkspaceTab === 'webhook' ? 'active' : ''}`}
-          onClick={() => setActiveWorkspaceTab('webhook')}
-        >
-          <Icon name="bell" size={15} />
-          <span>Nhận Điểm Danh Tự Động &amp; Nhật Ký</span>
-          {liveFeedEvents.length > 0 && <span className="hik-tab-badge">{liveFeedEvents.length}</span>}
-        </button>
-      </nav>
-
-      {/* ═══════════════════════════════════════════════════════════════════════════════
-          PHÂN KHU 1: THIẾT BỊ CHẤM CÔNG, QUÉT MẠNG LAN & ĐỒNG BỘ 2 CHIỀU
-         ═══════════════════════════════════════════════════════════════════════════════ */}
-      {activeWorkspaceTab === 'devices' && (
-        <>
-          <section className="hik-hero-card hik-fade-in">
-            <div className="hik-cluster-toolbar">
-              <div className="hik-hero-title-group">
-                <div className="hik-hero-heading-row">
-                  <h2>Máy Chấm Công &amp; Đồng Bộ Dữ Liệu Phân Hiệu</h2>
-                  <span className="hik-pill-discovery">Khóa bảo mật riêng theo Phân hiệu</span>
-                </div>
-                <p className="hik-hero-subtitle">
-                  Quét tìm máy chấm công trong mạng nội bộ, kéo ảnh khuôn mặt &amp; lượt điểm danh về Web hoặc đẩy danh sách học sinh, nhân sự xuống máy của trường.
-                </p>
-              </div>
-
-              {/* Thanh nút bấm phân nhóm hợp lý: Nhóm Khai báo/Quét mạng | Nhóm Đồng bộ (chỉ hiện khi đã có máy) */}
-              <div className="hik-toolbar-groups">
-                <div className="hik-toolbar-group">
-                  {canManageSync && (
-                    <button
-                      type="button"
-                      className={`hik-btn ${devices.length === 0 ? 'hik-btn-primary' : 'hik-btn-secondary'}`}
-                      disabled={scanningLan}
-                      onClick={handleScanLan}
-                    >
-                      <Icon
-                        name={scanningLan ? 'refresh' : 'radar'}
-                        size={15}
-                        className={scanningLan ? 'hik-spin' : ''}
-                      />
-                      <span>
-                        {scanningLan ? `Đang quét mạng (${scanProgress}%)...` : 'Quét tìm máy trong mạng'}
-                      </span>
-                    </button>
-                  )}
-
-                  {isAdmin && (
-                    <button
-                      type="button"
-                      className="hik-btn hik-btn-secondary"
-                      onClick={() => {
-                        if (showDeviceForm && !editingDeviceId) {
-                          setShowDeviceForm(false);
-                        } else {
-                          openAddDeviceForm();
-                        }
-                      }}
-                    >
-                      <Icon name="plus" size={15} />
-                      <span>{showDeviceForm && !editingDeviceId ? 'Đóng biểu mẫu' : 'Thêm thủ công'}</span>
-                    </button>
-                  )}
-                </div>
-
-                {canManageSync && devices.length > 0 && (
-                  <>
-                    <span className="hik-toolbar-divider" aria-hidden="true" />
-                    <div className="hik-toolbar-group">
-                      <button
-                        type="button"
-                        className="hik-btn hik-btn-secondary"
-                        disabled={pullingAll || syncingAll || biSyncingAll}
-                        onClick={handlePullAllFastFromCluster}
-                        title="Kéo ảnh khuôn mặt & lượt chấm công từ tất cả máy về phần mềm"
-                      >
-                        <Icon
-                          name={pullingAll ? 'refresh' : 'download'}
-                          size={15}
-                          className={pullingAll ? 'hik-spin' : ''}
-                        />
-                        <span>{pullingAll ? 'Đang kéo về Web...' : 'Kéo về Web'}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        className="hik-btn hik-btn-secondary"
-                        disabled={syncingAll || pullingAll || biSyncingAll}
-                        onClick={() => askPushSync(null)}
-                        title="Đẩy hồ sơ mới & ảnh khuôn mặt từ phần mềm xuống tất cả máy"
-                      >
-                        <Icon
-                          name={syncingAll ? 'refresh' : 'upload'}
-                          size={15}
-                          className={syncingAll ? 'hik-spin' : ''}
-                        />
-                        <span>{syncingAll ? 'Đang đẩy xuống...' : 'Đẩy xuống máy'}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        className="hik-btn hik-btn-primary"
-                        disabled={biSyncingAll || syncingAll || pullingAll}
-                        onClick={() => handleQuickBidirectionalCluster(null)}
-                        title="Đồng bộ trọn vẹn cả 2 chiều giữa phần mềm và toàn bộ máy chấm công của phân hiệu"
-                      >
-                        <Icon name="refresh" size={15} className={biSyncingAll ? 'hik-spin' : ''} />
-                        <span>{biSyncingAll ? 'Đang đồng bộ 2 chiều...' : 'Đồng bộ 2 chiều'}</span>
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
+      {/* ─── KHỐI 1: CỤM ĐIỀU KHIỂN CHÍNH, QUÉT MẠNG LAN & 4 CHỈ SỐ DUNG LƯỢNG ─── */}
+      <section className="hik-hero-card">
+        <div className="hik-cluster-toolbar">
+          <div className="hik-hero-title-group">
+            <div className="hik-hero-heading-row">
+              <h2>Quản Lý Máy Chấm Công &amp; Đồng Bộ 2 Chiều (Web ↔ Máy)</h2>
+              <span className="hik-pill-discovery">Khóa bảo mật riêng theo Phân hiệu</span>
             </div>
+            <p className="hik-hero-subtitle">
+              <strong>Kéo từ máy về Web:</strong> lấy danh sách hồ sơ, họ tên, ảnh khuôn mặt &amp; lượt quẹt đang lưu trong máy.{' '}
+              <strong>Đồng bộ Web xuống máy:</strong> nạp danh sách học sinh &amp; nhân sự từ Web xuống bộ nhớ máy chấm công.
+            </p>
+          </div>
 
-            {/* Thanh định danh Phân hiệu đang thao tác */}
-            <div className="hik-campus-bar">
-              <div className="hik-campus-tabs">
-                <span className="hik-campus-label">Phạm vi đồng bộ an toàn:</span>
-                {campuses.length > 1 && isVendorSupport ? (
-                  <>
-                    <button
-                      type="button"
-                      className={`hik-campus-chip ${selectedCampus === 'ALL' ? 'active' : ''}`}
-                      onClick={() => {
-                        setSelectedCampus('ALL');
-                        setRosterPage(1);
-                      }}
-                    >
-                      Tất cả cơ sở ({campuses.length})
-                    </button>
-                    {campuses.map((cName) => (
-                      <button
-                        key={cName}
-                        type="button"
-                        className={`hik-campus-chip ${selectedCampus === cName ? 'active' : ''}`}
-                        onClick={() => {
-                          setSelectedCampus(cName);
-                          setRosterPage(1);
-                        }}
-                      >
-                        {cName}
-                      </button>
-                    ))}
-                  </>
-                ) : (
-                  <span
-                    className="hik-campus-chip active"
-                    style={{ cursor: 'default', display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                  >
-                    <Icon name="building" size={13} />
-                    <span>{storedTenant?.name || campuses[0] || 'Phân hiệu hiện tại'}</span>
-                  </span>
-                )}
-              </div>
-              <span style={{ fontSize: 12, color: '#475569', fontWeight: 700 }}>
-                Mã phân hiệu khóa phần cứng: <strong style={{ color: '#0f172a' }}>{resolvedSchoolCode || '—'}</strong>
-                {isVendorSupport ? ' • Phiên Kỹ thuật Nhà cung cấp' : ''}
-              </span>
-            </div>
-
-            {/* HIỆU ỨNG ĐANG QUÉT RADAR TRỰC TIẾP TRONG MẠNG LAN */}
-            {scanningLan && (
-              <div className="hik-radar-scanning-box hik-fade-in" role="status" aria-live="polite">
-                <div className="hik-radar-orb">
-                  <Icon name="radar" size={22} />
-                </div>
-                <div className="hik-scan-progress-wrap">
-                  <div className="hik-scan-progress-head">
-                    <strong>Đang dò tìm máy chấm công trong mạng nội bộ của trường...</strong>
-                    <span className="hik-scan-progress-pct">{scanProgress}%</span>
-                  </div>
-                  <div className="hik-scan-progress-track">
-                    <div
-                      className="hik-scan-progress-fill"
-                      style={{ width: `${Math.max(8, scanProgress)}%` }}
-                    />
-                  </div>
-                  <p className="hik-scan-progress-sub">
-                    {scanStatusText ||
-                      'Đang kiểm tra các thiết bị Hikvision đang bật trong mạng LAN — bạn chưa cần nhập mật khẩu ở bước này.'}
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* KẾT QUẢ QUÉT MẠNG LAN (BƯỚC 1: HIỂN THỊ DANH SÁCH MÁY RÕ RÀNG — BẤM KẾT NỐI MỚI NHẬP MẬT KHẨU) */}
-            {!scanningLan && lanScanResult && (
-              <div className="hik-lan-panel hik-fade-in">
-                <div className="hik-lan-header">
-                  <div>
-                    <h4>
-                      <Icon name="radar" size={17} />
-                      <span>
-                        {lanScanResult.needsLocalConnector
-                          ? 'Cần bật "Bộ kết nối 1 chạm" trên máy tính này để quét mạng nội bộ của trường'
-                          : `Thiết bị tìm thấy trong mạng trường (${lanScanResult.scannedSubnets?.join(', ') || 'Mạng nội bộ'}) — ${
-                              lanScanResult.discoveredDevices?.length || 0
-                            } máy`}
-                      </span>
-                    </h4>
-                    <p>
-                      {lanScanResult.needsLocalConnector
-                        ? 'Vì trang Web đang mở qua tên miền Internet, bạn hãy bật Bộ kết nối 1 chạm trên máy tính đặt tại trường để nhìn thấy máy chấm công trong mạng của phân hiệu.'
-                        : 'Chọn máy chấm công tìm thấy bên dưới và bấm "Kết nối & Gắn vào phân hiệu" để nhập mật khẩu xác nhận.'}
-                    </p>
-                  </div>
-                  <div className="hik-lan-controls">
-                    <input
-                      type="text"
-                      name="hn_campus_lan_ip_filter"
-                      autoComplete="off"
-                      spellCheck={false}
-                      value={subnetPrefix}
-                      onChange={(e) => setSubnetPrefix(e.target.value)}
-                      placeholder="Tùy chọn dải mạng / IP (VD: 192.168.1)"
-                    />
-                    <button
-                      type="button"
-                      className="hik-btn hik-btn-secondary hik-btn-sm"
-                      disabled={scanningLan}
-                      onClick={handleScanLan}
-                    >
-                      <Icon name="refresh" size={13} />
-                      <span>Quét lại</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="hik-icon-close"
-                      onClick={() => setLanScanResult(null)}
-                      aria-label="Đóng kết quả quét mạng"
-                    >
-                      <Icon name="close" size={16} />
-                    </button>
-                  </div>
-                </div>
-
-                {!lanScanResult.needsLocalConnector && connectorHealth.needsUpdate && (
-                  <div
-                    style={{
-                      background: '#fffbeb',
-                      border: '1px solid #fcd34d',
-                      borderRadius: 11,
-                      padding: '10px 14px',
-                      fontSize: 12.5,
-                      color: '#78350f',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 10,
-                      flexWrap: 'wrap'
-                    }}
-                  >
-                    <span>
-                      <strong>Lưu ý:</strong> Máy tính này đang chạy Bộ kết nối phiên bản cũ (<code>v{connectorHealth.version || '2.0.0'}</code>) nên có thể chưa hiện đủ tất cả máy chấm công trong mạng. Bạn hãy bấm cập nhật lên <code>v2.2.0</code> rồi bấm <strong>Quét lại</strong> nhé!
-                    </span>
-                    <button
-                      type="button"
-                      className="hik-btn hik-btn-primary hik-btn-sm"
-                      disabled={downloadingConnector}
-                      onClick={handleDownloadConnectorZip}
-                    >
-                      <Icon name="download" size={13} />
-                      <span>Cập Nhật Bộ Kết Nối (.zip)</span>
-                    </button>
-                  </div>
-                )}
-
-                {lanScanResult.needsLocalConnector ? (
-                  <div
-                    style={{
-                      background: '#ffffff',
-                      padding: '14px 18px',
-                      borderRadius: 12,
-                      fontSize: 13,
-                      color: '#1e293b',
-                      display: 'flex',
-                      flexWrap: 'wrap',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 12,
-                      border: '1px solid #fde68a'
-                    }}
-                  >
-                    <div style={{ flex: '1 1 380px', lineHeight: 1.55 }}>
-                      <strong>Hướng dẫn kết nối 2 bước nhanh chóng (chỉ thực hiện 1 lần đầu):</strong>
-                      <div style={{ marginTop: 4, color: '#475569' }}>
-                        <strong>Bước 1:</strong> Bấm nút <strong>&ldquo;Tải Bộ Kết Nối 1 Chạm (.zip)&rdquo;</strong> bên phải rồi giải nén ra máy tính.<br />
-                        <strong>Bước 2:</strong> Mở tệp <code>1-Bat-Ket-Noi-1-Cham.bat</code>, sau đó bấm <strong>&ldquo;Đã bật xong — Quét ngay&rdquo;</strong>.
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      <button
-                        type="button"
-                        className="hik-btn hik-btn-secondary hik-btn-sm"
-                        disabled={downloadingConnector}
-                        onClick={handleDownloadConnectorZip}
-                      >
-                        <Icon name="download" size={14} />
-                        <span>{downloadingConnector ? 'Đang tải...' : 'Tải Bộ Kết Nối 1 Chạm (.zip)'}</span>
-                      </button>
-                      <button
-                        type="button"
-                        className="hik-btn hik-btn-primary hik-btn-sm"
-                        disabled={scanningLan}
-                        onClick={handleScanLan}
-                      >
-                        <Icon name="refresh" size={14} />
-                        <span>Đã bật xong — Quét ngay</span>
-                      </button>
-                    </div>
-                  </div>
-                ) : lanScanResult.discoveredDevices?.length === 0 ? (
-                  <div
-                    style={{
-                      background: '#ffffff',
-                      padding: '14px 16px',
-                      borderRadius: 12,
-                      fontSize: 13,
-                      color: '#475569',
-                      lineHeight: 1.55,
-                      border: '1px solid #e2e8f0'
-                    }}
-                  >
-                    Chưa tìm thấy máy chấm công nào đang bật trong dải mạng này. Bạn hãy kiểm tra xem máy chấm công ở cổng đã cắm điện và dùng chung mạng Wi-Fi/dây mạng với máy tính này chưa, hoặc nhập địa chỉ của máy (ví dụ: <code>192.168.1.8</code>) vào ô bên trên rồi bấm <strong>Quét lại</strong>.
-                  </div>
-                ) : (
-                  <div className="hik-lan-list">
-                    {lanScanResult.discoveredDevices.map((item) => (
-                      <div key={`${item.host}:${item.port}`} className="hik-lan-item">
-                        <div className="hik-lan-item-main">
-                          <span className="hik-lan-device-icon">
-                            <Icon name="server" size={20} />
-                          </span>
-                          <div className="hik-lan-item-copy">
-                            <div className="hik-lan-item-title">
-                              <span>Máy chấm công Hikvision — {item.host}</span>
-                              {!item.lockedToOtherCampus && !item.alreadySaved && (
-                                <span className="hik-status-pill hik-status-online" style={{ fontSize: 11 }}>
-                                  Đang bật trong mạng LAN
-                                </span>
-                              )}
-                            </div>
-                            <div className="hik-lan-item-meta">
-                              Dòng máy: <strong>{item.model || 'DS-K1T320MX'}</strong> · Cổng kết nối: {item.port || 80}
-                              {item.serialNumber ? ` · Mã phần cứng: ${item.serialNumber}` : ''}
-                              {item.currentStoredUsers !== null && item.currentStoredUsers !== undefined
-                                ? ` · Đang lưu ${item.currentStoredUsers}/${item.maxUserCapacity || 500} hồ sơ`
-                                : ''}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="hik-lan-item-actions">
-                          {item.lockedToOtherCampus ? (
-                            <span
-                              className="hik-status-pill hik-status-offline"
-                              title="Thiết bị này đã khóa cho phân hiệu khác để chống kéo/đẩy nhầm"
-                            >
-                              <Icon name="lock" size={12} /> Thuộc phân hiệu khác
-                            </span>
-                          ) : item.alreadySaved ? (
-                            <span className="hik-status-pill hik-status-online">
-                              <Icon name="check" size={12} /> Đã gắn với phân hiệu ({item.savedName || item.savedCampus})
-                            </span>
-                          ) : isAdmin ? (
-                            <button
-                              type="button"
-                              className="hik-btn hik-btn-primary"
-                              onClick={() => openConnectDiscoveredModal(item)}
-                            >
-                              <Icon name="link" size={15} />
-                              <span>Kết nối &amp; Gắn vào phân hiệu</span>
-                            </button>
-                          ) : null}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
-
-          {/* ─── BIỂU MẪU THÊM / SỬA MÁY CHẤM CÔNG THỦ CÔNG ─── */}
-          {showDeviceForm && isAdmin && (
-            <form className="hik-device-form-card hik-fade-in" autoComplete="off" onSubmit={handleSaveDevice}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-                <div>
-                  <h3 style={{ margin: '0 0 3px', fontSize: 15, fontWeight: 800, color: '#0f172a' }}>
-                    {editingDeviceId
-                      ? 'Cập Nhật Cấu Hình Máy Chấm Công Của Phân Hiệu'
-                      : 'Thêm Máy Chấm Công Thủ Công Cho Phân Hiệu'}
-                  </h3>
-                  <p style={{ margin: 0, fontSize: 12, color: '#64748b' }}>
-                    Mật khẩu quản trị máy chấm công được mã hóa và khóa bảo mật riêng cho phân hiệu {resolvedSchoolCode}.
-                  </p>
-                </div>
+          <div className="hik-toolbar-groups">
+            <div className="hik-toolbar-group">
+              {canManageSync && (
                 <button
                   type="button"
-                  className="hik-icon-close"
+                  className={`hik-btn ${devices.length === 0 ? 'hik-btn-primary' : 'hik-btn-secondary'}`}
+                  disabled={scanningLan}
+                  onClick={handleScanLan}
+                >
+                  <Icon
+                    name={scanningLan ? 'refresh' : 'radar'}
+                    size={15}
+                    className={scanningLan ? 'hik-spin' : ''}
+                  />
+                  <span>
+                    {scanningLan ? `Đang quét mạng (${scanProgress}%)...` : 'Quét tìm máy trong mạng'}
+                  </span>
+                </button>
+              )}
+
+              {isAdmin && (
+                <button
+                  type="button"
+                  className="hik-btn hik-btn-secondary"
                   onClick={() => {
-                    setShowDeviceForm(false);
-                    setEditingDeviceId(null);
+                    if (showDeviceForm && !editingDeviceId) {
+                      setShowDeviceForm(false);
+                    } else {
+                      openAddDeviceForm();
+                    }
                   }}
                 >
-                  <Icon name="close" size={16} />
+                  <Icon name="plus" size={15} />
+                  <span>{showDeviceForm && !editingDeviceId ? 'Đóng biểu mẫu' : 'Thêm máy thủ công'}</span>
                 </button>
-              </div>
+              )}
+            </div>
 
-              {/* Chặn trình duyệt tự điền tài khoản Web */}
-              <input type="text" name="fake_dev_user" autoComplete="username" tabIndex={-1} aria-hidden="true" style={{ position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none' }} />
-              <input type="password" name="fake_dev_pass" autoComplete="current-password" tabIndex={-1} aria-hidden="true" style={{ position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none' }} />
-
-              <div className="hik-form-grid-4">
-                <div className="hik-field">
-                  <label>Tên gọi máy chấm công *</label>
-                  <input
-                    required
-                    value={deviceForm.name}
-                    onChange={(e) => setDeviceForm({ ...deviceForm, name: e.target.value })}
-                    placeholder="VD: Máy chấm công Cổng chính"
-                  />
-                </div>
-
-                <div className="hik-field">
-                  <label>Phân hiệu / Cơ sở lắp đặt *</label>
-                  <select
-                    value={deviceForm.campus}
-                    onChange={(e) => setDeviceForm({ ...deviceForm, campus: e.target.value })}
-                  >
-                    {campuses.map((cName) => (
-                      <option key={cName} value={cName}>
-                        {cName}
-                      </option>
-                    ))}
-                    <option value="ALL">Dùng chung tất cả phân hiệu</option>
-                  </select>
-                </div>
-
-                <div className="hik-field">
-                  <label>Vị trí cửa lắp đặt</label>
-                  <input
-                    value={deviceForm.location}
-                    onChange={(e) => setDeviceForm({ ...deviceForm, location: e.target.value })}
-                    placeholder="VD: Sảnh đón trẻ Tầng 1"
-                  />
-                </div>
-
-                <div className="hik-field">
-                  <label>Mã định danh máy *</label>
-                  <input
-                    required
-                    disabled={Boolean(editingDeviceId)}
-                    value={deviceForm.deviceCode}
-                    onChange={(e) => setDeviceForm({ ...deviceForm, deviceCode: e.target.value.toUpperCase() })}
-                    placeholder="VD: HIK-CS1-01"
-                  />
-                </div>
-              </div>
-
-              <div className="hik-form-grid-4">
-                <div className="hik-field">
-                  <label>Địa chỉ IP mạng nội bộ *</label>
-                  <input
-                    required
-                    value={deviceForm.host}
-                    onChange={(e) => {
-                      const nextHost = e.target.value;
-                      setDeviceForm((prev) => ({
-                        ...prev,
-                        host: nextHost,
-                        ...(!editingDeviceId
-                          ? {
-                              deviceCode: buildAutoDeviceCode(nextHost),
-                              name: `Máy chấm công Hikvision (${nextHost.trim() || 'LAN'})`
-                            }
-                          : {})
-                      }));
-                    }}
-                    placeholder="VD: 192.168.1.8"
-                  />
-                </div>
-
-                <div className="hik-field">
-                  <label>Giao thức &amp; Cổng kết nối</label>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <select
-                      style={{ width: '48%' }}
-                      value={deviceForm.transportScheme}
-                      onChange={(e) => {
-                        const scheme = e.target.value;
-                        setDeviceForm((prev) => ({
-                          ...prev,
-                          transportScheme: scheme,
-                          port: scheme === 'https' && prev.port === 80 ? 443 : scheme === 'http' && prev.port === 443 ? 80 : prev.port
-                        }));
-                      }}
-                    >
-                      <option value="http">HTTP</option>
-                      <option value="https">HTTPS</option>
-                    </select>
-                    <input
-                      style={{ width: '52%' }}
-                      type="number"
-                      required
-                      value={deviceForm.port}
-                      onChange={(e) => setDeviceForm({ ...deviceForm, port: Number(e.target.value) })}
-                    />
-                  </div>
-                </div>
-
-                <div className="hik-field">
-                  <label>Tài khoản quản trị máy</label>
-                  <input
-                    required
-                    name="hn_device_admin_account"
-                    autoComplete="off"
-                    value={deviceForm.deviceUsername}
-                    onChange={(e) => setDeviceForm({ ...deviceForm, deviceUsername: e.target.value })}
-                    placeholder="admin"
-                  />
-                </div>
-
-                <div className="hik-field">
-                  <label>
-                    Mật khẩu máy chấm công {editingDeviceId ? '(Để trống nếu giữ nguyên)' : ''}
-                  </label>
-                  <input
-                    type="password"
-                    name="hn_device_admin_secret"
-                    autoComplete="new-password"
-                    value={deviceForm.devicePassword}
-                    onChange={(e) => setDeviceForm({ ...deviceForm, devicePassword: e.target.value })}
-                    placeholder={editingDeviceId ? 'Giữ nguyên mật khẩu đã lưu' : 'Nhập mật khẩu của máy chấm công'}
-                  />
-                </div>
-              </div>
-
-              <div className="hik-form-grid-3">
-                <div className="hik-field">
-                  <label>Chiến lược phân bổ bộ nhớ 500 vị trí</label>
-                  <select
-                    value={deviceForm.syncAllocationMode}
-                    onChange={(e) => setDeviceForm({ ...deviceForm, syncAllocationMode: e.target.value })}
-                  >
-                    {Object.entries(ALLOCATION_MODES).map(([key, meta]) => (
-                      <option key={key} value={key}>
-                        {meta.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="hik-field">
-                  <label>Đối tượng đồng bộ xuống máy này</label>
-                  <select
-                    value={deviceForm.syncTargetScope}
-                    onChange={(e) => setDeviceForm({ ...deviceForm, syncTargetScope: e.target.value })}
-                  >
-                    {Object.entries(TARGET_SCOPES).map(([key, label]) => (
-                      <option key={key} value={key}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="hik-field">
-                  <label>Giới hạn bộ nhớ máy (Số vị trí tối đa)</label>
-                  <input
-                    type="number"
-                    min="10"
-                    max="50000"
-                    value={deviceForm.maxUserCapacity}
-                    onChange={(e) => setDeviceForm({ ...deviceForm, maxUserCapacity: Number(e.target.value) })}
-                  />
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', paddingTop: 4 }}>
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 700, color: '#1d4ed8', cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={deviceForm.autoSyncOnChange}
-                    onChange={(e) => setDeviceForm({ ...deviceForm, autoSyncOnChange: e.target.checked })}
-                  />
-                  <span>Tự động ưu tiên đồng bộ hồ sơ thuộc phân hiệu {deviceForm.campus === 'ALL' ? 'toàn trường' : deviceForm.campus}</span>
-                </label>
-
-                <div style={{ display: 'flex', gap: 8 }}>
+            {canManageSync && devices.length > 0 && (
+              <>
+                <span className="hik-toolbar-divider" aria-hidden="true" />
+                <div className="hik-toolbar-group">
                   <button
                     type="button"
                     className="hik-btn hik-btn-secondary"
+                    disabled={pullingAll || syncingAll || biSyncingAll}
+                    onClick={handlePullAllFastFromCluster}
+                    title="Đọc toàn bộ hồ sơ, họ tên, ảnh khuôn mặt & lượt chấm công từ các máy về Web"
+                  >
+                    <Icon
+                      name={pullingAll ? 'refresh' : 'download'}
+                      size={15}
+                      className={pullingAll ? 'hik-spin' : ''}
+                    />
+                    <span>{pullingAll ? 'Đang đọc từ máy...' : 'Kéo Ảnh & Tên từ máy về'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="hik-btn hik-btn-secondary"
+                    disabled={syncingAll || pullingAll || biSyncingAll}
+                    onClick={() => askPushSync(null)}
+                    title="Đồng bộ danh sách Học sinh & Nhân sự từ Web xuống tất cả máy chấm công"
+                  >
+                    <Icon
+                      name={syncingAll ? 'refresh' : 'upload'}
+                      size={15}
+                      className={syncingAll ? 'hik-spin' : ''}
+                    />
+                    <span>{syncingAll ? 'Đang đồng bộ xuống...' : 'Đồng bộ Web xuống máy'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="hik-btn hik-btn-primary"
+                    disabled={biSyncingAll || syncingAll || pullingAll}
+                    onClick={() => handleQuickBidirectionalCluster(null)}
+                    title="Đồng bộ trọn vẹn cả 2 chiều giữa Web và toàn bộ máy chấm công của phân hiệu"
+                  >
+                    <Icon name="refresh" size={15} className={biSyncingAll ? 'hik-spin' : ''} />
+                    <span>{biSyncingAll ? 'Đang chạy 2 chiều...' : 'Đồng bộ 2 chiều'}</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Thanh định danh Phân hiệu đang thao tác */}
+        <div className="hik-campus-bar">
+          <div className="hik-campus-tabs">
+            <span className="hik-campus-label">Phân hiệu đang quản lý:</span>
+            {campuses.length > 1 && isVendorSupport ? (
+              <>
+                <button
+                  type="button"
+                  className={`hik-campus-chip ${selectedCampus === 'ALL' ? 'active' : ''}`}
+                  onClick={() => {
+                    setSelectedCampus('ALL');
+                    setRosterPage(1);
+                  }}
+                >
+                  Tất cả cơ sở ({campuses.length})
+                </button>
+                {campuses.map((cName) => (
+                  <button
+                    key={cName}
+                    type="button"
+                    className={`hik-campus-chip ${selectedCampus === cName ? 'active' : ''}`}
                     onClick={() => {
-                      setShowDeviceForm(false);
-                      setEditingDeviceId(null);
+                      setSelectedCampus(cName);
+                      setRosterPage(1);
                     }}
                   >
-                    Hủy
+                    {cName}
                   </button>
-                  <button type="submit" className="hik-btn hik-btn-primary" disabled={savingDevice}>
-                    <Icon name={savingDevice ? 'refresh' : 'check'} size={15} className={savingDevice ? 'hik-spin' : ''} />
-                    <span>{savingDevice ? 'Đang lưu & kiểm tra...' : 'Lưu Máy & Kiểm Tra Dung Lượng'}</span>
-                  </button>
-                </div>
-              </div>
-            </form>
-          )}
+                ))}
+              </>
+            ) : (
+              <span
+                className="hik-campus-chip active"
+                style={{ cursor: 'default', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              >
+                <Icon name="building" size={13} />
+                <span>{storedTenant?.name || campuses[0] || 'Phân hiệu hiện tại'}</span>
+              </span>
+            )}
+          </div>
+          <span style={{ fontSize: 12, color: '#475569', fontWeight: 700 }}>
+            Mã trường: <strong style={{ color: '#0f172a' }}>{resolvedSchoolCode || '—'}</strong>
+            {isVendorSupport ? ' • Phiên Kỹ thuật Nhà cung cấp' : ''}
+          </span>
+        </div>
 
-          {/* ─── BÁO CÁO KẾT QUẢ KÉO NHANH / ĐỒNG BỘ 2 CHIỀU & GHÉP NHANH HỒ SƠ ─── */}
-          {lastPullReport && (
-            <section className="hik-pull-banner hik-fade-in">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
-                <div>
-                  <h4 style={{ margin: '0 0 4px', fontSize: 14, fontWeight: 800, color: '#064e3b', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <Icon name="check" size={16} />
-                    <span>
-                      Kết quả đồng bộ tại &ldquo;{lastPullReport.deviceName}&rdquo; ({lastPullReport.campus} • {lastPullReport.host})
-                    </span>
-                  </h4>
-                  <p style={{ margin: 0, fontSize: 12.5, color: '#065f46' }}>
-                    Khớp tự động <strong>{lastPullReport.matchedCount || 0} hồ sơ</strong> của trường • Tải về{' '}
-                    <strong>{lastPullReport.pulledFaceCount || 0} ảnh khuôn mặt (&lt;200KB)</strong>
-                    {lastPullReport.eventsIngested !== undefined
-                      ? ` • Ghi nhận ${lastPullReport.eventsIngested} lượt chấm công / điểm danh mới.`
-                      : '.'}
-                  </p>
-                </div>
+        {/* HIỆU ỨNG ĐANG QUÉT RADAR TRỰC TIẾP TRONG MẠNG LAN */}
+        {scanningLan && (
+          <div className="hik-radar-scanning-box hik-fade-in" role="status" aria-live="polite">
+            <div className="hik-radar-orb">
+              <Icon name="radar" size={22} />
+            </div>
+            <div className="hik-scan-progress-wrap">
+              <div className="hik-scan-progress-head">
+                <strong>Đang dò tìm tất cả máy chấm công trong mạng nội bộ của trường...</strong>
+                <span className="hik-scan-progress-pct">{scanProgress}%</span>
+              </div>
+              <div className="hik-scan-progress-track">
+                <div
+                  className="hik-scan-progress-fill"
+                  style={{ width: `${Math.max(8, scanProgress)}%` }}
+                />
+              </div>
+              <p className="hik-scan-progress-sub">
+                {scanStatusText ||
+                  'Đang kiểm tra các thiết bị Hikvision đang bật trong mạng LAN — bạn chưa cần nhập mật khẩu ở bước này.'}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* KẾT QUẢ QUÉT MẠNG LAN (HIỂN THỊ MÃ DÒNG MÁY & SỐ SERI GỌN GÀNG, RÕ NGHĨA) */}
+        {!scanningLan && lanScanResult && (
+          <div className="hik-lan-panel hik-fade-in">
+            <div className="hik-lan-header">
+              <div>
+                <h4>
+                  <Icon name="radar" size={17} />
+                  <span>
+                    {lanScanResult.needsLocalConnector
+                      ? 'Cần bật "Bộ kết nối 1 chạm" trên máy tính này để quét mạng nội bộ của trường'
+                      : `Thiết bị tìm thấy trong mạng trường (${lanScanResult.scannedSubnets?.join(', ') || 'Mạng nội bộ'}) — ${
+                          lanScanResult.discoveredDevices?.length || 0
+                        } máy`}
+                  </span>
+                </h4>
+                <p>
+                  {lanScanResult.needsLocalConnector
+                    ? 'Vì trang Web đang mở qua tên miền Internet, bạn hãy bật Bộ kết nối 1 chạm trên máy tính đặt tại trường để nhìn thấy máy chấm công trong mạng của phân hiệu.'
+                    : 'Chọn máy chấm công tìm thấy bên dưới và bấm "Kết nối & Gắn vào phân hiệu" để nhập mật khẩu máy.'}
+                </p>
+              </div>
+              <div className="hik-lan-controls">
+                <input
+                  type="text"
+                  name="hn_campus_lan_ip_filter"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={subnetPrefix}
+                  onChange={(e) => setSubnetPrefix(e.target.value)}
+                  placeholder="Tùy chọn dải mạng / IP (VD: 192.168.1)"
+                />
+                <button
+                  type="button"
+                  className="hik-btn hik-btn-secondary hik-btn-sm"
+                  disabled={scanningLan}
+                  onClick={handleScanLan}
+                >
+                  <Icon name="refresh" size={13} />
+                  <span>Quét lại</span>
+                </button>
                 <button
                   type="button"
                   className="hik-icon-close"
-                  onClick={() => setLastPullReport(null)}
+                  onClick={() => setLanScanResult(null)}
+                  aria-label="Đóng kết quả quét mạng"
                 >
                   <Icon name="close" size={16} />
                 </button>
               </div>
-
-              {Array.isArray(lastPullReport.syncedPeople) && lastPullReport.syncedPeople.length > 0 && (
-                <div className="hik-pull-chips">
-                  {lastPullReport.syncedPeople.map((p) => (
-                    <div key={`${p.subjectType}:${p.subjectId}`} className="hik-pull-chip">
-                      {p.faceDataUrl && <img src={p.faceDataUrl} alt={p.fullName} />}
-                      <span>
-                        [{p.personCode}] {p.fullName}
-                      </span>
-                      <span style={{ color: '#059669', fontSize: 10.5 }}>{p.sizeKB}KB</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {Array.isArray(lastPullReport.unmatchedOnDevice) &&
-                lastPullReport.unmatchedOnDevice.length > 0 && (
-                  <div className="hik-unmatched-box">
-                    <div style={{ fontSize: 12.5, fontWeight: 800, color: '#92400e' }}>
-                      Phát hiện {lastPullReport.unmatchedOnDevice.length} hồ sơ đăng ký trực tiếp trên máy chưa khớp Mã trên phần mềm — Ghép nhanh để lưu luôn Ảnh khuôn mặt &amp; Điểm danh:
-                    </div>
-
-                    {lastPullReport.unmatchedOnDevice.map((u) => {
-                      const rowKey = `${u.deviceId}:${u.employeeNo}`;
-                      return (
-                        <div key={rowKey} className="hik-unmatched-row">
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                            {u.faceDataUrl ? (
-                              <img
-                                src={u.faceDataUrl}
-                                alt={u.name}
-                                style={{ width: 34, height: 34, borderRadius: 8, objectFit: 'cover', border: '1px solid #fbbf24' }}
-                              />
-                            ) : (
-                              <span className="hik-avatar-circle">{String(u.name || 'M').charAt(0).toUpperCase()}</span>
-                            )}
-                            <div>
-                              <div style={{ fontWeight: 800, fontSize: 12.5, color: '#0f172a' }}>
-                                Mã trên máy: <code>{u.employeeNo}</code> — {u.name}
-                              </div>
-                              <div style={{ fontSize: 11, color: '#64748b' }}>
-                                Máy: {u.deviceName} • {u.hasFace ? 'Có ảnh khuôn mặt sẵn trên máy' : 'Chưa có ảnh mặt'}
-                              </div>
-                            </div>
-                          </div>
-
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                            <select
-                              className="hik-unmatched-select"
-                              value={unmatchedLinkChoice[rowKey] || ''}
-                              onChange={(e) =>
-                                setUnmatchedLinkChoice((prev) => ({
-                                  ...prev,
-                                  [rowKey]: e.target.value
-                                }))
-                              }
-                            >
-                              <option value="">-- Chọn Nhân sự / Học sinh trên Web --</option>
-                              {quickLinkCandidates.map((cand) => (
-                                <option
-                                  key={`${cand.subjectType}::${cand.subjectId}`}
-                                  value={`${cand.subjectType}::${cand.subjectId}`}
-                                >
-                                  [{cand.subjectType === 'STUDENT' ? 'HS' : 'NS'}] {cand.personCode} — {cand.fullName} ({cand.campus})
-                                </option>
-                              ))}
-                            </select>
-
-                            <button
-                              type="button"
-                              className="hik-btn hik-btn-primary hik-btn-sm"
-                              disabled={linkingExtKey === rowKey}
-                              onClick={() => handleQuickLinkUnmatchedUser(u)}
-                            >
-                              {linkingExtKey === rowKey ? 'Đang ghép...' : 'Ghép & Lưu Ảnh Mặt Ngay'}
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-            </section>
-          )}
-
-          {/* ─── DANH SÁCH THẺ MÁY CHẤM CÔNG HOẶC HƯỚNG DẪN BẮT ĐẦU (KHÔNG LẶP LẠI KHI ĐANG QUÉT / MỞ FORM) ─── */}
-          {loading ? (
-            <div className="hik-hero-card" style={{ alignItems: 'center', padding: '36px 20px' }}>
-              <span className="loading-orb" />
-              <span style={{ fontSize: 13, fontWeight: 700, color: '#64748b' }}>
-                Đang tải danh sách máy chấm công &amp; hồ sơ khuôn mặt...
-              </span>
             </div>
-          ) : devices.length === 0 ? (
-            !scanningLan &&
-            !lanScanResult &&
-            !showDeviceForm && (
-              <div className="hik-hero-card hik-fade-in" style={{ alignItems: 'center', textAlign: 'center', padding: '40px 24px' }}>
-                <div
-                  style={{
-                    width: 56,
-                    height: 56,
-                    borderRadius: 16,
-                    background: '#eff6ff',
-                    color: '#2563eb',
-                    display: 'grid',
-                    placeItems: 'center'
-                  }}
+
+            {!lanScanResult.needsLocalConnector && connectorHealth.needsUpdate && (
+              <div
+                style={{
+                  background: '#fffbeb',
+                  border: '1px solid #fcd34d',
+                  borderRadius: 11,
+                  padding: '10px 14px',
+                  fontSize: 12.5,
+                  color: '#78350f',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 10,
+                  flexWrap: 'wrap'
+                }}
+              >
+                <span>
+                  <strong>Lưu ý:</strong> Máy tính này đang chạy Bộ kết nối phiên bản cũ (<code>v{connectorHealth.version || '2.0.0'}</code>) nên có thể chưa hiện đủ tất cả máy chấm công trong mạng. Bạn hãy bấm cập nhật lên <code>v2.2.0</code> rồi bấm <strong>Quét lại</strong> nhé!
+                </span>
+                <button
+                  type="button"
+                  className="hik-btn hik-btn-primary hik-btn-sm"
+                  disabled={downloadingConnector}
+                  onClick={handleDownloadConnectorZip}
                 >
-                  <Icon name="radar" size={26} />
+                  <Icon name="download" size={13} />
+                  <span>Cập Nhật Bộ Kết Nối (.zip)</span>
+                </button>
+              </div>
+            )}
+
+            {lanScanResult.needsLocalConnector ? (
+              <div
+                style={{
+                  background: '#ffffff',
+                  padding: '14px 18px',
+                  borderRadius: 12,
+                  fontSize: 13,
+                  color: '#1e293b',
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  border: '1px solid #fde68a'
+                }}
+              >
+                <div style={{ flex: '1 1 380px', lineHeight: 1.55 }}>
+                  <strong>Hướng dẫn kết nối 2 bước nhanh chóng (chỉ thực hiện 1 lần đầu):</strong>
+                  <div style={{ marginTop: 4, color: '#475569' }}>
+                    <strong>Bước 1:</strong> Bấm nút <strong>&ldquo;Tải Bộ Kết Nối 1 Chạm (.zip)&rdquo;</strong> bên phải rồi giải nén ra máy tính.<br />
+                    <strong>Bước 2:</strong> Mở tệp <code>1-Bat-Ket-Noi-1-Cham.bat</code>, sau đó bấm <strong>&ldquo;Đã bật xong — Quét ngay&rdquo;</strong>.
+                  </div>
                 </div>
-                <div>
-                  <h3 style={{ margin: '6px 0', fontSize: 16.5, fontWeight: 800, color: '#0f172a' }}>
-                    Chưa có máy chấm công nào được gắn vào {selectedCampus === 'ALL' ? 'phân hiệu này' : selectedCampus}
-                  </h3>
-                  <p style={{ margin: '0 auto', maxWidth: 540, fontSize: 13, color: '#64748b', lineHeight: 1.55 }}>
-                    Bạn hãy bấm <strong>&ldquo;Quét tìm máy trong mạng&rdquo;</strong> để phần mềm tự động dò tìm thiết bị Hikvision đang bật tại trường (chưa cần nhập mật khẩu ngay), hoặc khai báo địa chỉ IP thủ công.
-                  </p>
-                </div>
-                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center', marginTop: 4 }}>
-                  {canManageSync && (
-                    <button type="button" className="hik-btn hik-btn-primary" onClick={handleScanLan} disabled={scanningLan}>
-                      <Icon name="radar" size={15} />
-                      <span>Quét tìm máy trong mạng</span>
-                    </button>
-                  )}
-                  {isAdmin && (
-                    <button type="button" className="hik-btn hik-btn-secondary" onClick={openAddDeviceForm}>
-                      <Icon name="plus" size={15} />
-                      <span>Thêm máy thủ công</span>
-                    </button>
-                  )}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="hik-btn hik-btn-secondary hik-btn-sm"
+                    disabled={downloadingConnector}
+                    onClick={handleDownloadConnectorZip}
+                  >
+                    <Icon name="download" size={14} />
+                    <span>{downloadingConnector ? 'Đang tải...' : 'Tải Bộ Kết Nối 1 Chạm (.zip)'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="hik-btn hik-btn-primary hik-btn-sm"
+                    disabled={scanningLan}
+                    onClick={handleScanLan}
+                  >
+                    <Icon name="refresh" size={14} />
+                    <span>Đã bật xong — Quét ngay</span>
+                  </button>
                 </div>
               </div>
-            )
-          ) : (
-            <>
-              <div className="hik-devices-grid hik-fade-in">
-                {devices.map((dev) => {
-                  const st = getDeviceStatusMeta(dev.status);
-                  const scheme = (dev.transportScheme || 'http').toUpperCase();
-                  const displayPort = scheme === 'HTTP' ? (dev.httpPort || 80) : (dev.httpsPort || 443);
-                  const maxCap = Number(dev.maxUserCapacity) || 500;
-                  const usedSlots = Number(dev.currentStoredUsers || dev.lastSyncSummary?.syncedUsers || 0);
-                  const usagePercent = Math.min(100, Math.round((usedSlots / maxCap) * 100));
-                  const allocMeta = ALLOCATION_MODES[dev.syncAllocationMode] || ALLOCATION_MODES.BY_CAMPUS_PRIORITY;
-                  const busyState = deviceActionBusy[dev._id];
-
+            ) : lanScanResult.discoveredDevices?.length === 0 ? (
+              <div
+                style={{
+                  background: '#ffffff',
+                  padding: '14px 16px',
+                  borderRadius: 12,
+                  fontSize: 13,
+                  color: '#475569',
+                  lineHeight: 1.55,
+                  border: '1px solid #e2e8f0'
+                }}
+              >
+                Chưa tìm thấy máy chấm công nào đang bật trong dải mạng này. Bạn hãy kiểm tra xem máy chấm công ở cổng đã cắm điện và dùng chung mạng Wi-Fi/dây mạng với máy tính này chưa, hoặc nhập địa chỉ của máy (ví dụ: <code>192.168.1.8</code>) vào ô bên trên rồi bấm <strong>Quét lại</strong>.
+              </div>
+            ) : (
+              <div className="hik-lan-list">
+                {lanScanResult.discoveredDevices.map((item) => {
+                  const shortSn = formatReadableSerial(item.serialNumber);
                   return (
-                    <article key={dev._id} className="hik-device-card">
-                      {busyState && <div className="hik-card-busy-bar" aria-hidden="true" />}
-
-                      <div>
-                        <div className="hik-device-card-top">
-                          <div style={{ minWidth: 0 }}>
-                            <div className="hik-device-badges">
-                              <span className={`hik-status-pill ${st.cls}`}>
-                                <span className="dot" />
-                                {st.label}
+                    <div key={`${item.host}:${item.port}`} className="hik-lan-item">
+                      <div className="hik-lan-item-main">
+                        <span className="hik-lan-device-icon">
+                          <Icon name="server" size={20} />
+                        </span>
+                        <div className="hik-lan-item-copy">
+                          <div className="hik-lan-item-title">
+                            <span>Máy chấm công Hikvision ({item.host})</span>
+                            {!item.lockedToOtherCampus && !item.alreadySaved && (
+                              <span className="hik-status-pill hik-status-online" style={{ fontSize: 11 }}>
+                                Đang bật trong mạng LAN
                               </span>
-                              <span className="hik-endpoint-pill">
-                                {dev.host}:{displayPort}
-                              </span>
-                              {dev.serialNumber ? (
-                                <span
-                                  className="hik-serial-lock-pill"
-                                  title="Đã khóa cứng mã phần cứng với phân hiệu này để không bao giờ kéo/đẩy nhầm sang trường khác"
-                                >
-                                  <Icon name="lock" size={11} /> Đã khóa phân hiệu ({dev.serialNumber.slice(-10)})
-                                </span>
-                              ) : (
-                                <span className="hik-serial-lock-pill pending">
-                                  <Icon name="unlock" size={11} /> Tự khóa mã máy ở lần đồng bộ đầu
-                                </span>
-                              )}
-                            </div>
-                            <h3 className="hik-device-title">{dev.name}</h3>
-                            <p className="hik-device-meta">
-                              Vị trí: <strong>{dev.location || 'Sảnh đón trẻ'}</strong> • Dòng máy:{' '}
-                              <strong>{dev.model || 'Hikvision Khuôn mặt'}</strong>
-                              {dev.webhookConfiguredUrl === fullWebhookUrl ? (
-                                <span style={{ color: '#059669', fontWeight: 700 }}> • Đã trỏ đúng tên miền hiện tại</span>
-                              ) : null}
-                            </p>
-                          </div>
-
-                          <div className="hik-device-icon-actions">
-                            <button
-                              type="button"
-                              className="hik-icon-btn"
-                              title="Ánh xạ mã trên máy với Nhân sự / Học sinh"
-                              onClick={() => openMappingsModal(dev)}
-                            >
-                              <Icon name="users" size={16} />
-                            </button>
-                            <button
-                              type="button"
-                              className="hik-icon-btn"
-                              title="Xem nhật ký đồng bộ của máy"
-                              onClick={() => openDeviceLogsModal(dev)}
-                            >
-                              <Icon name="fileText" size={16} />
-                            </button>
-                            {isAdmin && (
-                              <>
-                                <button
-                                  type="button"
-                                  className="hik-icon-btn"
-                                  title="Chỉnh sửa cấu hình máy chấm công"
-                                  onClick={() => openEditDeviceForm(dev)}
-                                >
-                                  <Icon name="edit" size={16} />
-                                </button>
-                                <button
-                                  type="button"
-                                  className="hik-icon-btn danger"
-                                  title="Xóa máy chấm công"
-                                  onClick={() => confirmDeleteDevice(dev)}
-                                >
-                                  <Icon name="trash" size={16} />
-                                </button>
-                              </>
                             )}
                           </div>
-                        </div>
-
-                        {/* Thanh dung lượng bộ nhớ 500 vị trí */}
-                        <div className="hik-capacity-box" style={{ marginTop: 12 }}>
-                          <div className="hik-capacity-row">
-                            <span className="hik-capacity-label">
-                              <Icon name="hardDrive" size={15} />
-                              Dung lượng bộ nhớ máy chấm công:
-                            </span>
-                            <span className={`hik-capacity-count ${usagePercent >= 90 ? 'danger' : ''}`}>
-                              {usedSlots} / {maxCap} hồ sơ ({usagePercent}%)
-                            </span>
-                          </div>
-
-                          <div className="hik-progress-track">
-                            <div
-                              className={`hik-progress-fill ${
-                                usagePercent >= 90 ? 'danger' : usagePercent >= 70 ? 'warn' : ''
-                              }`}
-                              style={{ width: `${Math.max(4, usagePercent)}%` }}
-                            />
-                          </div>
-
-                          <div className="hik-capacity-foot">
-                            <span>
-                              Cơ chế: <strong style={{ color: '#334155' }}>{allocMeta.shortLabel}</strong>
-                            </span>
-                            {dev.lastSyncSummary?.message ? (
-                              <span className="hik-capacity-summary">{dev.lastSyncSummary.message}</span>
-                            ) : (
-                              <span>Đối tượng: {TARGET_SCOPES[dev.syncTargetScope] || TARGET_SCOPES.ALL}</span>
+                          <div className="hik-lan-item-meta" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 5 }}>
+                            <span className="hik-code-tag">Dòng máy: {item.model || 'DS-K1T320MX'}</span>
+                            <span className="hik-code-tag">Địa chỉ: {item.host}:{item.port || 80}</span>
+                            {shortSn && (
+                              <span className="hik-code-tag" title={`Số Seri đầy đủ: ${item.serialNumber}`}>
+                                Số Seri: {shortSn}
+                              </span>
                             )}
                           </div>
                         </div>
                       </div>
 
-                      {/* TẦNG 1: 3 NÚT ĐỒNG BỘ CHÍNH (RÕ RÀNG, DỄ BẤM NHẤT CHO NGƯỜI QUẢN LÝ) */}
-                      {canManageSync && (
-                        <div className="hik-device-primary-actions">
+                      <div className="hik-lan-item-actions">
+                        {item.lockedToOtherCampus ? (
+                          <span
+                            className="hik-status-pill hik-status-offline"
+                            title="Thiết bị này đã khóa cho phân hiệu khác để chống kéo/đẩy nhầm"
+                          >
+                            <Icon name="lock" size={12} /> Đã khóa cho trường khác
+                          </span>
+                        ) : item.alreadySaved ? (
+                          <span className="hik-status-pill hik-status-online">
+                            <Icon name="check" size={12} /> Đã kết nối ({item.savedName || item.savedCampus})
+                          </span>
+                        ) : isAdmin ? (
                           <button
                             type="button"
-                            className="hik-btn hik-btn-primary hik-btn-sm"
-                            disabled={Boolean(busyState)}
-                            onClick={() => handleQuickBidirectionalCluster(dev)}
-                            title="1 chạm đồng bộ cả 2 phía (Kéo từ máy về Web + Đẩy từ Web xuống máy)"
+                            className="hik-btn hik-btn-primary"
+                            onClick={() => openConnectDiscoveredModal(item)}
                           >
-                            <Icon
-                              name="refresh"
-                              size={14}
-                              className={busyState === 'bisync' ? 'hik-spin' : ''}
-                            />
-                            <span>{busyState === 'bisync' ? 'Đang chạy 2 chiều...' : 'Đồng bộ 2 chiều'}</span>
+                            <Icon name="link" size={15} />
+                            <span>Kết nối &amp; Gắn vào phân hiệu</span>
                           </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
-                          <button
-                            type="button"
-                            className="hik-btn hik-btn-secondary hik-btn-sm"
-                            disabled={Boolean(busyState)}
-                            onClick={() => askPullUsersFromDevice(dev)}
-                            title="Kéo ảnh khuôn mặt, hồ sơ & lượt chấm công từ máy này về Web"
-                          >
-                            <Icon
-                              name={busyState === 'pull' ? 'refresh' : 'download'}
-                              size={14}
-                              className={busyState === 'pull' ? 'hik-spin' : ''}
-                            />
-                            <span>{busyState === 'pull' ? 'Đang kéo về...' : 'Kéo về Web'}</span>
-                          </button>
+        {/* 4 Thẻ chỉ số tổng quan hiển thị rõ số liệu cả trên Máy lẫn trên Web */}
+        <div className="hik-kpi-grid">
+          <div className="hik-kpi-card hik-kpi-slate">
+            <p className="hik-kpi-label">Cụm máy chấm công tại trường</p>
+            <p className="hik-kpi-value">
+              {kpi.totalDevices} máy ({kpi.totalSlotCapacity} vị trí)
+            </p>
+            <p className="hik-kpi-sub">
+              {selectedCampus === 'ALL'
+                ? `Phân hiệu: ${storedTenant?.name || campuses[0] || 'Toàn trường'}`
+                : `Cơ sở: ${selectedCampus}`}
+            </p>
+          </div>
 
+          <div
+            className="hik-kpi-card hik-kpi-emerald"
+            style={{ cursor: deviceStoredPeople.length > 0 ? 'pointer' : 'default' }}
+            onClick={() => machineSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            role="presentation"
+          >
+            <p className="hik-kpi-label">Hồ sơ đang lưu trong máy chấm công</p>
+            <p className="hik-kpi-value">{kpi.storedOnDevicesCount || 0} hồ sơ trong máy</p>
+            <p className="hik-kpi-sub">
+              {kpi.unmatchedOnDevicesCount > 0
+                ? `${kpi.unmatchedOnDevicesCount} người trên máy chưa lấy về Web`
+                : devices.length > 0
+                  ? 'Bấm "Kéo Ảnh & Tên về Web" để đọc từ máy'
+                  : 'Kết nối máy để đọc danh sách trong máy'}
+            </p>
+          </div>
+
+          <div className="hik-kpi-card hik-kpi-indigo">
+            <p className="hik-kpi-label">Danh sách trên Web (Nhân sự &amp; Học sinh)</p>
+            <p className="hik-kpi-value">{kpi.activeWithCodeCount} / 500 vị trí mỗi máy</p>
+            <p className="hik-kpi-sub">
+              {kpi.activeStaffCount} nhân sự • {kpi.activeStudentCount} học sinh đang học
+            </p>
+          </div>
+
+          <div className="hik-kpi-card hik-kpi-rose">
+            <p className="hik-kpi-label">Ảnh khuôn mặt sẵn sàng trên Web</p>
+            <p className="hik-kpi-value">{kpi.withBiometricFaceCount} ảnh khuôn mặt</p>
+            <p className="hik-kpi-sub">
+              {kpi.reclaimableInactiveCount > 0
+                ? `${kpi.reclaimableInactiveCount} hồ sơ đã nghỉ có thể dọn khỏi máy`
+                : 'Ảnh chân dung chuẩn < 200KB để đồng bộ xuống máy'}
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* ─── BIỂU MẪU THÊM / SỬA MÁY CHẤM CÔNG THỦ CÔNG ─── */}
+      {showDeviceForm && isAdmin && (
+        <form className="hik-device-form-card hik-fade-in" autoComplete="off" onSubmit={handleSaveDevice}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+            <div>
+              <h3 style={{ margin: '0 0 3px', fontSize: 15, fontWeight: 800, color: '#0f172a' }}>
+                {editingDeviceId
+                  ? 'Cập Nhật Cấu Hình Máy Chấm Công Của Phân Hiệu'
+                  : 'Thêm Máy Chấm Công Thủ Công Cho Phân Hiệu'}
+              </h3>
+              <p style={{ margin: 0, fontSize: 12, color: '#64748b' }}>
+                Mật khẩu quản trị máy chấm công được mã hóa và khóa bảo mật riêng cho phân hiệu {resolvedSchoolCode}.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="hik-icon-close"
+              onClick={() => {
+                setShowDeviceForm(false);
+                setEditingDeviceId(null);
+              }}
+            >
+              <Icon name="close" size={16} />
+            </button>
+          </div>
+
+          <input type="text" name="fake_dev_user" autoComplete="username" tabIndex={-1} aria-hidden="true" style={{ position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none' }} />
+          <input type="password" name="fake_dev_pass" autoComplete="current-password" tabIndex={-1} aria-hidden="true" style={{ position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none' }} />
+
+          <div className="hik-form-grid-4">
+            <div className="hik-field">
+              <label>Tên gọi máy chấm công *</label>
+              <input
+                required
+                value={deviceForm.name}
+                onChange={(e) => setDeviceForm({ ...deviceForm, name: e.target.value })}
+                placeholder="VD: Máy chấm công Cổng chính"
+              />
+            </div>
+
+            <div className="hik-field">
+              <label>Phân hiệu / Cơ sở lắp đặt *</label>
+              <select
+                value={deviceForm.campus}
+                onChange={(e) => setDeviceForm({ ...deviceForm, campus: e.target.value })}
+              >
+                {campuses.map((cName) => (
+                  <option key={cName} value={cName}>
+                    {cName}
+                  </option>
+                ))}
+                <option value="ALL">Dùng chung tất cả phân hiệu</option>
+              </select>
+            </div>
+
+            <div className="hik-field">
+              <label>Vị trí cửa lắp đặt</label>
+              <input
+                value={deviceForm.location}
+                onChange={(e) => setDeviceForm({ ...deviceForm, location: e.target.value })}
+                placeholder="VD: Sảnh đón trẻ Tầng 1"
+              />
+            </div>
+
+            <div className="hik-field">
+              <label>Mã quản lý máy trên Web *</label>
+              <input
+                required
+                disabled={Boolean(editingDeviceId)}
+                value={deviceForm.deviceCode}
+                onChange={(e) => setDeviceForm({ ...deviceForm, deviceCode: e.target.value.toUpperCase() })}
+                placeholder="VD: MCC-CONG-1"
+              />
+            </div>
+          </div>
+
+          <div className="hik-form-grid-4">
+            <div className="hik-field">
+              <label>Địa chỉ IP mạng nội bộ *</label>
+              <input
+                required
+                value={deviceForm.host}
+                onChange={(e) => {
+                  const nextHost = e.target.value;
+                  setDeviceForm((prev) => ({
+                    ...prev,
+                    host: nextHost,
+                    ...(!editingDeviceId
+                      ? {
+                          deviceCode: buildAutoDeviceCode(nextHost),
+                          name: `Máy chấm công (${nextHost.trim() || 'LAN'})`
+                        }
+                      : {})
+                  }));
+                }}
+                placeholder="VD: 192.168.1.8"
+              />
+            </div>
+
+            <div className="hik-field">
+              <label>Giao thức &amp; Cổng kết nối</label>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <select
+                  style={{ width: '48%' }}
+                  value={deviceForm.transportScheme}
+                  onChange={(e) => {
+                    const scheme = e.target.value;
+                    setDeviceForm((prev) => ({
+                      ...prev,
+                      transportScheme: scheme,
+                      port: scheme === 'https' && prev.port === 80 ? 443 : scheme === 'http' && prev.port === 443 ? 80 : prev.port
+                    }));
+                  }}
+                >
+                  <option value="http">HTTP</option>
+                  <option value="https">HTTPS</option>
+                </select>
+                <input
+                  style={{ width: '52%' }}
+                  type="number"
+                  required
+                  value={deviceForm.port}
+                  onChange={(e) => setDeviceForm({ ...deviceForm, port: Number(e.target.value) })}
+                />
+              </div>
+            </div>
+
+            <div className="hik-field">
+              <label>Tài khoản quản trị máy</label>
+              <input
+                required
+                name="hn_device_admin_account"
+                autoComplete="off"
+                value={deviceForm.deviceUsername}
+                onChange={(e) => setDeviceForm({ ...deviceForm, deviceUsername: e.target.value })}
+                placeholder="admin"
+              />
+            </div>
+
+            <div className="hik-field">
+              <label>
+                Mật khẩu máy chấm công {editingDeviceId ? '(Để trống nếu giữ nguyên)' : ''}
+              </label>
+              <input
+                type="password"
+                name="hn_device_admin_secret"
+                autoComplete="new-password"
+                value={deviceForm.devicePassword}
+                onChange={(e) => setDeviceForm({ ...deviceForm, devicePassword: e.target.value })}
+                placeholder={editingDeviceId ? 'Giữ nguyên mật khẩu đã lưu' : 'Nhập mật khẩu của máy chấm công'}
+              />
+            </div>
+          </div>
+
+          <div className="hik-form-grid-3">
+            <div className="hik-field">
+              <label>Chiến lược phân bổ bộ nhớ 500 vị trí</label>
+              <select
+                value={deviceForm.syncAllocationMode}
+                onChange={(e) => setDeviceForm({ ...deviceForm, syncAllocationMode: e.target.value })}
+              >
+                {Object.entries(ALLOCATION_MODES).map(([key, meta]) => (
+                  <option key={key} value={key}>
+                    {meta.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="hik-field">
+              <label>Đối tượng đồng bộ xuống máy này</label>
+              <select
+                value={deviceForm.syncTargetScope}
+                onChange={(e) => setDeviceForm({ ...deviceForm, syncTargetScope: e.target.value })}
+              >
+                {Object.entries(TARGET_SCOPES).map(([key, label]) => (
+                  <option key={key} value={key}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="hik-field">
+              <label>Giới hạn bộ nhớ máy (Số vị trí tối đa)</label>
+              <input
+                type="number"
+                min="10"
+                max="50000"
+                value={deviceForm.maxUserCapacity}
+                onChange={(e) => setDeviceForm({ ...deviceForm, maxUserCapacity: Number(e.target.value) })}
+              />
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', paddingTop: 4 }}>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 700, color: '#1d4ed8', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={deviceForm.autoSyncOnChange}
+                onChange={(e) => setDeviceForm({ ...deviceForm, autoSyncOnChange: e.target.checked })}
+              />
+              <span>Tự động ưu tiên đồng bộ hồ sơ thuộc phân hiệu {deviceForm.campus === 'ALL' ? 'toàn trường' : deviceForm.campus}</span>
+            </label>
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                className="hik-btn hik-btn-secondary"
+                onClick={() => {
+                  setShowDeviceForm(false);
+                  setEditingDeviceId(null);
+                }}
+              >
+                Hủy
+              </button>
+              <button type="submit" className="hik-btn hik-btn-primary" disabled={savingDevice}>
+                <Icon name={savingDevice ? 'refresh' : 'check'} size={15} className={savingDevice ? 'hik-spin' : ''} />
+                <span>{savingDevice ? 'Đang lưu & kiểm tra...' : 'Lưu cấu hình máy'}</span>
+              </button>
+            </div>
+          </div>
+        </form>
+      )}
+
+      {/* ─── KHỐI 2: DANH SÁCH THẺ MÁY CHẤM CÔNG CỦA PHÂN HIỆU ─── */}
+      {loading ? (
+        <div className="hik-hero-card" style={{ alignItems: 'center', padding: '36px 20px' }}>
+          <span className="loading-orb" />
+          <span style={{ fontSize: 13, fontWeight: 700, color: '#64748b' }}>
+            Đang tải danh sách máy chấm công &amp; hồ sơ khuôn mặt...
+          </span>
+        </div>
+      ) : devices.length === 0 ? (
+        !scanningLan &&
+        !lanScanResult &&
+        !showDeviceForm && (
+          <div className="hik-hero-card hik-fade-in" style={{ alignItems: 'center', textAlign: 'center', padding: '36px 24px' }}>
+            <div
+              style={{
+                width: 54,
+                height: 54,
+                borderRadius: 16,
+                background: '#eff6ff',
+                color: '#2563eb',
+                display: 'grid',
+                placeItems: 'center'
+              }}
+            >
+              <Icon name="radar" size={25} />
+            </div>
+            <div>
+              <h3 style={{ margin: '6px 0', fontSize: 16, fontWeight: 800, color: '#0f172a' }}>
+                Chưa có máy chấm công nào được kết nối vào {selectedCampus === 'ALL' ? 'phân hiệu này' : selectedCampus}
+              </h3>
+              <p style={{ margin: '0 auto', maxWidth: 540, fontSize: 13, color: '#64748b', lineHeight: 1.55 }}>
+                Bấm <strong>&ldquo;Quét tìm máy trong mạng&rdquo;</strong> để phần mềm dò tìm tất cả thiết bị Hikvision đang bật tại trường, sau đó nhập mật khẩu để đọc ngay danh sách hồ sơ lưu trong máy.
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center', marginTop: 4 }}>
+              {canManageSync && (
+                <button type="button" className="hik-btn hik-btn-primary" onClick={handleScanLan} disabled={scanningLan}>
+                  <Icon name="radar" size={15} />
+                  <span>Quét tìm máy trong mạng</span>
+                </button>
+              )}
+              {isAdmin && (
+                <button type="button" className="hik-btn hik-btn-secondary" onClick={openAddDeviceForm}>
+                  <Icon name="plus" size={15} />
+                  <span>Thêm máy thủ công</span>
+                </button>
+              )}
+            </div>
+          </div>
+        )
+      ) : (
+        <div className="hik-devices-grid hik-fade-in">
+          {devices.map((dev) => {
+            const st = getDeviceStatusMeta(dev.status);
+            const scheme = (dev.transportScheme || 'http').toUpperCase();
+            const displayPort = scheme === 'HTTP' ? (dev.httpPort || 80) : (dev.httpsPort || 443);
+            const maxCap = Number(dev.maxUserCapacity) || 500;
+            const usedSlots = Number(dev.currentStoredUsers || dev.lastSyncSummary?.syncedUsers || 0);
+            const usedFaces = Number(dev.currentStoredFaces || 0);
+            const usagePercent = Math.min(100, Math.round((usedSlots / maxCap) * 100));
+            const allocMeta = ALLOCATION_MODES[dev.syncAllocationMode] || ALLOCATION_MODES.BY_CAMPUS_PRIORITY;
+            const busyState = deviceActionBusy[dev._id];
+            const shortSerial = formatReadableSerial(dev.serialNumber);
+
+            return (
+              <article key={dev._id} className="hik-device-card">
+                {busyState && <div className="hik-card-busy-bar" aria-hidden="true" />}
+
+                <div>
+                  <div className="hik-device-card-top">
+                    <div style={{ minWidth: 0 }}>
+                      <div className="hik-device-badges">
+                        <span className={`hik-status-pill ${st.cls}`}>
+                          <span className="dot" />
+                          {st.label}
+                        </span>
+                        <span className="hik-endpoint-pill">
+                          IP: {dev.host}:{displayPort}
+                        </span>
+                        <span className="hik-code-tag">
+                          Mã máy: {dev.deviceCode}
+                        </span>
+                        {shortSerial ? (
+                          <span
+                            className="hik-serial-lock-pill"
+                            title={`Đã khóa bảo mật phần cứng với phân hiệu này (Số Seri đầy đủ: ${dev.serialNumber})`}
+                          >
+                            <Icon name="lock" size={11} /> Seri: {shortSerial}
+                          </span>
+                        ) : (
+                          <span className="hik-serial-lock-pill pending">
+                            <Icon name="unlock" size={11} /> Sẽ tự khóa Seri khi kết nối
+                          </span>
+                        )}
+                      </div>
+                      <h3 className="hik-device-title">{dev.name}</h3>
+                      <p className="hik-device-meta">
+                        Vị trí: <strong>{dev.location || 'Sảnh đón trẻ'}</strong> • Dòng máy:{' '}
+                        <strong>{dev.model || 'Hikvision Khuôn mặt'}</strong>
+                        {dev.webhookConfiguredUrl === fullWebhookUrl ? (
+                          <span style={{ color: '#059669', fontWeight: 700 }}> • Đã nhận điểm danh tự động</span>
+                        ) : null}
+                      </p>
+                    </div>
+
+                    <div className="hik-device-icon-actions">
+                      <button
+                        type="button"
+                        className="hik-icon-btn"
+                        title="Bảng ánh xạ mã trên máy với Học sinh / Nhân sự"
+                        onClick={() => openMappingsModal(dev)}
+                      >
+                        <Icon name="users" size={16} />
+                      </button>
+                      <button
+                        type="button"
+                        className="hik-icon-btn"
+                        title="Xem nhật ký đồng bộ của máy"
+                        onClick={() => openDeviceLogsModal(dev)}
+                      >
+                        <Icon name="fileText" size={16} />
+                      </button>
+                      {isAdmin && (
+                        <>
                           <button
                             type="button"
-                            className="hik-btn hik-btn-secondary hik-btn-sm"
-                            disabled={Boolean(busyState)}
-                            onClick={() => askPushSync(dev)}
-                            title="Đẩy nhanh hồ sơ & ảnh khuôn mặt từ Web xuống máy này"
+                            className="hik-icon-btn"
+                            title="Chỉnh sửa cấu hình máy chấm công"
+                            onClick={() => openEditDeviceForm(dev)}
                           >
-                            <Icon
-                              name={busyState === 'push' ? 'refresh' : 'upload'}
-                              size={14}
-                              className={busyState === 'push' ? 'hik-spin' : ''}
-                            />
-                            <span>{busyState === 'push' ? 'Đang đẩy xuống...' : 'Đẩy xuống máy'}</span>
+                            <Icon name="edit" size={16} />
                           </button>
-                        </div>
+                          <button
+                            type="button"
+                            className="hik-icon-btn danger"
+                            title="Xóa máy chấm công"
+                            onClick={() => confirmDeleteDevice(dev)}
+                          >
+                            <Icon name="trash" size={16} />
+                          </button>
+                        </>
                       )}
+                    </div>
+                  </div>
 
-                      {/* TẦNG 2: THANH TIỆN ÍCH PHẦN CỨNG GỌN GÀNG */}
-                      <div className="hik-device-utility-bar">
-                        <button
-                          type="button"
-                          className="hik-utility-chip"
-                          disabled={Boolean(busyState)}
-                          onClick={() => handleCheckCapacity(dev)}
-                        >
-                          <Icon
-                            name={busyState === 'capacity' ? 'refresh' : 'wifi'}
-                            size={13}
-                            className={busyState === 'capacity' ? 'hik-spin' : ''}
-                          />
-                          <span>{busyState === 'capacity' ? 'Đang kiểm tra...' : 'Kiểm tra bộ nhớ'}</span>
-                        </button>
+                  {/* Thanh dung lượng thực tế trong bộ nhớ máy chấm công */}
+                  <div className="hik-capacity-box" style={{ marginTop: 12 }}>
+                    <div className="hik-capacity-row">
+                      <span className="hik-capacity-label">
+                        <Icon name="hardDrive" size={15} />
+                        Đang lưu trong bộ nhớ máy:
+                      </span>
+                      <span className={`hik-capacity-count ${usagePercent >= 90 ? 'danger' : ''}`}>
+                        {usedSlots} / {maxCap} hồ sơ ({usedFaces} ảnh mặt)
+                      </span>
+                    </div>
 
-                        {canControlHardware && (
-                          <button
-                            type="button"
-                            className="hik-utility-chip"
-                            disabled={Boolean(busyState)}
-                            onClick={() => handlePullEventLogsFromMachine(dev)}
-                            title="Chỉ đọc riêng lịch sử quẹt mặt/thẻ lưu trên máy chấm công"
-                          >
-                            <Icon
-                              name={busyState === 'events' ? 'refresh' : 'clock'}
-                              size={13}
-                              className={busyState === 'events' ? 'hik-spin' : ''}
-                            />
-                            <span>{busyState === 'events' ? 'Đang đọc lượt quẹt...' : 'Đọc lượt điểm danh'}</span>
-                          </button>
-                        )}
+                    <div className="hik-progress-track">
+                      <div
+                        className={`hik-progress-fill ${
+                          usagePercent >= 90 ? 'danger' : usagePercent >= 70 ? 'warn' : ''
+                        }`}
+                        style={{ width: `${Math.max(4, usagePercent)}%` }}
+                      />
+                    </div>
 
-                        {canControlHardware && (
-                          <button
-                            type="button"
-                            className="hik-utility-chip"
-                            disabled={Boolean(busyState)}
-                            onClick={() => askUnlockDoor(dev)}
-                          >
-                            <Icon name="unlock" size={13} />
-                            <span>{busyState === 'door' ? 'Đang mở cửa...' : 'Mở cửa từ xa'}</span>
-                          </button>
-                        )}
+                    <div className="hik-capacity-foot">
+                      <span>
+                        Chế độ: <strong style={{ color: '#334155' }}>{allocMeta.shortLabel}</strong>
+                      </span>
+                      {dev.statusMessage ? (
+                        <span className="hik-capacity-summary">{dev.statusMessage}</span>
+                      ) : (
+                        <span>Đối tượng: {TARGET_SCOPES[dev.syncTargetScope] || TARGET_SCOPES.ALL}</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
 
-                        {canControlHardware && (
-                          <button
-                            type="button"
-                            className="hik-utility-chip"
-                            disabled={Boolean(busyState)}
-                            onClick={() => askPruneDevice(dev)}
-                          >
-                            <Icon name="eraser" size={13} />
-                            <span>{busyState === 'prune' ? 'Đang dọn...' : 'Dọn hồ sơ nghỉ'}</span>
-                          </button>
-                        )}
+                {/* TẦNG 1: 3 NÚT CHÍNH RÕ NGHĨA (KÉO TỪ MÁY VỀ WEB | ĐỒNG BỘ WEB XUỐNG MÁY | ĐỒNG BỘ 2 CHIỀU) */}
+                {canManageSync && (
+                  <div className="hik-device-primary-actions">
+                    <button
+                      type="button"
+                      className="hik-btn hik-btn-secondary hik-btn-sm"
+                      disabled={Boolean(busyState)}
+                      onClick={() => handleDirectPullFromDevice(dev)}
+                      title="Đọc toàn bộ hồ sơ, họ tên, ảnh khuôn mặt & lượt điểm danh đang có trong máy này về Web"
+                    >
+                      <Icon
+                        name={busyState === 'pull' ? 'refresh' : 'download'}
+                        size={14}
+                        className={busyState === 'pull' ? 'hik-spin' : ''}
+                      />
+                      <span>{busyState === 'pull' ? 'Đang kéo về...' : 'Kéo Ảnh & Tên về Web'}</span>
+                    </button>
 
-                        {canControlHardware && (
-                          <button
-                            type="button"
-                            className="hik-utility-chip"
-                            disabled={Boolean(busyState)}
-                            onClick={() => handleUpdateWebhookDomain(dev)}
-                            title="Cập nhật địa chỉ tên miền Web hiện tại xuống máy chấm công để nhận điểm danh tức thì"
-                          >
-                            <Icon
-                              name={busyState === 'webhook' ? 'refresh' : 'globe'}
-                              size={13}
-                              className={busyState === 'webhook' ? 'hik-spin' : ''}
-                            />
-                            <span>
-                              {busyState === 'webhook' ? 'Đang cập nhật...' : 'Cập nhật tên miền Web'}
-                            </span>
-                          </button>
-                        )}
+                    <button
+                      type="button"
+                      className="hik-btn hik-btn-secondary hik-btn-sm"
+                      disabled={Boolean(busyState)}
+                      onClick={() => askPushSync(dev)}
+                      title="Đồng bộ danh sách Học sinh & Nhân sự từ Web xuống chiếc máy này"
+                    >
+                      <Icon
+                        name={busyState === 'push' ? 'refresh' : 'upload'}
+                        size={14}
+                        className={busyState === 'push' ? 'hik-spin' : ''}
+                      />
+                      <span>{busyState === 'push' ? 'Đang đẩy xuống...' : 'Đồng bộ Web xuống máy'}</span>
+                    </button>
 
-                        {isVendorSupport && isAdmin && (
-                          <button
-                            type="button"
-                            className="hik-utility-chip"
-                            style={{ borderColor: '#fcd34d', background: '#fffbeb', color: '#92400e' }}
-                            onClick={() => {
-                              setVendorSerialModalDev(dev);
-                              setVendorSerialForm({
-                                newSerialNumber: dev.serialNumber || '',
-                                targetSchoolCode: ''
-                              });
-                            }}
-                            title="Chỉ dành cho Kỹ thuật viên Nhà cung cấp: Gỡ khóa mã phần cứng hoặc chuyển máy sang phân hiệu khác"
-                          >
-                            <Icon name="wrench" size={13} />
-                            <span>Gỡ khóa / Chuyển Phân hiệu</span>
-                          </button>
-                        )}
+                    <button
+                      type="button"
+                      className="hik-btn hik-btn-primary hik-btn-sm"
+                      disabled={Boolean(busyState)}
+                      onClick={() => handleQuickBidirectionalCluster(dev)}
+                      title="1 chạm thực hiện cả 2 chiều: Kéo dữ liệu từ máy về Web + Đồng bộ từ Web xuống máy"
+                    >
+                      <Icon
+                        name="refresh"
+                        size={14}
+                        className={busyState === 'bisync' ? 'hik-spin' : ''}
+                      />
+                      <span>{busyState === 'bisync' ? 'Đang chạy 2 chiều...' : 'Đồng bộ 2 chiều'}</span>
+                    </button>
+                  </div>
+                )}
 
-                        {dev.unmappedCount > 0 && (
-                          <button
-                            type="button"
-                            className="hik-utility-chip"
-                            style={{ borderColor: '#fbbf24', background: '#fef3c7', color: '#92400e' }}
-                            onClick={() => openUnmappedModal(dev)}
-                          >
-                            <span>{dev.unmappedCount} lượt chưa ghép</span>
-                          </button>
-                        )}
-                      </div>
-                    </article>
+                {/* TẦNG 2: THANH TIỆN ÍCH PHẦN CỨNG GỌN GÀNG */}
+                <div className="hik-device-utility-bar">
+                  <button
+                    type="button"
+                    className="hik-utility-chip"
+                    onClick={() => {
+                      setMachineFilterId(dev._id);
+                      machineSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }}
+                  >
+                    <Icon name="users" size={13} />
+                    <span>Xem hồ sơ trong máy ({dev.storedSnapshotCount || usedSlots})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="hik-utility-chip"
+                    disabled={Boolean(busyState)}
+                    onClick={() => handleCheckCapacity(dev)}
+                  >
+                    <Icon
+                      name={busyState === 'capacity' ? 'refresh' : 'wifi'}
+                      size={13}
+                      className={busyState === 'capacity' ? 'hik-spin' : ''}
+                    />
+                    <span>{busyState === 'capacity' ? 'Đang kiểm tra...' : 'Kiểm tra kết nối'}</span>
+                  </button>
+
+                  {canControlHardware && (
+                    <button
+                      type="button"
+                      className="hik-utility-chip"
+                      disabled={Boolean(busyState)}
+                      onClick={() => handlePullEventLogsFromMachine(dev)}
+                    >
+                      <Icon
+                        name={busyState === 'events' ? 'refresh' : 'clock'}
+                        size={13}
+                        className={busyState === 'events' ? 'hik-spin' : ''}
+                      />
+                      <span>{busyState === 'events' ? 'Đang đọc lượt quẹt...' : 'Đọc lượt điểm danh'}</span>
+                    </button>
+                  )}
+
+                  {canControlHardware && (
+                    <button
+                      type="button"
+                      className="hik-utility-chip"
+                      disabled={Boolean(busyState)}
+                      onClick={() => askUnlockDoor(dev)}
+                    >
+                      <Icon name="unlock" size={13} />
+                      <span>{busyState === 'door' ? 'Đang mở cửa...' : 'Mở cửa từ xa'}</span>
+                    </button>
+                  )}
+
+                  {canControlHardware && (
+                    <button
+                      type="button"
+                      className="hik-utility-chip"
+                      disabled={Boolean(busyState)}
+                      onClick={() => askPruneDevice(dev)}
+                    >
+                      <Icon name="eraser" size={13} />
+                      <span>{busyState === 'prune' ? 'Đang dọn...' : 'Dọn hồ sơ nghỉ'}</span>
+                    </button>
+                  )}
+
+                  {canControlHardware && (
+                    <button
+                      type="button"
+                      className="hik-utility-chip"
+                      disabled={Boolean(busyState)}
+                      onClick={() => handleUpdateWebhookDomain(dev)}
+                    >
+                      <Icon
+                        name={busyState === 'webhook' ? 'refresh' : 'globe'}
+                        size={13}
+                        className={busyState === 'webhook' ? 'hik-spin' : ''}
+                      />
+                      <span>{busyState === 'webhook' ? 'Đang cập nhật...' : 'Cập nhật tên miền Web'}</span>
+                    </button>
+                  )}
+
+                  {isVendorSupport && isAdmin && (
+                    <button
+                      type="button"
+                      className="hik-utility-chip"
+                      style={{ borderColor: '#fcd34d', background: '#fffbeb', color: '#92400e' }}
+                      onClick={() => {
+                        setVendorSerialModalDev(dev);
+                        setVendorSerialForm({
+                          newSerialNumber: dev.serialNumber || '',
+                          targetSchoolCode: ''
+                        });
+                      }}
+                    >
+                      <Icon name="wrench" size={13} />
+                      <span>Gỡ khóa / Chuyển Phân hiệu</span>
+                    </button>
+                  )}
+
+                  {dev.unmappedCount > 0 && (
+                    <button
+                      type="button"
+                      className="hik-utility-chip"
+                      style={{ borderColor: '#fbbf24', background: '#fef3c7', color: '#92400e' }}
+                      onClick={() => openUnmappedModal(dev)}
+                    >
+                      <span>{dev.unmappedCount} lượt chưa ghép</span>
+                    </button>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ─── KHỐI 3: HỒ SƠ ĐANG LƯU TRONG MÁY CHẤM CÔNG (HIỂN THỊ RÕ ẢNH + TÊN + MÃ TRÊN MÁY & 1 CHẠM LẤY VỀ WEB) ─── */}
+      {devices.length > 0 && (
+        <section ref={machineSectionRef} className="hik-machine-roster-card hik-fade-in">
+          <div className="hik-machine-roster-head">
+            <div className="hik-machine-roster-top">
+              <div>
+                <h3>
+                  <Icon name="hardDrive" size={18} />
+                  <span>Hồ Sơ Đang Lưu Trong Máy Chấm Công ({filteredDevicePeople.length} hồ sơ)</span>
+                  {unmatchedDevicePeopleCount > 0 && (
+                    <span className="hik-match-status unmatched" style={{ fontSize: 11.5 }}>
+                      {unmatchedDevicePeopleCount} hồ sơ trên máy chưa có trên Web
+                    </span>
+                  )}
+                </h3>
+                <p>
+                  Danh sách người dùng, <strong>họ tên</strong> và <strong>ảnh khuôn mặt thật</strong> đọc trực tiếp từ bộ nhớ máy chấm công. Muốn đưa hồ sơ từ máy về Web, bạn chỉ cần bấm <strong>&ldquo;Lấy Ảnh &amp; Tên về Web&rdquo;</strong>.
+                </p>
+              </div>
+
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                {canManageSync && (
+                  <button
+                    type="button"
+                    className="hik-btn hik-btn-secondary hik-btn-sm"
+                    disabled={pullingAll}
+                    onClick={() => {
+                      if (machineFilterId !== 'ALL') {
+                        const targetDev = devices.find((d) => d._id === machineFilterId);
+                        if (targetDev) {
+                          void handleDirectPullFromDevice(targetDev);
+                          return;
+                        }
+                      }
+                      void handlePullAllFastFromCluster();
+                    }}
+                  >
+                    <Icon name={pullingAll ? 'refresh' : 'download'} size={14} className={pullingAll ? 'hik-spin' : ''} />
+                    <span>{pullingAll ? 'Đang đọc từ máy...' : 'Đọc lại dữ liệu từ máy'}</span>
+                  </button>
+                )}
+
+                {canManageSync && filteredDevicePeople.length > 0 && (
+                  <button
+                    type="button"
+                    className="hik-btn hik-btn-primary hik-btn-sm"
+                    disabled={Boolean(importingKey)}
+                    onClick={() =>
+                      handleImportFromMachineToWeb({
+                        deviceId: machineFilterId === 'ALL' ? 'ALL_DEVICES' : machineFilterId,
+                        importAll: true
+                      })
+                    }
+                  >
+                    <Icon name={importingKey ? 'refresh' : 'check'} size={14} className={importingKey ? 'hik-spin' : ''} />
+                    <span>
+                      {importingKey
+                        ? 'Đang lưu về Web...'
+                        : `Lấy tất cả Ảnh & Tên về Web (${filteredDevicePeople.length})`}
+                    </span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Bộ lọc theo từng máy chấm công & trạng thái khớp */}
+            <div className="hik-device-filter-bar">
+              <div className="hik-filter-pills">
+                <button
+                  type="button"
+                  className={`hik-filter-pill ${machineFilterId === 'ALL' ? 'active' : ''}`}
+                  onClick={() => setMachineFilterId('ALL')}
+                >
+                  Tất cả máy ({deviceStoredPeople.length})
+                </button>
+                {devices.map((d) => {
+                  const countOnDev = deviceStoredPeople.filter((x) => x.deviceId === d._id).length;
+                  return (
+                    <button
+                      key={d._id}
+                      type="button"
+                      className={`hik-filter-pill ${machineFilterId === d._id ? 'active' : ''}`}
+                      onClick={() => setMachineFilterId(d._id)}
+                    >
+                      {d.name} ({countOnDev})
+                    </button>
                   );
                 })}
               </div>
 
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 12,
-                  flexWrap: 'wrap',
-                  padding: '12px 18px',
-                  borderRadius: 14,
-                  background: '#ffffff',
-                  border: '1px solid #e2e8f0'
-                }}
-              >
-                <span style={{ fontSize: 13, color: '#475569' }}>
-                  Muốn chụp Camera hoặc cập nhật ảnh chân dung khuôn mặt cho học sinh &amp; giáo viên trước khi đẩy xuống máy?
-                </span>
-                <button
-                  type="button"
-                  className="hik-btn hik-btn-secondary hik-btn-sm"
-                  onClick={() => setActiveWorkspaceTab('roster')}
+              <div className="hik-roster-filters">
+                <select
+                  value={machineMatchFilter}
+                  onChange={(e) => setMachineMatchFilter(e.target.value)}
                 >
-                  <Icon name="camera" size={14} />
-                  <span>Mở danh sách Ảnh khuôn mặt ({pagination.totalItems} hồ sơ)</span>
-                </button>
+                  <option value="ALL">Tất cả trạng thái ({deviceStoredPeople.length})</option>
+                  <option value="UNMATCHED">Chưa có trên Web ({kpi.unmatchedOnDevicesCount || 0})</option>
+                  <option value="MATCHED">Đã khớp với Web</option>
+                </select>
+                <input
+                  type="search"
+                  value={machineSearch}
+                  onChange={(e) => setMachineSearch(e.target.value)}
+                  placeholder="Tìm mã trên máy, họ tên..."
+                />
               </div>
-            </>
-          )}
-        </>
-      )}
-
-      {/* ═══════════════════════════════════════════════════════════════════════════════
-          PHÂN KHU 2: DANH SÁCH ẢNH KHUÔN MẶT HỌC SINH & NHÂN SỰ (<200KB)
-         ═══════════════════════════════════════════════════════════════════════════════ */}
-      {activeWorkspaceTab === 'roster' && (
-        <section className="hik-roster-card hik-fade-in">
-          <div className="hik-roster-header">
-            <div>
-              <h3>
-                Danh Sách Nhân Sự, Học Sinh &amp; Ảnh Quét Mặt Chấm Công ({pagination.totalItems} hồ sơ)
-              </h3>
-              <p>
-                <strong>Ảnh quét mặt chấm công</strong> dùng riêng để đẩy xuống máy Hikvision của phân hiệu (tách biệt với ảnh đại diện trên Web). Mọi ảnh chụp Camera hoặc tải lên đều được tự động căn chỉnh dung lượng gọn nhẹ <strong>&lt; 200KB</strong>.
-              </p>
             </div>
-
-            <form
-              className="hik-roster-filters"
-              onSubmit={(e) => {
-                e.preventDefault();
-                setAppliedSearch(searchInput.trim());
-                setRosterPage(1);
-              }}
-            >
-              <select
-                value={subjectFilter}
-                onChange={(e) => {
-                  setSubjectFilter(e.target.value);
-                  setRosterPage(1);
-                }}
-              >
-                <option value="ALL">Tất cả đối tượng</option>
-                <option value="EMPLOYEE">Nhân sự / Giáo viên</option>
-                <option value="STUDENT">Học sinh</option>
-              </select>
-
-              <select
-                value={faceStatusFilter}
-                onChange={(e) => {
-                  setFaceStatusFilter(e.target.value);
-                  setRosterPage(1);
-                }}
-              >
-                <option value="ALL">Tất cả trạng thái ảnh</option>
-                <option value="WITH_FACE">Đã có ảnh mặt (&lt;200KB)</option>
-                <option value="MISSING_FACE">Chưa có ảnh quét mặt</option>
-              </select>
-
-              <input
-                type="search"
-                value={searchInput}
-                onChange={(e) => {
-                  setSearchInput(e.target.value);
-                  if (!e.target.value.trim() && appliedSearch) {
-                    setAppliedSearch('');
-                    setRosterPage(1);
-                  }
-                }}
-                placeholder="Tìm mã NV/HS, họ tên, lớp..."
-              />
-
-              <button type="submit" className="hik-btn hik-btn-secondary hik-btn-sm">
-                <Icon name="search" size={14} /> Lọc
-              </button>
-            </form>
           </div>
 
           <div className="hik-roster-table-wrap">
             <table className="hik-roster-table">
               <thead>
                 <tr>
-                  <th>Mã chấm công</th>
-                  <th>Họ tên &amp; Phân hiệu</th>
-                  <th>Ảnh Quét Mặt Chấm Công</th>
-                  <th style={{ textAlign: 'right' }}>Đẩy lẻ xuống máy</th>
+                  <th>Mã trên máy &amp; Thiết bị</th>
+                  <th>Ảnh Khuôn Mặt &amp; Họ Tên Trên Máy</th>
+                  <th>Trạng thái trên Web</th>
+                  <th style={{ textAlign: 'right' }}>Lấy dữ liệu từ máy về Web</th>
                 </tr>
               </thead>
               <tbody>
-                {roster.length === 0 ? (
+                {deviceStoredPeople.length === 0 ? (
                   <tr>
-                    <td colSpan={4} style={{ textAlign: 'center', padding: '28px 16px', color: '#64748b' }}>
-                      Không có hồ sơ Nhân sự / Học sinh nào khớp với bộ lọc hiện tại.
+                    <td colSpan={4} style={{ textAlign: 'center', padding: '28px 16px', color: '#475569' }}>
+                      Chưa đọc danh sách hồ sơ từ bộ nhớ máy chấm công. Bạn hãy bấm nút{' '}
+                      <strong>&ldquo;Kéo Ảnh &amp; Tên về Web&rdquo;</strong> trên thẻ máy (hoặc{' '}
+                      <strong>&ldquo;Đọc lại dữ liệu từ máy&rdquo;</strong> ở góc trên) để hiển thị toàn bộ hồ sơ trong máy nhé!
+                    </td>
+                  </tr>
+                ) : filteredDevicePeople.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} style={{ textAlign: 'center', padding: '24px 16px', color: '#64748b' }}>
+                      Không có hồ sơ nào trên máy khớp với bộ lọc tìm kiếm hiện tại.
                     </td>
                   </tr>
                 ) : (
-                  roster.map((item) => {
-                    const rowKey = `${item.subjectType}:${item.subjectId}`;
-                    const busyMode = personActionBusy[rowKey];
-                    const initialChar = (item.fullName || item.personCode || 'H').charAt(0).toUpperCase();
+                  filteredDevicePeople.map((sp) => {
+                    const rowKey = `${sp.deviceId}:${sp.externalPersonId}`;
+                    const isImportingThis = importingKey === rowKey;
+                    const initial = String(sp.nameOnDevice || sp.externalPersonId || 'M').charAt(0).toUpperCase();
 
                     return (
                       <tr key={rowKey}>
-                        <td className="hik-code-cell">{item.personCode}</td>
+                        <td>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+                            <span className="hik-machine-id-badge">Mã máy: {sp.externalPersonId}</span>
+                            <span style={{ fontSize: 11, color: '#64748b', fontWeight: 600 }}>
+                              {sp.deviceName} ({sp.deviceHost})
+                            </span>
+                          </div>
+                        </td>
 
                         <td>
                           <div className="hik-person-cell">
-                            {item.webAvatar ? (
+                            {sp.faceDataUrl ? (
                               <img
-                                src={item.webAvatar}
-                                alt={item.fullName}
-                                className="hik-avatar-circle"
-                                title="Ảnh đại diện hiển thị trên Web"
+                                src={sp.faceDataUrl}
+                                alt={sp.nameOnDevice}
+                                style={{
+                                  width: 40,
+                                  height: 40,
+                                  borderRadius: 10,
+                                  objectFit: 'cover',
+                                  border: '1.5px solid #6ee7b7',
+                                  flexShrink: 0
+                                }}
                               />
                             ) : (
-                              <span className="hik-avatar-circle">{initialChar}</span>
+                              <span className="hik-avatar-circle" style={{ width: 40, height: 40 }}>
+                                {initial}
+                              </span>
                             )}
                             <div>
-                              <p className="hik-person-name">{item.fullName}</p>
+                              <p className="hik-person-name">{sp.nameOnDevice}</p>
                               <p className="hik-person-sub">
-                                {item.subjectType === 'STUDENT' ? 'Học sinh' : 'Nhân sự'} •{' '}
-                                <strong>{item.roleOrClassLabel}</strong> • {item.campus}
+                                {sp.faceDataUrl
+                                  ? `Có ảnh khuôn mặt trên máy (${sp.faceSizeKB}KB)`
+                                  : sp.hasFaceOnDevice
+                                    ? 'Đã đăng ký khuôn mặt trên máy'
+                                    : 'Chưa có ảnh khuôn mặt trên máy'}
                               </p>
                             </div>
                           </div>
                         </td>
 
                         <td>
-                          <div className="hik-face-cell">
-                            {item.hasBiometricFace && item.faceDataUrl ? (
-                              <span className="hik-face-ready-badge">
-                                <img src={item.faceDataUrl} alt={`Face ${item.fullName}`} />
-                                <span>Đã có ảnh mặt ({item.faceSizeKB}KB)</span>
+                          {sp.isMatchedOnWeb ? (
+                            <span className="hik-match-status matched">
+                              <Icon name="check" size={13} />
+                              <span>
+                                Đã khớp: [{sp.matchedPersonCode}] {sp.matchedFullName}
                               </span>
-                            ) : (
-                              <span className="hik-face-empty-badge">Chưa có ảnh quét mặt</span>
-                            )}
-
-                            {canManageSync && (
-                              <>
-                                <button
-                                  type="button"
-                                  className="hik-btn hik-btn-primary hik-btn-sm"
-                                  disabled={Boolean(busyMode)}
-                                  onClick={() => setCameraTarget(item)}
-                                >
-                                  <Icon name="camera" size={13} />
-                                  <span>Chụp Camera</span>
-                                </button>
-
-                                <label className="hik-btn hik-btn-secondary hik-btn-sm">
-                                  <Icon name="upload" size={13} />
-                                  <span>
-                                    {busyMode === 'upload'
-                                      ? 'Đang nén...'
-                                      : item.hasBiometricFace
-                                        ? 'Đổi ảnh'
-                                        : 'Chọn ảnh'}
-                                  </span>
-                                  <input
-                                    type="file"
-                                    accept="image/jpeg,image/png,image/webp"
-                                    hidden
-                                    disabled={Boolean(busyMode)}
-                                    onChange={(e) => handleFileUploadForPerson(item, e)}
-                                  />
-                                </label>
-                              </>
-                            )}
-                          </div>
+                            </span>
+                          ) : (
+                            <span className="hik-match-status unmatched">
+                              <span>Mới chỉ có trong máy — Chưa lưu về Web</span>
+                            </span>
+                          )}
                         </td>
 
                         <td style={{ textAlign: 'right' }}>
-                          <button
-                            type="button"
-                            className="hik-btn hik-btn-secondary hik-btn-sm"
-                            disabled={Boolean(busyMode) || devices.length === 0 || !canManageSync}
-                            onClick={() => handlePushSinglePerson(item)}
-                            title={devices.length === 0 ? 'Cần kết nối ít nhất 1 máy chấm công trước khi đẩy ảnh' : 'Đẩy ngay hồ sơ này xuống máy chấm công'}
-                          >
-                            <Icon
-                              name={busyMode === 'push' ? 'refresh' : 'send'}
-                              size={13}
-                              className={busyMode === 'push' ? 'hik-spin' : ''}
-                            />
-                            <span>{busyMode === 'push' ? 'Đang đẩy...' : 'Đẩy xuống máy'}</span>
-                          </button>
+                          {canManageSync && (
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                              <button
+                                type="button"
+                                className={`hik-btn ${sp.isMatchedOnWeb ? 'hik-btn-secondary' : 'hik-btn-primary'} hik-btn-sm`}
+                                disabled={Boolean(importingKey)}
+                                onClick={() =>
+                                  handleImportFromMachineToWeb({
+                                    deviceId: sp.deviceId,
+                                    externalPersonIds: [sp.externalPersonId],
+                                    importAll: false
+                                  })
+                                }
+                              >
+                                <Icon
+                                  name={isImportingThis ? 'refresh' : 'download'}
+                                  size={13}
+                                  className={isImportingThis ? 'hik-spin' : ''}
+                                />
+                                <span>
+                                  {isImportingThis
+                                    ? 'Đang lấy...'
+                                    : sp.isMatchedOnWeb
+                                      ? 'Cập nhật Ảnh & Tên về Web'
+                                      : 'Lấy Ảnh & Tên về Web'}
+                                </span>
+                              </button>
+
+                              {!sp.isMatchedOnWeb && quickLinkCandidates.length > 0 && (
+                                <>
+                                  <select
+                                    className="hik-unmatched-select"
+                                    style={{ maxWidth: 210, padding: '6px 8px', fontSize: 11.5 }}
+                                    value={unmatchedLinkChoice[rowKey] || ''}
+                                    onChange={(e) =>
+                                      setUnmatchedLinkChoice((prev) => ({
+                                        ...prev,
+                                        [rowKey]: e.target.value
+                                      }))
+                                    }
+                                  >
+                                    <option value="">-- Hoặc ghép vào HS/NS sẵn có --</option>
+                                    {quickLinkCandidates.map((cand) => (
+                                      <option
+                                        key={`${cand.subjectType}::${cand.subjectId}`}
+                                        value={`${cand.subjectType}::${cand.subjectId}`}
+                                      >
+                                        [{cand.subjectType === 'STUDENT' ? 'HS' : 'NS'}] {cand.personCode} — {cand.fullName}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  {unmatchedLinkChoice[rowKey] && (
+                                    <button
+                                      type="button"
+                                      className="hik-btn hik-btn-secondary hik-btn-sm"
+                                      disabled={linkingExtKey === rowKey}
+                                      onClick={() => handleQuickLinkUnmatchedUser(sp)}
+                                    >
+                                      {linkingExtKey === rowKey ? 'Đang ghép...' : 'Xác nhận ghép'}
+                                    </button>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          )}
                         </td>
                       </tr>
                     );
@@ -2944,115 +2885,314 @@ export default function TimekeepingDeviceManagement() {
               </tbody>
             </table>
           </div>
-
-          {pagination.totalPages > 1 && (
-            <div className="hik-pagination-bar">
-              <span>
-                Trang <strong>{pagination.page}</strong> / {pagination.totalPages} ({pagination.totalItems} hồ sơ)
-              </span>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  type="button"
-                  className="hik-btn hik-btn-secondary hik-btn-sm"
-                  disabled={pagination.page <= 1}
-                  onClick={() => setRosterPage((p) => Math.max(1, p - 1))}
-                >
-                  Trang trước
-                </button>
-                <button
-                  type="button"
-                  className="hik-btn hik-btn-secondary hik-btn-sm"
-                  disabled={pagination.page >= pagination.totalPages}
-                  onClick={() => setRosterPage((p) => Math.min(pagination.totalPages, p + 1))}
-                >
-                  Trang tiếp
-                </button>
-              </div>
-            </div>
-          )}
         </section>
       )}
 
-      {/* ═══════════════════════════════════════════════════════════════════════════════
-          PHÂN KHU 3: ĐỊA CHỈ NHẬN ĐIỂM DANH TỰ ĐỘNG (ĐỘNG THEO TÊN MIỀN) & NHẬT KÝ TRỰC TIẾP
-         ═══════════════════════════════════════════════════════════════════════════════ */}
-      {activeWorkspaceTab === 'webhook' && (
-        <>
-          <section className="hik-webhook-strip hik-fade-in">
-            <div style={{ flex: '1 1 420px', minWidth: 0 }}>
-              <div style={{ fontSize: 11.5, fontWeight: 800, color: '#1d4ed8', textTransform: 'uppercase', marginBottom: 4 }}>
-                Địa chỉ nhận điểm danh tự động theo tên miền hiện tại ({resolvedSchoolCode})
-              </div>
-              <p style={{ margin: '0 0 10px', fontSize: 12.5, color: '#475569', lineHeight: 1.5 }}>
-                Khi học sinh hoặc giáo viên quét khuôn mặt tại cổng, máy chấm công sẽ tự động gửi kết quả về địa chỉ dưới đây. Nếu nhà trường đổi sang tên miền mới, chỉ cần bấm nút cập nhật 1 chạm để đẩy địa chỉ mới xuống tất cả máy.
-              </p>
-              <div className="hik-webhook-url-box">
-                <Icon name="link" size={15} />
-                <code>{fullWebhookUrl}</code>
-                <button type="button" className="hik-btn hik-btn-secondary hik-btn-sm" onClick={handleCopyWebhookUrl}>
-                  <Icon name="copy" size={13} /> {copiedUrl ? 'Đã sao chép' : 'Sao chép địa chỉ'}
-                </button>
-              </div>
-            </div>
+      {/* ─── KHỐI 4: DANH SÁCH HỒ SƠ TRÊN WEB & ĐỒNG BỘ XUỐNG MÁY CHẤM CÔNG ─── */}
+      <section className="hik-roster-card">
+        <div className="hik-roster-header">
+          <div>
+            <h3>
+              Danh Sách Hồ Sơ Trên Web &amp; Đồng Bộ Xuống Máy ({pagination.totalItems} hồ sơ)
+            </h3>
+            <p>
+              Danh sách Học sinh &amp; Nhân sự của phân hiệu trên phần mềm Web. Bấm <strong>&ldquo;Chụp Camera&rdquo;</strong> hoặc <strong>&ldquo;Chọn ảnh&rdquo;</strong> để gắn ảnh khuôn mặt chuẩn <code>&lt; 200KB</code>, sau đó bấm <strong>&ldquo;Đồng bộ xuống máy&rdquo;</strong>.
+            </p>
+          </div>
 
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-              {canControlHardware && devices.length > 0 && (
-                <button
-                  type="button"
-                  className="hik-btn hik-btn-primary hik-btn-sm"
-                  disabled={updatingWebhookAll}
-                  onClick={() => handleUpdateWebhookDomain(null)}
-                >
-                  <Icon
-                    name={updatingWebhookAll ? 'refresh' : 'globe'}
-                    size={14}
-                    className={updatingWebhookAll ? 'hik-spin' : ''}
-                  />
-                  <span>
-                    {updatingWebhookAll
-                      ? 'Đang cập nhật xuống máy...'
-                      : '1 Chạm Cập Nhật Tên Miền Mới Xuống Máy'}
-                  </span>
-                </button>
+          <form
+            className="hik-roster-filters"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setAppliedSearch(searchInput.trim());
+              setRosterPage(1);
+            }}
+          >
+            <select
+              value={subjectFilter}
+              onChange={(e) => {
+                setSubjectFilter(e.target.value);
+                setRosterPage(1);
+              }}
+            >
+              <option value="ALL">Tất cả đối tượng</option>
+              <option value="EMPLOYEE">Nhân sự / Giáo viên</option>
+              <option value="STUDENT">Học sinh</option>
+            </select>
+
+            <select
+              value={syncStatusFilter}
+              onChange={(e) => {
+                setSyncStatusFilter(e.target.value);
+                setRosterPage(1);
+              }}
+            >
+              <option value="ALL">Tất cả trạng thái máy</option>
+              <option value="ON_DEVICE">Đã có trên máy chấm công</option>
+              <option value="NOT_ON_DEVICE">Chưa đồng bộ xuống máy</option>
+            </select>
+
+            <select
+              value={faceStatusFilter}
+              onChange={(e) => {
+                setFaceStatusFilter(e.target.value);
+                setRosterPage(1);
+              }}
+            >
+              <option value="ALL">Tất cả trạng thái ảnh</option>
+              <option value="WITH_FACE">Đã có ảnh khuôn mặt</option>
+              <option value="MISSING_FACE">Chưa có ảnh khuôn mặt</option>
+            </select>
+
+            <input
+              type="search"
+              value={searchInput}
+              onChange={(e) => {
+                setSearchInput(e.target.value);
+                if (!e.target.value.trim() && appliedSearch) {
+                  setAppliedSearch('');
+                  setRosterPage(1);
+                }
+              }}
+              placeholder="Tìm mã NV/HS, họ tên, lớp..."
+            />
+
+            <button type="submit" className="hik-btn hik-btn-secondary hik-btn-sm">
+              <Icon name="search" size={14} /> Lọc
+            </button>
+          </form>
+        </div>
+
+        <div className="hik-roster-table-wrap">
+          <table className="hik-roster-table">
+            <thead>
+              <tr>
+                <th>Mã chấm công</th>
+                <th>Họ tên &amp; Lớp / Bộ phận</th>
+                <th>Ảnh Khuôn Mặt Chấm Công</th>
+                <th>Trạng thái trên máy</th>
+                <th style={{ textAlign: 'right' }}>Đồng bộ Web → Máy</th>
+              </tr>
+            </thead>
+            <tbody>
+              {roster.length === 0 ? (
+                <tr>
+                  <td colSpan={5} style={{ textAlign: 'center', padding: '28px 16px', color: '#64748b' }}>
+                    Không có hồ sơ Nhân sự / Học sinh nào khớp với bộ lọc hiện tại.
+                  </td>
+                </tr>
+              ) : (
+                roster.map((item) => {
+                  const rowKey = `${item.subjectType}:${item.subjectId}`;
+                  const busyMode = personActionBusy[rowKey];
+                  const initialChar = (item.fullName || item.personCode || 'H').charAt(0).toUpperCase();
+
+                  return (
+                    <tr key={rowKey}>
+                      <td className="hik-code-cell">{item.personCode}</td>
+
+                      <td>
+                        <div className="hik-person-cell">
+                          {item.webAvatar ? (
+                            <img
+                              src={item.webAvatar}
+                              alt={item.fullName}
+                              className="hik-avatar-circle"
+                              title="Ảnh đại diện hiển thị trên Web"
+                            />
+                          ) : (
+                            <span className="hik-avatar-circle">{initialChar}</span>
+                          )}
+                          <div>
+                            <p className="hik-person-name">{item.fullName}</p>
+                            <p className="hik-person-sub">
+                              {item.subjectType === 'STUDENT' ? 'Học sinh' : 'Nhân sự'} •{' '}
+                              <strong>{item.roleOrClassLabel}</strong> • {item.campus}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
+
+                      <td>
+                        <div className="hik-face-cell">
+                          {item.hasBiometricFace && item.faceDataUrl ? (
+                            <span className="hik-face-ready-badge">
+                              <img src={item.faceDataUrl} alt={`Face ${item.fullName}`} />
+                              <span>Đã có ảnh ({item.faceSizeKB}KB)</span>
+                            </span>
+                          ) : (
+                            <span className="hik-face-empty-badge">Chưa có ảnh mặt</span>
+                          )}
+
+                          {canManageSync && (
+                            <>
+                              <button
+                                type="button"
+                                className="hik-btn hik-btn-primary hik-btn-sm"
+                                disabled={Boolean(busyMode)}
+                                onClick={() => setCameraTarget(item)}
+                              >
+                                <Icon name="camera" size={13} />
+                                <span>Chụp Camera</span>
+                              </button>
+
+                              <label className="hik-btn hik-btn-secondary hik-btn-sm">
+                                <Icon name="upload" size={13} />
+                                <span>
+                                  {busyMode === 'upload'
+                                    ? 'Đang nén...'
+                                    : item.hasBiometricFace
+                                      ? 'Đổi ảnh'
+                                      : 'Chọn ảnh'}
+                                </span>
+                                <input
+                                  type="file"
+                                  accept="image/jpeg,image/png,image/webp"
+                                  hidden
+                                  disabled={Boolean(busyMode)}
+                                  onChange={(e) => handleFileUploadForPerson(item, e)}
+                                />
+                              </label>
+                            </>
+                          )}
+                        </div>
+                      </td>
+
+                      <td>
+                        {item.isOnDevice ? (
+                          <span
+                            className="hik-sync-badge synced"
+                            title={item.syncedDeviceNames?.join(', ') || 'Đã đồng bộ xuống máy chấm công'}
+                          >
+                            <Icon name="check" size={12} />
+                            <span>Đã có trên máy ({item.syncedDeviceCount || 1})</span>
+                          </span>
+                        ) : (
+                          <span className="hik-sync-badge unsynced">Chưa đẩy xuống máy</span>
+                        )}
+                      </td>
+
+                      <td style={{ textAlign: 'right' }}>
+                        <button
+                          type="button"
+                          className="hik-btn hik-btn-secondary hik-btn-sm"
+                          disabled={Boolean(busyMode) || devices.length === 0 || !canManageSync}
+                          onClick={() => handlePushSinglePerson(item)}
+                          title={
+                            devices.length === 0
+                              ? 'Cần kết nối ít nhất 1 máy chấm công trước khi đồng bộ xuống máy'
+                              : 'Đồng bộ hồ sơ & ảnh khuôn mặt của người này từ Web xuống máy chấm công'
+                          }
+                        >
+                          <Icon
+                            name={busyMode === 'push' ? 'refresh' : 'upload'}
+                            size={13}
+                            className={busyMode === 'push' ? 'hik-spin' : ''}
+                          />
+                          <span>{busyMode === 'push' ? 'Đang đồng bộ...' : 'Đồng bộ xuống máy'}</span>
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
-              {canControlHardware && (
-                <button type="button" className="hik-btn hik-btn-secondary hik-btn-sm" onClick={openWebhookSimulator}>
-                  <Icon name="send" size={14} /> Thử nghiệm quét mặt điểm danh
-                </button>
-              )}
-              <button type="button" className="hik-btn hik-btn-secondary hik-btn-sm" onClick={openWebhookLogs}>
-                <Icon name="fileText" size={14} /> Lịch sử nhận điểm danh
+            </tbody>
+          </table>
+        </div>
+
+        {pagination.totalPages > 1 && (
+          <div className="hik-pagination-bar">
+            <span>
+              Trang <strong>{pagination.page}</strong> / {pagination.totalPages} ({pagination.totalItems} hồ sơ)
+            </span>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                className="hik-btn hik-btn-secondary hik-btn-sm"
+                disabled={pagination.page <= 1}
+                onClick={() => setRosterPage((p) => Math.max(1, p - 1))}
+              >
+                Trang trước
+              </button>
+              <button
+                type="button"
+                className="hik-btn hik-btn-secondary hik-btn-sm"
+                disabled={pagination.page >= pagination.totalPages}
+                onClick={() => setRosterPage((p) => Math.min(pagination.totalPages, p + 1))}
+              >
+                Trang tiếp
               </button>
             </div>
-          </section>
+          </div>
+        )}
+      </section>
 
-          <section className="hik-live-feed-card hik-fade-in">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <strong style={{ fontSize: 14, color: '#0f172a', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                <Icon name="bell" size={16} />
-                <span>Hoạt động điểm danh &amp; thiết bị theo thời gian thực tại phân hiệu ({resolvedSchoolCode})</span>
-              </strong>
-              <span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>Tự động cập nhật trực tiếp</span>
-            </div>
+      {/* ─── KHỐI 5: ĐỊA CHỈ NHẬN ĐIỂM DANH TỰ ĐỘNG THEO TÊN MIỀN & THÔNG BÁO TRỰC TIẾP ─── */}
+      <section className="hik-webhook-strip">
+        <div style={{ flex: '1 1 420px', minWidth: 0 }}>
+          <div style={{ fontSize: 11.5, fontWeight: 800, color: '#1d4ed8', textTransform: 'uppercase', marginBottom: 4 }}>
+            Địa chỉ nhận điểm danh tự động theo tên miền hiện tại ({resolvedSchoolCode})
+          </div>
+          <div className="hik-webhook-url-box">
+            <Icon name="link" size={15} />
+            <code>{fullWebhookUrl}</code>
+            <button type="button" className="hik-btn hik-btn-secondary hik-btn-sm" onClick={handleCopyWebhookUrl}>
+              <Icon name="copy" size={13} /> {copiedUrl ? 'Đã sao chép' : 'Sao chép địa chỉ'}
+            </button>
+          </div>
+        </div>
 
-            {liveFeedEvents.length === 0 ? (
-              <div style={{ padding: '20px 16px', borderRadius: 12, background: '#f8fafc', border: '1px solid #e2e8f0', color: '#64748b', fontSize: 13, textAlign: 'center' }}>
-                Chưa có thông báo điểm danh mới trong phiên này. Khi trẻ hoặc nhân sự quét khuôn mặt qua cổng, thông báo tiếng Việt sẽ hiển thị ngay tại đây.
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          {canControlHardware && devices.length > 0 && (
+            <button
+              type="button"
+              className="hik-btn hik-btn-primary hik-btn-sm"
+              disabled={updatingWebhookAll}
+              onClick={() => handleUpdateWebhookDomain(null)}
+            >
+              <Icon
+                name={updatingWebhookAll ? 'refresh' : 'globe'}
+                size={14}
+                className={updatingWebhookAll ? 'hik-spin' : ''}
+              />
+              <span>
+                {updatingWebhookAll
+                  ? 'Đang cập nhật xuống máy...'
+                  : '1 Chạm Cập Nhật Tên Miền Mới Xuống Máy'}
+              </span>
+            </button>
+          )}
+          {canControlHardware && (
+            <button type="button" className="hik-btn hik-btn-secondary hik-btn-sm" onClick={openWebhookSimulator}>
+              <Icon name="send" size={14} /> Thử nghiệm quét mặt điểm danh
+            </button>
+          )}
+          <button type="button" className="hik-btn hik-btn-secondary hik-btn-sm" onClick={openWebhookLogs}>
+            <Icon name="fileText" size={14} /> Lịch sử nhận điểm danh
+          </button>
+        </div>
+      </section>
+
+      {liveFeedEvents.length > 0 && (
+        <section className="hik-live-feed-card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <strong style={{ fontSize: 13.5, color: '#0f172a', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <Icon name="bell" size={15} />
+              <span>Thông báo điểm danh &amp; đồng bộ trực tiếp tại phân hiệu ({resolvedSchoolCode})</span>
+            </strong>
+            <span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>Cập nhật theo thời gian thực</span>
+          </div>
+          <div className="hik-live-feed-list">
+            {liveFeedEvents.slice(0, 6).map((ev) => (
+              <div key={ev.id} className={`hik-live-event-item ${ev.tone || 'info'}`}>
+                <div style={{ minWidth: 0 }}>
+                  <strong style={{ display: 'block', color: '#0f172a', marginBottom: 2 }}>{ev.title}</strong>
+                  <span style={{ color: '#334155' }}>{ev.message}</span>
+                </div>
               </div>
-            ) : (
-              <div className="hik-live-feed-list">
-                {liveFeedEvents.map((ev) => (
-                  <div key={ev.id} className={`hik-live-event-item ${ev.tone || 'info'}`}>
-                    <div style={{ minWidth: 0 }}>
-                      <strong style={{ display: 'block', color: '#0f172a', marginBottom: 2 }}>{ev.title}</strong>
-                      <span style={{ color: '#334155' }}>{ev.message}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-        </>
+            ))}
+          </div>
+        </section>
       )}
 
       {/* ─── MODAL CHỤP CAMERA & NÉN ẢNH KHUÔN MẶT (<200KB) ─── */}
@@ -3065,10 +3205,10 @@ export default function TimekeepingDeviceManagement() {
         />
       )}
 
-      {/* ─── MODAL XÁC NHẬN AN TOÀN PHẦN CỨNG (PULL / PUSH / PRUNE / DOOR / DELETE) ─── */}
+      {/* ─── MODAL XÁC NHẬN AN TOÀN PHẦN CỨNG (PULL / PUSH / PRUNE / DOOR / DELETE — Bấm ngoài KHÔNG tắt) ─── */}
       {confirmState &&
         createPortal(
-          <div className="hik-modal-backdrop" onClick={() => setConfirmState(null)} role="presentation">
+          <div className="hik-modal-backdrop" role="presentation">
             <div className="hik-confirm-modal" onClick={(e) => e.stopPropagation()}>
               <div className="hik-camera-header">
                 <div>
@@ -3108,34 +3248,6 @@ export default function TimekeepingDeviceManagement() {
                   </ul>
                 )}
 
-                {confirmState.mode === 'PULL_USERS' && (
-                  <div style={{ padding: 12, borderRadius: 12, background: '#f8fafc', border: '1px solid #e2e8f0', fontSize: 12.5 }}>
-                    <div style={{ fontWeight: 800, color: '#0f172a', marginBottom: 8 }}>
-                      Tùy chọn chế độ lưu Ảnh khuôn mặt khi kéo về Web:
-                    </div>
-                    <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 8, cursor: 'pointer' }}>
-                      <input
-                        type="radio"
-                        checked={overwriteFacesOnPull === true}
-                        onChange={() => setOverwriteFacesOnPull(true)}
-                      />
-                      <span>
-                        <strong>Cập nhật &amp; ghi đè toàn bộ ảnh mặt từ máy chấm công về Web</strong> (Khuyên dùng khi ảnh đã đăng ký trên máy là chuẩn nhất).
-                      </span>
-                    </label>
-                    <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', cursor: 'pointer' }}>
-                      <input
-                        type="radio"
-                        checked={overwriteFacesOnPull === false}
-                        onChange={() => setOverwriteFacesOnPull(false)}
-                      />
-                      <span>
-                        <strong>Chỉ tải bổ sung cho những hồ sơ chưa có ảnh mặt trên Web</strong> (Giữ nguyên những ảnh đã chụp trên Web).
-                      </span>
-                    </label>
-                  </div>
-                )}
-
                 {confirmState.mode === 'PUSH_SYNC' && (
                   <label
                     style={{
@@ -3156,7 +3268,7 @@ export default function TimekeepingDeviceManagement() {
                       onChange={(e) => setForceFullPush(e.target.checked)}
                     />
                     <span>
-                      <strong>Ép nạp lại toàn bộ 100% hồ sơ &amp; ảnh mặt</strong> (Mặc định không tích sẽ dùng chế độ <strong>Đồng bộ Nhanh Delta</strong> chỉ đẩy những hồ sơ mới/thay đổi để hoàn tất trong vài giây).
+                      <strong>Ép nạp lại toàn bộ 100% hồ sơ &amp; ảnh mặt</strong> (Mặc định không tích sẽ dùng chế độ <strong>Đồng bộ Nhanh</strong> chỉ đẩy những hồ sơ mới/thay đổi để hoàn tất trong vài giây).
                     </span>
                   </label>
                 )}
@@ -3164,21 +3276,19 @@ export default function TimekeepingDeviceManagement() {
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, paddingTop: 6 }}>
                   <button
                     type="button"
-                    className="hik-btn hik-btn-neutral"
+                    className="hik-btn hik-btn-secondary"
                     onClick={() => setConfirmState(null)}
                   >
                     Hủy bỏ
                   </button>
                   <button
                     type="button"
-                    className={`hik-btn ${confirmState.tone === 'danger' ? 'hik-btn-danger' : 'hik-btn-indigo'}`}
+                    className={`hik-btn ${confirmState.tone === 'danger' ? 'hik-btn-danger' : 'hik-btn-primary'}`}
                     onClick={async () => {
                       const current = confirmState;
                       setConfirmState(null);
                       try {
-                        if (current.mode === 'PULL_USERS' && current.deviceId) {
-                          await executePullFromDevice(current.deviceId, overwriteFacesOnPull);
-                        } else if (current.mode === 'PUSH_SYNC') {
+                        if (current.mode === 'PUSH_SYNC') {
                           await executePushSync(current.targetDevice, forceFullPush);
                         } else if (current.onExecute) {
                           await current.onExecute();
@@ -3200,10 +3310,10 @@ export default function TimekeepingDeviceManagement() {
           document.body
         )}
 
-      {/* ─── MODAL GIẢ LẬP WEBHOOK ─── */}
+      {/* ─── MODAL GIẢ LẬP WEBHOOK (Bấm ngoài KHÔNG tắt) ─── */}
       {activeModal === 'simulate_webhook' &&
         createPortal(
-          <div className="account-modal-backdrop" onClick={() => setActiveModal(null)} role="presentation">
+          <div className="account-modal-backdrop" role="presentation">
             <form
               className="account-modal-card student-form"
               style={{ width: 'min(620px, 96vw)' }}
@@ -3351,11 +3461,15 @@ export default function TimekeepingDeviceManagement() {
           document.body
         )}
 
-      {/* ─── MODAL ÁNH XẠ ID MÁY THỦ CÔNG ─── */}
+      {/* ─── MODAL ÁNH XẠ ID MÁY THỦ CÔNG (Chỉ bấm ngoài tắt nếu chỉ xem, Admin có quyền thêm/xóa thì KHÔNG tắt) ─── */}
       {activeModal === 'mappings' &&
         selectedDevice &&
         createPortal(
-          <div className="account-modal-backdrop" onClick={() => setActiveModal(null)} role="presentation">
+          <div
+            className="account-modal-backdrop"
+            onClick={!isAdmin ? () => setActiveModal(null) : undefined}
+            role="presentation"
+          >
             <div className="account-modal-card" style={{ width: 'min(820px, 96vw)' }} onClick={(e) => e.stopPropagation()}>
               <div className="account-modal-header">
                 <div>
@@ -3553,12 +3667,11 @@ export default function TimekeepingDeviceManagement() {
           </div>,
           document.body
         )}
-      {/* ─── BƯỚC 2: MODAL NHẬP MẬT KHẨU KẾT NỐI & GẮN MÁY VỪA TÌM THẤY TRONG LAN ─── */}
+      {/* ─── BƯỚC 2: MODAL NHẬP MẬT KHẨU KẾT NỐI & GẮN MÁY VỪA TÌM THẤY TRONG LAN (Bấm ngoài KHÔNG tắt) ─── */}
       {connectModalTarget &&
         createPortal(
           <div
             className="account-modal-backdrop"
-            onClick={() => !connectingDiscovered && setConnectModalTarget(null)}
             role="presentation"
           >
             <form
@@ -3595,13 +3708,39 @@ export default function TimekeepingDeviceManagement() {
                   lineHeight: 1.5
                 }}
               >
-                Đã tìm thấy thiết bị <strong>{connectModalTarget.model || 'DS-K1T320MX'}</strong> tại địa chỉ{' '}
-                <strong>{connectModalTarget.host}</strong>. Nhập mật khẩu quản trị của máy chấm công để hệ thống khóa bảo mật thiết bị vào phân hiệu <strong>{resolvedSchoolCode}</strong> và tự động kéo dữ liệu về phần mềm.
+                Thiết bị <strong>{connectModalTarget.model || 'DS-K1T320MX'}</strong> tại địa chỉ{' '}
+                <strong>{connectModalTarget.host}</strong>
+                {connectModalTarget.serialNumber
+                  ? ` (Số Seri: ${formatReadableSerial(connectModalTarget.serialNumber)})`
+                  : ''}
+                . Nhập mật khẩu quản trị của máy chấm công để khóa bảo mật thiết bị vào phân hiệu{' '}
+                <strong>{resolvedSchoolCode}</strong> và đọc ngay danh sách hồ sơ đang lưu trong máy.
               </div>
 
               {connectModalError && (
                 <div className="form-error" style={{ marginBottom: 14, fontSize: 13 }}>
                   {connectModalError}
+                </div>
+              )}
+
+              {connectingDiscovered && connectStepLabel && (
+                <div
+                  style={{
+                    marginBottom: 14,
+                    padding: '10px 14px',
+                    borderRadius: 10,
+                    background: '#eff6ff',
+                    border: '1px solid #93c5fd',
+                    color: '#1d4ed8',
+                    fontSize: 12.5,
+                    fontWeight: 700,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8
+                  }}
+                >
+                  <Icon name="refresh" size={14} className="hik-spin" />
+                  <span>{connectStepLabel}</span>
                 </div>
               )}
 
@@ -3695,11 +3834,11 @@ export default function TimekeepingDeviceManagement() {
           document.body
         )}
 
-      {/* ─── MODAL KỸ THUẬT NHÀ CUNG CẤP: GỠ KHÓA MÃ PHẦN CỨNG / CHUYỂN PHÂN HIỆU ─── */}
+      {/* ─── MODAL KỸ THUẬT NHÀ CUNG CẤP: GỠ KHÓA MÃ PHẦN CỨNG / CHUYỂN PHÂN HIỆU (Bấm ngoài KHÔNG tắt) ─── */}
       {vendorSerialModalDev &&
         isVendorSupport &&
         createPortal(
-          <div className="account-modal-backdrop" onClick={() => setVendorSerialModalDev(null)} role="presentation">
+          <div className="account-modal-backdrop" role="presentation">
             <form
               className="account-modal-card student-form"
               style={{ width: 'min(580px, 96vw)' }}

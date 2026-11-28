@@ -26,6 +26,7 @@ const TimekeepingDevice = require('../models/zone2_hr/TimekeepingDevice');
 const AttendanceDevicePersonMapping = require('../models/zone2_hr/AttendanceDevicePersonMapping');
 const RawAttendanceEvent = require('../models/zone2_hr/RawAttendanceEvent');
 const BiometricFaceProfile = require('../models/zone2_hr/BiometricFaceProfile');
+const DeviceStoredPerson = require('../models/zone2_hr/DeviceStoredPerson');
 const hikvisionIsapiService = require('./hikvisionIsapiService');
 const { buildDeviceConfig, syncDeviceEvents } = require('./hikvisionSyncService');
 const { ingestDeviceEvent, ingestStudentDeviceAttendance } = require('./attendanceDeviceService');
@@ -332,7 +333,7 @@ async function loadTenantBiometricContext(tenantId) {
       subjectId: String(emp._id),
       employeeRecordId: String(emp._id),
       userId: linkedUser ? String(linkedUser._id) : (emp.userId ? String(emp.userId) : null),
-      mappingSubjectId: linkedUser ? String(linkedUser._id) : (emp.userId ? String(emp.userId) : null),
+      mappingSubjectId: linkedUser ? String(linkedUser._id) : String(emp.userId || emp._id),
       personCode,
       altCodes: [],
       username: linkedUser?.username || '',
@@ -455,7 +456,10 @@ async function ensureDevicePersonMapping(tenantId, deviceId, rosterItem, actorId
         $set: {
           subjectType: rosterItem.subjectType,
           subjectId: new mongoose.Types.ObjectId(rosterItem.mappingSubjectId),
-          userId: rosterItem.subjectType === 'EMPLOYEE' ? new mongoose.Types.ObjectId(rosterItem.mappingSubjectId) : undefined,
+          userId:
+            rosterItem.subjectType === 'EMPLOYEE' && rosterItem.userId
+              ? new mongoose.Types.ObjectId(rosterItem.userId)
+              : undefined,
           studentId: rosterItem.subjectType === 'STUDENT' ? new mongoose.Types.ObjectId(rosterItem.mappingSubjectId) : undefined,
           active: true,
           metadata: {
@@ -553,6 +557,143 @@ async function selectTargetRosterForDeviceCapacity(tenantId, device, unifiedRost
 /**
  * Lấy tổng quan cụm máy chấm công, 4 chỉ số KPI 500-slot và danh sách Nhân sự/Học sinh theo Phân hiệu.
  */
+/**
+ * Đồng bộ bảng lưu trữ hồ sơ thực tế trên từng máy chấm công (`DeviceStoredPerson`) bằng `bulkWrite` hiệu năng cao.
+ * Giúp giao diện Web luôn hiển thị đầy đủ Tên + Mã trên máy + Ảnh khuôn mặt thật đang lưu trong từng máy.
+ */
+async function syncDeviceStoredPersonsSnapshot(tenantId, deviceId, rawUsers = [], { pruneMissing = true } = {}) {
+  const safeUsers = Array.isArray(rawUsers) ? rawUsers : [];
+  const ops = [];
+  const activeExtIds = [];
+  const now = new Date();
+
+  for (const u of safeUsers) {
+    const extId = String(u?.employeeNo || u?.externalPersonId || u?.personCode || '').trim();
+    if (!extId) continue;
+    activeExtIds.push(extId);
+
+    let mimeType = 'image/jpeg';
+    let imageBase64 = '';
+    let sizeBytes = 0;
+    const rawDataUrl = u.faceDataUrl || (u.imageBase64 ? `data:image/jpeg;base64,${u.imageBase64}` : '');
+    if (rawDataUrl) {
+      try {
+        const parsed = parseAndValidateFaceImagePayload(rawDataUrl);
+        mimeType = parsed.mimeType;
+        imageBase64 = parsed.imageBase64;
+        sizeBytes = parsed.sizeBytes;
+      } catch {
+        imageBase64 = '';
+      }
+    }
+
+    const updateFields = {
+      nameOnDevice: String(u.name ?? u.fullName ?? '').trim(),
+      numOfFace: Number(u.numOfFace || (imageBase64 ? 1 : 0)),
+      numOfCard: Number(u.numOfCard || 0),
+      numOfFP: Number(u.numOfFP || 0),
+      lastPulledAt: now
+    };
+    if (imageBase64) {
+      updateFields.mimeType = mimeType;
+      updateFields.imageBase64 = imageBase64;
+      updateFields.sizeBytes = sizeBytes;
+    }
+
+    ops.push({
+      updateOne: {
+        filter: { tenantId, deviceId, externalPersonId: extId },
+        update: { $set: updateFields },
+        upsert: true
+      }
+    });
+  }
+
+  if (ops.length > 0) {
+    await DeviceStoredPerson.bulkWrite(ops, { ordered: false });
+  }
+  if (pruneMissing) {
+    if (activeExtIds.length === 0) {
+      await DeviceStoredPerson.deleteMany({ tenantId, deviceId });
+    } else {
+      await DeviceStoredPerson.deleteMany({
+        tenantId,
+        deviceId,
+        externalPersonId: { $nin: activeExtIds }
+      });
+    }
+  }
+}
+
+function buildRosterLookupMaps(unifiedRoster = [], deviceMappings = []) {
+  const byMappingSubjKey = new Map();
+  const byCode = new Map();
+  const byUsername = new Map();
+  const byCampusAndToneFreeName = new Map();
+  const byToneFreeName = new Map();
+
+  for (const item of unifiedRoster) {
+    if (!item.isActive) continue;
+    byMappingSubjKey.set(`${item.subjectType}:${item.subjectId}`, item);
+    if (item.mappingSubjectId) {
+      byMappingSubjKey.set(`${item.subjectType}:${item.mappingSubjectId}`, item);
+    }
+    if (item.personCode) {
+      byCode.set(item.personCode.toUpperCase(), item);
+    }
+    if (Array.isArray(item.altCodes)) {
+      for (const alt of item.altCodes) {
+        if (alt && !byCode.has(alt.toUpperCase())) {
+          byCode.set(alt.toUpperCase(), item);
+        }
+      }
+    }
+    if (item.username) {
+      byUsername.set(item.username.toLowerCase(), item);
+    }
+    const cleanName = removeVietnameseTones(item.fullName);
+    if (cleanName) {
+      byCampusAndToneFreeName.set(`${item.campus}::${cleanName}`, item);
+      if (!byToneFreeName.has(cleanName)) {
+        byToneFreeName.set(cleanName, item);
+      }
+    }
+  }
+
+  const byDeviceAndExtId = new Map();
+  const byExtIdOnly = new Map();
+  for (const m of deviceMappings) {
+    const extKey = String(m.externalPersonId || '').trim().toUpperCase();
+    const targetId = String(m.studentId || m.userId || m.subjectId || '');
+    const rosterMatch =
+      byMappingSubjKey.get(`${m.subjectType}:${targetId}`) ||
+      byMappingSubjKey.get(`${m.subjectType}:${String(m.subjectId || '')}`);
+    if (extKey && rosterMatch) {
+      byDeviceAndExtId.set(`${String(m.deviceId)}::${extKey}`, rosterMatch);
+      if (!byExtIdOnly.has(extKey)) byExtIdOnly.set(extKey, rosterMatch);
+    }
+  }
+
+  const matchDeviceUser = (deviceDoc, extIdRaw, nameRaw) => {
+    const codeUpper = String(extIdRaw || '').trim().toUpperCase();
+    const devNameNoTone = removeVietnameseTones(nameRaw || '');
+    const devIdStr = deviceDoc?._id ? String(deviceDoc._id) : '';
+    return (
+      (devIdStr ? byDeviceAndExtId.get(`${devIdStr}::${codeUpper}`) : null) ||
+      byExtIdOnly.get(codeUpper) ||
+      byCode.get(codeUpper) ||
+      byUsername.get(String(nameRaw || '').trim().toLowerCase()) ||
+      (devNameNoTone && deviceDoc?.campus && deviceDoc.campus !== 'ALL'
+        ? byCampusAndToneFreeName.get(`${deviceDoc.campus}::${devNameNoTone}`)
+        : null) ||
+      (devNameNoTone ? byToneFreeName.get(devNameNoTone) : null) ||
+      null
+    );
+  };
+
+  return { matchDeviceUser };
+}
+
 async function getBiometricOverview(tenantId, query = {}, sanitizeDeviceFn = (d) => d) {
   const campusFilter = query.campus && query.campus !== 'ALL' ? String(query.campus).trim() : 'ALL';
   const subjectFilter = ['EMPLOYEE', 'STUDENT'].includes(String(query.subjectType || '').toUpperCase())
@@ -586,12 +727,94 @@ async function getBiometricOverview(tenantId, query = {}, sanitizeDeviceFn = (d)
     : [];
   const unmappedMap = new Map(unmappedCounts.map((u) => [u._id, u.count]));
 
-  const filteredDevices = deviceDocs
-    .filter((d) => campusFilter === 'ALL' || d.campus === campusFilter || d.campus === 'ALL')
-    .map((d) => ({
-      ...sanitizeDeviceFn(d),
+  const filteredDeviceDocs = deviceDocs.filter(
+    (d) => campusFilter === 'ALL' || d.campus === campusFilter || d.campus === 'ALL'
+  );
+  const filteredDeviceIds = filteredDeviceDocs.map((d) => d._id);
+
+  const [storedPersonsDocs, allDeviceMappings] =
+    filteredDeviceIds.length > 0
+      ? await Promise.all([
+          DeviceStoredPerson.find({ tenantId, deviceId: { $in: filteredDeviceIds } })
+            .sort({ externalPersonId: 1 })
+            .lean(),
+          AttendanceDevicePersonMapping.find({
+            tenantId,
+            deviceId: { $in: filteredDeviceIds },
+            active: true
+          }).lean()
+        ])
+      : [[], []];
+
+  const deviceByIdMap = new Map(filteredDeviceDocs.map((d) => [String(d._id), d]));
+  const { matchDeviceUser } = buildRosterLookupMaps(bioCtx.unifiedRoster, allDeviceMappings);
+
+  // Ghi nhận hồ sơ Web nào đang nằm trên những máy chấm công nào
+  const webSubjectOnDevicesMap = new Map();
+  let unmatchedOnDevicesCount = 0;
+
+  const deviceStoredPeople = storedPersonsDocs.map((sp) => {
+    const devDoc = deviceByIdMap.get(String(sp.deviceId));
+    const matched = matchDeviceUser(devDoc, sp.externalPersonId, sp.nameOnDevice);
+    if (matched) {
+      const subjKey = `${matched.subjectType}:${matched.subjectId}`;
+      if (!webSubjectOnDevicesMap.has(subjKey)) {
+        webSubjectOnDevicesMap.set(subjKey, new Set());
+      }
+      if (devDoc?.name) {
+        webSubjectOnDevicesMap.get(subjKey).add(devDoc.name);
+      }
+    } else {
+      unmatchedOnDevicesCount += 1;
+    }
+
+    const hasFaceImg = Boolean(sp.imageBase64);
+    return {
+      _id: String(sp._id),
+      deviceId: String(sp.deviceId),
+      deviceName: devDoc?.name || 'Máy chấm công',
+      deviceCode: devDoc?.deviceCode || '',
+      deviceHost: devDoc?.host || '',
+      deviceCampus: devDoc?.campus || DEFAULT_CAMPUS_NAME,
+      externalPersonId: sp.externalPersonId,
+      nameOnDevice: sp.nameOnDevice || `Mã ${sp.externalPersonId}`,
+      numOfFace: Number(sp.numOfFace || (hasFaceImg ? 1 : 0)),
+      hasFaceOnDevice: Boolean(Number(sp.numOfFace || 0) > 0 || hasFaceImg),
+      faceSizeKB: hasFaceImg ? Math.max(1, Math.round(((sp.sizeBytes || 0) / 1024) * 10) / 10) : 0,
+      faceDataUrl: hasFaceImg ? `data:${sp.mimeType || 'image/jpeg'};base64,${sp.imageBase64}` : '',
+      lastPulledAt: sp.lastPulledAt,
+      isMatchedOnWeb: Boolean(matched),
+      matchedSubjectType: matched?.subjectType || null,
+      matchedSubjectId: matched?.subjectId || null,
+      matchedPersonCode: matched?.personCode || '',
+      matchedFullName: matched?.fullName || '',
+      matchedRoleOrClass: matched?.roleOrClassLabel || ''
+    };
+  });
+
+  // Đếm số hồ sơ thực tế lưu trong từng máy để hiển thị chính xác trên thẻ máy
+  const storedCountByDevId = new Map();
+  const storedFaceCountByDevId = new Map();
+  for (const sp of deviceStoredPeople) {
+    storedCountByDevId.set(sp.deviceId, (storedCountByDevId.get(sp.deviceId) || 0) + 1);
+    if (sp.hasFaceOnDevice) {
+      storedFaceCountByDevId.set(sp.deviceId, (storedFaceCountByDevId.get(sp.deviceId) || 0) + 1);
+    }
+  }
+
+  const filteredDevices = filteredDeviceDocs.map((d) => {
+    const dIdStr = String(d._id);
+    const snapCount = storedCountByDevId.get(dIdStr) || 0;
+    const snapFaceCount = storedFaceCountByDevId.get(dIdStr) || 0;
+    const dto = sanitizeDeviceFn(d);
+    return {
+      ...dto,
+      currentStoredUsers: Math.max(Number(dto.currentStoredUsers) || 0, snapCount),
+      currentStoredFaces: Math.max(Number(dto.currentStoredFaces) || 0, snapFaceCount),
+      storedSnapshotCount: snapCount,
       unmappedCount: unmappedMap.get(d.deviceCode) || 0
-    }));
+    };
+  });
 
   const campusScopedRoster = bioCtx.unifiedRoster.filter(
     (item) => campusFilter === 'ALL' || item.campus === campusFilter
@@ -601,10 +824,32 @@ async function getBiometricOverview(tenantId, query = {}, sanitizeDeviceFn = (d)
   const activeWithFace = activeWithCode.filter((item) => item.hasBiometricFace);
   const reclaimableInactive = campusScopedRoster.filter((item) => item.isReclaimableInactive);
 
-  const filteredActiveRoster = activeWithCode.filter((item) => {
+  const syncStatusFilter = String(query.syncStatus || 'ALL').toUpperCase();
+
+  const enrichedActiveRoster = activeWithCode.map((item) => {
+    const subjKey = `${item.subjectType}:${item.subjectId}`;
+    const devNameSet = new Set(webSubjectOnDevicesMap.get(subjKey) || []);
+    if (Array.isArray(item.faceProfileDoc?.syncedDeviceIds)) {
+      for (const sId of item.faceProfileDoc.syncedDeviceIds) {
+        const dDoc = deviceByIdMap.get(String(sId));
+        if (dDoc?.name) devNameSet.add(dDoc.name);
+      }
+    }
+    const syncedDeviceNames = Array.from(devNameSet);
+    return {
+      ...item,
+      isOnDevice: syncedDeviceNames.length > 0,
+      syncedDeviceCount: syncedDeviceNames.length,
+      syncedDeviceNames
+    };
+  });
+
+  const filteredActiveRoster = enrichedActiveRoster.filter((item) => {
     if (subjectFilter !== 'ALL' && item.subjectType !== subjectFilter) return false;
     if (faceFilter === 'WITH_FACE' && !item.hasBiometricFace) return false;
     if (faceFilter === 'MISSING_FACE' && item.hasBiometricFace) return false;
+    if (syncStatusFilter === 'ON_DEVICE' && !item.isOnDevice) return false;
+    if (syncStatusFilter === 'NOT_ON_DEVICE' && item.isOnDevice) return false;
     if (search) {
       const hay = `${item.personCode} ${item.fullName} ${item.roleOrClassLabel} ${item.campus}`.toLowerCase();
       if (!hay.includes(search)) return false;
@@ -613,6 +858,9 @@ async function getBiometricOverview(tenantId, query = {}, sanitizeDeviceFn = (d)
   });
 
   filteredActiveRoster.sort((a, b) => {
+    if (a.isOnDevice !== b.isOnDevice) {
+      return a.isOnDevice ? -1 : 1;
+    }
     if (a.subjectType !== b.subjectType) {
       return a.subjectType === 'EMPLOYEE' ? -1 : 1;
     }
@@ -638,6 +886,10 @@ async function getBiometricOverview(tenantId, query = {}, sanitizeDeviceFn = (d)
   }));
 
   const schoolCode = bioCtx.tenantDoc?.code || '';
+  const totalStoredOnDevices = filteredDevices.reduce(
+    (sum, d) => sum + (Number(d.currentStoredUsers) || 0),
+    0
+  );
 
   return {
     school: {
@@ -656,9 +908,12 @@ async function getBiometricOverview(tenantId, query = {}, sanitizeDeviceFn = (d)
       activeStaffCount: activeWithCode.filter((x) => x.subjectType === 'EMPLOYEE').length,
       activeStudentCount: activeWithCode.filter((x) => x.subjectType === 'STUDENT').length,
       withBiometricFaceCount: activeWithFace.length,
-      reclaimableInactiveCount: reclaimableInactive.length
+      reclaimableInactiveCount: reclaimableInactive.length,
+      storedOnDevicesCount: Math.max(totalStoredOnDevices, deviceStoredPeople.length),
+      unmatchedOnDevicesCount
     },
     devices: filteredDevices,
+    deviceStoredPeople,
     roster: pagedRoster,
     quickLinkCandidates,
     pagination: {
@@ -1044,8 +1299,8 @@ async function pullUsersAndFacesFromDevice(
     }
   });
 
-  // Với tối đa 20 hồ sơ trên máy chưa khớp tự động nhưng có ảnh mặt: tải kèm preview để Admin bấm Ghép 1 chạm ngay trên Web!
-  const unmatchedSlice = rawUnmatched.slice(0, 30);
+  // Tải ảnh khuôn mặt của các hồ sơ chưa khớp trên máy để lưu đầy đủ vào bảng DeviceStoredPerson
+  const unmatchedSlice = rawUnmatched.slice(0, 60);
   const unmatchedOnDevice = await runWithConcurrency(unmatchedSlice, 3, async (du) => {
     let previewFaceDataUrl = '';
     if (du.faceURL) {
@@ -1062,18 +1317,42 @@ async function pullUsersAndFacesFromDevice(
       deviceId: String(device._id),
       deviceName: device.name,
       employeeNo: du.employeeNo,
-      name: du.name || `ID ${du.employeeNo}`,
+      name: du.name || `Mã ${du.employeeNo}`,
       numOfFace: du.numOfFace,
       hasFace: Boolean(du.numOfFace > 0 || previewFaceDataUrl),
       faceDataUrl: previewFaceDataUrl
     };
   });
 
+  // Đồng bộ vào bảng DeviceStoredPerson để giao diện luôn hiển thị rõ toàn bộ hồ sơ trên máy
+  const faceByCodeMap = new Map();
+  for (const sp of syncedPeople) {
+    if (sp.personCode && sp.faceDataUrl) faceByCodeMap.set(String(sp.personCode).toUpperCase(), sp.faceDataUrl);
+  }
+  const unmatchedFaceMap = new Map(unmatchedOnDevice.map((u) => [String(u.employeeNo), u.faceDataUrl || '']));
+  const snapshotPayload = deviceUsers.map((du) => {
+    const extNo = String(du.employeeNo || '').trim();
+    return {
+      employeeNo: extNo,
+      name: du.name || '',
+      numOfFace: du.numOfFace || 0,
+      numOfCard: du.numOfCard || 0,
+      numOfFP: du.numOfFP || 0,
+      faceDataUrl: unmatchedFaceMap.get(extNo) || faceByCodeMap.get(extNo.toUpperCase()) || ''
+    };
+  });
+  await syncDeviceStoredPersonsSnapshot(tenantId, device._id, snapshotPayload, { pruneMissing: true });
+
   device.status = 'ONLINE';
   device.lastSeenAt = new Date();
   device.currentStoredUsers = deviceUsers.length;
   device.currentStoredFaces = totalFacesOnDevice;
-  device.statusMessage = `Đã kéo từ máy về Web: ${matchedCount}/${deviceUsers.length} hồ sơ khớp (${pulledFaceCount} ảnh mặt)`;
+  device.statusMessage =
+    deviceUsers.length === 0
+      ? 'Máy đang trống (0 hồ sơ)'
+      : unmatchedOnDevice.length > 0 && matchedCount === 0
+        ? `Đang lưu ${deviceUsers.length} hồ sơ (${totalFacesOnDevice} khuôn mặt) trên máy — sẵn sàng lấy về Web`
+        : `Đang lưu ${deviceUsers.length} hồ sơ trên máy (đã khớp ${matchedCount} hồ sơ Web)`;
   await device.save();
 
   return {
@@ -1190,9 +1469,20 @@ async function linkPulledDeviceUserToSubject(tenantId, deviceId, {
     }
   }
 
-  // Lưu ảnh khuôn mặt (từ faceDataUrl có sẵn hoặc kéo lại trực tiếp từ máy theo cleanExtId)
+  // Lưu ảnh khuôn mặt (ưu tiên từ faceDataUrl, hoặc bản chụp đã lưu trong DeviceStoredPerson, hoặc kéo từ máy)
   let savedFace = null;
   let effectiveFaceDataUrl = faceDataUrl;
+
+  if (!effectiveFaceDataUrl) {
+    const cachedPerson = await DeviceStoredPerson.findOne({
+      tenantId,
+      deviceId: device._id,
+      externalPersonId: cleanExtId
+    }).lean();
+    if (cachedPerson?.imageBase64) {
+      effectiveFaceDataUrl = `data:${cachedPerson.mimeType || 'image/jpeg'};base64,${cachedPerson.imageBase64}`;
+    }
+  }
 
   if (!effectiveFaceDataUrl) {
     try {
@@ -2014,7 +2304,15 @@ async function prepareConnectorDeviceTask(
 async function ingestConnectorPulledPayload(
   tenantId,
   deviceId,
-  { deviceInfo = {}, users = [], events = [], overwriteExistingFaces = true, actorId = null } = {}
+  {
+    deviceInfo = {},
+    users = [],
+    events = [],
+    overwriteExistingFaces = true,
+    syncNamesFromDevice = false,
+    inspectOnly = false,
+    actorId = null
+  } = {}
 ) {
   if (!mongoose.isValidObjectId(deviceId)) {
     throw createServiceError('Mã máy chấm công không hợp lệ.', 'INVALID_DEVICE_ID', 400);
@@ -2029,49 +2327,47 @@ async function ingestConnectorPulledPayload(
     await assertDeviceSerialCampusLock(tenantId, device, deviceInfo.serialNumber);
   }
 
+  // Trường hợp chỉ kiểm tra kết nối & đọc dung lượng bộ nhớ (KHÔNG xóa bản chụp hồ sơ trên máy)
+  if (inspectOnly) {
+    if (deviceInfo?.model) device.model = deviceInfo.model;
+    if (deviceInfo?.macAddress) device.macAddress = deviceInfo.macAddress;
+    if (deviceInfo?.maxUserCapacity) device.maxUserCapacity = deviceInfo.maxUserCapacity;
+    if (deviceInfo?.currentStoredUsers !== undefined) {
+      device.currentStoredUsers = Number(deviceInfo.currentStoredUsers) || 0;
+    }
+    if (deviceInfo?.currentStoredFaces !== undefined) {
+      device.currentStoredFaces = Number(deviceInfo.currentStoredFaces) || 0;
+    }
+    device.status = 'ONLINE';
+    device.lastSeenAt = new Date();
+    device.statusMessage = `Đang trực tuyến • Bộ nhớ lưu ${device.currentStoredUsers}/${device.maxUserCapacity || 500} hồ sơ`;
+    await device.save();
+
+    return {
+      deviceId: String(device._id),
+      deviceName: device.name,
+      currentStoredUsers: device.currentStoredUsers,
+      currentStoredFaces: device.currentStoredFaces,
+      maxUserCapacity: device.maxUserCapacity || 500,
+      message: `Máy "${device.name}" đang kết nối tốt: bộ nhớ hiện lưu ${device.currentStoredUsers}/${device.maxUserCapacity || 500} hồ sơ (${device.currentStoredFaces || 0} ảnh khuôn mặt).`
+    };
+  }
+
   return withDeviceBiometricLock(device._id, 'Lưu dữ liệu kéo từ cầu nối nội bộ', async () => {
     const [bioCtx, deviceMappings] = await Promise.all([
       loadTenantBiometricContext(tenantId),
       AttendanceDevicePersonMapping.find({ tenantId, deviceId: device._id, active: true }).lean()
     ]);
 
-    const byMappingSubjKey = new Map();
-    const byCode = new Map();
-    const byUsername = new Map();
-    const byCampusAndToneFreeName = new Map();
-    const byToneFreeName = new Map();
-
-    for (const item of bioCtx.unifiedRoster) {
-      if (!item.isActive) continue;
-      byMappingSubjKey.set(`${item.subjectType}:${item.subjectId}`, item);
-      if (item.mappingSubjectId) {
-        byMappingSubjKey.set(`${item.subjectType}:${item.mappingSubjectId}`, item);
-      }
-      if (item.personCode) byCode.set(item.personCode.toUpperCase(), item);
-      if (Array.isArray(item.altCodes)) {
-        for (const alt of item.altCodes) {
-          if (alt && !byCode.has(alt.toUpperCase())) byCode.set(alt.toUpperCase(), item);
-        }
-      }
-      if (item.username) byUsername.set(item.username.toLowerCase(), item);
-      const cleanName = removeVietnameseTones(item.fullName);
-      if (cleanName) {
-        byCampusAndToneFreeName.set(`${item.campus}::${cleanName}`, item);
-        if (!byToneFreeName.has(cleanName)) byToneFreeName.set(cleanName, item);
-      }
-    }
-
-    const byMappedExtId = new Map();
-    for (const m of deviceMappings) {
-      const extKey = String(m.externalPersonId || '').trim().toUpperCase();
-      const targetId = String(m.studentId || m.userId || m.subjectId || '');
-      const rosterMatch = byMappingSubjKey.get(`${m.subjectType}:${targetId}`);
-      if (extKey && rosterMatch) byMappedExtId.set(extKey, rosterMatch);
-    }
+    const { matchDeviceUser } = buildRosterLookupMaps(bioCtx.unifiedRoster, deviceMappings);
 
     const deviceUsers = Array.isArray(users) ? users : [];
+    // Lưu toàn bộ hồ sơ thực tế đang có trên máy vào DeviceStoredPerson để hiển thị rõ trên UI
+    await syncDeviceStoredPersonsSnapshot(tenantId, device._id, deviceUsers, { pruneMissing: true });
+
     let matchedCount = 0;
     let pulledFaceCount = 0;
+    let updatedNamesCount = 0;
     let totalFacesOnDevice = 0;
     const syncedPeople = [];
     const unmatchedOnDevice = [];
@@ -2083,25 +2379,17 @@ async function ingestConnectorPulledPayload(
       const rawEmpNo = String(du.employeeNo || '').trim();
       if (!rawEmpNo) continue;
       const codeUpper = rawEmpNo.toUpperCase();
-      const devNameNoTone = removeVietnameseTones(du.name || '');
+      const cleanDevName = String(du.name || '').trim();
 
-      const matched =
-        byMappedExtId.get(codeUpper) ||
-        byCode.get(codeUpper) ||
-        byUsername.get(String(du.name || '').trim().toLowerCase()) ||
-        (devNameNoTone && device.campus && device.campus !== 'ALL'
-          ? byCampusAndToneFreeName.get(`${device.campus}::${devNameNoTone}`)
-          : null) ||
-        (devNameNoTone ? byToneFreeName.get(devNameNoTone) : null) ||
-        null;
+      const matched = matchDeviceUser(device, rawEmpNo, cleanDevName);
 
       if (!matched) {
-        if (unmatchedOnDevice.length < 30) {
+        if (unmatchedOnDevice.length < 100) {
           unmatchedOnDevice.push({
             deviceId: String(device._id),
             deviceName: device.name,
             employeeNo: rawEmpNo,
-            name: du.name || `Mã số ${rawEmpNo}`,
+            name: cleanDevName || `Mã ${rawEmpNo}`,
             numOfFace: Number(du.numOfFace || 0),
             hasFace: Boolean(Number(du.numOfFace) > 0 || du.faceDataUrl),
             faceDataUrl: du.faceDataUrl || ''
@@ -2112,6 +2400,25 @@ async function ingestConnectorPulledPayload(
 
       matchedCount += 1;
       await ensureDevicePersonMapping(tenantId, device._id, matched, actorId, rawEmpNo);
+
+      // Cập nhật Tên từ máy về Web nếu người dùng bật lấy cả Ảnh & Tên và tên trên máy hợp lệ
+      if (syncNamesFromDevice && cleanDevName && cleanDevName !== rawEmpNo && cleanDevName !== matched.fullName) {
+        if (matched.subjectType === 'EMPLOYEE' && matched.employeeRecordId) {
+          await Employee.updateOne(
+            { _id: matched.employeeRecordId, tenantId },
+            { $set: { fullName: cleanDevName } }
+          );
+          matched.fullName = cleanDevName;
+          updatedNamesCount += 1;
+        } else if (matched.subjectType === 'STUDENT' && matched.subjectId) {
+          await Student.updateOne(
+            { _id: matched.subjectId, tenantId },
+            { $set: { fullName: cleanDevName } }
+          );
+          matched.fullName = cleanDevName;
+          updatedNamesCount += 1;
+        }
+      }
 
       if (du.faceDataUrl && (overwriteExistingFaces || !matched.hasBiometricFace)) {
         try {
@@ -2197,15 +2504,25 @@ async function ingestConnectorPulledPayload(
     device.lastSeenAt = new Date();
     device.currentStoredUsers = deviceUsers.length;
     device.currentStoredFaces = totalFacesOnDevice;
-    device.statusMessage = `Đã kéo thành công ${matchedCount} hồ sơ và ${pulledFaceCount} ảnh khuôn mặt từ máy về phần mềm`;
-    await device.save();
 
-    const friendlySummary = `Đã kéo thành công từ máy "${device.name}": khớp ${matchedCount}/${deviceUsers.length} hồ sơ, lưu ${pulledFaceCount} ảnh khuôn mặt${eventsIngested > 0 ? ` và cập nhật ${eventsIngested} lượt điểm danh mới` : ''}.`;
+    let friendlySummary = '';
+    if (deviceUsers.length === 0) {
+      friendlySummary = `Đã kết nối máy "${device.name}": bộ nhớ máy hiện đang trống (0 hồ sơ). Bạn có thể bấm "Đồng bộ Web xuống máy" để nạp danh sách học sinh & nhân sự xuống máy.`;
+    } else if (unmatchedOnDevice.length > 0 && matchedCount === 0) {
+      friendlySummary = `Đã đọc thành công ${deviceUsers.length} hồ sơ (${totalFacesOnDevice} ảnh khuôn mặt) đang lưu trong máy "${device.name}"! Bạn có thể xem danh sách ngay bên dưới và bấm "Lấy Ảnh & Tên về Web".`;
+    } else if (unmatchedOnDevice.length > 0) {
+      friendlySummary = `Đã đọc ${deviceUsers.length} hồ sơ từ máy "${device.name}": cập nhật ${matchedCount} hồ sơ đã khớp (${pulledFaceCount} ảnh mặt) và phát hiện ${unmatchedOnDevice.length} hồ sơ mới trên máy chờ lấy về Web.`;
+    } else {
+      friendlySummary = `Đã kéo thành công từ máy "${device.name}": cập nhật ${matchedCount} hồ sơ, lưu ${pulledFaceCount} ảnh khuôn mặt${updatedNamesCount > 0 ? `, đồng bộ ${updatedNamesCount} tên` : ''}${eventsIngested > 0 ? ` và ${eventsIngested} lượt điểm danh mới` : ''}!`;
+    }
+
+    device.statusMessage = `Đang lưu ${deviceUsers.length} hồ sơ (${totalFacesOnDevice} ảnh mặt) trên máy`;
+    await device.save();
 
     publishCampusRealtimeEvent(tenantId, {
       type: 'DEVICE_PULL_COMPLETED',
       tone: 'success',
-      title: `Đã kéo dữ liệu từ ${device.name}`,
+      title: `Đọc dữ liệu từ ${device.name}`,
       message: friendlySummary,
       deviceName: device.name
     });
@@ -2219,6 +2536,7 @@ async function ingestConnectorPulledPayload(
       totalFacesOnDevice,
       matchedCount,
       pulledFaceCount,
+      updatedNamesCount,
       eventsIngested,
       syncedPeople: syncedPeople.slice(0, 40),
       unmatchedOnDevice,
@@ -2272,11 +2590,21 @@ async function completeConnectorPushedPayload(
     );
   }
 
-  // Đảm bảo bảng ánh xạ ID máy được cập nhật đồng bộ
+  // Đảm bảo bảng ánh xạ ID máy & bản chụp hồ sơ trên máy được cập nhật đồng bộ
   const { selectedTargets } = await selectTargetRosterForDeviceCapacity(tenantId, device, bioCtx.unifiedRoster);
   await runWithConcurrency(selectedTargets, 6, async (t) => {
     await ensureDevicePersonMapping(tenantId, device._id, t, actorId);
   });
+
+  if (syncedUsers > 0 && selectedTargets.length > 0) {
+    const pushedSnapshot = selectedTargets.slice(0, syncedUsers).map((t) => ({
+      employeeNo: t.personCode,
+      name: t.fullName,
+      numOfFace: t.faceProfileDoc?.imageBase64 ? 1 : 0,
+      imageBase64: t.faceProfileDoc?.imageBase64 || ''
+    }));
+    await syncDeviceStoredPersonsSnapshot(tenantId, device._id, pushedSnapshot, { pruneMissing: false });
+  }
 
   if (deviceInfo?.model) device.model = deviceInfo.model;
   if (deviceInfo?.macAddress) device.macAddress = deviceInfo.macAddress;
@@ -2484,6 +2812,235 @@ async function unlockOrReassignDeviceSerialByVendor(
   };
 }
 
+/**
+ * Kéo & lưu trực tiếp hồ sơ từ máy chấm công (`DeviceStoredPerson`: Ảnh khuôn mặt + Họ tên + Mã trên máy)
+ * vào danh sách Nhân sự / Học sinh trên Web chỉ với 1 nút bấm.
+ *
+ * - Với người đã khớp trên Web: cập nhật Ảnh khuôn mặt và Họ tên từ máy về Web.
+ * - Với người mới chỉ có trên máy chấm công: tự động tạo hồ sơ Nhân sự trên Web kèm đúng Họ tên, Mã chấm công,
+ *   ánh xạ thiết bị và lưu luôn Ảnh khuôn mặt!
+ */
+async function importPulledUsersToWebRoster(
+  tenantId,
+  deviceId,
+  {
+    externalPersonIds = [],
+    importAll = false,
+    overwriteName = true,
+    overwriteFace = true,
+    actorId = null
+  } = {}
+) {
+  if (!mongoose.isValidObjectId(deviceId)) {
+    throw createServiceError('Mã máy chấm công không hợp lệ.', 'INVALID_DEVICE_ID', 400);
+  }
+  const device = await TimekeepingDevice.findOne({ _id: deviceId, tenantId });
+  if (!device) {
+    throw createServiceError('Không tìm thấy máy chấm công trong phân hiệu của bạn.', 'DEVICE_NOT_FOUND', 404);
+  }
+
+  const filter = { tenantId, deviceId: device._id };
+  const cleanIds = (Array.isArray(externalPersonIds) ? externalPersonIds : [])
+    .map((x) => String(x || '').trim())
+    .filter(Boolean);
+  if (!importAll && cleanIds.length > 0) {
+    filter.externalPersonId = { $in: cleanIds };
+  }
+
+  const storedDocs = await DeviceStoredPerson.find(filter).sort({ externalPersonId: 1 }).lean();
+  if (storedDocs.length === 0) {
+    throw createServiceError(
+      'Chưa có dữ liệu hồ sơ nào đọc từ máy chấm công này. Bạn hãy bấm "Kéo Ảnh & Tên từ máy về Web" trước nhé.',
+      'NO_STORED_DEVICE_USERS',
+      400
+    );
+  }
+
+  const [bioCtx, deviceMappings, existingEmpCodes] = await Promise.all([
+    loadTenantBiometricContext(tenantId),
+    AttendanceDevicePersonMapping.find({ tenantId, deviceId: device._id, active: true }).lean(),
+    Employee.find({ tenantId }).select('employeeCode').lean()
+  ]);
+
+  const { matchDeviceUser } = buildRosterLookupMaps(bioCtx.unifiedRoster, deviceMappings);
+  const usedEmpCodes = new Set(
+    existingEmpCodes.map((e) => String(e.employeeCode || '').trim().toUpperCase()).filter(Boolean)
+  );
+  for (const item of bioCtx.unifiedRoster) {
+    if (item.personCode) usedEmpCodes.add(item.personCode.toUpperCase());
+  }
+
+  const allocateEmployeeCode = (rawExtId) => {
+    const cleaned = String(rawExtId || '')
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9_-]/g, '');
+    let baseCode =
+      /^[A-Z]/.test(cleaned) && cleaned.length >= 3
+        ? cleaned.slice(0, 24)
+        : `MCC-${String(cleaned || '001').padStart(3, '0')}`;
+    let candidate = baseCode;
+    let suffix = 1;
+    while (usedEmpCodes.has(candidate)) {
+      suffix += 1;
+      candidate = `${baseCode}-${suffix}`;
+    }
+    usedEmpCodes.add(candidate);
+    return candidate;
+  };
+
+  const targetCampus =
+    device.campus && device.campus !== 'ALL' ? device.campus : bioCtx.campuses[0] || DEFAULT_CAMPUS_NAME;
+
+  let importedNewCount = 0;
+  let updatedExistingCount = 0;
+  let savedFacesCount = 0;
+
+  for (const sp of storedDocs) {
+    const extId = String(sp.externalPersonId || '').trim();
+    if (!extId) continue;
+    const devName = String(sp.nameOnDevice || '').trim();
+    const matched = matchDeviceUser(device, extId, devName);
+
+    if (matched) {
+      let touched = false;
+      if (overwriteName && devName && devName !== extId && devName !== matched.fullName) {
+        if (matched.subjectType === 'EMPLOYEE' && matched.employeeRecordId) {
+          await Employee.updateOne(
+            { _id: matched.employeeRecordId, tenantId },
+            { $set: { fullName: devName } }
+          );
+          matched.fullName = devName;
+          touched = true;
+        } else if (matched.subjectType === 'STUDENT' && matched.subjectId) {
+          await Student.updateOne(
+            { _id: matched.subjectId, tenantId },
+            { $set: { fullName: devName } }
+          );
+          matched.fullName = devName;
+          touched = true;
+        }
+      }
+
+      await ensureDevicePersonMapping(tenantId, device._id, matched, actorId, extId);
+
+      if (sp.imageBase64 && (overwriteFace || !matched.hasBiometricFace)) {
+        await BiometricFaceProfile.findOneAndUpdate(
+          {
+            tenantId,
+            subjectType: matched.subjectType,
+            subjectId: new mongoose.Types.ObjectId(matched.subjectId)
+          },
+          {
+            $set: {
+              linkedUserId: matched.userId ? new mongoose.Types.ObjectId(matched.userId) : null,
+              personCode: matched.personCode,
+              fullName: matched.fullName,
+              campus: matched.campus || targetCampus,
+              mimeType: sp.mimeType || 'image/jpeg',
+              imageBase64: sp.imageBase64,
+              sizeBytes: sp.sizeBytes || Buffer.from(sp.imageBase64, 'base64').length,
+              source: 'PULLED_FROM_DEVICE',
+              lastSyncedAt: new Date(),
+              updatedBy: actorId || null
+            },
+            $addToSet: { syncedDeviceIds: device._id }
+          },
+          { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
+        );
+        savedFacesCount += 1;
+        touched = true;
+      }
+      if (touched) updatedExistingCount += 1;
+    } else {
+      const newEmpCode = allocateEmployeeCode(extId);
+      const finalFullName = devName || `Nhân sự (${newEmpCode})`;
+
+      const createdEmp = await Employee.create({
+        tenantId,
+        employeeCode: newEmpCode,
+        fullName: finalFullName,
+        campus: targetCampus,
+        departmentName: 'Đồng bộ từ máy chấm công',
+        position: 'teacher',
+        payrollRole: 'teacher',
+        status: 'active',
+        salaryConfig: {
+          baseSalary: 0,
+          lowMonthlySalaryConfirmed: true,
+          standardWorkDays: 26
+        }
+      });
+
+      await AttendanceDevicePersonMapping.findOneAndUpdate(
+        {
+          tenantId,
+          deviceId: device._id,
+          externalPersonId: extId
+        },
+        {
+          $set: {
+            subjectType: 'EMPLOYEE',
+            subjectId: createdEmp._id,
+            active: true,
+            metadata: {
+              displayName: finalFullName,
+              note: `Lấy trực tiếp từ máy ${device.name}`
+            },
+            ...(actorId ? { createdBy: actorId } : {})
+          }
+        },
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
+      );
+
+      if (sp.imageBase64) {
+        await BiometricFaceProfile.findOneAndUpdate(
+          {
+            tenantId,
+            subjectType: 'EMPLOYEE',
+            subjectId: createdEmp._id
+          },
+          {
+            $set: {
+              linkedUserId: null,
+              personCode: newEmpCode,
+              fullName: finalFullName,
+              campus: targetCampus,
+              mimeType: sp.mimeType || 'image/jpeg',
+              imageBase64: sp.imageBase64,
+              sizeBytes: sp.sizeBytes || Buffer.from(sp.imageBase64, 'base64').length,
+              source: 'PULLED_FROM_DEVICE',
+              lastSyncedAt: new Date(),
+              updatedBy: actorId || null
+            },
+            $addToSet: { syncedDeviceIds: device._id }
+          },
+          { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
+        );
+        savedFacesCount += 1;
+      }
+
+      importedNewCount += 1;
+    }
+  }
+
+  const message =
+    importedNewCount > 0 && updatedExistingCount > 0
+      ? `Đã lấy từ máy "${device.name}" về Web: thêm mới ${importedNewCount} hồ sơ, cập nhật ${updatedExistingCount} hồ sơ có sẵn và lưu ${savedFacesCount} ảnh khuôn mặt!`
+      : importedNewCount > 0
+        ? `Đã lấy thành công ${importedNewCount} hồ sơ (kèm Họ tên & ${savedFacesCount} ảnh khuôn mặt) từ máy "${device.name}" về danh sách của trường!`
+        : `Đã cập nhật thành công Họ tên & ${savedFacesCount} ảnh khuôn mặt từ máy "${device.name}" về danh sách Web!`;
+
+  return {
+    deviceId: String(device._id),
+    deviceName: device.name,
+    importedNewCount,
+    updatedExistingCount,
+    savedFacesCount,
+    message
+  };
+}
+
 module.exports = {
   parseAndValidateFaceImagePayload,
   getBiometricOverview,
@@ -2492,6 +3049,7 @@ module.exports = {
   checkDeviceCapacityAndHealth,
   pullUsersAndFacesFromDevice,
   linkPulledDeviceUserToSubject,
+  importPulledUsersToWebRoster,
   pullAllFromDevices,
   quickBidirectionalSync,
   syncSmartToDevices,

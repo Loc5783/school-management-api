@@ -91,6 +91,7 @@ router.post('/devices/:id/test-connection', roleCheck(['admin']), deviceCtrl.tes
 router.post('/devices/:id/check-capacity', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.checkDeviceCapacity);
 router.post('/devices/:id/pull-users', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.pullUsersFromDevice);
 router.post('/devices/:id/link-pulled-user', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.linkPulledDeviceUser);
+router.post('/devices/:id/import-to-web', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.importPulledUsersToWeb);
 router.post('/devices/:id/push-sync', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.pushSmartSyncToDevice);
 router.post('/devices/:id/quick-bidirectional-sync', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.quickBidirectionalSync);
 router.post('/devices/:id/prune-inactive', roleCheck(['admin', 'principal']), deviceCtrl.pruneDeviceInactiveSlots);

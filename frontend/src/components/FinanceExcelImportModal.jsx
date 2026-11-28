@@ -253,9 +253,6 @@ export default function FinanceExcelImportModal({
     <div
       className="account-modal-backdrop"
       role="presentation"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && !confirming && !previewing) onClose();
-      }}
     >
       <div
         ref={modalRef}

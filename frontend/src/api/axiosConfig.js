@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { clearAuthSession } from '../utils/storage';
+import { beginTrackedActionNetworkCall } from '../utils/actionProgressGuard';
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || (typeof window !== 'undefined' ? '/api' : 'http://127.0.0.1:5001/api'),
@@ -7,8 +8,12 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' }
 });
 
-// Interceptor Request: tự động gắn token phù hợp (ưu tiên superadmin_token cho các API điều hành Đa Trường)
+// Interceptor Request: tự động gắn token phù hợp và kích hoạt hiệu ứng tiến trình + chống bấm đúp cho nút hành động
 api.interceptors.request.use((config) => {
+  config._hnFinishActionProgress = beginTrackedActionNetworkCall({
+    url: config.url,
+    method: config.method
+  });
   const reqUrl = String(config.url || '');
   const isMultiSchoolApi = reqUrl.startsWith('/multi-school') && !reqUrl.includes('/multi-school/login');
   const token = isMultiSchoolApi
@@ -26,8 +31,12 @@ api.interceptors.request.use((config) => {
 
 // Interceptor Response: giải mã lỗi Blob tải file, chuẩn hóa lỗi mạng/413/429 tiếng Việt và xử lý hết hạn phiên 401 thông minh
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    response.config?._hnFinishActionProgress?.();
+    return response;
+  },
   async (error) => {
+    error.config?._hnFinishActionProgress?.();
     const reqUrl = String(error.config?.url || '');
 
     // 1. Nếu gọi API tải tệp (responseType: 'blob') mà bị lỗi 4xx/5xx, giải mã Blob sang JSON để hiển thị đúng thông báo tiếng Việt

@@ -27,20 +27,22 @@ const DEFAULT_SCHOOL_SETTINGS = {
 };
 
 const MODULE_LABELS = {
-  students: 'Hồ sơ & Y tế Học sinh',
-  classrooms: 'Quản lý Khung Lớp học',
+  classrooms: 'Quản lý Lớp học của trường',
+  students: 'Hồ sơ & Sức khỏe Học sinh',
   attendance: 'Điểm danh Khuôn mặt & Đơn nghỉ',
+  daily_care: 'Sổ theo dõi & Chăm sóc trẻ hằng ngày',
   pickups: 'Đón trả trẻ an toàn bằng Mã QR',
   guard: 'Trực cổng Bảo vệ & Khách ra vào',
   nutrition: 'Bếp ăn Bán trú & Lưu mẫu 24h',
-  finance: 'Thu học phí & Công nợ',
-  hr: 'Hồ sơ Nhân sự & Tiền lương',
   timekeeping: 'Máy chấm công & Cầu nối nội bộ',
+  accounts: 'Cấp phát Tài khoản & Phân quyền Trường',
+  hr: 'Hồ sơ Nhân sự & Tiền lương',
+  finance: 'Thu học phí & Công nợ',
   procurement: 'Cơ sở vật chất & Mua sắm',
-  feedback: 'Góp ý từ Phụ huynh',
+  reports: 'Báo cáo Thống kê Điều hành',
   chat: 'Tin nhắn Giáo viên – Phụ huynh',
-  notifications: 'Thông báo Nội bộ Trường',
-  reports: 'Báo cáo Thống kê Điều hành'
+  feedback: 'Góp ý từ Phụ huynh',
+  notifications: 'Thông báo Nội bộ Trường'
 };
 
 /**
@@ -243,8 +245,8 @@ export default function SchoolCampusManagement() {
       }
       actions={(
         <div className="toolbar-buttons">
-          <button type="button" className="button button-secondary" onClick={load} disabled={loading}>
-            <Icon name="refresh" size={15} /> Làm mới
+          <button type="button" className="button button-secondary" onClick={load} disabled={loading} aria-busy={loading}>
+            <Icon name="refresh" size={15} /> {loading ? 'Đang làm mới...' : 'Làm mới'}
           </button>
           {isAdmin && (
             <Link className="button button-primary" to="/devices">

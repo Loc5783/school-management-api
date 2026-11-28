@@ -16,9 +16,42 @@ const handle = (fn) => async (req, res) => {
     res.status(conflict ? 409 : error.statusCode || 500).json({ message: conflict ? 'Thông tin vừa thay đổi hoặc đã tồn tại. Hãy tải lại trước khi lưu.' : error.statusCode ? error.message : 'Không thể xử lý tuyển dụng. Vui lòng thử lại.' });
   }
 };
-const teacherPositions = new Set(['teacher', 'head_teacher', 'assistant_teacher']);
-const positions = new Set(['principal', 'vice_principal', ...teacherPositions, 'accountant', 'chef', 'security', 'hr']);
-const expectedAccountRole = (position) => teacherPositions.has(position) ? 'teacher' : ({ principal: 'principal', vice_principal: 'principal', chef: 'chef', security: 'guard', accountant: 'accountant', hr: 'hr' })[position];
+const teacherPositions = new Set(['teacher', 'head_teacher', 'assistant_teacher', 'youth_leader']);
+const positions = new Set([
+  'principal',
+  'vice_principal',
+  ...teacherPositions,
+  'chief_accountant',
+  'accountant',
+  'head_chef',
+  'chef',
+  'kitchen_helper',
+  'security',
+  'nurse',
+  'cleaner',
+  'maintenance',
+  'driver',
+  'hr',
+  'office_admin'
+]);
+const expectedAccountRole = (position) => teacherPositions.has(position)
+  ? 'teacher'
+  : ({
+      principal: 'principal',
+      vice_principal: 'principal',
+      chief_accountant: 'accountant',
+      accountant: 'accountant',
+      head_chef: 'chef',
+      chef: 'chef',
+      kitchen_helper: 'chef',
+      security: 'guard',
+      nurse: 'guard',
+      cleaner: 'guard',
+      maintenance: 'guard',
+      driver: 'guard',
+      hr: 'hr',
+      office_admin: 'hr'
+    })[position];
 const versionOf = (record, value) => {
   if (!Number.isInteger(value) || value !== record.__v) throw fail('Thông tin vừa thay đổi. Hãy tải lại trước khi lưu.', 409);
 };

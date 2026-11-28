@@ -59,6 +59,10 @@ export default function PayrollManagement() {
   const [reopenError, setReopenError] = useState('');
   const [adjustmentForm, setAdjustmentForm] = useState({ bonus: 0, advancePayment: 0, otherDeduction: 0, insurance: 0, insuranceBasisNote: '', insuranceConfirmed: false, note: '' });
   const [exportingPayroll, setExportingPayroll] = useState(false);
+  const [calculatingPayroll, setCalculatingPayroll] = useState(false);
+  const [statusBusyId, setStatusBusyId] = useState('');
+  const [adjustmentSaving, setAdjustmentSaving] = useState(false);
+  const [reopenSaving, setReopenSaving] = useState(false);
 
   const currentUser = getStoredUser();
   const role = currentUser.role || '';
@@ -123,6 +127,8 @@ export default function PayrollManagement() {
   };
 
   const calculatePayroll = async () => {
+    if (calculatingPayroll) return;
+    setCalculatingPayroll(true);
     setSuccessNotice('');
     setErrorMessage('');
     try {
@@ -137,10 +143,14 @@ export default function PayrollManagement() {
       }
     } catch (err) {
       setErrorMessage(err.response?.data?.message || err.message || 'Không thể tổng hợp bảng lương.');
+    } finally {
+      setCalculatingPayroll(false);
     }
   };
 
   const handleUpdateStatus = async (payrollId, status) => {
+    if (statusBusyId) return;
+    setStatusBusyId(payrollId);
     setSuccessNotice('');
     setErrorMessage('');
     try {
@@ -149,6 +159,8 @@ export default function PayrollManagement() {
       setSuccessNotice(`Đã chuyển trạng thái phiếu lương sang: ${statusText[status] || status}`);
     } catch (err) {
       setErrorMessage(err.response?.data?.message || err.message || 'Không thể cập nhật trạng thái phiếu lương.');
+    } finally {
+      setStatusBusyId('');
     }
   };
 
@@ -191,6 +203,8 @@ export default function PayrollManagement() {
 
   const saveAdjustment = async (event) => {
     event.preventDefault();
+    if (adjustmentSaving) return;
+    setAdjustmentSaving(true);
     try {
       await updatePayrollAdjustment(adjustingPayroll._id, {
         allowances: { other: Number(adjustmentForm.bonus) || 0 },
@@ -208,11 +222,15 @@ export default function PayrollManagement() {
       setSuccessNotice('Đã cập nhật điều chỉnh và tính lại thực lĩnh.');
     } catch (err) {
       setErrorMessage(err.response?.data?.message || err.message || 'Không thể điều chỉnh bảng lương.');
+    } finally {
+      setAdjustmentSaving(false);
     }
   };
 
   const submitReopen = async (event) => {
     event.preventDefault();
+    if (reopenSaving) return;
+    setReopenSaving(true);
     setSuccessNotice('');
     setErrorMessage('');
     try {
@@ -224,6 +242,8 @@ export default function PayrollManagement() {
       setSuccessNotice(res.data?.message || 'Đã mở lại phiếu lương thành công.');
     } catch (err) {
       setReopenError(err.response?.data?.message || err.message || 'Không thể mở lại phiếu lương.');
+    } finally {
+      setReopenSaving(false);
     }
   };
 
@@ -320,8 +340,13 @@ export default function PayrollManagement() {
                 </select>
 
                 {canOperateHr && (
-                  <button className="button button-primary" onClick={calculatePayroll}>
-                    <Icon name="clock" size={15} /> Tính lương tháng này
+                  <button
+                    className="button button-primary"
+                    disabled={calculatingPayroll}
+                    aria-busy={calculatingPayroll}
+                    onClick={calculatePayroll}
+                  >
+                    <Icon name="clock" size={15} /> {calculatingPayroll ? 'Đang tính lương...' : 'Tính lương tháng này'}
                   </button>
                 )}
 
@@ -415,17 +440,27 @@ export default function PayrollManagement() {
                               {tab === 'approvals' && (
                                 <>
                                   {p.status === 'draft' && canReview && (
-                                    <button className="button button-primary" onClick={() => handleUpdateStatus(p._id, 'reviewed')}>
-                                      Đối soát OK
+                                    <button
+                                      className="button button-primary"
+                                      disabled={Boolean(statusBusyId)}
+                                      aria-busy={statusBusyId === p._id}
+                                      onClick={() => handleUpdateStatus(p._id, 'reviewed')}
+                                    >
+                                      {statusBusyId === p._id ? 'Đang đối soát...' : 'Đối soát OK'}
                                     </button>
                                   )}
                                   {p.status === 'reviewed' && canConfirm && (
-                                    <button className="button button-primary" onClick={() => handleUpdateStatus(p._id, 'confirmed')}>
-                                      Duyệt phiếu
+                                    <button
+                                      className="button button-primary"
+                                      disabled={Boolean(statusBusyId)}
+                                      aria-busy={statusBusyId === p._id}
+                                      onClick={() => handleUpdateStatus(p._id, 'confirmed')}
+                                    >
+                                      {statusBusyId === p._id ? 'Đang duyệt...' : 'Duyệt phiếu'}
                                     </button>
                                   )}
                                   {p.status === 'confirmed' && canConfirm && (
-                                    <button className="button button-danger" onClick={() => setReopeningPayroll(p)}>
+                                    <button className="button button-danger" disabled={Boolean(statusBusyId)} onClick={() => setReopeningPayroll(p)}>
                                       Mở lại
                                     </button>
                                   )}
@@ -535,8 +570,12 @@ export default function PayrollManagement() {
               </div>
 
               <div className="form-actions">
-                <button type="button" className="button button-secondary" onClick={() => setAdjustingPayroll(null)}>Đóng</button>
-                {canReview && <button type="submit" className="button button-primary">Lưu điều chỉnh</button>}
+                <button type="button" className="button button-secondary" disabled={adjustmentSaving} onClick={() => setAdjustingPayroll(null)}>Đóng</button>
+                {canReview && (
+                  <button type="submit" className="button button-primary" disabled={adjustmentSaving} aria-busy={adjustmentSaving}>
+                    {adjustmentSaving ? 'Đang lưu...' : 'Lưu điều chỉnh'}
+                  </button>
+                )}
               </div>
             </form>
           </div>,
@@ -629,7 +668,9 @@ export default function PayrollManagement() {
               </label>
 
               <div className="form-actions">
-                <button type="submit" className="button button-danger">Xác nhận mở lại</button>
+                <button type="submit" className="button button-danger" disabled={reopenSaving} aria-busy={reopenSaving}>
+                  {reopenSaving ? 'Đang mở lại...' : 'Xác nhận mở lại'}
+                </button>
               </div>
             </form>
           </div>,

@@ -1,0 +1,621 @@
+/* ==========================================================================
+   GIAO DIỆN CẤP PHÁT TÀI KHOẢN & PHÂN QUYỀN ĐA PHƯƠNG TIỆN (PRODUCTION UI)
+   ========================================================================== */
+
+.acc-kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.acc-kpi-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px;
+  border-radius: 16px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.03);
+}
+
+.acc-kpi-card small {
+  display: block;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+  margin-bottom: 6px;
+}
+
+.acc-kpi-card strong {
+  display: block;
+  font-size: 24px;
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1.15;
+}
+
+.acc-kpi-card span.acc-kpi-sub {
+  display: block;
+  margin-top: 5px;
+  font-size: 12px;
+  color: #475569;
+}
+
+.acc-kpi-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.acc-kpi-icon.blue { background: #eff6ff; color: #2563eb; }
+.acc-kpi-icon.violet { background: #f5f3ff; color: #7c3aed; }
+.acc-kpi-icon.amber { background: #fffbeb; color: #d97706; }
+.acc-kpi-icon.teal { background: #f0fdfa; color: #0d9488; }
+
+.acc-unlinked-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 13px 18px;
+  margin-bottom: 16px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%);
+  border: 1px solid #bfdbfe;
+}
+
+.acc-unlinked-banner strong {
+  color: #1e3a8a;
+  font-size: 13.5px;
+}
+
+.acc-unlinked-banner p {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: #475569;
+}
+
+/* Dải chip lọc nhanh theo nhóm vai trò */
+.acc-role-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 0 23px 14px;
+}
+
+.acc-role-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 33px;
+  padding: 0 13px;
+  border-radius: 999px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.acc-role-chip:hover {
+  border-color: #94a3b8;
+  color: #0f172a;
+  background: #ffffff;
+}
+
+.acc-role-chip.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.22);
+}
+
+/* Avatar ảnh mặt thật hoặc chữ cái phân màu */
+.acc-person-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.acc-face-thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  object-fit: cover;
+  border: 1.5px solid #cbd5e1;
+  background: #f1f5f9;
+  flex-shrink: 0;
+}
+
+.acc-avatar-fallback {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.acc-avatar-fallback.tone-violet { background: #ede9fe; color: #6d28d9; }
+.acc-avatar-fallback.tone-indigo { background: #e0e7ff; color: #4338ca; }
+.acc-avatar-fallback.tone-blue { background: #dbeafe; color: #1d4ed8; }
+.acc-avatar-fallback.tone-emerald { background: #d1fae5; color: #047857; }
+.acc-avatar-fallback.tone-rose { background: #ffe4e6; color: #be123c; }
+.acc-avatar-fallback.tone-amber { background: #fef3c7; color: #b45309; }
+.acc-avatar-fallback.tone-teal { background: #ccfbf1; color: #0f766e; }
+.acc-avatar-fallback.tone-cyan { background: #cffafe; color: #0e7490; }
+.acc-avatar-fallback.tone-slate { background: #e2e8f0; color: #334155; }
+
+.acc-meta-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: #64748b;
+}
+
+.acc-emp-code {
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  color: #1e293b;
+  font-weight: 700;
+  font-size: 11px;
+}
+
+.acc-contact-stack {
+  display: grid;
+  gap: 3px;
+  font-size: 12.5px;
+}
+
+.acc-contact-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #1e293b;
+  font-weight: 600;
+}
+
+.acc-contact-sub {
+  font-size: 11.5px;
+  color: #64748b;
+}
+
+.acc-contact-missing {
+  font-size: 11.5px;
+  color: #94a3b8;
+  font-style: italic;
+}
+
+/* Huy hiệu Chức danh & Mô tả giao diện */
+.acc-position-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.acc-position-pill.tone-violet { background: #f3e8ff; color: #6b21a8; }
+.acc-position-pill.tone-indigo { background: #e0e7ff; color: #3730a3; }
+.acc-position-pill.tone-blue { background: #dbeafe; color: #1e40af; }
+.acc-position-pill.tone-emerald { background: #d1fae5; color: #065f46; }
+.acc-position-pill.tone-rose { background: #ffe4e6; color: #9f1239; }
+.acc-position-pill.tone-amber { background: #fef3c7; color: #92400e; }
+.acc-position-pill.tone-teal { background: #ccfbf1; color: #115e59; }
+.acc-position-pill.tone-cyan { background: #cffafe; color: #155e75; }
+.acc-position-pill.tone-slate { background: #f1f5f9; color: #334155; }
+
+.acc-workspace-caption {
+  display: block;
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: #64748b;
+  max-width: 250px;
+  line-height: 1.35;
+}
+
+.acc-username-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 7px;
+  border: 1px solid #dbe4f3;
+  background: #f8fafc;
+  color: #1e3a8a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.acc-username-btn:hover {
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+
+/* ==========================================================================
+   MODAL CẤP PHÁT TÀI KHOẢN MỚI — RỘNG THOÁNG, TRỰC QUAN, KHÔNG NGỢP
+   ========================================================================== */
+
+.acc-modal-wide {
+  width: min(920px, 100%) !important;
+  max-height: calc(100dvh - 32px) !important;
+}
+
+.acc-source-Segment {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 5px;
+  border-radius: 12px;
+  background: #f1f5f9;
+  margin-bottom: 14px;
+}
+
+.acc-source-tab {
+  min-height: 38px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #475569;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  transition: all 0.15s ease;
+}
+
+.acc-source-tab.active {
+  background: #ffffff;
+  color: #1d4ed8;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+}
+
+.acc-candidate-picker {
+  padding: 14px;
+  border-radius: 14px;
+  background: #f8fafc;
+  border: 1px solid #dbe4f3;
+  margin-bottom: 16px;
+}
+
+.acc-candidate-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 9px;
+  max-height: 196px;
+  overflow-y: auto;
+  margin-top: 10px;
+  padding-right: 4px;
+}
+
+.acc-candidate-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border-radius: 11px;
+  border: 1.5px solid #e2e8f0;
+  background: #ffffff;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+
+.acc-candidate-card:hover {
+  border-color: #93c5fd;
+  background: #f8fbff;
+}
+
+.acc-candidate-card.selected {
+  border-color: #2563eb;
+  background: #eff6ff;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+}
+
+.acc-candidate-card strong {
+  display: block;
+  font-size: 12.5px;
+  color: #0f172a;
+}
+
+.acc-candidate-card small {
+  display: block;
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.acc-section-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 4px 0 10px;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #334155;
+}
+
+/* Lưới Thẻ Vai trò + Xem trước giao diện */
+.acc-role-selector-layout {
+  display: grid;
+  grid-template-columns: 1.25fr 0.95fr;
+  gap: 14px;
+  align-items: stretch;
+  margin-bottom: 6px;
+}
+
+.acc-role-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.acc-role-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  border: 1.5px solid #e2e8f0;
+  background: #ffffff;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.acc-role-card:hover {
+  border-color: #94a3b8;
+  background: #f8fafc;
+}
+
+.acc-role-card.selected {
+  border-color: #2563eb;
+  background: #eff6ff;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.1);
+}
+
+.acc-role-card-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: #f1f5f9;
+  color: #334155;
+  flex-shrink: 0;
+}
+
+.acc-role-card.selected .acc-role-card-icon {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.acc-role-card strong {
+  display: block;
+  font-size: 12.5px;
+  color: #0f172a;
+  line-height: 1.25;
+}
+
+.acc-role-card small {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  color: #64748b;
+  line-height: 1.35;
+}
+
+/* Chọn chức danh chi tiết bên dưới thẻ vai trò */
+.acc-subposition-box {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.acc-subposition-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.acc-subposition-pill {
+  padding: 7px 13px;
+  border-radius: 9px;
+  border: 1.5px solid #cbd5e1;
+  background: #ffffff;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+
+.acc-subposition-pill.active {
+  border-color: #1d4ed8;
+  background: #1d4ed8;
+  color: #ffffff;
+}
+
+/* Hộp xem trước giao diện & quyền hạn */
+.acc-role-preview-panel {
+  padding: 15px 16px;
+  border-radius: 14px;
+  background: linear-gradient(160deg, #f8fafc 0%, #eff6ff 100%);
+  border: 1px solid #bfdbfe;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.acc-role-preview-panel h4 {
+  margin: 3px 0 4px;
+  font-size: 14.5px;
+  color: #0f172a;
+}
+
+.acc-role-preview-duty {
+  margin: 0;
+  font-size: 12px;
+  color: #334155;
+  line-height: 1.45;
+}
+
+.acc-preview-list {
+  margin: 8px 0 0;
+  padding-left: 17px;
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: #1e3a8a;
+  font-weight: 600;
+}
+
+.acc-preview-isolation {
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid #dbeafe;
+  font-size: 11.5px;
+  color: #475569;
+}
+
+/* Lưới form thông tin nhân sự & đăng nhập */
+.acc-fields-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.acc-fields-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.acc-inline-input-btn {
+  display: flex;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.acc-inline-input-btn input {
+  flex: 1;
+  min-width: 0;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  font: 500 13.5px 'Plus Jakarta Sans', sans-serif;
+}
+
+.acc-pwd-meter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 11.5px;
+}
+
+.acc-pwd-bars {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 96px;
+}
+
+.acc-pwd-bars i {
+  height: 5px;
+  flex: 1;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.acc-pwd-bars.weak i:nth-child(1) { background: #ef4444; }
+.acc-pwd-bars.medium i:nth-child(1),
+.acc-pwd-bars.medium i:nth-child(2) { background: #f59e0b; }
+.acc-pwd-bars.strong i { background: #10b981; }
+
+/* Phiếu bàn giao đa phương tiện có QR */
+.acc-handover-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 18px 22px;
+  margin-bottom: 18px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #ecfdf5 0%, #ffffff 65%, #eff6ff 100%);
+  border: 1.5px solid #6ee7b7;
+  box-shadow: 0 10px 26px rgba(16, 185, 129, 0.1);
+}
+
+.acc-handover-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px 16px;
+  margin-top: 10px;
+  font-size: 13px;
+  color: #334155;
+}
+
+.acc-handover-qr-box {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+@media (max-width: 960px) {
+  .acc-kpi-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .acc-role-selector-layout {
+    grid-template-columns: 1fr;
+  }
+  .acc-fields-grid-3 {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .acc-kpi-strip,
+  .acc-role-cards-grid,
+  .acc-fields-grid-3,
+  .acc-fields-grid-2,
+  .acc-source-Segment {
+    grid-template-columns: 1fr;
+  }
+}
+

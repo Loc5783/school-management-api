@@ -207,7 +207,38 @@ export default function Dashboard() {
         </section>
       )}
 
-      {!isTeacher && (
+      {isTeacher ? (
+        <section className="content-card" aria-label="Công việc lớp học hôm nay" style={{ padding: '18px 22px', marginBottom: '18px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+            <div>
+              <p className="card-kicker" style={{ marginBottom: '2px' }}>LỚP HỌC CỦA TÔI HÔM NAY</p>
+              <h2 style={{ margin: 0, fontSize: '17px' }}>Thao tác nhanh dành riêng cho Giáo viên đứng lớp</h2>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '12px' }}>
+            {[
+              { title: 'Điểm danh & Trả trẻ', desc: 'Ghi nhận trẻ đến lớp & bàn giao chiều', to: '/attendance', tone: 'green', icon: 'attendance' },
+              { title: 'Sổ chăm sóc hằng ngày', desc: 'Cập nhật ăn, ngủ, vệ sinh & sức khỏe', to: '/daily-care', tone: 'blue', icon: 'card' },
+              { title: 'Tin nhắn Phụ huynh', desc: 'Trao đổi trực tiếp với phụ huynh lớp', to: '/messages', tone: 'violet', icon: 'chat' },
+              { title: 'Thực đơn & Dị ứng lớp', desc: 'Kiểm tra món ăn & trẻ dị ứng hôm nay', to: '/nutrition', tone: 'orange', icon: 'utensils' }
+            ].map((item) => (
+              <Link
+                key={item.title}
+                to={item.to}
+                className="quick-action"
+                style={{ margin: 0, padding: '12px 14px', border: '1px solid #e2e8f0', borderRadius: '14px', background: '#f8fafc' }}
+              >
+                <span className={`quick-icon ${item.tone}`}><Icon name={item.icon} /></span>
+                <span>
+                  <strong style={{ display: 'block' }}>{item.title}</strong>
+                  <small>{item.desc}</small>
+                </span>
+                <Icon name="chevronRight" size={16} />
+              </Link>
+            ))}
+          </div>
+        </section>
+      ) : (
         <section className="content-card" aria-label="Quy trình bắt đầu nhanh 4 bước" style={{ padding: '18px 22px', marginBottom: '18px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
             <div>

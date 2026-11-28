@@ -1715,9 +1715,9 @@ export default function PrincipalOverview() {
         </div>
       )}
 
-      {/* MODAL: TẠO GIAO VIỆC MỚI */}
+      {/* MODAL: TẠO GIAO VIỆC MỚI (Bấm ngoài KHÔNG tắt) */}
       {showNewTaskModal && (
-        <div className="principal-modal-overlay" onClick={() => setShowNewTaskModal(false)} role="presentation">
+        <div className="principal-modal-overlay" role="presentation">
           <div className="principal-modal" onClick={(e) => e.stopPropagation()}>
             <div className="principal-modal-header">
               <h3>Giao việc cho bộ phận</h3>
@@ -1837,9 +1837,9 @@ export default function PrincipalOverview() {
         </div>
       )}
 
-      {/* MODAL: YÊU CẦU XEM LẠI / CHỈ ĐẠO CÔNG VIỆC */}
+      {/* MODAL: YÊU CẦU XEM LẠI / CHỈ ĐẠO CÔNG VIỆC (Bấm ngoài KHÔNG tắt) */}
       {reviewTaskTarget && (
-        <div className="principal-modal-overlay" onClick={() => setReviewTaskTarget(null)} role="presentation">
+        <div className="principal-modal-overlay" role="presentation">
           <div className="principal-modal" onClick={(e) => e.stopPropagation()}>
             <div className="principal-modal-header">
               <h3>Chỉ đạo tiến độ: {reviewTaskTarget.title}</h3>
@@ -1867,9 +1867,9 @@ export default function PrincipalOverview() {
         </div>
       )}
 
-      {/* MODAL: GHI CHỈ ĐẠO SỰ CỐ AN NINH */}
+      {/* MODAL: GHI CHỈ ĐẠO SỰ CỐ AN NINH (Bấm ngoài KHÔNG tắt) */}
       {instructionIncident && (
-        <div className="principal-modal-overlay" onClick={() => setInstructionIncident(null)} role="presentation">
+        <div className="principal-modal-overlay" role="presentation">
           <div className="principal-modal" onClick={(e) => e.stopPropagation()}>
             <div className="principal-modal-header">
               <h3>Ghi chỉ đạo sự cố an ninh</h3>
@@ -1901,9 +1901,9 @@ export default function PrincipalOverview() {
         </div>
       )}
 
-      {/* MODAL: SOẠN THÔNG BÁO CHỈ ĐẠO MỚI */}
+      {/* MODAL: SOẠN THÔNG BÁO CHỈ ĐẠO MỚI (Bấm ngoài KHÔNG tắt) */}
       {showNewDirectiveModal && (
-        <div className="principal-modal-overlay" onClick={() => setShowNewDirectiveModal(false)} role="presentation">
+        <div className="principal-modal-overlay" role="presentation">
           <div className="principal-modal" onClick={(e) => e.stopPropagation()}>
             <div className="principal-modal-header">
               <h3>Soạn thông báo chỉ đạo nội bộ</h3>

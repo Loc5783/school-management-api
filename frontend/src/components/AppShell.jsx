@@ -7,9 +7,21 @@ import api from '../api/axiosConfig';
 import { getUnreadChat } from '../api/chat';
 import { enterSchoolWorkspace, getPublicSystemMeta, getSuperAdminSchools } from '../api/multiSchool';
 import { playGentleAttendanceChime } from '../utils/vietnameseHardwareTranslator';
+import {
+  getEffectivePosition,
+  getHomePathForUser,
+  getUserRoleBadgeLabel,
+  isGeneralSupervisorTeacher,
+  isNonSecuritySupportStaff
+} from '../utils/roleWorkspaceConfig';
 
 const ROUTE_MODULE_MAP = {
+  '/students': 'students',
+  '/classrooms': 'classrooms',
   '/attendance': 'attendance',
+  '/daily-care': 'daily_care',
+  '/parent-care': 'daily_care',
+  '/accounts': 'accounts',
   '/timekeeping': 'timekeeping',
   '/devices': 'timekeeping',
   '/hr': 'hr',
@@ -24,6 +36,7 @@ const ROUTE_MODULE_MAP = {
   '/guard': 'guard',
   '/pickups': 'pickups',
   '/assets': 'procurement',
+  '/principal': 'reports',
   '/reports': 'reports',
   '/internal-notices': 'notifications',
   '/student-profile-change-requests': 'feedback',
@@ -409,6 +422,98 @@ const accountantNavSections = [
       { to: '/my-leave-requests', label: 'Nghỉ phép cá nhân', icon: 'calendar' },
       { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'bell' },
       { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
+      { to: '/staff-settings', label: 'Cài đặt tài khoản', icon: 'settings' },
+    ],
+  },
+];
+
+const generalSupervisorNavSections = [
+  {
+    id: 'supervisor-overview',
+    label: 'TỔNG PHỤ TRÁCH & CHUYÊN MÔN',
+    icon: 'grid',
+    theme: 'system',
+    items: [
+      { to: '/staff-workspace', label: 'Bàn làm việc Tổng phụ trách', icon: 'grid' },
+      { to: '/dashboard', label: 'Tổng quan lớp học', icon: 'classes' },
+    ],
+  },
+  {
+    id: 'supervisor-discipline',
+    label: 'NỀ NẾP & HOẠT ĐỘNG TRƯỜNG',
+    icon: 'attendance',
+    theme: 'student',
+    items: [
+      { to: '/attendance', label: 'Điểm danh & Sĩ số các lớp', icon: 'attendance' },
+      { to: '/attendance/reports', label: 'Báo cáo chuyên cần & Vắng', icon: 'chart' },
+      { to: '/students', label: 'Tra cứu Hồ sơ học sinh', icon: 'students' },
+      { to: '/internal-notices', label: 'Thông báo & Sự kiện trường', icon: 'bell' },
+      { to: '/assets', label: 'Đề xuất vật tư hoạt động', icon: 'settings' },
+    ],
+  },
+  {
+    id: 'supervisor-personal',
+    label: 'CÔNG VIỆC & CÁ NHÂN',
+    icon: 'users',
+    theme: 'personal',
+    items: [
+      { to: '/my-staffing', label: 'Lịch phân công của tôi', icon: 'calendar' },
+      { to: '/timekeeping?tab=corrections', label: 'Chấm công & Bù công', icon: 'clock' },
+      { to: '/my-leave-requests', label: 'Nghỉ phép cá nhân', icon: 'calendar' },
+      { to: '/my-payroll', label: 'Lương của tôi', icon: 'money' },
+      { to: '/staff-settings', label: 'Cài đặt tài khoản', icon: 'settings' },
+    ],
+  },
+];
+
+const kitchenHelperNavSections = [
+  {
+    id: 'helper-kitchen',
+    label: 'CÔNG VIỆC CẤP DƯỠNG HÔM NAY',
+    icon: 'utensils',
+    theme: 'ops',
+    items: [
+      { to: '/kitchen', label: 'Suất ăn & Chia khay hôm nay', icon: 'grid' },
+      { to: '/nutrition', label: 'Xem thực đơn & Lưu ý dị ứng', icon: 'utensils' },
+    ],
+  },
+  {
+    id: 'helper-personal',
+    label: 'CHẤM CÔNG & CÁ NHÂN',
+    icon: 'clock',
+    theme: 'personal',
+    items: [
+      { to: '/timekeeping', label: 'Chấm công ca bếp', icon: 'clock' },
+      { to: '/my-staffing', label: 'Lịch phân công ca', icon: 'calendar' },
+      { to: '/internal-notices', label: 'Thông báo nội bộ', icon: 'bell' },
+      { to: '/my-leave-requests', label: 'Xin nghỉ phép', icon: 'calendar' },
+      { to: '/my-payroll', label: 'Phiếu lương của tôi', icon: 'money' },
+      { to: '/staff-settings', label: 'Đổi mật khẩu', icon: 'settings' },
+    ],
+  },
+];
+
+const supportStaffNavSections = [
+  {
+    id: 'support-workspace',
+    label: 'CÔNG VIỆC HẰNG NGÀY',
+    icon: 'grid',
+    theme: 'ops',
+    items: [
+      { to: '/staff-workspace', label: 'Không gian làm việc hôm nay', icon: 'grid' },
+      { to: '/timekeeping', label: 'Chấm công vào / ra ca', icon: 'clock' },
+      { to: '/my-staffing', label: 'Lịch phân công ca trực', icon: 'calendar' },
+      { to: '/internal-notices', label: 'Bảng tin nhà trường', icon: 'bell' },
+    ],
+  },
+  {
+    id: 'support-personal',
+    label: 'CHẾ ĐỘ & TÀI KHOẢN CÁ NHÂN',
+    icon: 'users',
+    theme: 'personal',
+    items: [
+      { to: '/my-leave-requests', label: 'Xin nghỉ phép cá nhân', icon: 'calendar' },
+      { to: '/my-payroll', label: 'Phiếu lương tháng của tôi', icon: 'money' },
       { to: '/staff-settings', label: 'Cài đặt tài khoản', icon: 'settings' },
     ],
   },
@@ -1226,35 +1331,13 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
   const displayName = user?.profile?.fullName || user?.username || 'Quản trị viên';
   const isAdmin = user?.role === 'admin';
   const isVendorSupportSession = Boolean(user?.isVendorSupport || localStorage.getItem('superadmin_token'));
-  const roleLabel = isVendorSupportSession && isAdmin
-    ? 'Kỹ thuật viên Nhà cung cấp'
-    : ({
-        admin: 'Quản trị Phân hiệu Trường',
-        principal: 'Ban Giám đốc / Hiệu trưởng',
-        teacher: 'Giáo viên đứng lớp',
-        accountant: 'Kế toán học phí',
-        chef: 'Đầu bếp / Dinh dưỡng',
-        hr: 'Nhân sự & Tiền lương',
-        parent: 'Phụ huynh học sinh',
-        guard: 'Bảo vệ & An ninh'
-      }[user?.role] || 'Tài khoản trường');
+  const roleLabel = getUserRoleBadgeLabel(user, isVendorSupportSession);
   const totalUnread = unreadCount + chatUnread.total;
-  const homePath =
-    user?.role === 'admin'
-      ? '/campuses'
-      : user?.role === 'guard'
-        ? '/guard'
-        : user?.role === 'chef'
-          ? '/kitchen'
-          : user?.role === 'accountant'
-            ? '/accounting'
-            : user?.role === 'parent'
-              ? '/parent-dashboard'
-              : user?.role === 'hr'
-                ? '/hr'
-                : isPrincipal
-                  ? '/principal'
-                  : '/dashboard';
+  const homePath = getHomePathForUser(user);
+  const effectivePosition = getEffectivePosition(user);
+  const isSupervisorView = isGeneralSupervisorTeacher(user);
+  const isSupportNonSecurityView = isNonSecuritySupportStaff(user);
+  const isKitchenHelperView = isChef && effectivePosition === 'kitchen_helper';
 
   // Lọc menu dựa trên permissions và vai trò
   // Đảm bảo không trùng lặp route trong danh sách
@@ -1367,9 +1450,11 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
     }
 
     if (isTeacher) {
+      const targetSections = isSupervisorView ? generalSupervisorNavSections : teacherNavSections;
+      const openIds = isSupervisorView ? generalSupervisorNavSections.map((s) => s.id) : teacherOpenSections;
       return renderAccordionSections(
-        teacherNavSections,
-        teacherOpenSections,
+        targetSections,
+        openIds,
         toggleTeacherSection,
         mobile ? 'Menu chức năng giáo viên di động' : 'Menu chức năng giáo viên',
         'teacher-nav-accordion',
@@ -1389,6 +1474,16 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
     }
 
     if (isGuard) {
+      if (isSupportNonSecurityView) {
+        return renderAccordionSections(
+          supportStaffNavSections,
+          supportStaffNavSections.map((s) => s.id),
+          toggleGuardSection,
+          mobile ? 'Menu nhân viên vận hành di động' : 'Menu nhân viên vận hành',
+          'guard-nav-accordion',
+          mobile
+        );
+      }
       return renderAccordionSections(
         guardNavSections,
         guardOpenSections,
@@ -1400,9 +1495,11 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
     }
 
     if (isChef) {
+      const targetChefSections = isKitchenHelperView ? kitchenHelperNavSections : chefNavSections;
+      const chefOpenIds = isKitchenHelperView ? kitchenHelperNavSections.map((s) => s.id) : chefOpenSections;
       return renderAccordionSections(
-        chefNavSections,
-        chefOpenSections,
+        targetChefSections,
+        chefOpenIds,
         toggleChefSection,
         mobile ? 'Menu chức năng bếp ăn di động' : 'Menu chức năng bếp ăn',
         'chef-nav-accordion',

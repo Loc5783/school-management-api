@@ -20,21 +20,167 @@ import { getStoredSuperAdminUser, getStoredUser } from '../utils/storage';
 import './MultiSchoolManagement.css';
 
 const DEFAULT_MODULE_CATALOG = [
-  { key: 'students', label: 'Hồ sơ & Y tế Học sinh', required: true },
-  { key: 'classrooms', label: 'Quản lý Lớp & Phân hiệu', required: true },
-  { key: 'attendance', label: 'Điểm danh & Đơn xin nghỉ', required: false },
-  { key: 'pickups', label: 'Đón trả trẻ & Mã QR', required: false },
-  { key: 'guard', label: 'An ninh Trực cổng & Bưu phẩm', required: false },
-  { key: 'nutrition', label: 'Bếp ăn, Thực đơn & Lưu mẫu 24h', required: false },
-  { key: 'finance', label: 'Học phí, Kế toán & Sổ quỹ', required: false },
-  { key: 'hr', label: 'Nhân sự & Bảng lương', required: false },
-  { key: 'timekeeping', label: 'Chấm công & Thiết bị ISAPI', required: false },
-  { key: 'procurement', label: 'Mua sắm & Cơ sở vật chất', required: false },
-  { key: 'feedback', label: 'Phản hồi Phụ huynh & Duyệt hồ sơ', required: false },
-  { key: 'chat', label: 'Tin nhắn Nhà trường – Phụ huynh', required: false },
-  { key: 'notifications', label: 'Thông báo Nội bộ & Nhắc việc', required: false },
-  { key: 'reports', label: 'Báo cáo & Thống kê Điều hành', required: false }
+  {
+    key: 'classrooms',
+    group: 'Lớp học & Học sinh',
+    label: 'Quản lý Lớp học của trường',
+    desc: 'Tự tạo, sửa, xóa lớp học của trường, đặt độ tuổi, sĩ số tối đa & phân công giáo viên đứng lớp',
+    required: false
+  },
+  {
+    key: 'students',
+    group: 'Lớp học & Học sinh',
+    label: 'Quản lý Hồ sơ & Y tế Học sinh',
+    desc: 'Tiếp nhận học sinh, nhập Excel, theo dõi dị ứng, sức khỏe & điều chuyển lớp',
+    required: false
+  },
+  {
+    key: 'attendance',
+    group: 'Lớp học & Học sinh',
+    label: 'Điểm danh Lớp & Đơn xin nghỉ',
+    desc: 'Điểm danh đón/trả trẻ hằng ngày, thống kê vắng mặt & duyệt đơn xin nghỉ phép',
+    required: false
+  },
+  {
+    key: 'daily_care',
+    group: 'Lớp học & Học sinh',
+    label: 'Sổ chăm sóc bé hằng ngày',
+    desc: 'Ghi nhận tình hình ăn, ngủ, vệ sinh, nhận xét ngày gửi sang Cổng Phụ huynh',
+    required: false
+  },
+  {
+    key: 'pickups',
+    group: 'An ninh, Bán trú & Chấm công',
+    label: 'Đón trả trẻ & Xác thực Mã QR',
+    desc: 'Quản lý danh sách người đón hợp lệ & sinh mã QR xác thực bàn giao trẻ',
+    required: false
+  },
+  {
+    key: 'guard',
+    group: 'An ninh, Bán trú & Chấm công',
+    label: 'An ninh Trực cổng & Khách ra vào',
+    desc: 'Màn hình bảo vệ quét QR, ghi sổ khách thăm, giao nhận thực phẩm & sự cố an ninh',
+    required: false
+  },
+  {
+    key: 'nutrition',
+    group: 'An ninh, Bán trú & Chấm công',
+    label: 'Bếp ăn Bán trú, Thực đơn & Lưu mẫu 24h',
+    desc: 'Chốt suất nấu theo điểm danh, thực đơn tuần, cảnh báo dị ứng, kho bếp & lưu mẫu 24h',
+    required: false
+  },
+  {
+    key: 'timekeeping',
+    group: 'An ninh, Bán trú & Chấm công',
+    label: 'Máy chấm công Khuôn mặt & Cầu nối LAN',
+    desc: 'Quét/kết nối máy chấm công Hikvision của trường, kéo/đẩy ảnh mặt 2 chiều & Webhook',
+    required: false
+  },
+  {
+    key: 'accounts',
+    group: 'Nhân sự, Phân quyền & Tài chính',
+    label: 'Cấp phát Tài khoản & Phân quyền nội bộ',
+    desc: 'Cho phép trường tự cấp tài khoản Hiệu trưởng, Giáo viên, Kế toán, HR, Bếp, Nhân viên & Phụ huynh',
+    required: false
+  },
+  {
+    key: 'hr',
+    group: 'Nhân sự, Phân quyền & Tài chính',
+    label: 'Hồ sơ Nhân sự, Phân ca & Bảng lương',
+    desc: 'Hợp đồng lao động, phân công ca trực/dạy thay, duyệt nghỉ phép & tính lương tháng',
+    required: false
+  },
+  {
+    key: 'finance',
+    group: 'Nhân sự, Phân quyền & Tài chính',
+    label: 'Thu Học phí, Kế toán & Sổ quỹ',
+    desc: 'Thiết lập mức thu, phát hành hóa đơn, gạch nợ, hoàn tiền ăn, chi vận hành & đối soát sổ quỹ',
+    required: false
+  },
+  {
+    key: 'procurement',
+    group: 'Nhân sự, Phân quyền & Tài chính',
+    label: 'Cơ sở vật chất & Mua sắm vật tư',
+    desc: 'Quản lý tài sản phòng học/nhà bếp, đề xuất mua sắm vật tư & theo dõi bảo trì',
+    required: false
+  },
+  {
+    key: 'reports',
+    group: 'Điều hành Giám đốc & Tương tác Phụ huynh',
+    label: 'Sổ điều hành Giám đốc & Báo cáo tổng hợp',
+    desc: 'Bảng điều hành Hiệu trưởng, giao việc bộ phận, chỉ đạo nội bộ & báo cáo toàn trường',
+    required: false
+  },
+  {
+    key: 'chat',
+    group: 'Điều hành Giám đốc & Tương tác Phụ huynh',
+    label: 'Tin nhắn trực tiếp Giáo viên – Phụ huynh',
+    desc: 'Trao đổi trực tiếp 1-1 giữa giáo viên lớp và phụ huynh học sinh',
+    required: false
+  },
+  {
+    key: 'feedback',
+    group: 'Điều hành Giám đốc & Tương tác Phụ huynh',
+    label: 'Phản hồi Phụ huynh & Duyệt sửa hồ sơ',
+    desc: 'Tiếp nhận góp ý từ phụ huynh và duyệt yêu cầu chỉnh sửa thông tin học sinh',
+    required: false
+  },
+  {
+    key: 'notifications',
+    group: 'Điều hành Giám đốc & Tương tác Phụ huynh',
+    label: 'Bảng tin & Thông báo Nội bộ trường',
+    desc: 'Đăng thông báo nội bộ toàn trường và gửi nhắc việc qua chuông thời gian thực',
+    required: false
+  }
 ];
+
+const PLAN_LABELS = {
+  professional: 'Gói Toàn diện (Professional)',
+  standard: 'Gói Tiêu chuẩn',
+  enterprise: 'Gói Chuỗi trường (Enterprise)',
+  trial: 'Gói Dùng thử 30 ngày'
+};
+
+const BASIC_PRESET_MODULES = [
+  'classrooms',
+  'students',
+  'attendance',
+  'daily_care',
+  'accounts',
+  'finance',
+  'notifications',
+  'reports'
+];
+
+const ATTENDANCE_DEVICE_PRESET_MODULES = [
+  'classrooms',
+  'students',
+  'attendance',
+  'pickups',
+  'guard',
+  'timekeeping',
+  'accounts',
+  'hr',
+  'notifications'
+];
+
+const suggestSchoolCodeFromName = (name = '') => {
+  const clean = String(name || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .replace(/truong|mam|non|co|so/gi, ' ')
+    .toUpperCase()
+    .replace(/[^A-Z0-9\s-]/g, ' ')
+    .trim();
+  if (!clean) return '';
+  const words = clean.split(/\s+/).filter(Boolean);
+  if (words.length <= 2) {
+    return words.join('-').slice(0, 16);
+  }
+  return `${words.slice(0, 2).join('')}-${words[words.length - 1]}`.slice(0, 18);
+};
 
 const formatCurrency = (val) => `${new Intl.NumberFormat('vi-VN').format(Number(val) || 0)} đ`;
 
@@ -71,17 +217,22 @@ const generateRandomAdminPassword = () => {
 
 const makeEmptyCreateForm = (standards = {}, allModuleKeys = []) => ({
   code: '',
+  codeTouched: false,
   name: '',
-  organizationCode: 'HOA-NANG-GROUP',
+  representativeName: '',
+  contactPhone: '',
   contactEmail: '',
-  campusesInput: 'Cơ sở chính',
+  address: '',
+  subscriptionPlan: 'professional',
+  licenseExpiresAt: '',
   adminUsername: 'admin',
-  adminPassword: '',
+  adminUsernameTouched: false,
+  adminPassword: generateRandomAdminPassword(),
   adminFullName: '',
   adminPhone: '',
-  maxCampuses: standards.defaultMaxCampusesPerSchool || 10,
+  maxCampuses: standards.defaultMaxCampusesPerSchool || 5,
   maxStudents: standards.defaultMaxStudentsPerSchool || 800,
-  maxStaff: 200,
+  maxStaff: standards.defaultMaxStaffPerSchool || 200,
   enabledModules: allModuleKeys.length ? [...allModuleKeys] : DEFAULT_MODULE_CATALOG.map((m) => m.key)
 });
 
@@ -144,10 +295,16 @@ export default function MultiSchoolManagement() {
   const [editingSchool, setEditingSchool] = useState(null);
   const [editForm, setEditForm] = useState({
     name: '',
-    organizationCode: '',
+    representativeName: '',
+    contactPhone: '',
     contactEmail: '',
+    address: '',
+    subscriptionPlan: 'professional',
+    licenseExpiresAt: '',
     status: 'active',
     adminUsername: 'admin',
+    adminFullName: '',
+    adminPhone: '',
     newAdminPassword: '',
     maxCampuses: 10,
     maxStudents: 800,
@@ -298,7 +455,7 @@ export default function MultiSchoolManagement() {
 
   const openCreateModal = () => {
     setCreateError('');
-    setShowCreatePass(false);
+    setShowCreatePass(true);
     setCreateForm(
       makeEmptyCreateForm(
         systemSettings?.preschoolStandards || {},
@@ -308,10 +465,10 @@ export default function MultiSchoolManagement() {
     setShowCreateModal(true);
   };
 
-  const toggleCreateModule = (modKey, required) => {
-    if (required) return;
+  const toggleCreateModule = (modKey) => {
     setCreateForm((prev) => {
       const exists = prev.enabledModules.includes(modKey);
+      if (exists && prev.enabledModules.length <= 1) return prev;
       return {
         ...prev,
         enabledModules: exists
@@ -324,31 +481,34 @@ export default function MultiSchoolManagement() {
   const handleCreateSchool = async (e) => {
     e.preventDefault();
     if (creating) return;
+    if (!createForm.contactPhone.trim()) {
+      setCreateError('Vui lòng nhập Số điện thoại / Hotline liên hệ của trường.');
+      return;
+    }
+    if (!createForm.address.trim()) {
+      setCreateError('Vui lòng nhập Địa chỉ thực tế của trường học.');
+      return;
+    }
     setCreating(true);
     setCreateError('');
     const cleanCode = createForm.code.trim().toUpperCase();
     const cleanUser = createForm.adminUsername.trim();
     const plainPass = createForm.adminPassword;
     try {
-      const initialCampuses = createForm.campusesInput
-        .split(/[,;\n]/)
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map((cName, idx) => ({
-          ...(cName.toLowerCase() === 'cơ sở chính' ? { code: 'CS-CHINH' } : { code: `PH-${idx + 1}` }),
-          name: cName
-        }));
-
       const res = await createSchoolWithAdmin({
         code: cleanCode,
         name: createForm.name.trim(),
-        organizationCode: createForm.organizationCode.trim().toUpperCase(),
+        representativeName: createForm.representativeName.trim(),
+        contactPhone: createForm.contactPhone.trim(),
         contactEmail: createForm.contactEmail.trim(),
+        address: createForm.address.trim(),
+        subscriptionPlan: createForm.subscriptionPlan,
+        licenseExpiresAt: createForm.licenseExpiresAt || null,
         adminUsername: cleanUser,
         adminPassword: plainPass,
-        adminFullName: createForm.adminFullName.trim(),
-        adminPhone: createForm.adminPhone.trim(),
-        initialCampuses,
+        adminFullName: (createForm.adminFullName || createForm.representativeName).trim(),
+        adminPhone: (createForm.adminPhone || createForm.contactPhone).trim(),
+        adminEmail: createForm.contactEmail.trim(),
         enabledModules: createForm.enabledModules,
         quotas: {
           maxCampuses: Number(createForm.maxCampuses),
@@ -379,10 +539,18 @@ export default function MultiSchoolManagement() {
     setShowEditPass(false);
     setEditForm({
       name: fullSchool.name || '',
-      organizationCode: fullSchool.organizationCode || '',
-      contactEmail: fullSchool.contactEmail || '',
+      representativeName: fullSchool.representativeName || fullSchool.primaryAdmin?.fullName || '',
+      contactPhone: fullSchool.contactPhone || fullSchool.primaryAdmin?.phone || '',
+      contactEmail: fullSchool.contactEmail || fullSchool.primaryAdmin?.email || '',
+      address: fullSchool.address || fullSchool.campuses?.[0]?.address || '',
+      subscriptionPlan: fullSchool.subscriptionPlan || 'professional',
+      licenseExpiresAt: fullSchool.licenseExpiresAt
+        ? new Date(fullSchool.licenseExpiresAt).toISOString().slice(0, 10)
+        : '',
       status: fullSchool.status || 'active',
       adminUsername: fullSchool.primaryAdmin?.username || `admin_${String(fullSchool.code || '').toLowerCase()}`,
+      adminFullName: fullSchool.primaryAdmin?.fullName || '',
+      adminPhone: fullSchool.primaryAdmin?.phone || '',
       newAdminPassword: '',
       maxCampuses: fullSchool.quotas?.maxCampuses || 10,
       maxStudents: fullSchool.quotas?.maxStudents || 800,
@@ -394,10 +562,10 @@ export default function MultiSchoolManagement() {
     setEditError('');
   };
 
-  const toggleEditModule = (modKey, required) => {
-    if (required) return;
+  const toggleEditModule = (modKey) => {
     setEditForm((prev) => {
       const exists = prev.enabledModules.includes(modKey);
+      if (exists && prev.enabledModules.length <= 1) return prev;
       return {
         ...prev,
         enabledModules: exists
@@ -417,10 +585,16 @@ export default function MultiSchoolManagement() {
     try {
       await updateSchoolAndAdmin(editingSchool._id, {
         name: editForm.name,
-        organizationCode: editForm.organizationCode,
+        representativeName: editForm.representativeName,
+        contactPhone: editForm.contactPhone,
         contactEmail: editForm.contactEmail,
+        address: editForm.address,
+        subscriptionPlan: editForm.subscriptionPlan,
+        licenseExpiresAt: editForm.licenseExpiresAt || null,
         status: editForm.status,
         adminUsername: cleanAdminUser,
+        adminFullName: editForm.adminFullName,
+        adminPhone: editForm.adminPhone,
         newAdminPassword: plainResetPass,
         enabledModules: editForm.enabledModules,
         quotas: {
@@ -695,8 +869,8 @@ export default function MultiSchoolManagement() {
           </div>
 
           <div className="toolbar-buttons" style={{ flexWrap: 'wrap' }}>
-            <button type="button" className="button button-secondary" onClick={load} disabled={loading}>
-              <Icon name="refresh" size={15} /> Làm mới số liệu
+            <button type="button" className="button button-secondary" onClick={load} disabled={loading} aria-busy={loading}>
+              <Icon name="refresh" size={15} /> {loading ? 'Đang làm mới...' : 'Làm mới số liệu'}
             </button>
             {schools.length > 0 && (
               <button type="button" className="button button-secondary" onClick={() => openDispatchNotificationModal(schools[0])}>
@@ -1320,15 +1494,24 @@ export default function MultiSchoolManagement() {
                                 <div className="sa-school-identity">
                                   <div className="sa-school-code-row">
                                     <span className="sa-school-code-pill">{s.code}</span>
+                                    <span className="sa-plan-badge">
+                                      {PLAN_LABELS[s.subscriptionPlan] || 'Gói Toàn diện'}
+                                    </span>
                                     <span className={`student-status ${s.status === 'active' ? 'enrolled' : 'withdrawn'}`}>
                                       {s.status === 'active' ? 'Hoạt động' : s.status === 'suspended' ? 'Tạm ngưng' : 'Đã đóng'}
                                     </span>
                                   </div>
                                   <strong className="sa-school-title">{s.name}</strong>
+                                  {s.address && <small>Địa chỉ: {s.address}</small>}
                                   <small>
-                                    {s.campusCount}/{s.quotas?.maxCampuses || 10} phân hiệu: {(s.campusNames || []).join(', ')}
+                                    {[
+                                      s.representativeName ? `Đại diện: ${s.representativeName}` : '',
+                                      s.contactPhone ? `SĐT: ${s.contactPhone}` : '',
+                                      s.contactEmail || ''
+                                    ]
+                                      .filter(Boolean)
+                                      .join(' · ') || `${s.campusCount} cơ sở`}
                                   </small>
-                                  {s.contactEmail && <small>Liên hệ: {s.contactEmail}</small>}
                                 </div>
                               </td>
 
@@ -1416,7 +1599,7 @@ export default function MultiSchoolManagement() {
                                 </div>
                               </td>
 
-                              <td style={{ minWidth: 180 }}>
+                              <td style={{ minWidth: 195 }}>
                                 <div>
                                   <strong>{s.studentCount}</strong> / {s.quotas?.maxStudents || 800} học sinh
                                 </div>
@@ -1424,7 +1607,13 @@ export default function MultiSchoolManagement() {
                                   <div className="superadmin-progress-fill blue" style={{ width: `${quotaPercent}%` }} />
                                 </div>
                                 <small>
-                                  {s.classCount} lớp · {s.staffCount} nhân sự · <strong>{s.enabledModules?.length || moduleCatalog.length}/{moduleCatalog.length}</strong> phân hệ
+                                  {s.classCount} lớp · {s.staffCount}/{s.quotas?.maxStaff || 200} NS ·{' '}
+                                  <strong>{s.enabledModules?.length || moduleCatalog.length}/{moduleCatalog.length}</strong> quyền
+                                </small>
+                                <small style={{ color: s.enabledModules?.includes('classrooms') !== false ? '#15803d' : '#b45309' }}>
+                                  {s.enabledModules?.includes('classrooms') !== false
+                                    ? '✓ Đã cấp quyền Quản lý Lớp'
+                                    : '• Đang khóa Quản lý Lớp'}
                                 </small>
                               </td>
 
@@ -1488,6 +1677,12 @@ export default function MultiSchoolManagement() {
               key={systemSettings?.updatedAt || 'global-settings'}
               initialSettings={systemSettings}
               schools={schools}
+              superUser={superUser}
+              onSuperUserUpdated={(nextUser) => setSuperUser(nextUser)}
+              onNavigateSection={(sec) => {
+                setActiveSection(sec);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
               onSaved={(nextSettings) => {
                 if (nextSettings) setSystemSettings(nextSettings);
                 void load();
@@ -1497,14 +1692,11 @@ export default function MultiSchoolManagement() {
         </div>
       </main>
 
-      {/* MODAL GỬI THÔNG BÁO HỆ THỐNG ĐÍCH DANH CHO TỪNG TRƯỜNG SỬ DỤNG */}
+      {/* MODAL GỬI THÔNG BÁO HỆ THỐNG ĐÍCH DANH CHO TỪNG TRƯỜNG SỬ DỤNG (Bấm ngoài KHÔNG tắt) */}
       {showDispatchModal && createPortal(
         <div
           className="account-modal-backdrop"
           role="presentation"
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !dispatching) setShowDispatchModal(false);
-          }}
         >
           <form
             className="account-modal-card student-form"
@@ -1634,14 +1826,11 @@ export default function MultiSchoolManagement() {
         />
       )}
 
-      {/* MODAL KIỂM TRA NHANH LUỒNG WEBHOOK CHẤM CÔNG / ĐIỂM DANH CỦA TRƯỜNG */}
+      {/* MODAL KIỂM TRA NHANH LUỒNG WEBHOOK CHẤM CÔNG / ĐIỂM DANH CỦA TRƯỜNG (Bấm ngoài KHÔNG tắt) */}
       {webhookTestSchool && createPortal(
         <div
           className="account-modal-backdrop"
           role="presentation"
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !webhookTesting) setWebhookTestSchool(null);
-          }}
         >
           <form
             className="account-modal-card student-form"
@@ -1728,24 +1917,17 @@ export default function MultiSchoolManagement() {
         document.body
       )}
 
-      {/* MODAL KHỞI TẠO TRƯỜNG MỚI KÈM HẠN MỨC, ACCOUNT ADMIN RIÊNG & GÓI MODULE */}
+      {/* MODAL KHỞI TẠO TRƯỜNG MỚI KÈM ĐẦY ĐỦ QUYỀN QUẢN LÝ & TÀI KHOẢN ADMIN RIÊNG (Bấm ngoài KHÔNG tắt) */}
       {showCreateModal && createPortal(
-        <div
-          className="account-modal-backdrop"
-          role="presentation"
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !creating) setShowCreateModal(false);
-          }}
-        >
+        <div className="account-modal-backdrop" role="presentation">
           <form
-            className="account-modal-card student-form"
-            style={{ width: 'min(840px, 96vw)' }}
+            className="account-modal-card student-form sa-modal-wide"
             autoComplete="off"
             onSubmit={handleCreateSchool}
           >
             <div className="account-modal-header">
               <div>
-                <p className="card-kicker">KHỞI TẠO TRƯỜNG MỚI, CẤP ACCOUNT ADMIN & WEBHOOK</p>
+                <p className="card-kicker">CẤP PHÉP ĐƠN VỊ TRƯỜNG HỌC MỚI &amp; BÀN GIAO TÀI KHOẢN QUẢN TRỊ</p>
                 <h2>Thêm trường học mới vào hệ thống</h2>
               </div>
               <button
@@ -1759,172 +1941,350 @@ export default function MultiSchoolManagement() {
               </button>
             </div>
 
-            {createError && <div className="account-modal-error" role="alert"><Icon name="alertCircle" size={16} /><span>{createError}</span></div>}
+            {createError && (
+              <div className="account-modal-error" role="alert">
+                <Icon name="alertCircle" size={16} />
+                <span>{createError}</span>
+              </div>
+            )}
 
-            <div className="student-form-grid">
-              <label>
-                Mã trường (School Code — dùng cho đuôi Webhook) *
-                <input
-                  required
-                  autoComplete="off"
-                  maxLength={20}
-                  placeholder="VD: HOANANG-B"
-                  value={createForm.code}
-                  onChange={(e) => setCreateForm({ ...createForm, code: e.target.value.toUpperCase().replace(/\s+/g, '') })}
-                />
+            {/* KHỐI 1: THÔNG TIN ĐỊNH DANH & LIÊN HỆ TRƯỜNG HỌC */}
+            <div className="sa-form-section-card">
+              <div className="sa-form-section-head">
+                <strong>1. Thông tin Trường học &amp; Địa chỉ Liên hệ</strong>
                 {createForm.code && (
-                  <small style={{ display: 'block', marginTop: 4, color: '#1d4ed8' }}>
-                    Webhook của trường: <code>/api/attendance/webhook/{createForm.code}</code>
+                  <small style={{ color: '#1d4ed8', fontWeight: 700 }}>
+                    Webhook riêng: <code>/api/attendance/webhook/{createForm.code}</code>
                   </small>
                 )}
-              </label>
-              <label>
-                Tên trường học *
+              </div>
+
+              <div className="student-form-grid" style={{ padding: 0 }}>
+                <label>
+                  Tên chính thức của Trường / Cơ sở *
+                  <input
+                    required
+                    autoComplete="off"
+                    maxLength={160}
+                    placeholder="VD: Trường Mầm non Hoa Nắng - Cơ sở Cầu Giấy"
+                    value={createForm.name}
+                    onChange={(e) => {
+                      const nextName = e.target.value;
+                      setCreateForm((prev) => {
+                        const autoCode = prev.codeTouched ? prev.code : suggestSchoolCodeFromName(nextName);
+                        const autoAdminUser = prev.adminUsernameTouched
+                          ? prev.adminUsername
+                          : autoCode
+                            ? `admin_${autoCode.toLowerCase().replace(/[^a-z0-9]/g, '')}`
+                            : 'admin';
+                        return {
+                          ...prev,
+                          name: nextName,
+                          code: autoCode,
+                          adminUsername: autoAdminUser
+                        };
+                      });
+                    }}
+                  />
+                </label>
+
+                <label>
+                  Mã định danh Trường (School Code) *
+                  <input
+                    required
+                    autoComplete="off"
+                    maxLength={20}
+                    placeholder="VD: HOANANG-CG"
+                    value={createForm.code}
+                    onChange={(e) => {
+                      const clean = e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+                      setCreateForm((prev) => ({
+                        ...prev,
+                        code: clean,
+                        codeTouched: true,
+                        adminUsername: prev.adminUsernameTouched
+                          ? prev.adminUsername
+                          : clean
+                            ? `admin_${clean.toLowerCase().replace(/[^a-z0-9]/g, '')}`
+                            : 'admin'
+                      }));
+                    }}
+                  />
+                </label>
+              </div>
+
+              <div className="sa-form-grid-3">
+                <label>
+                  Người đại diện / Hiệu trưởng
+                  <input
+                    autoComplete="off"
+                    maxLength={120}
+                    placeholder="VD: Cô Nguyễn Thị Minh"
+                    value={createForm.representativeName}
+                    onChange={(e) =>
+                      setCreateForm((prev) => ({
+                        ...prev,
+                        representativeName: e.target.value,
+                        adminFullName: prev.adminFullName || e.target.value
+                      }))
+                    }
+                  />
+                </label>
+
+                <label>
+                  Số điện thoại / Hotline trường *
+                  <input
+                    type="tel"
+                    required
+                    autoComplete="off"
+                    maxLength={25}
+                    placeholder="VD: 0912 345 678"
+                    value={createForm.contactPhone}
+                    onChange={(e) =>
+                      setCreateForm((prev) => ({
+                        ...prev,
+                        contactPhone: e.target.value
+                      }))
+                    }
+                  />
+                </label>
+
+                <label>
+                  Email liên hệ chính thức
+                  <input
+                    type="email"
+                    name="school_office_contact_email"
+                    autoComplete="off"
+                    placeholder="vanphong@ten-truong.edu.vn"
+                    value={createForm.contactEmail}
+                    onChange={(e) => setCreateForm({ ...createForm, contactEmail: e.target.value })}
+                  />
+                </label>
+              </div>
+
+              <label className="form-wide" style={{ display: 'block' }}>
+                Địa chỉ thực tế của trường *
                 <input
                   required
                   autoComplete="off"
-                  maxLength={160}
-                  placeholder="VD: Trường Mầm non Hoa Nắng - Cơ sở Cầu Giấy"
-                  value={createForm.name}
-                  onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
+                  maxLength={300}
+                  placeholder="VD: Số 18 đường Cầu Giấy, Quận Cầu Giấy, Hà Nội"
+                  value={createForm.address}
+                  onChange={(e) => setCreateForm({ ...createForm, address: e.target.value })}
                 />
               </label>
-              <label>
-                Mã hệ thống / Cụm trường
-                <input
-                  autoComplete="off"
-                  maxLength={40}
-                  placeholder="VD: HOA-NANG-GROUP"
-                  value={createForm.organizationCode}
-                  onChange={(e) => setCreateForm({ ...createForm, organizationCode: e.target.value.toUpperCase() })}
-                />
-              </label>
-              <label>
-                Email văn phòng trường (không tự điền tài khoản cá nhân)
-                <input
-                  type="email"
-                  name="school_office_contact_email"
-                  autoComplete="off"
-                  placeholder="vanphong@hoanang.edu.vn"
-                  value={createForm.contactEmail}
-                  onChange={(e) => setCreateForm({ ...createForm, contactEmail: e.target.value })}
-                />
-              </label>
-              <label className="form-wide">
-                Các Phân hiệu / Cơ sở ban đầu của trường (ngăn cách bằng dấu phẩy)
-                <input
-                  autoComplete="off"
-                  placeholder="VD: Cơ sở chính, Phân hiệu 1, Phân hiệu 2"
-                  value={createForm.campusesInput}
-                  onChange={(e) => setCreateForm({ ...createForm, campusesInput: e.target.value })}
-                />
-              </label>
+            </div>
 
-              <label>
-                Hạn mức tối đa Phân hiệu
-                <input
-                  type="number"
-                  min={1}
-                  max={100}
-                  value={createForm.maxCampuses}
-                  onChange={(e) => setCreateForm({ ...createForm, maxCampuses: e.target.value })}
-                />
-              </label>
-              <label>
-                Hạn mức tối đa Học sinh
-                <input
-                  type="number"
-                  min={10}
-                  max={20000}
-                  value={createForm.maxStudents}
-                  onChange={(e) => setCreateForm({ ...createForm, maxStudents: e.target.value })}
-                />
-              </label>
+            {/* KHỐI 2: HẠN MỨC BẢN QUYỀN & TÀI KHOẢN ADMIN RIÊNG CỦA TRƯỜNG */}
+            <div className="sa-form-section-card">
+              <div className="sa-form-section-head">
+                <strong>2. Gói Bản quyền, Hạn mức &amp; Tài khoản Admin Bàn giao</strong>
+                <small style={{ color: '#64748b' }}>
+                  Tài khoản Admin trường dùng để cài đặt phân hiệu, tạo lớp và cấp tài khoản nội bộ
+                </small>
+              </div>
 
-              <fieldset className="student-allergy-fieldset form-wide">
-                <legend>Tài khoản Quản trị riêng của trường (Dùng để trường tự tạo Giám đốc, Giáo viên, Đầu bếp...)</legend>
-                <div className="student-form-grid" style={{ padding: 0 }}>
-                  <label>
-                    Tên đăng nhập Admin trường *
-                    <input
-                      required
-                      name="new_school_admin_username"
-                      autoComplete="off"
-                      placeholder="VD: admin_csb"
-                      value={createForm.adminUsername}
-                      onChange={(e) => setCreateForm({ ...createForm, adminUsername: e.target.value })}
-                    />
-                  </label>
-                  <label>
-                    Họ tên người quản trị trường
-                    <input
-                      autoComplete="off"
-                      placeholder="VD: Nguyễn Thị Minh"
-                      value={createForm.adminFullName}
-                      onChange={(e) => setCreateForm({ ...createForm, adminFullName: e.target.value })}
-                    />
-                  </label>
-                  <label className="form-wide">
-                    Mật khẩu khởi tạo bàn giao cho Admin trường *
-                    <div className="password-field-group">
-                      <input
-                        type={showCreatePass ? 'text' : 'password'}
-                        name="new_school_admin_password"
-                        autoComplete="new-password"
-                        required
-                        minLength={6}
-                        placeholder="Nhập tối thiểu 6 ký tự hoặc bấm Tạo mật khẩu nhanh"
-                        value={createForm.adminPassword}
-                        onChange={(e) => setCreateForm({ ...createForm, adminPassword: e.target.value })}
-                      />
-                      <button type="button" className="password-field-btn" onClick={() => setShowCreatePass((v) => !v)}>
-                        <Icon name={showCreatePass ? 'eyeOff' : 'eye'} size={15} /> {showCreatePass ? 'Ẩn' : 'Hiện'}
-                      </button>
-                      <button
-                        type="button"
-                        className="password-field-btn"
-                        onClick={() => {
-                          setCreateForm((prev) => ({ ...prev, adminPassword: generateRandomAdminPassword() }));
-                          setShowCreatePass(true);
-                        }}
-                      >
-                        Tạo mật khẩu nhanh
-                      </button>
+              <div className="sa-form-grid-4">
+                <label>
+                  Gói cấp phép phần mềm
+                  <select
+                    value={createForm.subscriptionPlan}
+                    onChange={(e) => setCreateForm({ ...createForm, subscriptionPlan: e.target.value })}
+                  >
+                    {Object.entries(PLAN_LABELS).map(([k, lbl]) => (
+                      <option key={k} value={k}>
+                        {lbl}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Thời hạn bản quyền
+                  <input
+                    type="date"
+                    value={createForm.licenseExpiresAt}
+                    onChange={(e) => setCreateForm({ ...createForm, licenseExpiresAt: e.target.value })}
+                    title="Để trống nếu cấp không giới hạn thời gian"
+                  />
+                </label>
+
+                <label>
+                  Tối đa Học sinh *
+                  <input
+                    type="number"
+                    required
+                    min={10}
+                    max={20000}
+                    value={createForm.maxStudents}
+                    onChange={(e) => setCreateForm({ ...createForm, maxStudents: e.target.value })}
+                  />
+                </label>
+
+                <label>
+                  Tối đa Nhân sự *
+                  <input
+                    type="number"
+                    required
+                    min={5}
+                    max={5000}
+                    value={createForm.maxStaff}
+                    onChange={(e) => setCreateForm({ ...createForm, maxStaff: e.target.value })}
+                  />
+                </label>
+              </div>
+
+              <div className="sa-form-grid-3">
+                <label>
+                  Tên đăng nhập Admin trường *
+                  <input
+                    required
+                    name="new_school_admin_username"
+                    autoComplete="off"
+                    placeholder="VD: admin_hoanangcg"
+                    value={createForm.adminUsername}
+                    onChange={(e) =>
+                      setCreateForm({
+                        ...createForm,
+                        adminUsername: e.target.value.trim(),
+                        adminUsernameTouched: true
+                      })
+                    }
+                  />
+                </label>
+
+                <label>
+                  Họ tên người quản trị nhận bàn giao
+                  <input
+                    autoComplete="off"
+                    placeholder="VD: Nguyễn Thị Minh"
+                    value={createForm.adminFullName}
+                    onChange={(e) => setCreateForm({ ...createForm, adminFullName: e.target.value })}
+                  />
+                </label>
+
+                <label>
+                  Hạn mức Phân hiệu trực thuộc
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={createForm.maxCampuses}
+                    onChange={(e) => setCreateForm({ ...createForm, maxCampuses: e.target.value })}
+                  />
+                </label>
+              </div>
+
+              <label className="form-wide" style={{ display: 'block' }}>
+                Mật khẩu khởi tạo bàn giao cho Admin trường *
+                <div className="password-field-group">
+                  <input
+                    type={showCreatePass ? 'text' : 'password'}
+                    name="new_school_admin_password"
+                    autoComplete="new-password"
+                    required
+                    minLength={6}
+                    placeholder="Nhập tối thiểu 6 ký tự hoặc bấm Tạo mật khẩu mạnh"
+                    value={createForm.adminPassword}
+                    onChange={(e) => setCreateForm({ ...createForm, adminPassword: e.target.value })}
+                  />
+                  <button type="button" className="password-field-btn" onClick={() => setShowCreatePass((v) => !v)}>
+                    <Icon name={showCreatePass ? 'eyeOff' : 'eye'} size={15} /> {showCreatePass ? 'Ẩn' : 'Hiện'}
+                  </button>
+                  <button
+                    type="button"
+                    className="password-field-btn"
+                    onClick={() => {
+                      setCreateForm((prev) => ({ ...prev, adminPassword: generateRandomAdminPassword() }));
+                      setShowCreatePass(true);
+                    }}
+                  >
+                    Tạo mật khẩu mới
+                  </button>
+                </div>
+              </label>
+            </div>
+
+            {/* KHỐI 3: CẤP QUYỀN QUẢN LÝ CHO TRƯỜNG (Đầy đủ 16 quyền, rõ chức năng từng mục) */}
+            <div className="sa-form-section-card">
+              <div className="sa-form-section-head">
+                <strong>
+                  3. Quyền Quản lý &amp; Phân hệ cấp cho Trường ({createForm.enabledModules.length}/{moduleCatalog.length} quyền đang bật)
+                </strong>
+                <div className="sa-preset-bar">
+                  <button
+                    type="button"
+                    className="sa-preset-btn"
+                    onClick={() => setCreateForm((p) => ({ ...p, enabledModules: moduleCatalog.map((m) => m.key) }))}
+                  >
+                    Cấp đầy đủ 100% ({moduleCatalog.length}/{moduleCatalog.length})
+                  </button>
+                  <button
+                    type="button"
+                    className="sa-preset-btn"
+                    onClick={() => setCreateForm((p) => ({ ...p, enabledModules: [...BASIC_PRESET_MODULES] }))}
+                  >
+                    Gói Cơ bản (Lớp, HS, Điểm danh, Học phí)
+                  </button>
+                  <button
+                    type="button"
+                    className="sa-preset-btn"
+                    onClick={() => setCreateForm((p) => ({ ...p, enabledModules: [...ATTENDANCE_DEVICE_PRESET_MODULES] }))}
+                  >
+                    Gói Chuyên cần &amp; Máy chấm công
+                  </button>
+                </div>
+              </div>
+
+              {['Lớp học & Học sinh', 'An ninh, Bán trú & Chấm công', 'Nhân sự, Phân quyền & Tài chính', 'Điều hành Giám đốc & Tương tác Phụ huynh'].map(
+                (groupTitle) => {
+                  const groupItems = moduleCatalog.filter((m) => (m.group || 'Lớp học & Học sinh') === groupTitle);
+                  if (!groupItems.length) return null;
+                  return (
+                    <div key={groupTitle} className="sa-module-group-block">
+                      <div className="sa-module-group-title">
+                        <span>{groupTitle}</span>
+                        <span>
+                          {groupItems.filter((m) => createForm.enabledModules.includes(m.key)).length}/{groupItems.length} quyền
+                        </span>
+                      </div>
+                      <div className="superadmin-module-grid">
+                        {groupItems.map((mod) => {
+                          const checked = createForm.enabledModules.includes(mod.key);
+                          const fallbackMeta = DEFAULT_MODULE_CATALOG.find((d) => d.key === mod.key);
+                          return (
+                            <label
+                              key={mod.key}
+                              className={`superadmin-module-Option ${checked ? 'checked' : ''}`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleCreateModule(mod.key)}
+                              />
+                              <span>
+                                <strong>{mod.label}</strong>
+                                {(mod.desc || fallbackMeta?.desc) && (
+                                  <small className="sa-module-item-desc">{mod.desc || fallbackMeta?.desc}</small>
+                                )}
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </label>
-                </div>
-              </fieldset>
-
-              <fieldset className="student-allergy-fieldset form-wide">
-                <legend>Phân hệ chức năng cấp phép cho trường ({createForm.enabledModules.length}/{moduleCatalog.length})</legend>
-                <div className="superadmin-module-grid">
-                  {moduleCatalog.map((mod) => {
-                    const checked = createForm.enabledModules.includes(mod.key);
-                    return (
-                      <label
-                        key={mod.key}
-                        className={`superadmin-module-Option ${checked ? 'checked' : ''} ${mod.required ? 'locked' : ''}`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          disabled={mod.required}
-                          onChange={() => toggleCreateModule(mod.key, mod.required)}
-                        />
-                        <span>{mod.label}{mod.required ? ' (Bắt buộc)' : ''}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-              </fieldset>
+                  );
+                }
+              )}
             </div>
 
             <div className="account-modal-actions">
               <button type="button" className="button button-secondary" disabled={creating} onClick={() => setShowCreateModal(false)}>
-                Hủy
+                Hủy bỏ
               </button>
               <button type="submit" className="button button-primary" disabled={creating}>
-                {creating ? 'Đang khởi tạo...' : 'Tạo trường & Cấp tài khoản Admin'}
+                <Icon name="check" size={16} />
+                {creating ? 'Đang khởi tạo...' : 'Tạo trường & Bàn giao Tài khoản Admin'}
               </button>
             </div>
           </form>
@@ -1932,24 +2292,17 @@ export default function MultiSchoolManagement() {
         document.body
       )}
 
-      {/* MODAL CẤU HÌNH ĐỊNH DANH TRƯỜNG, HẠN MỨC, MODULE & ĐẶT LẠI ACCOUNT ADMIN TRƯỜNG */}
+      {/* MODAL CẤU HÌNH TRƯỜNG, GÓI BẢN QUYỀN, QUYỀN QUẢN LÝ LỚP & ĐẶT LẠI ACCOUNT ADMIN (Bấm ngoài KHÔNG tắt) */}
       {editingSchool && createPortal(
-        <div
-          className="account-modal-backdrop"
-          role="presentation"
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !savingEdit) setEditingSchool(null);
-          }}
-        >
+        <div className="account-modal-backdrop" role="presentation">
           <form
-            className="account-modal-card student-form"
-            style={{ width: 'min(840px, 96vw)' }}
+            className="account-modal-card student-form sa-modal-wide"
             autoComplete="off"
             onSubmit={handleSaveEdit}
           >
             <div className="account-modal-header">
               <div>
-                <p className="card-kicker">CẤU HÌNH CẤP TRƯỜNG, CẤP LẠI ACCOUNT ADMIN & PHÂN HỆ</p>
+                <p className="card-kicker">CẬP NHẬT THÔNG TIN TRƯỜNG, QUYỀN QUẢN LÝ &amp; ACCOUNT ADMIN</p>
                 <h2>{editingSchool.name} ({editingSchool.code})</h2>
               </div>
               <button
@@ -1963,156 +2316,273 @@ export default function MultiSchoolManagement() {
               </button>
             </div>
 
-            {editError && <div className="account-modal-error" role="alert"><Icon name="alertCircle" size={16} /><span>{editError}</span></div>}
+            {editError && (
+              <div className="account-modal-error" role="alert">
+                <Icon name="alertCircle" size={16} />
+                <span>{editError}</span>
+              </div>
+            )}
 
-            <div className="student-form-grid">
-              <label className="form-wide">
-                Tên trường pháp lý / hiển thị *
-                <input
-                  required
-                  autoComplete="off"
-                  value={editForm.name}
-                  onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
-                />
-              </label>
-              <label>
-                Mã cụm / Chuỗi trường
-                <input
-                  autoComplete="off"
-                  value={editForm.organizationCode}
-                  onChange={(e) => setEditForm({ ...editForm, organizationCode: e.target.value.toUpperCase() })}
-                />
-              </label>
-              <label>
-                Trạng thái hoạt động của trường
-                <select
-                  value={editForm.status}
-                  onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
-                >
-                  <option value="active">Đang hoạt động</option>
-                  <option value="suspended">Tạm ngưng hoạt động (Khóa truy cập)</option>
-                </select>
-              </label>
-              <label>
-                Email liên hệ chính thức
-                <input
-                  type="email"
-                  name="edit_school_office_email"
-                  autoComplete="off"
-                  value={editForm.contactEmail}
-                  onChange={(e) => setEditForm({ ...editForm, contactEmail: e.target.value })}
-                />
-              </label>
-              <label>
-                Hạn mức tối đa Phân hiệu được mở
-                <input
-                  type="number"
-                  min={1}
-                  max={100}
-                  value={editForm.maxCampuses}
-                  onChange={(e) => setEditForm({ ...editForm, maxCampuses: e.target.value })}
-                />
-              </label>
-              <label>
-                Hạn mức tối đa Học sinh toàn trường
-                <input
-                  type="number"
-                  min={10}
-                  max={20000}
-                  value={editForm.maxStudents}
-                  onChange={(e) => setEditForm({ ...editForm, maxStudents: e.target.value })}
-                />
-              </label>
-              <label>
-                Hạn mức tối đa Nhân sự
-                <input
-                  type="number"
-                  min={5}
-                  max={5000}
-                  value={editForm.maxStaff}
-                  onChange={(e) => setEditForm({ ...editForm, maxStaff: e.target.value })}
-                />
-              </label>
+            <div className="sa-form-section-card">
+              <div className="sa-form-section-head">
+                <strong>1. Thông tin Định danh, Liên hệ &amp; Trạng thái Hoạt động</strong>
+                <code style={{ fontSize: 12, color: '#1e3a8a', fontWeight: 700 }}>
+                  Webhook: /api/attendance/webhook/{editingSchool.code}
+                </code>
+              </div>
 
-              <fieldset className="student-allergy-fieldset form-wide">
-                <legend>Tài khoản Admin riêng của trường & Đường dẫn Webhook đồng bộ</legend>
-                <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 8, background: '#fff', border: '1px solid #cbd5e1', fontSize: 12.5 }}>
-                  Đường dẫn đồng bộ máy chấm công & điểm danh học sinh của trường:{' '}
-                  <code style={{ fontWeight: 700, color: '#1e3a8a' }}>
-                    {window.location.origin}/api/attendance/webhook/{editingSchool.code}
-                  </code>
+              <div className="student-form-grid" style={{ padding: 0 }}>
+                <label>
+                  Tên chính thức của Trường *
+                  <input
+                    required
+                    autoComplete="off"
+                    value={editForm.name}
+                    onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                  />
+                </label>
+
+                <label>
+                  Trạng thái cấp phép của trường
+                  <select
+                    value={editForm.status}
+                    onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
+                  >
+                    <option value="active">Đang hoạt động bình thường</option>
+                    <option value="suspended">Tạm ngưng truy cập toàn trường</option>
+                  </select>
+                </label>
+              </div>
+
+              <div className="sa-form-grid-3">
+                <label>
+                  Người đại diện / Hiệu trưởng
+                  <input
+                    autoComplete="off"
+                    value={editForm.representativeName}
+                    onChange={(e) => setEditForm({ ...editForm, representativeName: e.target.value })}
+                    placeholder="VD: Cô Nguyễn Thị Minh"
+                  />
+                </label>
+
+                <label>
+                  Số điện thoại / Hotline trường
+                  <input
+                    type="tel"
+                    autoComplete="off"
+                    value={editForm.contactPhone}
+                    onChange={(e) => setEditForm({ ...editForm, contactPhone: e.target.value })}
+                    placeholder="VD: 0912 345 678"
+                  />
+                </label>
+
+                <label>
+                  Email liên hệ chính thức
+                  <input
+                    type="email"
+                    name="edit_school_office_email"
+                    autoComplete="off"
+                    value={editForm.contactEmail}
+                    onChange={(e) => setEditForm({ ...editForm, contactEmail: e.target.value })}
+                  />
+                </label>
+              </div>
+
+              <label className="form-wide" style={{ display: 'block' }}>
+                Địa chỉ thực tế của trường
+                <input
+                  autoComplete="off"
+                  value={editForm.address}
+                  onChange={(e) => setEditForm({ ...editForm, address: e.target.value })}
+                  placeholder="Nhập địa chỉ cụ thể của trường học"
+                />
+              </label>
+            </div>
+
+            <div className="sa-form-section-card">
+              <div className="sa-form-section-head">
+                <strong>2. Gói Bản quyền, Hạn mức &amp; Tài khoản Admin riêng của Trường</strong>
+              </div>
+
+              <div className="sa-form-grid-4">
+                <label>
+                  Gói cấp phép
+                  <select
+                    value={editForm.subscriptionPlan}
+                    onChange={(e) => setEditForm({ ...editForm, subscriptionPlan: e.target.value })}
+                  >
+                    {Object.entries(PLAN_LABELS).map(([k, lbl]) => (
+                      <option key={k} value={k}>
+                        {lbl}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Thời hạn bản quyền
+                  <input
+                    type="date"
+                    value={editForm.licenseExpiresAt}
+                    onChange={(e) => setEditForm({ ...editForm, licenseExpiresAt: e.target.value })}
+                  />
+                </label>
+
+                <label>
+                  Tối đa Học sinh
+                  <input
+                    type="number"
+                    min={10}
+                    max={20000}
+                    value={editForm.maxStudents}
+                    onChange={(e) => setEditForm({ ...editForm, maxStudents: e.target.value })}
+                  />
+                </label>
+
+                <label>
+                  Tối đa Nhân sự
+                  <input
+                    type="number"
+                    min={5}
+                    max={5000}
+                    value={editForm.maxStaff}
+                    onChange={(e) => setEditForm({ ...editForm, maxStaff: e.target.value })}
+                  />
+                </label>
+              </div>
+
+              <div className="sa-form-grid-3">
+                <label>
+                  Tên đăng nhập Admin trường
+                  <input
+                    name="edit_school_admin_username"
+                    autoComplete="off"
+                    value={editForm.adminUsername}
+                    onChange={(e) => setEditForm({ ...editForm, adminUsername: e.target.value })}
+                  />
+                </label>
+
+                <label>
+                  Họ tên Admin trường
+                  <input
+                    autoComplete="off"
+                    value={editForm.adminFullName}
+                    onChange={(e) => setEditForm({ ...editForm, adminFullName: e.target.value })}
+                  />
+                </label>
+
+                <label>
+                  Hạn mức Phân hiệu
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={editForm.maxCampuses}
+                    onChange={(e) => setEditForm({ ...editForm, maxCampuses: e.target.value })}
+                  />
+                </label>
+              </div>
+
+              <label className="form-wide" style={{ display: 'block' }}>
+                Cấp mới / Đặt lại mật khẩu Admin trường (để trống nếu giữ nguyên)
+                <div className="password-field-group">
+                  <input
+                    type={showEditPass ? 'text' : 'password'}
+                    name="edit_school_admin_new_password"
+                    autoComplete="new-password"
+                    placeholder="Nhập mật khẩu mới (>= 6 ký tự) nếu cần cấp lại"
+                    value={editForm.newAdminPassword}
+                    onChange={(e) => setEditForm({ ...editForm, newAdminPassword: e.target.value })}
+                  />
+                  <button type="button" className="password-field-btn" onClick={() => setShowEditPass((v) => !v)}>
+                    <Icon name={showEditPass ? 'eyeOff' : 'eye'} size={15} /> {showEditPass ? 'Ẩn' : 'Hiện'}
+                  </button>
+                  <button
+                    type="button"
+                    className="password-field-btn"
+                    onClick={() => {
+                      setEditForm((prev) => ({ ...prev, newAdminPassword: generateRandomAdminPassword() }));
+                      setShowEditPass(true);
+                    }}
+                  >
+                    Tạo MK mới
+                  </button>
                 </div>
-                <div className="student-form-grid" style={{ padding: 0 }}>
-                  <label>
-                    Tên đăng nhập Admin trường
-                    <input
-                      name="edit_school_admin_username"
-                      autoComplete="off"
-                      value={editForm.adminUsername}
-                      onChange={(e) => setEditForm({ ...editForm, adminUsername: e.target.value })}
-                    />
-                  </label>
-                  <label>
-                    Cấp mới / Đặt lại mật khẩu Admin trường (để trống nếu giữ nguyên)
-                    <div className="password-field-group">
-                      <input
-                        type={showEditPass ? 'text' : 'password'}
-                        name="edit_school_admin_new_password"
-                        autoComplete="new-password"
-                        placeholder="Nhập mật khẩu mới (>= 6 ký tự)"
-                        value={editForm.newAdminPassword}
-                        onChange={(e) => setEditForm({ ...editForm, newAdminPassword: e.target.value })}
-                      />
-                      <button type="button" className="password-field-btn" onClick={() => setShowEditPass((v) => !v)}>
-                        <Icon name={showEditPass ? 'eyeOff' : 'eye'} size={15} /> {showEditPass ? 'Ẩn' : 'Hiện'}
-                      </button>
-                      <button
-                        type="button"
-                        className="password-field-btn"
-                        onClick={() => {
-                          setEditForm((prev) => ({ ...prev, newAdminPassword: generateRandomAdminPassword() }));
-                          setShowEditPass(true);
-                        }}
-                      >
-                        Tạo MK mới
-                      </button>
+              </label>
+            </div>
+
+            <div className="sa-form-section-card">
+              <div className="sa-form-section-head">
+                <strong>
+                  3. Bật / Tắt Quyền Quản lý của Trường ({editForm.enabledModules.length}/{moduleCatalog.length} quyền đang bật)
+                </strong>
+                <div className="sa-preset-bar">
+                  <button
+                    type="button"
+                    className="sa-preset-btn"
+                    onClick={() => setEditForm((p) => ({ ...p, enabledModules: moduleCatalog.map((m) => m.key) }))}
+                  >
+                    Bật tất cả ({moduleCatalog.length}/{moduleCatalog.length})
+                  </button>
+                  <button
+                    type="button"
+                    className="sa-preset-btn"
+                    onClick={() => setEditForm((p) => ({ ...p, enabledModules: [...BASIC_PRESET_MODULES] }))}
+                  >
+                    Gói Cơ bản
+                  </button>
+                </div>
+              </div>
+
+              {['Lớp học & Học sinh', 'An ninh, Bán trú & Chấm công', 'Nhân sự, Phân quyền & Tài chính', 'Điều hành Giám đốc & Tương tác Phụ huynh'].map(
+                (groupTitle) => {
+                  const groupItems = moduleCatalog.filter((m) => (m.group || 'Lớp học & Học sinh') === groupTitle);
+                  if (!groupItems.length) return null;
+                  return (
+                    <div key={groupTitle} className="sa-module-group-block">
+                      <div className="sa-module-group-title">
+                        <span>{groupTitle}</span>
+                        <span>
+                          {groupItems.filter((m) => editForm.enabledModules.includes(m.key)).length}/{groupItems.length} quyền
+                        </span>
+                      </div>
+                      <div className="superadmin-module-grid">
+                        {groupItems.map((mod) => {
+                          const checked = editForm.enabledModules.includes(mod.key);
+                          const fallbackMeta = DEFAULT_MODULE_CATALOG.find((d) => d.key === mod.key);
+                          return (
+                            <label
+                              key={mod.key}
+                              className={`superadmin-module-Option ${checked ? 'checked' : ''}`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleEditModule(mod.key)}
+                              />
+                              <span>
+                                <strong>{mod.label}</strong>
+                                {(mod.desc || fallbackMeta?.desc) && (
+                                  <small className="sa-module-item-desc">{mod.desc || fallbackMeta?.desc}</small>
+                                )}
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </label>
-                </div>
-              </fieldset>
-
-              <fieldset className="student-allergy-fieldset form-wide">
-                <legend>
-                  Bật / Tắt Phân hệ chức năng cho trường ({editForm.enabledModules.length}/{moduleCatalog.length})
-                </legend>
-                <div className="superadmin-module-grid">
-                  {moduleCatalog.map((mod) => {
-                    const checked = editForm.enabledModules.includes(mod.key);
-                    return (
-                      <label
-                        key={mod.key}
-                        className={`superadmin-module-Option ${checked ? 'checked' : ''} ${mod.required ? 'locked' : ''}`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          disabled={mod.required}
-                          onChange={() => toggleEditModule(mod.key, mod.required)}
-                        />
-                        <span>{mod.label}{mod.required ? ' (Cốt lõi)' : ''}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-              </fieldset>
+                  );
+                }
+              )}
             </div>
 
             <div className="account-modal-actions">
               <button type="button" className="button button-secondary" disabled={savingEdit} onClick={() => setEditingSchool(null)}>
-                Hủy
+                Hủy bỏ
               </button>
               <button type="submit" className="button button-primary" disabled={savingEdit}>
-                {savingEdit ? 'Đang lưu...' : 'Lưu cấu hình & Tài khoản trường'}
+                <Icon name="check" size={16} />
+                {savingEdit ? 'Đang lưu...' : 'Lưu cấu hình & Quyền của Trường'}
               </button>
             </div>
           </form>

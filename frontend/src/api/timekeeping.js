@@ -40,6 +40,8 @@ export const pullTimekeepingDeviceUsers = (id, overwriteExistingFaces = true) =>
   api.post(`/timekeeping/devices/${id}/pull-users`, { overwriteExistingFaces });
 export const linkPulledTimekeepingUser = (deviceId, payload) =>
   api.post(`/timekeeping/devices/${deviceId}/link-pulled-user`, payload);
+export const importPulledUsersFromDeviceToWeb = (deviceId, payload = {}) =>
+  api.post(`/timekeeping/devices/${deviceId}/import-to-web`, payload);
 
 export const pushSmartSyncToDevice = (id, payload = {}) =>
   api.post(`/timekeeping/devices/${id}/push-sync`, payload);

@@ -194,7 +194,7 @@ export default function BiometricFaceCameraModal({
   if (!target) return null;
 
   return createPortal(
-    <div className="hik-modal-backdrop" onClick={onClose} role="presentation">
+    <div className="hik-modal-backdrop" role="presentation">
       <div className="hik-camera-modal" onClick={(e) => e.stopPropagation()}>
         <div className="hik-camera-header">
           <div className="hik-camera-title-wrap">
