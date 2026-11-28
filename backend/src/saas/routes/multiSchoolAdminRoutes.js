@@ -13,6 +13,7 @@ const {
   getSuperAdminMe,
   changeSuperAdminPassword,
   listAllSchoolsOverview,
+  getPlatformGrowthReportHandler,
   getSchoolDetailedReportHandler,
   getSystemSettingsHandler,
   updateSystemSettingsHandler,
@@ -35,6 +36,7 @@ router.use(platformAuthMiddleware);
 router.get('/me', getSuperAdminMe);
 router.post('/me/password', authLimiter, changeSuperAdminPassword);
 router.get('/schools', listAllSchoolsOverview);
+router.get('/growth-report', getPlatformGrowthReportHandler);
 router.get('/schools/:id/report', getSchoolDetailedReportHandler);
 router.get('/schools/:id/accounts', listSchoolAccountsHandler);
 router.post('/schools/:id/accounts', requirePlatformRole(['platform_lead']), createSchoolAccountHandler);

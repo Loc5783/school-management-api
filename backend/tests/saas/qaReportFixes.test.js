@@ -1574,5 +1574,61 @@ describe('QA & Security Evaluation Fixes — Full Replica Set Verification (phas
     expect(gzipRes.headers['content-encoding']).toBe('gzip');
     expect(gzipRes.body.success).toBe(true);
   });
+
+  test('16. SaaS Vendor Growth Analytics, Per-Student Annual Pricing & Add-on Modules (Zero School Internal Tuition Exposure)', async () => {
+    const superLogin = await request(app)
+      .post('/api/auth/login')
+      .send({ schoolCode: '', username: 'admin', password: '123456' });
+    expect(superLogin.status).toBe(200);
+    const superToken = superLogin.body.token;
+
+    // 16.1 Cập nhật bảng giá SaaS: 150.000đ/HS/năm + Add-on Dinh dưỡng Đầu bếp (40.000đ/HS/năm) + Add-on Đón trẻ QR (1.500.000đ/trường/năm)
+    const updatePricingRes = await request(app)
+      .put('/api/multi-school/settings')
+      .set('Authorization', `Bearer ${superToken}`)
+      .send({
+        saasPricing: {
+          basePricePerStudentYear: 150000,
+          minBillableStudentsPerSchool: 20,
+          addonCatalog: [
+            { moduleKey: 'nutrition', pricingMode: 'per_student_year', price: 40000 },
+            { moduleKey: 'pickups', pricingMode: 'flat_school_year', price: 1500000 }
+          ]
+        }
+      });
+    expect(updatePricingRes.status).toBe(200);
+    expect(updatePricingRes.body.data.saasPricing.basePricePerStudentYear).toBe(150000);
+
+    // 16.2 Dashboard SuperAdmin không trả về học phí nội bộ của trường và tính đúng ARR + Add-on
+    const overviewRes = await request(app)
+      .get('/api/multi-school/schools')
+      .set('Authorization', `Bearer ${superToken}`);
+    expect(overviewRes.status).toBe(200);
+    const { summary, addonAdoption, schools } = overviewRes.body.data;
+    expect(summary.totalBilled).toBeUndefined();
+    expect(summary.totalCollected).toBeUndefined();
+    expect(summary.totalContractedArr).toBeGreaterThan(0);
+    expect(Array.isArray(addonAdoption)).toBe(true);
+    const nutritionAddon = addonAdoption.find((a) => a.moduleKey === 'nutrition');
+    expect(nutritionAddon).toBeTruthy();
+    expect(nutritionAddon.price).toBe(40000);
+    expect(schools[0].finance).toBeUndefined();
+    expect(schools[0].saasBilling.billableStudents).toBeGreaterThanOrEqual(20);
+
+    // 16.3 API Báo cáo Tăng trưởng theo các khung thời gian động (7d, 30d, 6m, 12m)
+    for (const rangeKey of ['7d', '30d', '6m', '12m']) {
+      const growthRes = await request(app)
+        .get('/api/multi-school/growth-report')
+        .query({ range: rangeKey })
+        .set('Authorization', `Bearer ${superToken}`);
+      expect(growthRes.status).toBe(200);
+      expect(growthRes.body.data.range).toBe(rangeKey);
+      expect(growthRes.body.data.timeline.length).toBeGreaterThanOrEqual(6);
+      const latestBucket = growthRes.body.data.timeline[growthRes.body.data.timeline.length - 1];
+      expect(latestBucket.cumulativeSchools).toBeGreaterThanOrEqual(1);
+      expect(latestBucket.cumulativeAccounts).toBeGreaterThanOrEqual(1);
+      expect(latestBucket.estimatedArr).toBeGreaterThan(0);
+    }
+  });
 });
 

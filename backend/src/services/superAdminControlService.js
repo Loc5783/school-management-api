@@ -31,9 +31,6 @@ const AttendanceRecord = require('../models/zone2_hr/AttendanceRecord');
 const AttendanceAuditLog = require('../models/zone2_hr/AttendanceAuditLog');
 const TimekeepingDevice = require('../models/zone2_hr/TimekeepingDevice');
 const TimekeepingWebhookLog = require('../models/zone2_hr/TimekeepingWebhookLog');
-const Payroll = require('../models/zone2_hr/Payroll');
-const TuitionFee = require('../models/zone4_finance/TuitionFee');
-const OperatingExpense = require('../models/zone4_finance/OperatingExpense');
 const FoodSample = require('../models/zone5_nutrition/FoodSample');
 const Menu = require('../models/zone5_nutrition/Menu');
 const { ensureAllPermissions } = require('./defaultAdminBootstrapService');
@@ -46,6 +43,9 @@ const ALL_MODULE_DEFINITIONS = [
     group: 'Lớp học & Học sinh',
     label: 'Quản lý Lớp học của trường',
     desc: 'Cho phép trường tự tạo, sửa, xóa lớp học, cấu hình nhóm tuổi, sĩ số & phân công giáo viên đứng lớp',
+    tier: 'core',
+    defaultPricingMode: 'included',
+    defaultAddonPrice: 0,
     required: false
   },
   {
@@ -53,6 +53,9 @@ const ALL_MODULE_DEFINITIONS = [
     group: 'Lớp học & Học sinh',
     label: 'Quản lý Hồ sơ & Y tế Học sinh',
     desc: 'Tiếp nhận học sinh mới, nhập Excel, theo dõi dị ứng, sức khỏe & điều chuyển lớp trong trường',
+    tier: 'core',
+    defaultPricingMode: 'included',
+    defaultAddonPrice: 0,
     required: false
   },
   {
@@ -60,6 +63,9 @@ const ALL_MODULE_DEFINITIONS = [
     group: 'Lớp học & Học sinh',
     label: 'Điểm danh Lớp & Đơn xin nghỉ',
     desc: 'Điểm danh đón/trả trẻ hằng ngày, thống kê vắng mặt & duyệt đơn xin nghỉ phép',
+    tier: 'core',
+    defaultPricingMode: 'included',
+    defaultAddonPrice: 0,
     required: false
   },
   {
@@ -67,6 +73,9 @@ const ALL_MODULE_DEFINITIONS = [
     group: 'Lớp học & Học sinh',
     label: 'Sổ chăm sóc bé hằng ngày',
     desc: 'Cập nhật tình hình ăn, ngủ, vệ sinh, nhận xét cuối ngày gửi cho Phụ huynh',
+    tier: 'addon',
+    defaultPricingMode: 'per_student_year',
+    defaultAddonPrice: 15000,
     required: false
   },
   {
@@ -74,6 +83,9 @@ const ALL_MODULE_DEFINITIONS = [
     group: 'An ninh, Bán trú & Chấm công',
     label: 'Đón trả trẻ & Xác thực Mã QR',
     desc: 'Quản lý người đón hợp lệ, cấp mã QR đón trẻ & đối chiếu an toàn bàn giao',
+    tier: 'addon',
+    defaultPricingMode: 'per_student_year',
+    defaultAddonPrice: 20000,
     required: false
   },
   {
@@ -81,13 +93,19 @@ const ALL_MODULE_DEFINITIONS = [
     group: 'An ninh, Bán trú & Chấm công',
     label: 'An ninh Trực cổng & Khách ra vào',
     desc: 'Sổ trực cổng bảo vệ, ghi nhận khách thăm, giao nhận thực phẩm & sự cố an ninh',
+    tier: 'addon',
+    defaultPricingMode: 'flat_school_year',
+    defaultAddonPrice: 1200000,
     required: false
   },
   {
     key: 'nutrition',
     group: 'An ninh, Bán trú & Chấm công',
     label: 'Bếp ăn Bán trú, Thực đơn & Lưu mẫu 24h',
-    desc: 'Chốt suất nấu theo điểm danh thực tế, thực đơn tuần, kho thực phẩm & lưu mẫu 24h',
+    desc: 'Chốt suất nấu theo điểm danh thực tế, thực đơn tuần, kho thực phẩm & lưu mẫu 24h cho Đầu bếp',
+    tier: 'addon',
+    defaultPricingMode: 'per_student_year',
+    defaultAddonPrice: 30000,
     required: false
   },
   {
@@ -95,6 +113,9 @@ const ALL_MODULE_DEFINITIONS = [
     group: 'An ninh, Bán trú & Chấm công',
     label: 'Máy chấm công Khuôn mặt & Cầu nối LAN',
     desc: 'Kết nối máy chấm công Hikvision tại trường, kéo/đẩy ảnh khuôn mặt 2 chiều & Webhook',
+    tier: 'addon',
+    defaultPricingMode: 'flat_school_year',
+    defaultAddonPrice: 2400000,
     required: false
   },
   {
@@ -102,6 +123,9 @@ const ALL_MODULE_DEFINITIONS = [
     group: 'Nhân sự, Phân quyền & Tài chính',
     label: 'Cấp phát Tài khoản & Phân quyền nội bộ',
     desc: 'Cho phép trường tự cấp tài khoản Hiệu trưởng, Giáo viên, Kế toán, HR, Bếp, Nhân viên & Phụ huynh',
+    tier: 'core',
+    defaultPricingMode: 'included',
+    defaultAddonPrice: 0,
     required: false
   },
   {
@@ -109,6 +133,9 @@ const ALL_MODULE_DEFINITIONS = [
     group: 'Nhân sự, Phân quyền & Tài chính',
     label: 'Hồ sơ Nhân sự, Phân ca & Bảng lương',
     desc: 'Quản lý hợp đồng lao động, phân công ca trực/dạy thay, đơn nghỉ phép & tính lương tháng',
+    tier: 'addon',
+    defaultPricingMode: 'flat_school_year',
+    defaultAddonPrice: 1800000,
     required: false
   },
   {
@@ -116,6 +143,9 @@ const ALL_MODULE_DEFINITIONS = [
     group: 'Nhân sự, Phân quyền & Tài chính',
     label: 'Thu Học phí, Kế toán & Sổ quỹ',
     desc: 'Thiết lập biểu phí, phát hành hóa đơn, gạch nợ, hoàn tiền ăn, chi vận hành & đối soát sổ quỹ',
+    tier: 'addon',
+    defaultPricingMode: 'per_student_year',
+    defaultAddonPrice: 25000,
     required: false
   },
   {
@@ -123,6 +153,9 @@ const ALL_MODULE_DEFINITIONS = [
     group: 'Nhân sự, Phân quyền & Tài chính',
     label: 'Cơ sở vật chất & Mua sắm vật tư',
     desc: 'Quản lý danh mục tài sản lớp học/bếp, đề xuất mua sắm học cụ & theo dõi bảo trì',
+    tier: 'addon',
+    defaultPricingMode: 'flat_school_year',
+    defaultAddonPrice: 1000000,
     required: false
   },
   {
@@ -130,6 +163,9 @@ const ALL_MODULE_DEFINITIONS = [
     group: 'Điều hành Giám đốc & Tương tác Phụ huynh',
     label: 'Sổ điều hành Giám đốc & Báo cáo tổng hợp',
     desc: 'Bảng điều hành Hiệu trưởng, giao việc bộ phận, chỉ đạo nội bộ & báo cáo toàn trường',
+    tier: 'core',
+    defaultPricingMode: 'included',
+    defaultAddonPrice: 0,
     required: false
   },
   {
@@ -137,6 +173,9 @@ const ALL_MODULE_DEFINITIONS = [
     group: 'Điều hành Giám đốc & Tương tác Phụ huynh',
     label: 'Tin nhắn trực tiếp Giáo viên – Phụ huynh',
     desc: 'Kênh nhắn tin trao đổi trực tiếp 1-1 giữa giáo viên lớp và phụ huynh học sinh',
+    tier: 'addon',
+    defaultPricingMode: 'per_student_year',
+    defaultAddonPrice: 15000,
     required: false
   },
   {
@@ -144,6 +183,9 @@ const ALL_MODULE_DEFINITIONS = [
     group: 'Điều hành Giám đốc & Tương tác Phụ huynh',
     label: 'Phản hồi Phụ huynh & Duyệt sửa hồ sơ',
     desc: 'Tiếp nhận góp ý từ phụ huynh và phê duyệt yêu cầu điều chỉnh thông tin học sinh',
+    tier: 'addon',
+    defaultPricingMode: 'per_student_year',
+    defaultAddonPrice: 0,
     required: false
   },
   {
@@ -151,11 +193,20 @@ const ALL_MODULE_DEFINITIONS = [
     group: 'Điều hành Giám đốc & Tương tác Phụ huynh',
     label: 'Bảng tin & Thông báo Nội bộ trường',
     desc: 'Đăng thông báo nội bộ toàn trường và gửi nhắc việc qua chuông thông báo thời gian thực',
+    tier: 'core',
+    defaultPricingMode: 'included',
+    defaultAddonPrice: 0,
     required: false
   }
 ];
 
 const ALL_ENABLED_MODULES = ALL_MODULE_DEFINITIONS.map((m) => m.key);
+const DEFAULT_CORE_MODULES = ALL_MODULE_DEFINITIONS.filter((m) => m.tier === 'core').map((m) => m.key);
+const DEFAULT_ADDON_CATALOG = ALL_MODULE_DEFINITIONS.filter((m) => m.tier === 'addon').map((m) => ({
+  moduleKey: m.key,
+  pricingMode: m.defaultPricingMode === 'flat_school_year' ? 'flat_school_year' : 'per_student_year',
+  price: m.defaultAddonPrice || 0
+}));
 const REQUIRED_CORE_MODULES = [];
 
 const SETTINGS_CACHE_TTL_MS = 15 * 1000;
@@ -198,7 +249,152 @@ const DEFAULT_SYSTEM_SETTINGS = {
     minPasswordLength: 6,
     antiBotShieldEnabled: true
   },
+  saasPricing: {
+    basePricePerStudentYear: 120000,
+    minBillableStudentsPerSchool: 30,
+    coreModules: DEFAULT_CORE_MODULES,
+    addonCatalog: DEFAULT_ADDON_CATALOG
+  },
   updatedBy: 'system'
+};
+
+/**
+ * Chuẩn hóa cấu hình Bảng giá Bản quyền Phần mềm SaaS (Gói Nền theo Học sinh/năm + Các Gói Add-on).
+ *
+ * @param {object | undefined} rawPricing
+ * @returns {object}
+ */
+const normalizeSaasPricingConfig = (rawPricing = {}) => {
+  const basePrice = Number.isFinite(Number(rawPricing?.basePricePerStudentYear))
+    ? Math.max(0, Math.min(50000000, Math.round(Number(rawPricing.basePricePerStudentYear))))
+    : DEFAULT_SYSTEM_SETTINGS.saasPricing.basePricePerStudentYear;
+
+  const minStudents = Number.isFinite(Number(rawPricing?.minBillableStudentsPerSchool))
+    ? Math.max(0, Math.min(5000, Math.round(Number(rawPricing.minBillableStudentsPerSchool))))
+    : DEFAULT_SYSTEM_SETTINGS.saasPricing.minBillableStudentsPerSchool;
+
+  const rawAddonMap = new Map(
+    (Array.isArray(rawPricing?.addonCatalog) ? rawPricing.addonCatalog : []).map((item) => [
+      String(item?.moduleKey || '').trim(),
+      item
+    ])
+  );
+
+  const addonCatalog = ALL_MODULE_DEFINITIONS.filter((m) => m.tier === 'addon').map((mod) => {
+    const saved = rawAddonMap.get(mod.key);
+    const mode = saved?.pricingMode === 'flat_school_year' || saved?.pricingMode === 'per_student_year'
+      ? saved.pricingMode
+      : (mod.defaultPricingMode === 'flat_school_year' ? 'flat_school_year' : 'per_student_year');
+    const price = saved && Number.isFinite(Number(saved.price))
+      ? Math.max(0, Math.min(500000000, Math.round(Number(saved.price))))
+      : (mod.defaultAddonPrice || 0);
+
+    return {
+      moduleKey: mod.key,
+      label: mod.label,
+      group: mod.group,
+      desc: mod.desc,
+      pricingMode: mode,
+      price
+    };
+  });
+
+  return {
+    basePricePerStudentYear: basePrice,
+    minBillableStudentsPerSchool: minStudents,
+    coreModules: [...DEFAULT_CORE_MODULES],
+    addonCatalog
+  };
+};
+
+/**
+ * Tính toán chi tiết Phí bản quyền phần mềm SaaS theo năm (ARR) và tháng (MRR) cho 1 đơn vị trường.
+ * Công thức:
+ * - Sĩ số tính phí = max(sĩ số đang theo học thực tế, mức tối thiểu cam kết)
+ * - Phí Gói Nền/năm = Sĩ số tính phí × Đơn giá nền/HS/năm (hỗ trợ giá riêng từng trường)
+ * - Phí Add-on/năm = Tổng các Add-on trường đang kích hoạt (cộng theo đ/HS/năm hoặc đ/trường/năm)
+ * - Tổng sau chiết khấu = (Phí Gói Nền + Phí Add-on) × (1 - % chiết khấu hợp đồng)
+ */
+const calculateSchoolSaasBilling = (tenant, actualEnrolledStudents, enabledModules, saasPricingConfig) => {
+  const pricing = normalizeSaasPricingConfig(saasPricingConfig);
+  const custom = tenant?.saasBilling || {};
+  const actualStudents = Math.max(0, Number(actualEnrolledStudents) || 0);
+
+  const useCustomBasePrice = Boolean(custom.useCustomBasePrice && custom.customBasePricePerStudentYear != null);
+  const effectiveBasePrice = useCustomBasePrice
+    ? Math.max(0, Math.round(Number(custom.customBasePricePerStudentYear) || 0))
+    : pricing.basePricePerStudentYear;
+
+  const useCustomMinStudents = Boolean(custom.useCustomMinStudents && custom.customMinBillableStudents != null);
+  const effectiveMinStudents = useCustomMinStudents
+    ? Math.max(0, Math.round(Number(custom.customMinBillableStudents) || 0))
+    : pricing.minBillableStudentsPerSchool;
+
+  const billableStudents = Math.max(actualStudents, effectiveMinStudents);
+  const coreAnnualAmount = billableStudents * effectiveBasePrice;
+
+  const enabledSet = new Set(Array.isArray(enabledModules) ? enabledModules : ALL_ENABLED_MODULES);
+  const activeAddons = [];
+  let perStudentAddonAnnualAmount = 0;
+  let flatAddonAnnualAmount = 0;
+
+  for (const addon of pricing.addonCatalog) {
+    if (!enabledSet.has(addon.moduleKey)) continue;
+    const annualAmount = addon.pricingMode === 'flat_school_year'
+      ? addon.price
+      : billableStudents * addon.price;
+    if (addon.pricingMode === 'flat_school_year') {
+      flatAddonAnnualAmount += annualAmount;
+    } else {
+      perStudentAddonAnnualAmount += annualAmount;
+    }
+    activeAddons.push({
+      moduleKey: addon.moduleKey,
+      label: addon.label,
+      pricingMode: addon.pricingMode,
+      unitPrice: addon.price,
+      annualAmount
+    });
+  }
+
+  const addonAnnualAmount = perStudentAddonAnnualAmount + flatAddonAnnualAmount;
+  const subtotalAnnualAmount = coreAnnualAmount + addonAnnualAmount;
+  const discountPercent = Math.min(100, Math.max(0, Number(custom.discountPercent) || 0));
+  const discountAmount = Math.round((subtotalAnnualAmount * discountPercent) / 100);
+  const netAnnualAmount = Math.max(0, subtotalAnnualAmount - discountAmount);
+
+  const isTrial = (tenant?.subscriptionPlan || 'professional') === 'trial';
+  const isActive = (tenant?.status || 'active') === 'active';
+  const contractedArr = isActive && !isTrial ? netAnnualAmount : 0;
+  const potentialTrialArr = isActive && isTrial ? netAnnualAmount : 0;
+  const estimatedMrr = Math.round(contractedArr / 12);
+
+  return {
+    actualStudents,
+    effectiveMinStudents,
+    billableStudents,
+    effectiveBasePrice,
+    useCustomBasePrice,
+    customBasePricePerStudentYear: custom.customBasePricePerStudentYear ?? null,
+    useCustomMinStudents,
+    customMinBillableStudents: custom.customMinBillableStudents ?? null,
+    discountPercent,
+    discountAmount,
+    coreAnnualAmount,
+    perStudentAddonAnnualAmount,
+    flatAddonAnnualAmount,
+    addonAnnualAmount,
+    subtotalAnnualAmount,
+    netAnnualAmount,
+    contractedArr,
+    potentialTrialArr,
+    estimatedMrr,
+    isTrial,
+    activeAddons,
+    activeAddonCount: activeAddons.length,
+    activeCoreCount: pricing.coreModules.filter((k) => enabledSet.has(k)).length,
+    billingNote: custom.billingNote || ''
+  };
 };
 
 /**
@@ -246,7 +442,10 @@ const getSystemSettings = async ({ bypassCache = false } = {}) => {
 
   let doc = await SystemSetting.findOne({ key: 'GLOBAL_CONFIG' }).select('-connectorBridgeSecurity').lean();
   if (!doc) {
-    doc = { ...DEFAULT_SYSTEM_SETTINGS };
+    doc = {
+      ...DEFAULT_SYSTEM_SETTINGS,
+      saasPricing: normalizeSaasPricingConfig(DEFAULT_SYSTEM_SETTINGS.saasPricing)
+    };
   } else {
     doc = {
       ...DEFAULT_SYSTEM_SETTINGS,
@@ -255,7 +454,8 @@ const getSystemSettings = async ({ bypassCache = false } = {}) => {
       systemBanner: { ...DEFAULT_SYSTEM_SETTINGS.systemBanner, ...(doc.systemBanner || {}) },
       maintenanceMode: { ...DEFAULT_SYSTEM_SETTINGS.maintenanceMode, ...(doc.maintenanceMode || {}) },
       preschoolStandards: { ...DEFAULT_SYSTEM_SETTINGS.preschoolStandards, ...(doc.preschoolStandards || {}) },
-      securityPolicy: { ...DEFAULT_SYSTEM_SETTINGS.securityPolicy, ...(doc.securityPolicy || {}) }
+      securityPolicy: { ...DEFAULT_SYSTEM_SETTINGS.securityPolicy, ...(doc.securityPolicy || {}) },
+      saasPricing: normalizeSaasPricingConfig(doc.saasPricing)
     };
   }
 
@@ -439,6 +639,28 @@ const updateSystemSettings = async (payload = {}, actor) => {
     }
   }
 
+  let saasPricingToSave = normalizeSaasPricingConfig(current.saasPricing);
+  if (payload.saasPricing && typeof payload.saasPricing === 'object') {
+    const rawSp = payload.saasPricing;
+    if (rawSp.basePricePerStudentYear != null) {
+      const bp = Number(rawSp.basePricePerStudentYear);
+      if (!Number.isFinite(bp) || bp < 0 || bp > 50000000) {
+        throw Object.assign(new Error('Đơn giá bản quyền nền trên mỗi học sinh/năm phải từ 0 đến 50.000.000 đ'), { statusCode: 422 });
+      }
+    }
+    if (rawSp.minBillableStudentsPerSchool != null) {
+      const minS = Number(rawSp.minBillableStudentsPerSchool);
+      if (!Number.isFinite(minS) || minS < 0 || minS > 5000) {
+        throw Object.assign(new Error('Số học sinh tính phí tối thiểu mỗi trường phải từ 0 đến 5.000'), { statusCode: 422 });
+      }
+    }
+    saasPricingToSave = normalizeSaasPricingConfig({
+      basePricePerStudentYear: rawSp.basePricePerStudentYear ?? saasPricingToSave.basePricePerStudentYear,
+      minBillableStudentsPerSchool: rawSp.minBillableStudentsPerSchool ?? saasPricingToSave.minBillableStudentsPerSchool,
+      addonCatalog: Array.isArray(rawSp.addonCatalog) ? rawSp.addonCatalog : saasPricingToSave.addonCatalog
+    });
+  }
+
   const updated = await SystemSetting.findOneAndUpdate(
     { key: 'GLOBAL_CONFIG' },
     {
@@ -448,6 +670,16 @@ const updateSystemSettings = async (payload = {}, actor) => {
         maintenanceMode,
         preschoolStandards,
         securityPolicy,
+        saasPricing: {
+          basePricePerStudentYear: saasPricingToSave.basePricePerStudentYear,
+          minBillableStudentsPerSchool: saasPricingToSave.minBillableStudentsPerSchool,
+          coreModules: saasPricingToSave.coreModules,
+          addonCatalog: saasPricingToSave.addonCatalog.map((a) => ({
+            moduleKey: a.moduleKey,
+            pricingMode: a.pricingMode,
+            price: a.price
+          }))
+        },
         updatedBy: actor?.username || 'superadmin'
       }
     },
@@ -467,12 +699,16 @@ const updateSystemSettings = async (payload = {}, actor) => {
         bannerEnabled: systemBanner.enabled,
         maintenanceEnabled: maintenanceMode.enabled,
         defaultSchoolYear: preschoolStandards.defaultSchoolYear,
-        antiBotShieldEnabled: securityPolicy.antiBotShieldEnabled
+        antiBotShieldEnabled: securityPolicy.antiBotShieldEnabled,
+        basePricePerStudentYear: saasPricingToSave.basePricePerStudentYear
       }
     });
   }
 
-  return updated;
+  return {
+    ...updated,
+    saasPricing: saasPricingToSave
+  };
 };
 
 /**
@@ -567,12 +803,6 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
     todayStudentAtt,
     monthStudentAtt,
     todayStaffAtt,
-    financeStats,
-    tuitionByPeriodRaw,
-    expenseStats,
-    expenseByMonthRaw,
-    payrollStats,
-    payrollByPeriodRaw,
     foodSampleStats,
     menuStats,
     deviceStats,
@@ -727,62 +957,6 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
         }
       }
     ]),
-    TuitionFee.aggregate([
-      { $match: { tenantId: { $ne: null }, status: { $ne: 'cancelled' } } },
-      {
-        $group: {
-          _id: '$tenantId',
-          totalBilled: { $sum: { $ifNull: ['$totalAmount', 0] } },
-          totalCollected: { $sum: { $ifNull: ['$paidAmount', 0] } },
-          invoiceCount: { $sum: 1 },
-          paidInvoiceCount: { $sum: { $cond: [{ $eq: ['$status', 'paid'] }, 1, 0] } },
-          unpaidInvoiceCount: { $sum: { $cond: [{ $in: ['$status', ['unpaid', 'partial']] }, 1, 0] } }
-        }
-      }
-    ]),
-    TuitionFee.aggregate([
-      { $match: { tenantId: { $ne: null }, status: { $ne: 'cancelled' } } },
-      {
-        $group: {
-          _id: '$period',
-          billed: { $sum: { $ifNull: ['$totalAmount', 0] } },
-          collected: { $sum: { $ifNull: ['$paidAmount', 0] } },
-          invoiceCount: { $sum: 1 }
-        }
-      }
-    ]),
-    OperatingExpense.aggregate([
-      { $match: { tenantId: { $ne: null } } },
-      { $group: { _id: '$tenantId', totalOperatingExpense: { $sum: { $ifNull: ['$amount', 0] } } } }
-    ]),
-    OperatingExpense.aggregate([
-      { $match: { tenantId: { $ne: null } } },
-      {
-        $group: {
-          _id: {
-            $dateToString: {
-              format: '%Y-%m',
-              date: { $ifNull: ['$expenseDate', { $ifNull: ['$createdAt', startOfToday] }] },
-              timezone: '+07:00'
-            }
-          },
-          operatingExpense: { $sum: { $ifNull: ['$amount', 0] } }
-        }
-      }
-    ]),
-    Payroll.aggregate([
-      { $match: { tenantId: { $ne: null } } },
-      { $group: { _id: '$tenantId', totalPayroll: { $sum: { $ifNull: ['$netSalary', 0] } } } }
-    ]),
-    Payroll.aggregate([
-      { $match: { tenantId: { $ne: null } } },
-      {
-        $group: {
-          _id: { year: '$year', month: '$month' },
-          payroll: { $sum: { $ifNull: ['$netSalary', 0] } }
-        }
-      }
-    ]),
     FoodSample.aggregate([
       { $match: { tenantId: { $ne: null } } },
       {
@@ -848,15 +1022,13 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
   const todayAttMap = new Map(todayStudentAtt.map((x) => [String(x._id), x]));
   const monthAttMap = new Map(monthStudentAtt.map((x) => [String(x._id), x]));
   const todayStaffMap = new Map(todayStaffAtt.map((x) => [String(x._id), x]));
-  const financeMap = new Map(financeStats.map((x) => [String(x._id), x]));
-  const expenseMap = new Map(expenseStats.map((x) => [String(x._id), x.totalOperatingExpense]));
-  const payrollMap = new Map(payrollStats.map((x) => [String(x._id), x.totalPayroll]));
   const sampleMap = new Map(foodSampleStats.map((x) => [String(x._id), x]));
   const menuMap = new Map(menuStats.map((x) => [String(x._id), x.menuCount]));
   const deviceMap = new Map(deviceStats.map((x) => [String(x._id), x]));
   const webhookMap = new Map(webhookLogStats.map((x) => [String(x._id), x]));
   const schoolAuditMap = new Map(schoolAuditStats.map((x) => [String(x._id), x.auditCount30d]));
   const feedbackMap = new Map(feedbackStats.map((x) => [String(x._id), x.openFeedbackCount]));
+  const saasPricingConfig = normalizeSaasPricingConfig(settings.saasPricing);
 
   const adminsByTenant = new Map();
   for (const adm of schoolAdmins) {
@@ -891,15 +1063,6 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
     const attToday = todayAttMap.get(tid) || { totalRecorded: 0, presentCount: 0, absentCount: 0 };
     const att30d = monthAttMap.get(tid) || { totalRecords30d: 0, presentRecords30d: 0 };
     const staffToday = todayStaffMap.get(tid) || { staffPresentToday: 0 };
-    const fin = financeMap.get(tid) || {
-      totalBilled: 0,
-      totalCollected: 0,
-      invoiceCount: 0,
-      paidInvoiceCount: 0,
-      unpaidInvoiceCount: 0
-    };
-    const opExp = expenseMap.get(tid) || 0;
-    const payExp = payrollMap.get(tid) || 0;
     const smp = sampleMap.get(tid) || { totalSamples: 0, alertSampleCount: 0, todaySampleCount: 0 };
     const menuCount = menuMap.get(tid) || 0;
     const devStat = deviceMap.get(tid) || { devicesCount: 0, onlineDevicesCount: 0 };
@@ -907,16 +1070,17 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
     const auditCount30d = schoolAuditMap.get(tid) || 0;
     const openFeedbackCount = feedbackMap.get(tid) || 0;
 
-    // Điểm mức độ khai thác phần mềm thực tế của trường (thang 100%)
+    // Điểm mức độ khai thác phần mềm thực tế của trường trên nền tảng SaaS (thang 100%)
     let usageScorePercent = 0;
-    if (cls.classCount > 0 && stu.enrolledCount > 0) usageScorePercent += 20;
-    if (uAct.internalActiveAccounts >= 2) usageScorePercent += 20;
-    else if (uAct.internalActiveAccounts === 1) usageScorePercent += 10;
+    if (cls.classCount > 0 && stu.enrolledCount > 0) usageScorePercent += 25;
+    if (uAct.internalActiveAccounts >= 3) usageScorePercent += 25;
+    else if (uAct.internalActiveAccounts >= 1) usageScorePercent += 15;
     if (att30d.totalRecords30d > 0) usageScorePercent += 25;
-    if (fin.invoiceCount > 0) usageScorePercent += 20;
+    if (uAct.logins7dCount > 0 || auditCount30d > 0) usageScorePercent += 10;
     if (menuCount > 0 || smp.totalSamples > 0 || whStat.totalEvents > 0 || devStat.devicesCount > 0) {
       usageScorePercent += 15;
     }
+    usageScorePercent = Math.min(100, usageScorePercent);
     const usageTier = usageScorePercent >= 75 ? 'Sôi nổi' : (usageScorePercent >= 40 ? 'Đang triển khai' : 'Mới khởi tạo');
 
     const declaredCampuses = Array.isArray(t.campuses) && t.campuses.length > 0
@@ -935,6 +1099,8 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
       maxStaff: t.quotas?.maxStaff || 200
     };
 
+    const saasBilling = calculateSchoolSaasBilling(t, stu.enrolledCount, enabledModules, saasPricingConfig);
+
     const occupancyPercent = cls.totalCapacity > 0
       ? Math.min(100, Math.round((stu.enrolledCount / cls.totalCapacity) * 100))
       : 0;
@@ -944,15 +1110,8 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
     const attendance30dPercent = att30d.totalRecords30d > 0
       ? Math.round((att30d.presentRecords30d / att30d.totalRecords30d) * 100)
       : 0;
-    const collectionRatePercent = fin.totalBilled > 0
-      ? Math.min(100, Math.round((fin.totalCollected / fin.totalBilled) * 100))
-      : 0;
-    const outstandingDebt = Math.max(0, fin.totalBilled - fin.totalCollected);
 
-    // NOTE: SuperAdmin chỉ là đơn vị phân phối & cấp phép phần mềm xuống các trường,
-    // TUYỆT ĐỐI KHÔNG trộn lẫn thông báo nghiệp vụ hằng ngày của nội bộ trường (như chưa điểm danh HS,
-    // lưu mẫu thức ăn bếp hay phản hồi phụ huynh) lên cảnh báo của SuperAdmin.
-    // Chỉ cảnh báo các vấn đề cấp Nền tảng SaaS: Hạn mức gói cấp phép (Quota), Thiếu tài khoản Admin bàn giao, Lỗi tích hợp Webhook.
+    // Cảnh báo cấp Nền tảng SaaS (Bản quyền hết hạn, Quota, Tài khoản Admin bàn giao, Lỗi tích hợp Webhook)
     if (t.status === 'active') {
       const activeAdmins = admins.filter((a) => a.status === 'active');
       if (activeAdmins.length === 0) {
@@ -965,6 +1124,30 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
           title: 'Trường chưa có tài khoản Admin hoạt động',
           detail: 'Đơn vị trường đang mở nhưng chưa có tài khoản Admin active để quản trị nội bộ.'
         });
+      }
+      if (t.licenseExpiresAt) {
+        const daysLeft = Math.ceil((new Date(t.licenseExpiresAt).getTime() - startOfToday.getTime()) / (24 * 3600 * 1000));
+        if (daysLeft < 0) {
+          alerts.push({
+            severity: 'critical',
+            category: 'licensing',
+            schoolId: t._id,
+            schoolCode: t.code,
+            schoolName: t.name,
+            title: 'Hợp đồng bản quyền phần mềm đã quá hạn gia hạn',
+            detail: `Đã quá hạn ${Math.abs(daysLeft)} ngày — cần liên hệ nhà trường gia hạn gói bản quyền.`
+          });
+        } else if (daysLeft <= 30) {
+          alerts.push({
+            severity: 'warning',
+            category: 'licensing',
+            schoolId: t._id,
+            schoolCode: t.code,
+            schoolName: t.name,
+            title: `Bản quyền phần mềm sắp đến hạn (${daysLeft} ngày nữa)`,
+            detail: 'Chủ động gửi thông báo nhắc gia hạn hợp đồng năm tiếp theo cho nhà trường.'
+          });
+        }
       }
       if (stu.enrolledCount >= Math.round(quotas.maxStudents * 0.9)) {
         alerts.push({
@@ -1016,6 +1199,7 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
       enabledModules,
       moduleGateConfigured: Boolean(t.config?.moduleGateConfigured),
       quotas,
+      saasBilling,
       campuses: Array.isArray(t.campuses) && t.campuses.length > 0
         ? t.campuses
         : [{ code: 'CS-CHINH', name: 'Cơ sở chính', address: '', phone: '', managerName: '', openTime: '07:00', closeTime: '17:00', isActive: true }],
@@ -1053,18 +1237,6 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
         todayPercent: attendanceTodayPercent,
         rolling30dPercent: attendance30dPercent,
         records30dCount: att30d.totalRecords30d || 0
-      },
-      finance: {
-        totalBilled: fin.totalBilled,
-        totalCollected: fin.totalCollected,
-        outstandingDebt,
-        collectionRatePercent,
-        invoiceCount: fin.invoiceCount,
-        unpaidInvoiceCount: fin.unpaidInvoiceCount,
-        totalOperatingExpense: opExp,
-        totalPayroll: payExp,
-        totalExpenditure: opExp + payExp,
-        netCashflow: fin.totalCollected - (opExp + payExp)
       },
       safety: {
         foodSampleAlerts: smp.alertSampleCount,
@@ -1115,22 +1287,32 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
       acc.totalSchools += 1;
       if (item.status === 'active') acc.activeSchools += 1;
       else if (item.status === 'suspended') acc.suspendedSchools += 1;
+      if (item.subscriptionPlan === 'trial') acc.trialSchools += 1;
+      else if (item.status === 'active') acc.paidSchools += 1;
       acc.totalCampuses += item.campusCount;
       acc.totalClassrooms += item.classCount;
       acc.totalCapacity += item.totalCapacity;
       acc.totalStudentQuota += item.quotas?.maxStudents || 0;
       acc.totalStudents += item.studentCount;
+      acc.totalBillableStudents += item.status === 'active' ? (item.saasBilling?.billableStudents || 0) : 0;
       acc.totalStaff += item.staffCount;
       acc.totalStaffPresentToday += item.staffPresentToday;
-      acc.totalActiveAccounts += item.accountStats.activeAccounts;
+      acc.totalAccounts += item.accountStats.totalAccounts || 0;
+      acc.totalActiveAccounts += item.accountStats.activeAccounts || 0;
+      acc.totalInternalAccounts += item.accountStats.internalActiveAccounts || 0;
+      acc.totalParentAccounts += item.accountStats.parentAccounts || 0;
+      acc.totalLogins7d += item.accountStats.logins7dCount || 0;
       acc.totalWebhookEvents += item.webhook?.totalEvents || 0;
       acc.totalDevices += item.webhook?.devicesCount || 0;
       acc.todayStudentRecorded += item.attendance.todayRecorded;
       acc.todayStudentPresent += item.attendance.todayPresent;
-      acc.totalBilled += item.finance.totalBilled;
-      acc.totalCollected += item.finance.totalCollected;
-      acc.totalOutstandingDebt += item.finance.outstandingDebt;
-      acc.totalExpenditure += item.finance.totalExpenditure;
+      acc.totalContractedArr += item.saasBilling?.contractedArr || 0;
+      acc.totalPotentialTrialArr += item.saasBilling?.potentialTrialArr || 0;
+      acc.totalCoreArr += item.status === 'active' && !item.saasBilling?.isTrial ? (item.saasBilling?.coreAnnualAmount || 0) : 0;
+      acc.totalAddonArr += item.status === 'active' && !item.saasBilling?.isTrial ? (item.saasBilling?.addonAnnualAmount || 0) : 0;
+      acc.totalPerStudentAddonArr += item.status === 'active' && !item.saasBilling?.isTrial ? (item.saasBilling?.perStudentAddonAnnualAmount || 0) : 0;
+      acc.totalFlatAddonArr += item.status === 'active' && !item.saasBilling?.isTrial ? (item.saasBilling?.flatAddonAnnualAmount || 0) : 0;
+      acc.totalDiscountAmount += item.status === 'active' && !item.saasBilling?.isTrial ? (item.saasBilling?.discountAmount || 0) : 0;
       acc.totalOpenFeedback += item.safety.openParentFeedback;
       acc.totalFoodSampleAlerts += item.safety.foodSampleAlerts;
       return acc;
@@ -1139,118 +1321,87 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
       totalSchools: 0,
       activeSchools: 0,
       suspendedSchools: 0,
+      trialSchools: 0,
+      paidSchools: 0,
       totalCampuses: 0,
       totalClassrooms: 0,
       totalCapacity: 0,
       totalStudentQuota: 0,
       totalStudents: 0,
+      totalBillableStudents: 0,
       totalStaff: 0,
       totalStaffPresentToday: 0,
+      totalAccounts: 0,
       totalActiveAccounts: 0,
+      totalInternalAccounts: 0,
+      totalParentAccounts: 0,
+      totalLogins7d: 0,
       totalWebhookEvents: 0,
       totalDevices: 0,
       superAdminCount,
       todayStudentRecorded: 0,
       todayStudentPresent: 0,
-      totalBilled: 0,
-      totalCollected: 0,
-      totalOutstandingDebt: 0,
-      totalExpenditure: 0,
+      totalContractedArr: 0,
+      totalPotentialTrialArr: 0,
+      totalCoreArr: 0,
+      totalAddonArr: 0,
+      totalPerStudentAddonArr: 0,
+      totalFlatAddonArr: 0,
+      totalDiscountAmount: 0,
       totalOpenFeedback: 0,
       totalFoodSampleAlerts: 0
     }
   );
 
+  summary.estimatedMrr = Math.round(summary.totalContractedArr / 12);
+  summary.avgArrPerPaidSchool = summary.paidSchools > 0
+    ? Math.round(summary.totalContractedArr / summary.paidSchools)
+    : 0;
   summary.overallStudentQuotaPercent = summary.totalStudentQuota > 0
     ? Math.min(100, Math.round((summary.totalStudents / summary.totalStudentQuota) * 100))
     : 0;
-
   summary.overallOccupancyPercent = summary.totalCapacity > 0
     ? Math.min(100, Math.round((summary.totalStudents / summary.totalCapacity) * 100))
     : 0;
   summary.overallAttendanceTodayPercent = summary.todayStudentRecorded > 0
     ? Math.round((summary.todayStudentPresent / summary.todayStudentRecorded) * 100)
     : 0;
-  summary.overallCollectionRatePercent = summary.totalBilled > 0
-    ? Math.min(100, Math.round((summary.totalCollected / summary.totalBilled) * 100))
-    : 0;
-  summary.netCashflow = summary.totalCollected - summary.totalExpenditure;
   summary.alertCount = alerts.length;
 
-  // Tổng hợp chuỗi thời gian Kinh tế theo kỳ (tối đa 6 kỳ gần nhất) để vẽ biểu đồ trực quan
-  const normalizePeriodKey = (rawPeriod) => {
-    const s = String(rawPeriod || '').trim();
-    const m1 = /^(\d{4})[-/](\d{1,2})$/.exec(s);
-    if (m1) {
-      const mm = m1[2].padStart(2, '0');
-      return { sortKey: `${m1[1]}-${mm}`, label: `${mm}/${m1[1]}` };
+  // Thống kê tỷ lệ mua kèm & doanh thu từng gói Add-on trên toàn hệ thống
+  const activeSchoolsList = schools.filter((s) => s.status === 'active');
+  const addonAdoption = saasPricingConfig.addonCatalog.map((addon) => {
+    let activatedSchoolsCount = 0;
+    let paidActivatedCount = 0;
+    let estimatedArr = 0;
+
+    for (const s of activeSchoolsList) {
+      if (Array.isArray(s.enabledModules) && s.enabledModules.includes(addon.moduleKey)) {
+        activatedSchoolsCount += 1;
+        if (!s.saasBilling?.isTrial) {
+          paidActivatedCount += 1;
+          const found = s.saasBilling?.activeAddons?.find((a) => a.moduleKey === addon.moduleKey);
+          estimatedArr += found?.annualAmount || 0;
+        }
+      }
     }
-    const m2 = /^(\d{1,2})[-/](\d{4})$/.exec(s);
-    if (m2) {
-      const mm = m2[1].padStart(2, '0');
-      return { sortKey: `${m2[2]}-${mm}`, label: `${mm}/${m2[2]}` };
-    }
-    return null;
-  };
 
-  const periodBucketMap = new Map();
-  const ensureBucket = (sortKey, label) => {
-    if (!periodBucketMap.has(sortKey)) {
-      periodBucketMap.set(sortKey, {
-        period: sortKey,
-        label,
-        billed: 0,
-        collected: 0,
-        outstanding: 0,
-        operatingExpense: 0,
-        payroll: 0,
-        totalExpenditure: 0,
-        netBalance: 0,
-        invoiceCount: 0
-      });
-    }
-    return periodBucketMap.get(sortKey);
-  };
-
-  for (const row of tuitionByPeriodRaw) {
-    const norm = normalizePeriodKey(row._id);
-    if (!norm) continue;
-    const b = ensureBucket(norm.sortKey, norm.label);
-    b.billed += row.billed || 0;
-    b.collected += row.collected || 0;
-    b.invoiceCount += row.invoiceCount || 0;
-  }
-
-  for (const row of expenseByMonthRaw) {
-    const norm = normalizePeriodKey(row._id);
-    if (!norm) continue;
-    const b = ensureBucket(norm.sortKey, norm.label);
-    b.operatingExpense += row.operatingExpense || 0;
-  }
-
-  for (const row of payrollByPeriodRaw) {
-    if (!row._id?.year || !row._id?.month) continue;
-    const mm = String(row._id.month).padStart(2, '0');
-    const sortKey = `${row._id.year}-${mm}`;
-    const b = ensureBucket(sortKey, `${mm}/${row._id.year}`);
-    b.payroll += row.payroll || 0;
-  }
-
-  const economicTrend = [...periodBucketMap.values()]
-    .sort((a, b) => a.period.localeCompare(b.period))
-    .slice(-6)
-    .map((b) => {
-      const outstanding = Math.max(0, b.billed - b.collected);
-      const totalExpenditure = b.operatingExpense + b.payroll;
-      const collectionRatePercent = b.billed > 0 ? Math.min(100, Math.round((b.collected / b.billed) * 100)) : 0;
-      return {
-        ...b,
-        outstanding,
-        totalExpenditure,
-        netBalance: b.collected - totalExpenditure,
-        collectionRatePercent
-      };
-    });
+    return {
+      moduleKey: addon.moduleKey,
+      label: addon.label,
+      group: addon.group,
+      desc: addon.desc,
+      pricingMode: addon.pricingMode,
+      price: addon.price,
+      activatedSchoolsCount,
+      paidActivatedCount,
+      totalActiveSchools: activeSchoolsList.length,
+      adoptionPercent: activeSchoolsList.length > 0
+        ? Math.round((activatedSchoolsCount / activeSchoolsList.length) * 100)
+        : 0,
+      estimatedArr
+    };
+  });
 
   // Phân bố tài khoản theo vai trò trên toàn chuỗi trường
   const ROLE_CATALOG = [
@@ -1260,7 +1411,7 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
     { role: 'accountant', label: 'Kế toán học phí' },
     { role: 'hr', label: 'Nhân sự & Tiền lương' },
     { role: 'chef', label: 'Đầu bếp & Dinh dưỡng' },
-    { role: 'guard', label: 'Bảo vệ & An ninh cổng' },
+    { role: 'guard', label: 'Nhân viên & Bảo vệ cổng' },
     { role: 'parent', label: 'Phụ huynh học sinh' }
   ];
   const roleRawMap = new Map(roleDistRaw.map((r) => [String(r._id), r]));
@@ -1276,7 +1427,8 @@ const getPlatformDashboardAndSchools = async ({ bypassCache = false } = {}) => {
 
   const dashboardPayload = {
     summary,
-    economicTrend,
+    addonAdoption,
+    saasPricing: saasPricingConfig,
     roleDistribution,
     systemHealth: {
       ...systemHealth,
@@ -1325,9 +1477,6 @@ const getSchoolDetailedReport = async (tenantId) => {
     userRoleBreakdown,
     adminUsers,
     attendanceLast7Days,
-    financeByPeriod,
-    operatingExpenseTotal,
-    payrollByPeriod,
     recentFoodSamples,
     recentMenus,
     openFeedbacks,
@@ -1413,44 +1562,6 @@ const getSchoolDetailedReport = async (tenantId) => {
       },
       { $sort: { _id: -1 } },
       { $limit: 7 }
-    ]),
-    TuitionFee.aggregate([
-      { $match: { tenantId: tid, status: { $ne: 'cancelled' } } },
-      {
-        $group: {
-          _id: '$period',
-          invoiceCount: { $sum: 1 },
-          totalBilled: { $sum: { $ifNull: ['$totalAmount', 0] } },
-          totalCollected: { $sum: { $ifNull: ['$paidAmount', 0] } },
-          paidCount: { $sum: { $cond: [{ $eq: ['$status', 'paid'] }, 1, 0] } },
-          partialCount: { $sum: { $cond: [{ $eq: ['$status', 'partial'] }, 1, 0] } },
-          unpaidCount: { $sum: { $cond: [{ $eq: ['$status', 'unpaid'] }, 1, 0] } }
-        }
-      },
-      { $sort: { _id: -1 } },
-      { $limit: 6 }
-    ]),
-    OperatingExpense.aggregate([
-      { $match: { tenantId: tid } },
-      {
-        $group: {
-          _id: '$category',
-          totalAmount: { $sum: { $ifNull: ['$amount', 0] } },
-          count: { $sum: 1 }
-        }
-      }
-    ]),
-    Payroll.aggregate([
-      { $match: { tenantId: tid } },
-      {
-        $group: {
-          _id: { year: '$year', month: '$month' },
-          staffCount: { $sum: 1 },
-          totalNetSalary: { $sum: { $ifNull: ['$netSalary', 0] } }
-        }
-      },
-      { $sort: { '_id.year': -1, '_id.month': -1 } },
-      { $limit: 6 }
     ]),
     FoodSample.find({ tenantId: tid })
       .select('sampleCode mealDate mealType dishName status storageTemperature storedByName')
@@ -1548,22 +1659,15 @@ const getSchoolDetailedReport = async (tenantId) => {
     }
   }
 
-  const financeSummary = financeByPeriod.reduce(
-    (acc, p) => {
-      acc.totalBilled += p.totalBilled || 0;
-      acc.totalCollected += p.totalCollected || 0;
-      acc.invoiceCount += p.invoiceCount || 0;
-      return acc;
-    },
-    { totalBilled: 0, totalCollected: 0, invoiceCount: 0 }
+  const enabledModules = tenant.config?.moduleGateConfigured
+    ? sanitizeEnabledModules(tenant.enabledModules)
+    : [...ALL_ENABLED_MODULES];
+  const saasPricingConfig = normalizeSaasPricingConfig(settings.saasPricing);
+  const actualActiveStudents = (studentSummary.enrolled || 0) + (studentSummary.temporarily_absent || 0);
+  const saasBilling = calculateSchoolSaasBilling(tenant, actualActiveStudents, enabledModules, saasPricingConfig);
+  const availableAddonsToUpsell = saasPricingConfig.addonCatalog.filter(
+    (addon) => !enabledModules.includes(addon.moduleKey)
   );
-  financeSummary.outstandingDebt = Math.max(0, financeSummary.totalBilled - financeSummary.totalCollected);
-  financeSummary.collectionRatePercent = financeSummary.totalBilled > 0
-    ? Math.min(100, Math.round((financeSummary.totalCollected / financeSummary.totalBilled) * 100))
-    : 0;
-  financeSummary.operatingExpensesByCategory = operatingExpenseTotal;
-  financeSummary.totalOperatingExpenses = operatingExpenseTotal.reduce((s, x) => s + (x.totalAmount || 0), 0);
-  financeSummary.totalPayrollPaid = payrollByPeriod.reduce((s, x) => s + (x.totalNetSalary || 0), 0);
 
   const todayAttRow = attendanceLast7Days.find((d) => d._id === todayKey) || {
     _id: todayKey,
@@ -1581,15 +1685,20 @@ const getSchoolDetailedReport = async (tenantId) => {
       name: tenant.name,
       organizationCode: tenant.organizationCode || '',
       contactEmail: tenant.contactEmail || '',
+      contactPhone: tenant.contactPhone || tenant.campuses?.[0]?.phone || '',
+      address: tenant.address || tenant.campuses?.[0]?.address || '',
+      representativeName: tenant.representativeName || tenant.campuses?.[0]?.managerName || '',
+      subscriptionPlan: tenant.subscriptionPlan || 'professional',
+      licenseExpiresAt: tenant.licenseExpiresAt || null,
       status: tenant.status,
-      enabledModules: tenant.config?.moduleGateConfigured
-        ? sanitizeEnabledModules(tenant.enabledModules)
-        : [...ALL_ENABLED_MODULES],
+      enabledModules,
       quotas: {
         maxCampuses: tenant.quotas?.maxCampuses || settings.preschoolStandards.defaultMaxCampusesPerSchool || 10,
         maxStudents: tenant.quotas?.maxStudents || settings.preschoolStandards.defaultMaxStudentsPerSchool || 800,
         maxStaff: tenant.quotas?.maxStaff || 200
       },
+      saasBilling,
+      availableAddonsToUpsell,
       createdAt: tenant.createdAt,
       updatedAt: tenant.updatedAt
     },
@@ -1612,10 +1721,10 @@ const getSchoolDetailedReport = async (tenantId) => {
       today: todayAttRow,
       last7Days: attendanceLast7Days
     },
-    finance: {
-      summary: financeSummary,
-      byPeriod: financeByPeriod,
-      payrollHistory: payrollByPeriod
+    saasContract: {
+      billing: saasBilling,
+      availableAddonsToUpsell,
+      pricingPolicy: saasPricingConfig
     },
     kitchenAndFeedback: {
       recentMenus,
@@ -2471,11 +2580,276 @@ const updateSchoolAccountBySuperAdmin = async (schoolId, accountId, payload = {}
   return updatedResult;
 };
 
+/**
+ * Xây dựng chuỗi mốc thời gian (Time Buckets) theo múi giờ Việt Nam (+07:00) cho Báo cáo Tăng trưởng SaaS.
+ *
+ * @param {'7d' | '30d' | '6m' | '12m'} rangeKey
+ * @returns {Array<{ key: string, label: string, startMs: number, endMs: number }>}
+ */
+const buildGrowthTimeBuckets = (rangeKey = '12m') => {
+  const { todayKey } = getVietnamDateBounds();
+  const [curY, curM, curD] = todayKey.split('-').map(Number);
+  const buckets = [];
+
+  if (rangeKey === '7d') {
+    const endDayUtc = Date.UTC(curY, curM - 1, curD);
+    for (let i = 6; i >= 0; i -= 1) {
+      const d = new Date(endDayUtc - i * 86400000);
+      const yyyy = d.getUTCFullYear();
+      const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(d.getUTCDate()).padStart(2, '0');
+      const startMs = new Date(`${yyyy}-${mm}-${dd}T00:00:00.000+07:00`).getTime();
+      const endMs = new Date(`${yyyy}-${mm}-${dd}T23:59:59.999+07:00`).getTime();
+      buckets.push({
+        key: `${yyyy}-${mm}-${dd}`,
+        label: `${dd}/${mm}`,
+        startMs,
+        endMs
+      });
+    }
+    return buckets;
+  }
+
+  if (rangeKey === '30d') {
+    // Chia 30 ngày gần nhất thành 10 mốc (mỗi mốc 3 ngày) để biểu đồ rõ nét, không chồng chữ
+    const endDayUtc = Date.UTC(curY, curM - 1, curD);
+    for (let b = 9; b >= 0; b -= 1) {
+      const offsetEnd = b * 3;
+      const offsetStart = offsetEnd + 2;
+      const dStart = new Date(endDayUtc - offsetStart * 86400000);
+      const dEnd = new Date(endDayUtc - offsetEnd * 86400000);
+      const sy = dStart.getUTCFullYear();
+      const sm = String(dStart.getUTCMonth() + 1).padStart(2, '0');
+      const sd = String(dStart.getUTCDate()).padStart(2, '0');
+      const ey = dEnd.getUTCFullYear();
+      const em = String(dEnd.getUTCMonth() + 1).padStart(2, '0');
+      const ed = String(dEnd.getUTCDate()).padStart(2, '0');
+      const startMs = new Date(`${sy}-${sm}-${sd}T00:00:00.000+07:00`).getTime();
+      const endMs = new Date(`${ey}-${em}-${ed}T23:59:59.999+07:00`).getTime();
+      buckets.push({
+        key: `${ey}-${em}-${ed}`,
+        label: `${ed}/${em}`,
+        tooltipRange: `${sd}/${sm} – ${ed}/${em}/${ey}`,
+        startMs,
+        endMs
+      });
+    }
+    return buckets;
+  }
+
+  const monthCount = rangeKey === '6m' ? 6 : 12;
+  for (let i = monthCount - 1; i >= 0; i -= 1) {
+    const dFirst = new Date(Date.UTC(curY, curM - 1 - i, 1));
+    const y = dFirst.getUTCFullYear();
+    const m = dFirst.getUTCMonth() + 1;
+    const mm = String(m).padStart(2, '0');
+    const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const ddLast = String(lastDay).padStart(2, '0');
+    const startMs = new Date(`${y}-${mm}-01T00:00:00.000+07:00`).getTime();
+    const endMs = new Date(`${y}-${mm}-${ddLast}T23:59:59.999+07:00`).getTime();
+    buckets.push({
+      key: `${y}-${mm}`,
+      label: `${mm}/${y}`,
+      tooltipRange: `Tháng ${mm}/${y}`,
+      startMs,
+      endMs
+    });
+  }
+  return buckets;
+};
+
+/**
+ * Báo cáo Tổng kết Tăng trưởng Nền tảng SaaS theo thời gian (`7d` | `30d` | `6m` | `12m`).
+ * Phục vụ riêng Nhà cung cấp Phần mềm:
+ * - Tăng trưởng số trường đăng ký mới & tổng số trường đang sử dụng tại từng thời điểm.
+ * - Tăng trưởng tài khoản sử dụng (Nhân sự trường + Phụ huynh) & tài khoản đăng nhập hoạt động.
+ * - Tăng trưởng quy mô học sinh tính phí & Doanh thu Bản quyền Năm ước tính (ARR = Gói Nền + Add-on).
+ *
+ * @param {{ range?: string }} [options]
+ * @returns {Promise<object>}
+ */
+const getPlatformGrowthAnalytics = async ({ range = '12m' } = {}) => {
+  const validRange = ['7d', '30d', '6m', '12m'].includes(range) ? range : '12m';
+  const buckets = buildGrowthTimeBuckets(validRange);
+
+  const [settings, tenants, users, students] = await Promise.all([
+    getSystemSettings(),
+    Tenant.find({})
+      .select('_id code name status subscriptionPlan enabledModules config saasBilling createdAt licenseExpiresAt')
+      .sort({ createdAt: 1 })
+      .lean(),
+    User.find({ tenantId: { $ne: null } })
+      .select('tenantId role status createdAt lastLogin')
+      .lean(),
+    Student.find({ tenantId: { $ne: null } })
+      .select('tenantId status enrollmentDate createdAt')
+      .lean()
+  ]);
+
+  const saasPricingConfig = normalizeSaasPricingConfig(settings.saasPricing);
+
+  const tenantRows = tenants.map((t) => ({
+    ...t,
+    tidStr: String(t._id),
+    createdMs: t.createdAt ? new Date(t.createdAt).getTime() : 0,
+    enabledModules: t.config?.moduleGateConfigured
+      ? sanitizeEnabledModules(t.enabledModules)
+      : [...ALL_ENABLED_MODULES]
+  }));
+
+  const userRows = users.map((u) => ({
+    tidStr: String(u.tenantId),
+    role: u.role,
+    status: u.status,
+    createdMs: u.createdAt ? new Date(u.createdAt).getTime() : 0,
+    lastLoginMs: u.lastLogin ? new Date(u.lastLogin).getTime() : 0
+  }));
+
+  const studentRows = students.map((s) => ({
+    tidStr: String(s.tenantId),
+    status: s.status,
+    effectiveCreatedMs: (s.enrollmentDate ? new Date(s.enrollmentDate).getTime() : 0) ||
+      (s.createdAt ? new Date(s.createdAt).getTime() : 0)
+  }));
+
+  let prevArr = 0;
+  const timeline = buckets.map((b, idx) => {
+    let newSchools = 0;
+    let cumulativeSchools = 0;
+    const activeTenantsAtPoint = [];
+
+    for (const t of tenantRows) {
+      if (t.createdMs >= b.startMs && t.createdMs <= b.endMs) {
+        newSchools += 1;
+      }
+      if (t.createdMs <= b.endMs && t.status !== 'terminated') {
+        cumulativeSchools += 1;
+        if (t.status === 'active') {
+          activeTenantsAtPoint.push(t);
+        }
+      }
+    }
+
+    let newAccounts = 0;
+    let cumulativeAccounts = 0;
+    let cumulativeInternalAccounts = 0;
+    let cumulativeParentAccounts = 0;
+    let activeAccountsAtPoint = 0;
+
+    for (const u of userRows) {
+      if (u.createdMs >= b.startMs && u.createdMs <= b.endMs) {
+        newAccounts += 1;
+      }
+      if (u.createdMs <= b.endMs && u.status === 'active') {
+        cumulativeAccounts += 1;
+        if (u.role === 'parent') cumulativeParentAccounts += 1;
+        else cumulativeInternalAccounts += 1;
+      }
+      if (
+        (u.lastLoginMs >= b.startMs && u.lastLoginMs <= b.endMs) ||
+        (u.createdMs >= b.startMs && u.createdMs <= b.endMs)
+      ) {
+        activeAccountsAtPoint += 1;
+      }
+    }
+
+    let newStudents = 0;
+    let cumulativeStudents = 0;
+    const enrolledByTenantAtPoint = new Map();
+
+    for (const s of studentRows) {
+      if (s.effectiveCreatedMs >= b.startMs && s.effectiveCreatedMs <= b.endMs) {
+        newStudents += 1;
+      }
+      if (s.effectiveCreatedMs <= b.endMs && ['enrolled', 'temporarily_absent'].includes(s.status)) {
+        cumulativeStudents += 1;
+        enrolledByTenantAtPoint.set(s.tidStr, (enrolledByTenantAtPoint.get(s.tidStr) || 0) + 1);
+      }
+    }
+
+    let cumulativeContractedArr = 0;
+    let cumulativeBillableStudents = 0;
+    for (const t of activeTenantsAtPoint) {
+      const stuCountAtPoint = enrolledByTenantAtPoint.get(t.tidStr) || 0;
+      const bill = calculateSchoolSaasBilling(t, stuCountAtPoint, t.enabledModules, saasPricingConfig);
+      cumulativeContractedArr += bill.contractedArr;
+      cumulativeBillableStudents += bill.billableStudents;
+    }
+
+    // Với mốc đầu tiên của khung thời gian, tính ARR đầu kỳ để biết chính xác mức tăng mới trong kỳ đầu
+    if (idx === 0) {
+      let beforeStartArr = 0;
+      const enrolledBeforeStart = new Map();
+      for (const s of studentRows) {
+        if (s.effectiveCreatedMs < b.startMs && ['enrolled', 'temporarily_absent'].includes(s.status)) {
+          enrolledBeforeStart.set(s.tidStr, (enrolledBeforeStart.get(s.tidStr) || 0) + 1);
+        }
+      }
+      for (const t of tenantRows) {
+        if (t.createdMs < b.startMs && t.status === 'active') {
+          const billBefore = calculateSchoolSaasBilling(
+            t,
+            enrolledBeforeStart.get(t.tidStr) || 0,
+            t.enabledModules,
+            saasPricingConfig
+          );
+          beforeStartArr += billBefore.contractedArr;
+        }
+      }
+      prevArr = beforeStartArr;
+    }
+
+    const newArrAdded = Math.max(0, cumulativeContractedArr - prevArr);
+    prevArr = cumulativeContractedArr;
+
+    return {
+      key: b.key,
+      label: b.label,
+      tooltipRange: b.tooltipRange || b.label,
+      newSchools,
+      cumulativeSchools,
+      newAccounts,
+      cumulativeAccounts,
+      cumulativeInternalAccounts,
+      cumulativeParentAccounts,
+      activeAccountsAtPoint,
+      newStudents,
+      cumulativeStudents,
+      cumulativeBillableStudents,
+      estimatedArr: cumulativeContractedArr,
+      newArrAdded
+    };
+  });
+
+  const rangeStartMs = buckets[0]?.startMs || 0;
+  const rangeEndMs = buckets[buckets.length - 1]?.endMs || Date.now();
+  const rangeSummary = {
+    range: validRange,
+    newSchoolsInRange: timeline.reduce((s, x) => s + x.newSchools, 0),
+    newAccountsInRange: timeline.reduce((s, x) => s + x.newAccounts, 0),
+    newStudentsInRange: timeline.reduce((s, x) => s + x.newStudents, 0),
+    newArrInRange: timeline.reduce((s, x) => s + x.newArrAdded, 0),
+    activeLoginUsersInRange: userRows.filter(
+      (u) => u.lastLoginMs >= rangeStartMs && u.lastLoginMs <= rangeEndMs
+    ).length
+  };
+
+  return {
+    range: validRange,
+    timeline,
+    rangeSummary,
+    saasPricing: saasPricingConfig
+  };
+};
+
 module.exports = {
   ALL_MODULE_DEFINITIONS,
   ALL_ENABLED_MODULES,
+  DEFAULT_CORE_MODULES,
   REQUIRED_CORE_MODULES,
   sanitizeEnabledModules,
+  normalizeSaasPricingConfig,
+  calculateSchoolSaasBilling,
   getSystemSettings,
   updateSystemSettings,
   invalidateSystemSettingsCache,
@@ -2483,6 +2857,7 @@ module.exports = {
   isAntiBotShieldEnabledSync,
   measureSystemHealth,
   getPlatformDashboardAndSchools,
+  getPlatformGrowthAnalytics,
   getSchoolDetailedReport,
   listPlatformAuditLogs,
   listSchoolOperationalLogs,

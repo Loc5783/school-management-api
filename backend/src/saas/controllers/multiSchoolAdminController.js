@@ -25,6 +25,7 @@ const {
   updateSystemSettings,
   invalidatePlatformDashboardCache,
   getPlatformDashboardAndSchools,
+  getPlatformGrowthAnalytics,
   getSchoolDetailedReport,
   listPlatformAuditLogs,
   listSchoolOperationalLogs,
@@ -63,6 +64,42 @@ const parseQuotasInput = (rawQuotas, defaultStandards = {}) => {
   }
 
   return { maxCampuses, maxStudents, maxStaff };
+};
+
+const parseSaasBillingInput = (rawBilling, existingBilling = {}) => {
+  if (!rawBilling || typeof rawBilling !== 'object') {
+    return existingBilling || {};
+  }
+  const useCustomBasePrice = rawBilling.useCustomBasePrice !== undefined
+    ? Boolean(rawBilling.useCustomBasePrice)
+    : Boolean(existingBilling.useCustomBasePrice);
+  const customBasePricePerStudentYear = useCustomBasePrice && rawBilling.customBasePricePerStudentYear != null && rawBilling.customBasePricePerStudentYear !== ''
+    ? Math.max(0, Math.min(50000000, Math.round(Number(rawBilling.customBasePricePerStudentYear) || 0)))
+    : (useCustomBasePrice ? (existingBilling.customBasePricePerStudentYear ?? 0) : null);
+
+  const useCustomMinStudents = rawBilling.useCustomMinStudents !== undefined
+    ? Boolean(rawBilling.useCustomMinStudents)
+    : Boolean(existingBilling.useCustomMinStudents);
+  const customMinBillableStudents = useCustomMinStudents && rawBilling.customMinBillableStudents != null && rawBilling.customMinBillableStudents !== ''
+    ? Math.max(0, Math.min(5000, Math.round(Number(rawBilling.customMinBillableStudents) || 0)))
+    : (useCustomMinStudents ? (existingBilling.customMinBillableStudents ?? 0) : null);
+
+  const discountPercent = rawBilling.discountPercent != null && rawBilling.discountPercent !== ''
+    ? Math.max(0, Math.min(100, Number(rawBilling.discountPercent) || 0))
+    : (existingBilling.discountPercent || 0);
+
+  const billingNote = rawBilling.billingNote != null
+    ? String(rawBilling.billingNote).trim().slice(0, 300)
+    : (existingBilling.billingNote || '');
+
+  return {
+    useCustomBasePrice,
+    customBasePricePerStudentYear,
+    useCustomMinStudents,
+    customMinBillableStudents,
+    discountPercent,
+    billingNote
+  };
 };
 
 /**
@@ -298,6 +335,26 @@ const listAllSchoolsOverview = async (req, res) => {
 };
 
 /**
+ * Trả về Báo cáo Tổng kết Tăng trưởng Nền tảng SaaS theo khung thời gian (`7d` | `30d` | `6m` | `12m`).
+ */
+const getPlatformGrowthReportHandler = async (req, res) => {
+  try {
+    const range = String(req.query?.range || '12m').trim();
+    const data = await getPlatformGrowthAnalytics({ range });
+    return res.json({
+      success: true,
+      data
+    });
+  } catch (err) {
+    console.error('Lỗi tổng hợp báo cáo tăng trưởng SaaS:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Không thể tải báo cáo tăng trưởng nền tảng SaaS'
+    });
+  }
+};
+
+/**
  * Trả về Báo cáo Chi tiết 360° của một trường cụ thể cho SuperAdmin.
  */
 const getSchoolDetailedReportHandler = async (req, res) => {
@@ -487,7 +544,8 @@ const createSchoolWithAdmin = async (req, res) => {
       adminEmail = '',
       initialCampuses = [],
       enabledModules,
-      quotas: rawQuotas
+      quotas: rawQuotas,
+      saasBilling: rawSaasBilling
     } = req.body || {};
 
     const cleanCode = String(code || '').trim().toUpperCase();
@@ -623,6 +681,7 @@ const createSchoolWithAdmin = async (req, res) => {
             campuses: parsedCampuses,
             enabledModules: cleanModules,
             quotas,
+            saasBilling: parseSaasBillingInput(rawSaasBilling),
             config: { moduleGateConfigured: true },
             status: 'active',
             authVersion: 0
@@ -730,7 +789,8 @@ const updateSchoolAndAdmin = async (req, res) => {
       adminPhone,
       newAdminPassword,
       enabledModules,
-      quotas: rawQuotas
+      quotas: rawQuotas,
+      saasBilling: rawSaasBilling
     } = req.body || {};
 
     const resultData = await runSafeTransaction(async (session) => {
@@ -808,6 +868,9 @@ const updateSchoolAndAdmin = async (req, res) => {
           settings.preschoolStandards
         );
         tenant.quotas = mergedQuotas;
+      }
+      if (rawSaasBilling && typeof rawSaasBilling === 'object') {
+        tenant.saasBilling = parseSaasBillingInput(rawSaasBilling, tenant.saasBilling?.toObject?.() || tenant.saasBilling || {});
       }
       await tenant.save(sessionOpt);
 
@@ -1089,6 +1152,7 @@ module.exports = {
   getSuperAdminMe,
   changeSuperAdminPassword,
   listAllSchoolsOverview,
+  getPlatformGrowthReportHandler,
   getSchoolDetailedReportHandler,
   getSystemSettingsHandler,
   updateSystemSettingsHandler,

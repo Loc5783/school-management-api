@@ -16,6 +16,11 @@ export const loginSuperAdmin = (data) => api.post('/multi-school/login', data);
 export const getSuperAdminMe = () => api.get('/multi-school/me', { headers: superAdminHeaders() });
 export const changeSuperAdminPassword = (data) => api.post('/multi-school/me/password', data, { headers: superAdminHeaders() });
 export const getSuperAdminSchools = () => api.get('/multi-school/schools', { headers: superAdminHeaders() });
+export const getSuperAdminGrowthReport = (range = '12m') =>
+  api.get('/multi-school/growth-report', {
+    params: { range },
+    headers: superAdminHeaders()
+  });
 export const getSuperAdminSchoolReport = (id) => api.get(`/multi-school/schools/${id}/report`, { headers: superAdminHeaders() });
 export const getSuperAdminSchoolAccounts = (schoolId, params = {}) =>
   api.get(`/multi-school/schools/${schoolId}/accounts`, { params, headers: superAdminHeaders() });

@@ -2,7 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import Icon from '../components/Icon';
-import { CashflowDonutChart, EconomicPeriodChart } from '../components/SuperAdminCharts';
+import {
+  SaasRevenueBreakdownDonut,
+  SchoolComparisonBarChart
+} from '../components/SuperAdminCharts';
+import { formatCompactVnd } from '../utils/currencyFormatters';
 import SuperAdminSchoolReportModal from '../components/SuperAdminSchoolReportModal';
 import SuperAdminSchoolAccountsModal from '../components/SuperAdminSchoolAccountsModal';
 import SuperAdminUsageAnalyticsPanel from '../components/SuperAdminUsageAnalyticsPanel';
@@ -141,27 +145,25 @@ const PLAN_LABELS = {
   trial: 'Gói Dùng thử 30 ngày'
 };
 
+const CORE_ONLY_PRESET_MODULES = [
+  'classrooms',
+  'students',
+  'attendance',
+  'accounts',
+  'notifications',
+  'reports'
+];
+
 const BASIC_PRESET_MODULES = [
   'classrooms',
   'students',
   'attendance',
   'daily_care',
+  'pickups',
+  'nutrition',
   'accounts',
-  'finance',
   'notifications',
   'reports'
-];
-
-const ATTENDANCE_DEVICE_PRESET_MODULES = [
-  'classrooms',
-  'students',
-  'attendance',
-  'pickups',
-  'guard',
-  'timekeeping',
-  'accounts',
-  'hr',
-  'notifications'
 ];
 
 const suggestSchoolCodeFromName = (name = '') => {
@@ -233,6 +235,10 @@ const makeEmptyCreateForm = (standards = {}, allModuleKeys = []) => ({
   maxCampuses: standards.defaultMaxCampusesPerSchool || 5,
   maxStudents: standards.defaultMaxStudentsPerSchool || 800,
   maxStaff: standards.defaultMaxStaffPerSchool || 200,
+  useCustomBasePrice: false,
+  customBasePricePerStudentYear: '',
+  discountPercent: 0,
+  billingNote: '',
   enabledModules: allModuleKeys.length ? [...allModuleKeys] : DEFAULT_MODULE_CATALOG.map((m) => m.key)
 });
 
@@ -246,23 +252,31 @@ export default function MultiSchoolManagement() {
     totalSchools: 0,
     activeSchools: 0,
     suspendedSchools: 0,
+    trialSchools: 0,
+    paidSchools: 0,
     totalCampuses: 0,
     totalClassrooms: 0,
     totalCapacity: 0,
     totalStudents: 0,
+    totalBillableStudents: 0,
     totalStaff: 0,
     totalStaffPresentToday: 0,
     totalActiveAccounts: 0,
+    totalInternalAccounts: 0,
+    totalParentAccounts: 0,
     overallOccupancyPercent: 0,
     overallAttendanceTodayPercent: 0,
-    overallCollectionRatePercent: 0,
-    totalBilled: 0,
-    totalCollected: 0,
-    totalOutstandingDebt: 0,
-    totalExpenditure: 0,
+    totalContractedArr: 0,
+    estimatedMrr: 0,
+    totalCoreArr: 0,
+    totalAddonArr: 0,
+    totalPerStudentAddonArr: 0,
+    totalFlatAddonArr: 0,
+    totalPotentialTrialArr: 0,
     alertCount: 0
   });
-  const [economicTrend, setEconomicTrend] = useState([]);
+  const [addonAdoption, setAddonAdoption] = useState([]);
+  const [saasPricing, setSaasPricing] = useState(null);
   const [roleDistribution, setRoleDistribution] = useState([]);
   const [systemHealth, setSystemHealth] = useState(null);
   const [alerts, setAlerts] = useState([]);
@@ -309,6 +323,10 @@ export default function MultiSchoolManagement() {
     maxCampuses: 10,
     maxStudents: 800,
     maxStaff: 200,
+    useCustomBasePrice: false,
+    customBasePricePerStudentYear: '',
+    discountPercent: 0,
+    billingNote: '',
     enabledModules: DEFAULT_MODULE_CATALOG.map((m) => m.key)
   });
   const [showEditPass, setShowEditPass] = useState(false);
@@ -340,7 +358,8 @@ export default function MultiSchoolManagement() {
       const res = await getSuperAdminSchools();
       const payload = res.data?.data || {};
       setSummary((prev) => ({ ...prev, ...(payload.summary || {}) }));
-      setEconomicTrend(payload.economicTrend || []);
+      setAddonAdoption(payload.addonAdoption || []);
+      setSaasPricing(payload.saasPricing || payload.settings?.saasPricing || null);
       setRoleDistribution(payload.roleDistribution || []);
       setSystemHealth(payload.systemHealth || null);
       setAlerts(payload.alerts || []);
@@ -514,6 +533,14 @@ export default function MultiSchoolManagement() {
           maxCampuses: Number(createForm.maxCampuses),
           maxStudents: Number(createForm.maxStudents),
           maxStaff: Number(createForm.maxStaff)
+        },
+        saasBilling: {
+          useCustomBasePrice: Boolean(createForm.useCustomBasePrice),
+          customBasePricePerStudentYear: createForm.useCustomBasePrice
+            ? Number(createForm.customBasePricePerStudentYear || 0)
+            : null,
+          discountPercent: Number(createForm.discountPercent || 0),
+          billingNote: createForm.billingNote
         }
       });
       setShowCreateModal(false);
@@ -555,6 +582,11 @@ export default function MultiSchoolManagement() {
       maxCampuses: fullSchool.quotas?.maxCampuses || 10,
       maxStudents: fullSchool.quotas?.maxStudents || 800,
       maxStaff: fullSchool.quotas?.maxStaff || 200,
+      useCustomBasePrice: Boolean(fullSchool.saasBilling?.useCustomBasePrice),
+      customBasePricePerStudentYear:
+        fullSchool.saasBilling?.customBasePricePerStudentYear ?? (saasPricing?.basePricePerStudentYear || 120000),
+      discountPercent: fullSchool.saasBilling?.discountPercent || 0,
+      billingNote: fullSchool.saasBilling?.billingNote || '',
       enabledModules: Array.isArray(fullSchool.enabledModules)
         ? [...fullSchool.enabledModules]
         : moduleCatalog.map((m) => m.key)
@@ -601,6 +633,14 @@ export default function MultiSchoolManagement() {
           maxCampuses: Number(editForm.maxCampuses),
           maxStudents: Number(editForm.maxStudents),
           maxStaff: Number(editForm.maxStaff)
+        },
+        saasBilling: {
+          useCustomBasePrice: Boolean(editForm.useCustomBasePrice),
+          customBasePricePerStudentYear: editForm.useCustomBasePrice
+            ? Number(editForm.customBasePricePerStudentYear || 0)
+            : null,
+          discountPercent: Number(editForm.discountPercent || 0),
+          billingNote: editForm.billingNote
         }
       });
       if (plainResetPass) {
@@ -687,10 +727,48 @@ export default function MultiSchoolManagement() {
     });
   }, [schools, searchQuery, statusFilter]);
 
+  const addonCatalogMap = useMemo(() => {
+    const list = saasPricing?.addonCatalog || [];
+    return new Map(list.map((a) => [a.moduleKey, a]));
+  }, [saasPricing]);
+
+  const estimateModalBilling = (formState, actualStudents = 0) => {
+    const stdBase = saasPricing?.basePricePerStudentYear ?? 120000;
+    const minStu = saasPricing?.minBillableStudentsPerSchool ?? 30;
+    const unitBase = formState.useCustomBasePrice
+      ? Math.max(0, Number(formState.customBasePricePerStudentYear) || 0)
+      : stdBase;
+    const billableStudents = Math.max(Number(actualStudents) || 0, minStu);
+    const coreArr = billableStudents * unitBase;
+
+    let addonArr = 0;
+    let addonCount = 0;
+    for (const modKey of formState.enabledModules || []) {
+      const addon = addonCatalogMap.get(modKey);
+      if (addon) {
+        addonCount += 1;
+        addonArr += addon.pricingMode === 'flat_school_year' ? addon.price : billableStudents * addon.price;
+      }
+    }
+    const subtotal = coreArr + addonArr;
+    const discPct = Math.min(100, Math.max(0, Number(formState.discountPercent) || 0));
+    const netArr = Math.max(0, Math.round(subtotal * (1 - discPct / 100)));
+    return {
+      billableStudents,
+      unitBase,
+      coreArr,
+      addonArr,
+      addonCount,
+      discPct,
+      netArr,
+      isTrial: formState.subscriptionPlan === 'trial'
+    };
+  };
+
   const navItems = [
     {
       id: 'overview',
-      label: 'Tổng quan & Kinh tế',
+      label: 'Tổng quan Hệ thống',
       icon: 'chart',
       theme: 'system',
       badge: alerts.length > 0 ? alerts.length : null,
@@ -698,7 +776,7 @@ export default function MultiSchoolManagement() {
     },
     {
       id: 'analytics',
-      label: 'Thống kê Sử dụng & Biểu đồ',
+      label: 'Báo cáo Tổng kết & Tăng trưởng',
       icon: 'activity',
       theme: 'finance',
       badge: null,
@@ -732,12 +810,12 @@ export default function MultiSchoolManagement() {
 
   const sectionTitleMap = {
     overview: {
-      title: 'Trung tâm Phân phối Phần mềm, Kinh tế & Hỗ trợ Các Trường',
-      subtitle: 'Cấp phép đơn vị trường sử dụng phần mềm, giám sát hạ tầng máy chủ, biểu đồ kinh tế và hỗ trợ kỹ thuật (mọi cảnh báo vận hành hằng ngày được gửi riêng về đúng từng trường).'
+      title: 'Trung tâm Điều hành Nền tảng Phần mềm SaaS Đa Trường',
+      subtitle: 'Giám sát tổng quan đơn vị trường sử dụng, tài khoản, doanh thu bản quyền phần mềm (ARR), các gói Add-on và sức khỏe hạ tầng máy chủ.'
     },
     analytics: {
-      title: 'Báo cáo Thống kê Mức độ Sử dụng Phần mềm & Biểu đồ Các Trường',
-      subtitle: 'Đo lường chi tiết cách từng trường khai thác gói tính năng, hạn mức Quota, tài khoản người dùng và đồng bộ Webhook.'
+      title: 'Báo cáo Tổng kết Tăng trưởng, Tài khoản & Doanh thu Bản quyền SaaS',
+      subtitle: 'Theo dõi tăng trưởng số trường dùng theo thời điểm, số lượng tài khoản ở từng trường, định giá theo học sinh/năm và doanh thu từ các gói Add-on.'
     },
     schools: {
       title: 'Cấp phép Đơn vị Trường, Tài khoản Admin & Webhook',
@@ -994,10 +1072,10 @@ export default function MultiSchoolManagement() {
                 <article className="superadmin-kpi-card">
                   <span className="superadmin-kpi-icon amber"><Icon name="money" size={21} /></span>
                   <div className="superadmin-kpi-body">
-                    <small>THỰC THU TRÊN NỀN TẢNG</small>
-                    <strong>{formatCurrency(summary.totalCollected)}</strong>
+                    <small>DOANH THU BẢN QUYỀN NĂM (ARR)</small>
+                    <strong>{formatCurrency(summary.totalContractedArr || 0)}</strong>
                     <span className="superadmin-kpi-sub">
-                      Đạt {summary.overallCollectionRatePercent}% · Dư nợ: {formatCurrency(summary.totalOutstandingDebt)}
+                      ~{formatCurrency(summary.estimatedMrr || 0)}/tháng · {summary.totalBillableStudents || 0} HS tính phí
                     </span>
                   </div>
                 </article>
@@ -1027,28 +1105,29 @@ export default function MultiSchoolManagement() {
                 </article>
               </div>
 
-              {/* BIỂU ĐỒ DASHBOARD XEM KINH TẾ TOÀN CHUỖI */}
+              {/* BIỂU ĐỒ TỔNG QUAN TÀI KHOẢN & DOANH THU BẢN QUYỀN SAAS */}
               <div className="superadmin-two-col">
                 <section className="content-card" style={{ padding: '20px 22px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
                     <div>
-                      <p className="card-kicker">BIỂU ĐỒ KINH TẾ CHUỖI TRƯỜNG</p>
-                      <h2 style={{ margin: '2px 0 0' }}>Doanh thu Học phí – Thực thu – Chi phí vận hành</h2>
+                      <p className="card-kicker">QUY MÔ KHÁCH HÀNG TRƯỜNG HỌC</p>
+                      <h2 style={{ margin: '2px 0 0' }}>Tài khoản sử dụng &amp; Giá trị Bản quyền từng trường</h2>
                     </div>
                     <button type="button" className="button button-secondary" onClick={() => setActiveSection('analytics')}>
-                      Phân tích sâu & Xuất Excel →
+                      Báo cáo Tăng trưởng &amp; Bảng giá →
                     </button>
                   </div>
-                  <EconomicPeriodChart economicTrend={economicTrend} schools={schools} />
+                  <SchoolComparisonBarChart schools={schools} />
                 </section>
 
                 <section className="content-card" style={{ padding: '20px 22px' }}>
-                  <p className="card-kicker">PHÂN TÍCH DÒNG TIỀN & CÔNG NỢ</p>
-                  <h2 style={{ margin: '2px 0 6px' }}>Cơ cấu Thực thu, Nợ đọng & Chi lương</h2>
-                  <CashflowDonutChart
-                    collected={summary.totalCollected}
-                    outstanding={summary.totalOutstandingDebt}
-                    expenditure={summary.totalExpenditure}
+                  <p className="card-kicker">DOANH THU PHẦN MỀM SAAS (ARR)</p>
+                  <h2 style={{ margin: '2px 0 6px' }}>Cơ cấu Gói Nền theo Học sinh &amp; Các Gói Add-on</h2>
+                  <SaasRevenueBreakdownDonut
+                    coreArr={summary.totalCoreArr || 0}
+                    perStudentAddonArr={summary.totalPerStudentAddonArr || 0}
+                    flatAddonArr={summary.totalFlatAddonArr || 0}
+                    potentialTrialArr={summary.totalPotentialTrialArr || 0}
                   />
                 </section>
               </div>
@@ -1242,9 +1321,9 @@ export default function MultiSchoolManagement() {
               <section className="content-card student-list-card">
                 <div className="list-toolbar">
                   <div>
-                    <p className="card-kicker">BÁO CÁO HIỆU SUẤT HOẠT ĐỘNG TỪNG TRƯỜNG</p>
-                    <h2>Bảng đối chiếu Vận hành – Chuyên cần – Tài chính ({schools.length} trường)</h2>
-                    <p>Bấm <strong>&quot;Báo cáo 360°&quot;</strong> để xem chi tiết từng phân hiệu, lớp học, công nợ học phí và lưu mẫu bếp ăn của trường đó.</p>
+                    <p className="card-kicker">BẢNG ĐỐI CHIẾU TÀI KHOẢN, QUY MÔ SỬ DỤNG &amp; HỢP ĐỒNG CÁC TRƯỜNG</p>
+                    <h2>Tổng hợp quy mô sử dụng &amp; phí bản quyền từng trường ({schools.length} trường)</h2>
+                    <p>Bấm <strong>&quot;Báo cáo 360°&quot;</strong> để xem chi tiết tài khoản từng bộ phận, các gói Add-on đang bật và cơ hội bán thêm cho trường đó.</p>
                   </div>
                   <button type="button" className="button button-secondary" onClick={() => setActiveSection('schools')}>
                     Mở quản lý & cấu hình trường →
@@ -1268,12 +1347,12 @@ export default function MultiSchoolManagement() {
                       <thead>
                         <tr>
                           <th>Trường học</th>
-                          <th>Quy mô & Lấp đầy</th>
-                          <th>Điểm danh hôm nay / 30 ngày</th>
-                          <th>Tiến độ thu học phí</th>
-                          <th>Hoạt động & Log</th>
+                          <th>Học sinh tính phí &amp; Quota</th>
+                          <th>Tài khoản đang sử dụng</th>
+                          <th>Gói Nền &amp; Add-on / Phí năm</th>
+                          <th>Hoạt động &amp; Webhook</th>
                           <th>Trạng thái</th>
-                          <th>Báo cáo & Điều hành</th>
+                          <th>Báo cáo &amp; Điều hành</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1282,39 +1361,36 @@ export default function MultiSchoolManagement() {
                             <td>
                               <strong style={{ color: '#1d4ed8' }}>{s.code}</strong> · <strong>{s.name}</strong>
                               <small style={{ display: 'block', color: '#64748b' }}>
-                                {s.campusCount} phân hiệu · {s.classCount} lớp · {s.staffCount} nhân sự
+                                {s.campusCount} phân hiệu · {s.classCount} lớp · {PLAN_LABELS[s.subscriptionPlan] || 'Gói Toàn diện'}
                               </small>
                             </td>
-                            <td style={{ minWidth: '150px' }}>
+                            <td style={{ minWidth: '155px' }}>
                               <div>
-                                <strong>{s.studentCount}</strong> / {s.quotas?.maxStudents || 800} HS ({s.occupancyPercent}% lớp)
+                                <strong>{s.saasBilling?.billableStudents || s.studentCount}</strong> HS tính phí ({s.studentCount}/{s.quotas?.maxStudents || 800} thực tế)
                               </div>
                               <div className="superadmin-progress-track">
-                                <div className="superadmin-progress-fill blue" style={{ width: `${s.occupancyPercent}%` }} />
+                                <div className="superadmin-progress-fill blue" style={{ width: `${s.usage?.studentQuotaPercent || 0}%` }} />
                               </div>
                             </td>
                             <td style={{ minWidth: '155px' }}>
                               <div>
-                                Hôm nay: <strong>{s.attendance?.todayRecorded > 0 ? `${s.attendance.todayPercent}%` : 'Chưa ĐD'}</strong>
-                                {' · '}30N: <strong>{s.attendance?.rolling30dPercent || 0}%</strong>
+                                <strong>{s.accountStats?.activeAccounts || 0} TK đang dùng</strong>
                               </div>
-                              <div className="superadmin-progress-track">
-                                <div
-                                  className="superadmin-progress-fill green"
-                                  style={{ width: `${s.attendance?.rolling30dPercent || 0}%` }}
-                                />
-                              </div>
+                              <small style={{ color: '#64748b' }}>
+                                {s.accountStats?.internalActiveAccounts || 0} nhân sự · {s.accountStats?.parentAccounts || 0} phụ huynh
+                              </small>
                             </td>
-                            <td style={{ minWidth: '165px' }}>
+                            <td style={{ minWidth: '175px' }}>
                               <div>
-                                <strong>{s.finance?.collectionRatePercent || 0}%</strong> ({formatCurrency(s.finance?.totalCollected)})
+                                <strong style={{ color: '#15803d' }}>
+                                  {s.saasBilling?.isTrial
+                                    ? 'Dùng thử (0 đ)'
+                                    : `${formatCurrency(s.saasBilling?.contractedArr || s.saasBilling?.netAnnualAmount || 0)}/năm`}
+                                </strong>
                               </div>
-                              <div className="superadmin-progress-track">
-                                <div
-                                  className="superadmin-progress-fill amber"
-                                  style={{ width: `${s.finance?.collectionRatePercent || 0}%` }}
-                                />
-                              </div>
+                              <small style={{ color: '#475569' }}>
+                                {s.saasBilling?.activeCoreCount || 6} Core · <strong>+{s.saasBilling?.activeAddonCount || 0} Add-on</strong>
+                              </small>
                             </td>
                             <td style={{ whiteSpace: 'nowrap', fontSize: '12.5px' }}>
                               {formatShortDate(s.accountStats?.lastActivityAt)}
@@ -1366,17 +1442,20 @@ export default function MultiSchoolManagement() {
           )}
 
           {/* ================================================================
-              MỤC 2: TRANG THỐNG KÊ MỨC ĐỘ SỬ DỤNG & BIỂU ĐỒ KINH TẾ
+              MỤC 2: BÁO CÁO TỔNG KẾT TĂNG TRƯỞNG, TÀI KHOẢN & DOANH THU BẢN QUYỀN SAAS
              ================================================================ */}
           {activeSection === 'analytics' && (
             <SuperAdminUsageAnalyticsPanel
               summary={summary}
-              economicTrend={economicTrend}
+              addonAdoption={addonAdoption}
+              saasPricing={saasPricing}
               roleDistribution={roleDistribution}
               schools={schools}
               onOpenReport={(id) => setReportSchoolId(id)}
-              onOpenSchoolLogs={openSchoolLogs}
+              onOpenConfig={openEditModal}
+              onOpenAccounts={(s) => setAccountModalSchool(s)}
               onEnterSchool={handleEnterSchool}
+              onPricingSaved={load}
             />
           )}
 
@@ -2205,35 +2284,85 @@ export default function MultiSchoolManagement() {
               </label>
             </div>
 
-            {/* KHỐI 3: CẤP QUYỀN QUẢN LÝ CHO TRƯỜNG (Đầy đủ 16 quyền, rõ chức năng từng mục) */}
+            {/* KHỐI 3: GÓI NỀN (CORE), CÁC GÓI BÁN THÊM (ADD-ON) & ĐƠN GIÁ BẢN QUYỀN */}
             <div className="sa-form-section-card">
               <div className="sa-form-section-head">
                 <strong>
-                  3. Quyền Quản lý &amp; Phân hệ cấp cho Trường ({createForm.enabledModules.length}/{moduleCatalog.length} quyền đang bật)
+                  3. Gói Nền &amp; Các Gói Add-on mở bán cho Trường ({createForm.enabledModules.length}/{moduleCatalog.length} module)
                 </strong>
                 <div className="sa-preset-bar">
                   <button
                     type="button"
                     className="sa-preset-btn"
-                    onClick={() => setCreateForm((p) => ({ ...p, enabledModules: moduleCatalog.map((m) => m.key) }))}
+                    data-no-progress="true"
+                    onClick={() => setCreateForm((p) => ({ ...p, enabledModules: [...CORE_ONLY_PRESET_MODULES] }))}
                   >
-                    Cấp đầy đủ 100% ({moduleCatalog.length}/{moduleCatalog.length})
+                    Chỉ Gói Nền Core (6 module)
                   </button>
                   <button
                     type="button"
                     className="sa-preset-btn"
+                    data-no-progress="true"
                     onClick={() => setCreateForm((p) => ({ ...p, enabledModules: [...BASIC_PRESET_MODULES] }))}
                   >
-                    Gói Cơ bản (Lớp, HS, Điểm danh, Học phí)
+                    Core + Add-on Bếp ăn &amp; Đón trẻ
                   </button>
                   <button
                     type="button"
                     className="sa-preset-btn"
-                    onClick={() => setCreateForm((p) => ({ ...p, enabledModules: [...ATTENDANCE_DEVICE_PRESET_MODULES] }))}
+                    data-no-progress="true"
+                    onClick={() => setCreateForm((p) => ({ ...p, enabledModules: moduleCatalog.map((m) => m.key) }))}
                   >
-                    Gói Chuyên cần &amp; Máy chấm công
+                    Trọn bộ Full Add-on ({moduleCatalog.length}/{moduleCatalog.length})
                   </button>
                 </div>
+              </div>
+
+              <div className="sa-form-grid-3">
+                <label style={{ flexDirection: 'row', alignItems: 'center', gap: 8, cursor: 'pointer', paddingTop: 22 }}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(createForm.useCustomBasePrice)}
+                    onChange={(e) =>
+                      setCreateForm((p) => ({
+                        ...p,
+                        useCustomBasePrice: e.target.checked,
+                        customBasePricePerStudentYear:
+                          p.customBasePricePerStudentYear || (saasPricing?.basePricePerStudentYear ?? 120000)
+                      }))
+                    }
+                  />
+                  <span>Áp dụng đơn giá /HS/năm riêng cho trường</span>
+                </label>
+
+                <label>
+                  Đơn giá Gói Nền / HS / năm (VND)
+                  <input
+                    type="number"
+                    min={0}
+                    step={5000}
+                    disabled={!createForm.useCustomBasePrice}
+                    value={
+                      createForm.useCustomBasePrice
+                        ? createForm.customBasePricePerStudentYear
+                        : (saasPricing?.basePricePerStudentYear ?? 120000)
+                    }
+                    onChange={(e) =>
+                      setCreateForm({ ...createForm, customBasePricePerStudentYear: e.target.value })
+                    }
+                  />
+                </label>
+
+                <label>
+                  Chiết khấu hợp đồng năm (%)
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={createForm.discountPercent}
+                    onChange={(e) => setCreateForm({ ...createForm, discountPercent: e.target.value })}
+                  />
+                </label>
               </div>
 
               {['Lớp học & Học sinh', 'An ninh, Bán trú & Chấm công', 'Nhân sự, Phân quyền & Tài chính', 'Điều hành Giám đốc & Tương tác Phụ huynh'].map(
@@ -2245,13 +2374,14 @@ export default function MultiSchoolManagement() {
                       <div className="sa-module-group-title">
                         <span>{groupTitle}</span>
                         <span>
-                          {groupItems.filter((m) => createForm.enabledModules.includes(m.key)).length}/{groupItems.length} quyền
+                          {groupItems.filter((m) => createForm.enabledModules.includes(m.key)).length}/{groupItems.length} đang bật
                         </span>
                       </div>
                       <div className="superadmin-module-grid">
                         {groupItems.map((mod) => {
                           const checked = createForm.enabledModules.includes(mod.key);
                           const fallbackMeta = DEFAULT_MODULE_CATALOG.find((d) => d.key === mod.key);
+                          const addonCfg = addonCatalogMap.get(mod.key);
                           return (
                             <label
                               key={mod.key}
@@ -2263,7 +2393,21 @@ export default function MultiSchoolManagement() {
                                 onChange={() => toggleCreateModule(mod.key)}
                               />
                               <span>
-                                <strong>{mod.label}</strong>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                  <strong>{mod.label}</strong>
+                                  {addonCfg ? (
+                                    <span className="sa-addon-price-pill">
+                                      Add-on{' '}
+                                      {addonCfg.price <= 0
+                                        ? '(0đ)'
+                                        : addonCfg.pricingMode === 'flat_school_year'
+                                          ? `+${formatCompactVnd(addonCfg.price)}/năm`
+                                          : `+${formatCompactVnd(addonCfg.price)}/HS`}
+                                    </span>
+                                  ) : (
+                                    <span className="sa-core-pill">Gói Nền</span>
+                                  )}
+                                </span>
                                 {(mod.desc || fallbackMeta?.desc) && (
                                   <small className="sa-module-item-desc">{mod.desc || fallbackMeta?.desc}</small>
                                 )}
@@ -2276,6 +2420,22 @@ export default function MultiSchoolManagement() {
                   );
                 }
               )}
+
+              {(() => {
+                const est = estimateModalBilling(createForm, 0);
+                return (
+                  <div className="sa-live-arr-estimate-bar">
+                    <span>
+                      <strong>Ước tính hợp đồng khởi điểm ({est.billableStudents} HS tối thiểu + {est.addonCount} Add-on):</strong>{' '}
+                      Nền {formatCurrency(est.coreArr)} + Add-on {formatCurrency(est.addonArr)}
+                      {est.discPct > 0 ? ` − CK ${est.discPct}%` : ''}
+                    </span>
+                    <strong style={{ fontSize: 15 }}>
+                      {est.isTrial ? `Dùng thử 0 đ (Sau Trial: ${formatCurrency(est.netArr)}/năm)` : `${formatCurrency(est.netArr)} / năm`}
+                    </strong>
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="account-modal-actions">
@@ -2514,24 +2674,81 @@ export default function MultiSchoolManagement() {
             <div className="sa-form-section-card">
               <div className="sa-form-section-head">
                 <strong>
-                  3. Bật / Tắt Quyền Quản lý của Trường ({editForm.enabledModules.length}/{moduleCatalog.length} quyền đang bật)
+                  3. Gói Nền, Các Gói Add-on &amp; Đơn giá Bản quyền của Trường ({editForm.enabledModules.length}/{moduleCatalog.length} module)
                 </strong>
                 <div className="sa-preset-bar">
                   <button
                     type="button"
                     className="sa-preset-btn"
-                    onClick={() => setEditForm((p) => ({ ...p, enabledModules: moduleCatalog.map((m) => m.key) }))}
+                    data-no-progress="true"
+                    onClick={() => setEditForm((p) => ({ ...p, enabledModules: [...CORE_ONLY_PRESET_MODULES] }))}
                   >
-                    Bật tất cả ({moduleCatalog.length}/{moduleCatalog.length})
+                    Chỉ Gói Nền Core
                   </button>
                   <button
                     type="button"
                     className="sa-preset-btn"
+                    data-no-progress="true"
                     onClick={() => setEditForm((p) => ({ ...p, enabledModules: [...BASIC_PRESET_MODULES] }))}
                   >
-                    Gói Cơ bản
+                    Core + Bếp ăn &amp; Đón trẻ
+                  </button>
+                  <button
+                    type="button"
+                    className="sa-preset-btn"
+                    data-no-progress="true"
+                    onClick={() => setEditForm((p) => ({ ...p, enabledModules: moduleCatalog.map((m) => m.key) }))}
+                  >
+                    Bật tất cả ({moduleCatalog.length}/{moduleCatalog.length})
                   </button>
                 </div>
+              </div>
+
+              <div className="sa-form-grid-3">
+                <label style={{ flexDirection: 'row', alignItems: 'center', gap: 8, cursor: 'pointer', paddingTop: 22 }}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(editForm.useCustomBasePrice)}
+                    onChange={(e) =>
+                      setEditForm((p) => ({
+                        ...p,
+                        useCustomBasePrice: e.target.checked,
+                        customBasePricePerStudentYear:
+                          p.customBasePricePerStudentYear || (saasPricing?.basePricePerStudentYear ?? 120000)
+                      }))
+                    }
+                  />
+                  <span>Áp dụng đơn giá /HS/năm riêng cho trường</span>
+                </label>
+
+                <label>
+                  Đơn giá Gói Nền / HS / năm (VND)
+                  <input
+                    type="number"
+                    min={0}
+                    step={5000}
+                    disabled={!editForm.useCustomBasePrice}
+                    value={
+                      editForm.useCustomBasePrice
+                        ? editForm.customBasePricePerStudentYear
+                        : (saasPricing?.basePricePerStudentYear ?? 120000)
+                    }
+                    onChange={(e) =>
+                      setEditForm({ ...editForm, customBasePricePerStudentYear: e.target.value })
+                    }
+                  />
+                </label>
+
+                <label>
+                  Chiết khấu hợp đồng năm (%)
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={editForm.discountPercent}
+                    onChange={(e) => setEditForm({ ...editForm, discountPercent: e.target.value })}
+                  />
+                </label>
               </div>
 
               {['Lớp học & Học sinh', 'An ninh, Bán trú & Chấm công', 'Nhân sự, Phân quyền & Tài chính', 'Điều hành Giám đốc & Tương tác Phụ huynh'].map(
@@ -2543,13 +2760,14 @@ export default function MultiSchoolManagement() {
                       <div className="sa-module-group-title">
                         <span>{groupTitle}</span>
                         <span>
-                          {groupItems.filter((m) => editForm.enabledModules.includes(m.key)).length}/{groupItems.length} quyền
+                          {groupItems.filter((m) => editForm.enabledModules.includes(m.key)).length}/{groupItems.length} đang bật
                         </span>
                       </div>
                       <div className="superadmin-module-grid">
                         {groupItems.map((mod) => {
                           const checked = editForm.enabledModules.includes(mod.key);
                           const fallbackMeta = DEFAULT_MODULE_CATALOG.find((d) => d.key === mod.key);
+                          const addonCfg = addonCatalogMap.get(mod.key);
                           return (
                             <label
                               key={mod.key}
@@ -2561,7 +2779,21 @@ export default function MultiSchoolManagement() {
                                 onChange={() => toggleEditModule(mod.key)}
                               />
                               <span>
-                                <strong>{mod.label}</strong>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                  <strong>{mod.label}</strong>
+                                  {addonCfg ? (
+                                    <span className="sa-addon-price-pill">
+                                      Add-on{' '}
+                                      {addonCfg.price <= 0
+                                        ? '(0đ)'
+                                        : addonCfg.pricingMode === 'flat_school_year'
+                                          ? `+${formatCompactVnd(addonCfg.price)}/năm`
+                                          : `+${formatCompactVnd(addonCfg.price)}/HS`}
+                                    </span>
+                                  ) : (
+                                    <span className="sa-core-pill">Gói Nền</span>
+                                  )}
+                                </span>
                                 {(mod.desc || fallbackMeta?.desc) && (
                                   <small className="sa-module-item-desc">{mod.desc || fallbackMeta?.desc}</small>
                                 )}
@@ -2574,6 +2806,22 @@ export default function MultiSchoolManagement() {
                   );
                 }
               )}
+
+              {(() => {
+                const est = estimateModalBilling(editForm, editingSchool?.studentCount || 0);
+                return (
+                  <div className="sa-live-arr-estimate-bar">
+                    <span>
+                      <strong>Phí bản quyền/năm của {editingSchool?.code} ({est.billableStudents} HS tính phí + {est.addonCount} Add-on):</strong>{' '}
+                      Nền {formatCurrency(est.coreArr)} + Add-on {formatCurrency(est.addonArr)}
+                      {est.discPct > 0 ? ` − CK ${est.discPct}%` : ''}
+                    </span>
+                    <strong style={{ fontSize: 15 }}>
+                      {est.isTrial ? `Đang dùng thử (Quy đổi: ${formatCurrency(est.netArr)}/năm)` : `${formatCurrency(est.netArr)} / năm`}
+                    </strong>
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="account-modal-actions">

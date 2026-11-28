@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import Icon from './Icon';
 import { getSuperAdminSchoolReport } from '../api/multiSchool';
 
-const formatCurrency = (val) => `${new Intl.NumberFormat('vi-VN').format(Number(val) || 0)} đ`;
+const formatCurrency = (val) => `${new Intl.NumberFormat('vi-VN').format(Math.round(Number(val) || 0))} đ`;
 
 const formatDateTime = (val) => {
   if (!val) return 'Chưa ghi nhận';
@@ -20,22 +20,27 @@ const formatDateTime = (val) => {
 
 const ROLE_LABELS = {
   admin: 'Admin Trường',
-  principal: 'Hiệu trưởng',
-  teacher: 'Giáo viên',
-  accountant: 'Kế toán',
-  hr: 'Nhân sự',
-  chef: 'Bếp trưởng',
-  guard: 'Bảo vệ',
-  parent: 'Phụ huynh'
+  principal: 'Ban Giám hiệu / Hiệu trưởng',
+  teacher: 'Giáo viên đứng lớp',
+  accountant: 'Kế toán học phí',
+  hr: 'Nhân sự & Tiền lương',
+  chef: 'Đầu bếp & Dinh dưỡng',
+  guard: 'Nhân viên & Bảo vệ',
+  parent: 'Phụ huynh học sinh'
 };
 
-const SAMPLE_STATUS_LABELS = {
-  stored: 'Đang lưu mẫu 24h',
-  disposed_normal: 'Đã hủy mẫu đạt chuẩn',
-  sent_to_lab: 'Đã gửi xét nghiệm',
-  investigating: 'Đang điều tra sự cố'
+const PLAN_LABELS = {
+  professional: 'Gói Toàn diện (Professional)',
+  standard: 'Gói Tiêu chuẩn',
+  enterprise: 'Gói Chuỗi trường (Enterprise)',
+  trial: 'Gói Dùng thử (Trial)'
 };
 
+/**
+ * Modal Báo cáo 360° của từng Trường dành cho Nhà cung cấp Phần mềm (`SuperAdmin`).
+ * Chỉ hiển thị dữ liệu quy mô sử dụng, tài khoản các bộ phận, gói bản quyền Học sinh/năm & các Add-on
+ * (tuyệt đối không hiển thị sổ thu học phí hay lương nội bộ của trường).
+ */
 export default function SuperAdminSchoolReportModal({
   schoolId,
   moduleCatalog = [],
@@ -91,7 +96,11 @@ export default function SuperAdminSchoolReportModal({
   if (!schoolId) return null;
 
   const school = report?.school;
-  const moduleMap = new Map(moduleCatalog.map((m) => [m.key, m.label]));
+  const billing = school?.saasBilling || report?.saasContract?.billing || {};
+  const upsellAddons = school?.availableAddonsToUpsell || report?.saasContract?.availableAddonsToUpsell || [];
+  const moduleMap = new Map(moduleCatalog.map((m) => [m.key, m]));
+  const totalAccountsCount = (report?.accountsByRole || []).reduce((s, r) => s + (r.total || 0), 0);
+  const activeAccountsCount = (report?.accountsByRole || []).reduce((s, r) => s + (r.active || 0), 0);
 
   return createPortal(
     <div
@@ -107,18 +116,18 @@ export default function SuperAdminSchoolReportModal({
       >
         <div className="account-modal-header" style={{ alignItems: 'flex-start', gap: '16px', flexWrap: 'wrap' }}>
           <div>
-            <p className="card-kicker">BÁO CÁO GIÁM SÁT 360° DÀNH CHO SUPERADMIN</p>
+            <p className="card-kicker">HỒ SƠ KHÁCH HÀNG TRƯỜNG HỌC &amp; BÁO CÁO SỬ DỤNG 360°</p>
             <h2 style={{ margin: '4px 0' }}>
               {school ? `${school.name} (${school.code})` : 'Đang tải thông tin trường...'}
             </h2>
             {school && (
               <p style={{ margin: 0, fontSize: '13px', color: '#64748b' }}>
-                {school.organizationCode ? `Cụm: ${school.organizationCode} · ` : ''}
-                Trạng thái:{' '}
+                Gói: <strong>{PLAN_LABELS[school.subscriptionPlan] || 'Gói Toàn diện'}</strong> · Trạng thái:{' '}
                 <strong style={{ color: school.status === 'active' ? '#15803d' : '#b91c1c' }}>
                   {school.status === 'active' ? 'Đang hoạt động' : 'Tạm ngưng'}
                 </strong>
-                {school.contactEmail ? ` · Liên hệ: ${school.contactEmail}` : ''}
+                {school.contactPhone ? ` · SĐT: ${school.contactPhone}` : ''}
+                {school.contactEmail ? ` · Email: ${school.contactEmail}` : ''}
               </p>
             )}
           </div>
@@ -133,7 +142,7 @@ export default function SuperAdminSchoolReportModal({
                   onOpenConfig(school);
                 }}
               >
-                <Icon name="settings" size={15} /> Cấu hình & Phân hệ
+                <Icon name="settings" size={15} /> Cấu hình Giá &amp; Add-on
               </button>
             )}
             {school?.status === 'active' && onEnterWorkspace && (
@@ -145,7 +154,7 @@ export default function SuperAdminSchoolReportModal({
                   onEnterWorkspace(school);
                 }}
               >
-                <Icon name="shield" size={15} /> Vào điều hành trường
+                <Icon name="shield" size={15} /> Vào hỗ trợ kỹ thuật
               </button>
             )}
             <button type="button" className="button button-secondary" onClick={onClose}>
@@ -156,7 +165,8 @@ export default function SuperAdminSchoolReportModal({
 
         {loading ? (
           <div className="inline-loader" style={{ padding: '48px 0' }}>
-            Đang tổng hợp số liệu vận hành, điểm danh, tài chính và bếp ăn của trường...
+            <span className="loading-orb" />
+            Đang tổng hợp quy mô trường học, tài khoản sử dụng và hợp đồng bản quyền SaaS...
           </div>
         ) : error ? (
           <div className="form-error" role="alert" style={{ marginTop: '16px' }}>
@@ -167,31 +177,35 @@ export default function SuperAdminSchoolReportModal({
             <div className="superadmin-report-tabs" role="tablist">
               <button
                 type="button"
+                role="tab"
                 className={`superadmin-report-tab ${activeTab === 'overview' ? 'active' : ''}`}
                 onClick={() => setActiveTab('overview')}
               >
-                1. Tổng quan & Phân hiệu ({report.campuses?.length || 0})
+                1. Quy mô &amp; Phân hiệu ({report.campuses?.length || 0})
               </button>
               <button
                 type="button"
+                role="tab"
+                className={`superadmin-report-tab ${activeTab === 'accounts' ? 'active' : ''}`}
+                onClick={() => setActiveTab('accounts')}
+              >
+                2. Tài khoản đang sử dụng ({activeAccountsCount}/{totalAccountsCount})
+              </button>
+              <button
+                type="button"
+                role="tab"
+                className={`superadmin-report-tab ${activeTab === 'licensing' ? 'active' : ''}`}
+                onClick={() => setActiveTab('licensing')}
+              >
+                3. Hợp đồng Bản quyền &amp; Gói Add-on
+              </button>
+              <button
+                type="button"
+                role="tab"
                 className={`superadmin-report-tab ${activeTab === 'classes' ? 'active' : ''}`}
                 onClick={() => setActiveTab('classes')}
               >
-                2. Lớp học & Điểm danh 7 ngày ({report.classrooms?.length || 0} lớp)
-              </button>
-              <button
-                type="button"
-                className={`superadmin-report-tab ${activeTab === 'finance' ? 'active' : ''}`}
-                onClick={() => setActiveTab('finance')}
-              >
-                3. Tài chính Học phí & Chi phí
-              </button>
-              <button
-                type="button"
-                className={`superadmin-report-tab ${activeTab === 'safety' ? 'active' : ''}`}
-                onClick={() => setActiveTab('safety')}
-              >
-                4. Bếp ăn 24h, Phản hồi PH & Tài khoản
+                4. Lớp học &amp; Mức độ vận hành ({report.classrooms?.length || 0} lớp)
               </button>
             </div>
 
@@ -199,74 +213,44 @@ export default function SuperAdminSchoolReportModal({
               <div>
                 <div className="superadmin-kpi-grid" style={{ marginBottom: '18px' }}>
                   <div className="superadmin-kpi-card">
-                    <span className="superadmin-kpi-icon blue"><Icon name="grid" size={20} /></span>
+                    <span className="superadmin-kpi-icon green"><Icon name="money" size={20} /></span>
                     <div className="superadmin-kpi-body">
-                      <small>PHÂN HIỆU / HẠN MỨC</small>
-                      <strong>{report.campuses.length} / {school.quotas.maxCampuses} cơ sở</strong>
-                      <span className="superadmin-kpi-sub">{report.classrooms.length} lớp học đang mở</span>
+                      <small>PHÍ BẢN QUYỀN NĂM (ARR)</small>
+                      <strong>
+                        {billing.isTrial ? 'Đang dùng thử (0 đ)' : formatCurrency(billing.netAnnualAmount || 0)}
+                      </strong>
+                      <span className="superadmin-kpi-sub">
+                        {billing.billableStudents || 0} HS tính phí · {billing.activeAddonCount || 0} Add-on
+                      </span>
                     </div>
                   </div>
                   <div className="superadmin-kpi-card">
                     <span className="superadmin-kpi-icon purple"><Icon name="students" size={20} /></span>
                     <div className="superadmin-kpi-body">
-                      <small>HỌC SINH ĐANG HỌC / HẠN MỨC</small>
-                      <strong>{(report.students.enrolled || 0) + (report.students.temporarily_absent || 0)} / {school.quotas.maxStudents}</strong>
+                      <small>HỌC SINH ĐANG HỌC / QUOTA</small>
+                      <strong>
+                        {(report.students.enrolled || 0) + (report.students.temporarily_absent || 0)} / {school.quotas.maxStudents}
+                      </strong>
                       <span className="superadmin-kpi-sub">
-                        Bảo lưu: {report.students.temporarily_absent || 0} · Đã nghỉ: {report.students.withdrawn || 0}
+                        Bảo lưu: {report.students.temporarily_absent || 0} · Đã thôi học: {report.students.withdrawn || 0}
                       </span>
                     </div>
                   </div>
                   <div className="superadmin-kpi-card">
-                    <span className="superadmin-kpi-icon green"><Icon name="attendance" size={20} /></span>
+                    <span className="superadmin-kpi-icon blue"><Icon name="users" size={20} /></span>
                     <div className="superadmin-kpi-body">
-                      <small>ĐIỂM DANH HÔM NAY ({report.attendance.today._id})</small>
-                      <strong>{(report.attendance.today.present || 0) + (report.attendance.today.late || 0)} có mặt</strong>
-                      <span className="superadmin-kpi-sub">
-                        Nghỉ phép: {report.attendance.today.absentPermission || 0} · Không phép: {report.attendance.today.absentUnexcused || 0}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="superadmin-kpi-card">
-                    <span className="superadmin-kpi-icon amber"><Icon name="money" size={20} /></span>
-                    <div className="superadmin-kpi-body">
-                      <small>TỶ LỆ THU HỌC PHÍ</small>
-                      <strong>{report.finance.summary.collectionRatePercent}%</strong>
-                      <span className="superadmin-kpi-sub">
-                        Đã thu: {formatCurrency(report.finance.summary.totalCollected)}
-                      </span>
+                      <small>TÀI KHOẢN SỬ DỤNG CỦA TRƯỜNG</small>
+                      <strong>{activeAccountsCount} hoạt động</strong>
+                      <span className="superadmin-kpi-sub">Tổng tài khoản đã cấp: {totalAccountsCount}</span>
                     </div>
                   </div>
                 </div>
 
-                <section className="content-card" style={{ padding: '16px 20px', marginBottom: '16px' }}>
-                  <p className="card-kicker" style={{ marginBottom: '8px' }}>
-                    PHÂN HỆ CHỨC NĂNG ĐANG ĐƯỢC CẤP PHÉP ({school.enabledModules.length}/{moduleCatalog.length || 14})
-                  </p>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                    {school.enabledModules.map((modKey) => (
-                      <span
-                        key={modKey}
-                        style={{
-                          padding: '5px 11px',
-                          borderRadius: '999px',
-                          background: '#eff6ff',
-                          border: '1px solid #bfdbfe',
-                          color: '#1e40af',
-                          fontSize: '12.5px',
-                          fontWeight: 600
-                        }}
-                      >
-                        ✓ {moduleMap.get(modKey) || modKey}
-                      </span>
-                    ))}
-                  </div>
-                </section>
-
-                <section className="content-card student-list-card" style={{ marginBottom: '16px' }}>
+                <section className="content-card student-list-card">
                   <div className="list-toolbar">
                     <div>
-                      <p className="card-kicker">CẤU TRÚC CƠ SỞ VẬT CHẤT</p>
-                      <h3 style={{ margin: '2px 0' }}>Danh sách Phân hiệu / Cơ sở trực thuộc</h3>
+                      <p className="card-kicker">CẤU TRÚC PHÂN HIỆU / CƠ SỞ</p>
+                      <h3 style={{ margin: '2px 0' }}>Danh sách Phân hiệu thuộc trường ({report.campuses.length} cơ sở)</h3>
                     </div>
                   </div>
                   <div className="table-wrap">
@@ -275,10 +259,9 @@ export default function SuperAdminSchoolReportModal({
                         <tr>
                           <th>Mã cơ sở</th>
                           <th>Tên phân hiệu</th>
-                          <th>Địa chỉ & SĐT</th>
-                          <th>Phụ trách & Giờ mở cửa</th>
-                          <th>Số lớp / Sĩ số</th>
-                          <th>Lấp đầy</th>
+                          <th>Địa chỉ &amp; SĐT</th>
+                          <th>Người phụ trách</th>
+                          <th>Số lớp / Học sinh</th>
                           <th>Trạng thái</th>
                         </tr>
                       </thead>
@@ -288,17 +271,13 @@ export default function SuperAdminSchoolReportModal({
                             <td><strong>{c.code}</strong></td>
                             <td><strong>{c.name}</strong></td>
                             <td>
-                              <div>{c.address || 'Chưa khai báo địa chỉ'}</div>
-                              {c.phone && <small style={{ color: '#64748b' }}>SĐT: {c.phone}</small>}
+                              <div>{c.address || school.address || 'Chưa cập nhật địa chỉ'}</div>
+                              {(c.phone || school.contactPhone) && (
+                                <small style={{ color: '#64748b' }}>SĐT: {c.phone || school.contactPhone}</small>
+                              )}
                             </td>
-                            <td>
-                              <div>{c.managerName || '—'}</div>
-                              <small style={{ color: '#64748b' }}>Giờ: {c.openTime} – {c.closeTime}</small>
-                            </td>
-                            <td>
-                              <strong>{c.classCount} lớp</strong> · {c.studentCount}/{c.capacity || 0} HS
-                            </td>
-                            <td><strong>{c.occupancyPercent}%</strong></td>
+                            <td>{c.managerName || school.representativeName || '—'}</td>
+                            <td><strong>{c.classCount} lớp</strong> · {c.studentCount} học sinh</td>
                             <td>
                               <span className={`student-status ${c.isActive ? 'enrolled' : 'temporarily_absent'}`}>
                                 {c.isActive ? 'Hoạt động' : 'Tạm ngưng'}
@@ -310,19 +289,62 @@ export default function SuperAdminSchoolReportModal({
                     </table>
                   </div>
                 </section>
+              </div>
+            )}
 
-                <section className="content-card student-list-card">
+            {activeTab === 'accounts' && (
+              <div>
+                <section className="content-card student-list-card" style={{ marginBottom: 16 }}>
                   <div className="list-toolbar">
                     <div>
-                      <p className="card-kicker">BAN ĐIỀU HÀNH NHÀ TRƯỜNG</p>
-                      <h3 style={{ margin: '2px 0' }}>Tài khoản Admin trường & Ban Giám hiệu</h3>
+                      <p className="card-kicker">TỔNG HỢP TÀI KHOẢN THEO VAI TRÒ</p>
+                      <h3 style={{ margin: '2px 0' }}>Số lượng tài khoản đang dùng ở từng bộ phận của trường</h3>
                     </div>
                   </div>
                   <div className="table-wrap">
                     <table className="data-table sa-clean-table">
                       <thead>
                         <tr>
-                          <th>Tài khoản</th>
+                          <th>Vai trò trong trường</th>
+                          <th>Tài khoản đang hoạt động</th>
+                          <th>Tổng tài khoản đã cấp</th>
+                          <th>Đăng nhập gần nhất</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {report.accountsByRole.length === 0 ? (
+                          <tr>
+                            <td colSpan={4} style={{ textAlign: 'center', color: '#64748b' }}>
+                              Trường chưa khởi tạo tài khoản người dùng nào.
+                            </td>
+                          </tr>
+                        ) : (
+                          report.accountsByRole.map((r) => (
+                            <tr key={r._id}>
+                              <td><strong>{ROLE_LABELS[r._id] || r._id}</strong></td>
+                              <td style={{ color: '#15803d', fontWeight: 700 }}>{r.active} tài khoản</td>
+                              <td>{r.total} tài khoản</td>
+                              <td>{formatDateTime(r.lastLogin)}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+
+                <section className="content-card student-list-card">
+                  <div className="list-toolbar">
+                    <div>
+                      <p className="card-kicker">TÀI KHOẢN QUẢN TRỊ BÀN GIAO</p>
+                      <h3 style={{ margin: '2px 0' }}>Admin trường &amp; Ban Giám hiệu</h3>
+                    </div>
+                  </div>
+                  <div className="table-wrap">
+                    <table className="data-table sa-clean-table">
+                      <thead>
+                        <tr>
+                          <th>Tên đăng nhập</th>
                           <th>Họ và tên</th>
                           <th>Vai trò</th>
                           <th>Liên hệ</th>
@@ -331,412 +353,171 @@ export default function SuperAdminSchoolReportModal({
                         </tr>
                       </thead>
                       <tbody>
-                        {report.leadershipAccounts.length === 0 ? (
-                          <tr>
-                            <td colSpan={6} style={{ textAlign: 'center', color: '#64748b' }}>
-                              Chưa có tài khoản quản trị hoặc hiệu trưởng nào.
+                        {report.leadershipAccounts.map((acc) => (
+                          <tr key={acc._id}>
+                            <td><strong>@{acc.username}</strong></td>
+                            <td>{acc.fullName}</td>
+                            <td>{ROLE_LABELS[acc.role] || acc.role}</td>
+                            <td>{acc.phone || acc.email || '—'}</td>
+                            <td>{formatDateTime(acc.lastLogin)}</td>
+                            <td>
+                              <span className={`student-status ${acc.status === 'active' ? 'enrolled' : 'withdrawn'}`}>
+                                {acc.status === 'active' ? 'Hoạt động' : 'Đã khóa'}
+                              </span>
                             </td>
                           </tr>
-                        ) : (
-                          report.leadershipAccounts.map((acc) => (
-                            <tr key={acc._id}>
-                              <td><strong>@{acc.username}</strong></td>
-                              <td>{acc.fullName}</td>
-                              <td>{ROLE_LABELS[acc.role] || acc.role}</td>
-                              <td>{acc.phone || acc.email || '—'}</td>
-                              <td>{formatDateTime(acc.lastLogin)}</td>
-                              <td>
-                                <span className={`student-status ${acc.status === 'active' ? 'enrolled' : 'withdrawn'}`}>
-                                  {acc.status === 'active' ? 'Hoạt động' : 'Đã khóa'}
-                                </span>
-                              </td>
-                            </tr>
-                          ))
-                        )}
+                        ))}
                       </tbody>
                     </table>
                   </div>
                 </section>
+              </div>
+            )}
+
+            {activeTab === 'licensing' && (
+              <div>
+                <section className="content-card" style={{ padding: '18px 22px', marginBottom: 16 }}>
+                  <p className="card-kicker" style={{ color: '#1d4ed8' }}>BẢNG TÍNH PHÍ BẢN QUYỀN NĂM CỦA TRƯỜNG</p>
+                  <div className="sa-form-grid-4" style={{ marginTop: 10 }}>
+                    <div className="superadmin-health-box">
+                      <small>SĨ SỐ TÍNH PHÍ / NĂM</small>
+                      <strong>{billing.billableStudents || 0} học sinh</strong>
+                      <small style={{ marginTop: 4 }}>Sĩ số thực tế: {billing.actualStudents || 0} bé</small>
+                    </div>
+                    <div className="superadmin-health-box">
+                      <small>PHÍ GÓI NỀN (THEO HS)</small>
+                      <strong>{formatCurrency(billing.coreAnnualAmount || 0)}</strong>
+                      <small style={{ marginTop: 4 }}>Đơn giá: {formatCurrency(billing.effectiveBasePrice || 0)}/HS/năm</small>
+                    </div>
+                    <div className="superadmin-health-box">
+                      <small>PHÍ CÁC GÓI ADD-ON ({billing.activeAddonCount || 0})</small>
+                      <strong style={{ color: '#0f766e' }}>{formatCurrency(billing.addonAnnualAmount || 0)}</strong>
+                      <small style={{ marginTop: 4 }}>Cộng gộp các module nâng cao đã bật</small>
+                    </div>
+                    <div className="superadmin-health-box" style={{ background: '#f0fdf4', borderColor: '#bbf7d0' }}>
+                      <small style={{ color: '#166534' }}>TỔNG HỢP ĐỒNG / NĂM (ARR)</small>
+                      <strong style={{ color: '#15803d' }}>{formatCurrency(billing.netAnnualAmount || 0)}</strong>
+                      <small style={{ marginTop: 4, color: '#166534' }}>
+                        {billing.discountPercent > 0 ? `Đã chiết khấu ${billing.discountPercent}%` : `~${formatCurrency(Math.round((billing.netAnnualAmount || 0) / 12))}/tháng`}
+                      </small>
+                    </div>
+                  </div>
+                </section>
+
+                <div className="superadmin-two-col">
+                  <section className="content-card" style={{ padding: '18px 20px' }}>
+                    <p className="card-kicker" style={{ color: '#15803d' }}>
+                      CÁC GÓI ADD-ON TRƯỜNG ĐANG SỬ DỤNG ({(billing.activeAddons || []).length})
+                    </p>
+                    {(billing.activeAddons || []).length === 0 ? (
+                      <p style={{ color: '#64748b', fontSize: 13 }}>Trường hiện chỉ sử dụng Gói Nền cơ bản.</p>
+                    ) : (
+                      <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
+                        {billing.activeAddons.map((ad) => (
+                          <div key={ad.moduleKey} className="sa-donut-row">
+                            <div>
+                              <strong>✓ {ad.label}</strong>
+                              <small style={{ display: 'block', color: '#64748b' }}>
+                                {ad.pricingMode === 'flat_school_year'
+                                  ? `Trọn gói ${formatCurrency(ad.unitPrice)}/trường/năm`
+                                  : `${formatCurrency(ad.unitPrice)}/HS/năm × ${billing.billableStudents} HS`}
+                              </small>
+                            </div>
+                            <strong style={{ color: '#15803d' }}>{formatCurrency(ad.annualAmount)}/năm</strong>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="content-card" style={{ padding: '18px 20px' }}>
+                    <p className="card-kicker" style={{ color: '#b45309' }}>
+                      GÓI ADD-ON CÓ THỂ CHÀO BÁN THÊM ({upsellAddons.length})
+                    </p>
+                    {upsellAddons.length === 0 ? (
+                      <p style={{ color: '#15803d', fontSize: 13, fontWeight: 600, marginTop: 10 }}>
+                        ✓ Trường đã kích hoạt trọn bộ 100% các gói Add-on trên hệ thống!
+                      </p>
+                    ) : (
+                      <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
+                        {upsellAddons.map((up) => (
+                          <div key={up.moduleKey} className="sa-donut-row">
+                            <div>
+                              <strong>{up.label}</strong>
+                              <small style={{ display: 'block', color: '#64748b' }}>{up.desc}</small>
+                            </div>
+                            <span className="sa-addon-price-pill">
+                              {up.pricingMode === 'flat_school_year'
+                                ? `+${formatCurrency(up.price)}/năm`
+                                : `+${formatCurrency(up.price)}/HS/năm`}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div style={{ marginTop: 14 }}>
+                      <small style={{ color: '#64748b', display: 'block', marginBottom: 6 }}>
+                        Module Gói Nền đang bật:
+                      </small>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {school.enabledModules
+                          .filter((k) => moduleMap.get(k)?.tier === 'core')
+                          .map((k) => (
+                            <span key={k} className="sa-addon-mini-chip">
+                              {moduleMap.get(k)?.label || k}
+                            </span>
+                          ))}
+                      </div>
+                    </div>
+                  </section>
+                </div>
               </div>
             )}
 
             {activeTab === 'classes' && (
-              <div>
-                <section className="content-card student-list-card" style={{ marginBottom: '18px' }}>
-                  <div className="list-toolbar">
-                    <div>
-                      <p className="card-kicker">CHUYÊN CẦN 7 NGÀY GẦN NHẤT</p>
-                      <h3 style={{ margin: '2px 0' }}>Thống kê điểm danh học sinh theo ngày</h3>
-                    </div>
-                  </div>
-                  <div className="table-wrap">
-                    <table className="data-table sa-clean-table">
-                      <thead>
-                        <tr>
-                          <th>Ngày học</th>
-                          <th>Có mặt đúng giờ</th>
-                          <th>Đi muộn</th>
-                          <th>Nghỉ có phép</th>
-                          <th>Nghỉ không phép</th>
-                          <th>Tổng ghi nhận</th>
-                          <th>Tỷ lệ đi học</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {report.attendance.last7Days.length === 0 ? (
-                          <tr>
-                            <td colSpan={7} style={{ textAlign: 'center', color: '#64748b' }}>
-                              Chưa phát sinh dữ liệu điểm danh trong 7 ngày qua.
-                            </td>
-                          </tr>
-                        ) : (
-                          report.attendance.last7Days.map((row) => {
-                            const rate = row.total > 0 ? Math.round(((row.present + row.late) / row.total) * 100) : 0;
-                            return (
-                              <tr key={row._id}>
-                                <td><strong>{row._id}</strong></td>
-                                <td style={{ color: '#15803d', fontWeight: 700 }}>{row.present}</td>
-                                <td style={{ color: '#b45309', fontWeight: 600 }}>{row.late}</td>
-                                <td>{row.absentPermission}</td>
-                                <td style={{ color: row.absentUnexcused > 0 ? '#b91c1c' : undefined }}>
-                                  {row.absentUnexcused}
-                                </td>
-                                <td>{row.total}</td>
-                                <td><strong>{rate}%</strong></td>
-                              </tr>
-                            );
-                          })
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-
-                <section className="content-card student-list-card">
-                  <div className="list-toolbar">
-                    <div>
-                      <p className="card-kicker">DANH MỤC LỚP HỌC ĐANG MỞ</p>
-                      <h3 style={{ margin: '2px 0' }}>Chi tiết sĩ số & Giáo viên chủ nhiệm từng lớp</h3>
-                    </div>
-                  </div>
-                  <div className="table-wrap">
-                    <table className="data-table sa-clean-table">
-                      <thead>
-                        <tr>
-                          <th>Tên lớp</th>
-                          <th>Độ tuổi</th>
-                          <th>Phân hiệu</th>
-                          <th>Giáo viên chủ nhiệm</th>
-                          <th>Sĩ số / Tối đa</th>
-                          <th>Trẻ có lưu ý dị ứng</th>
-                          <th>Lấp đầy</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {report.classrooms.length === 0 ? (
-                          <tr>
-                            <td colSpan={7} style={{ textAlign: 'center', color: '#64748b' }}>
-                              Trường chưa mở lớp học nào.
-                            </td>
-                          </tr>
-                        ) : (
-                          report.classrooms.map((cls) => (
-                            <tr key={cls._id}>
-                              <td><strong>{cls.name}</strong></td>
-                              <td>{cls.ageGroup}</td>
-                              <td>{cls.campus}</td>
-                              <td>{cls.homeroomTeacher}</td>
-                              <td><strong>{cls.studentCount}</strong> / {cls.capacity}</td>
-                              <td>
-                                {cls.allergyCount > 0 ? (
-                                  <span style={{ color: '#b45309', fontWeight: 700 }}>{cls.allergyCount} trẻ</span>
-                                ) : (
-                                  '0'
-                                )}
-                              </td>
-                              <td><strong>{cls.occupancyPercent}%</strong></td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-              </div>
-            )}
-
-            {activeTab === 'finance' && (
-              <div>
-                <div className="superadmin-kpi-grid" style={{ marginBottom: '18px' }}>
-                  <div className="superadmin-kpi-card">
-                    <span className="superadmin-kpi-icon blue"><Icon name="money" size={20} /></span>
-                    <div className="superadmin-kpi-body">
-                      <small>TỔNG PHẢI THU HỌC PHÍ</small>
-                      <strong>{formatCurrency(report.finance.summary.totalBilled)}</strong>
-                      <span className="superadmin-kpi-sub">{report.finance.summary.invoiceCount} phiếu báo thu</span>
-                    </div>
-                  </div>
-                  <div className="superadmin-kpi-card">
-                    <span className="superadmin-kpi-icon green"><Icon name="check" size={20} /></span>
-                    <div className="superadmin-kpi-body">
-                      <small>THỰC THU ĐÃ GHI NHẬN</small>
-                      <strong>{formatCurrency(report.finance.summary.totalCollected)}</strong>
-                      <span className="superadmin-kpi-sub">Đạt {report.finance.summary.collectionRatePercent}% kế hoạch</span>
-                    </div>
-                  </div>
-                  <div className="superadmin-kpi-card">
-                    <span className="superadmin-kpi-icon rose"><Icon name="alertCircle" size={20} /></span>
-                    <div className="superadmin-kpi-body">
-                      <small>CÔNG NỢ CÒN PHẢI THU</small>
-                      <strong>{formatCurrency(report.finance.summary.outstandingDebt)}</strong>
-                      <span className="superadmin-kpi-sub">Chưa thu / thu một phần</span>
-                    </div>
-                  </div>
-                  <div className="superadmin-kpi-card">
-                    <span className="superadmin-kpi-icon amber"><Icon name="chart" size={20} /></span>
-                    <div className="superadmin-kpi-body">
-                      <small>TỔNG CHI VẬN HÀNH & LƯƠNG</small>
-                      <strong>
-                        {formatCurrency(
-                          (report.finance.summary.totalOperatingExpenses || 0) +
-                          (report.finance.summary.totalPayrollPaid || 0)
-                        )}
-                      </strong>
-                      <span className="superadmin-kpi-sub">
-                        Vận hành: {formatCurrency(report.finance.summary.totalOperatingExpenses)}
-                      </span>
-                    </div>
+              <section className="content-card student-list-card">
+                <div className="list-toolbar">
+                  <div>
+                    <p className="card-kicker">DANH SÁCH LỚP HỌC ĐANG HOẠT ĐỘNG</p>
+                    <h3 style={{ margin: '2px 0' }}>Quy mô lớp học &amp; sĩ số của trường ({report.classrooms.length} lớp)</h3>
                   </div>
                 </div>
-
-                <section className="content-card student-list-card" style={{ marginBottom: '18px' }}>
-                  <div className="list-toolbar">
-                    <div>
-                      <p className="card-kicker">THEO KỲ KẾ TOÁN</p>
-                      <h3 style={{ margin: '2px 0' }}>Tổng hợp thu học phí theo từng tháng</h3>
-                    </div>
-                  </div>
-                  <div className="table-wrap">
-                    <table className="data-table sa-clean-table">
-                      <thead>
+                <div className="table-wrap">
+                  <table className="data-table sa-clean-table">
+                    <thead>
+                      <tr>
+                        <th>Tên lớp</th>
+                        <th>Nhóm tuổi</th>
+                        <th>Phân hiệu</th>
+                        <th>Giáo viên chủ nhiệm</th>
+                        <th>Sĩ số / Tối đa</th>
+                        <th>Tỷ lệ lấp đầy</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {report.classrooms.length === 0 ? (
                         <tr>
-                          <th>Kỳ thu (MM-YYYY)</th>
-                          <th>Số hóa đơn</th>
-                          <th>Tổng phải thu</th>
-                          <th>Đã thu</th>
-                          <th>Hoàn tất</th>
-                          <th>Thu 1 phần</th>
-                          <th>Chưa nộp</th>
+                          <td colSpan={6} style={{ textAlign: 'center', color: '#64748b' }}>
+                            Trường chưa khởi tạo lớp học nào.
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {report.finance.byPeriod.length === 0 ? (
-                          <tr>
-                            <td colSpan={7} style={{ textAlign: 'center', color: '#64748b' }}>
-                              Chưa phát sinh kỳ thu học phí nào.
-                            </td>
+                      ) : (
+                        report.classrooms.map((cls) => (
+                          <tr key={cls._id}>
+                            <td><strong>{cls.name}</strong></td>
+                            <td>{cls.ageGroup}</td>
+                            <td>{cls.campus}</td>
+                            <td>{cls.homeroomTeacher}</td>
+                            <td><strong>{cls.studentCount}</strong> / {cls.capacity}</td>
+                            <td><strong>{cls.occupancyPercent}%</strong></td>
                           </tr>
-                        ) : (
-                          report.finance.byPeriod.map((p) => (
-                            <tr key={p._id}>
-                              <td><strong>{p._id}</strong></td>
-                              <td>{p.invoiceCount}</td>
-                              <td>{formatCurrency(p.totalBilled)}</td>
-                              <td style={{ color: '#15803d', fontWeight: 700 }}>{formatCurrency(p.totalCollected)}</td>
-                              <td>{p.paidCount}</td>
-                              <td>{p.partialCount}</td>
-                              <td style={{ color: p.unpaidCount > 0 ? '#b91c1c' : undefined }}>{p.unpaidCount}</td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-
-                <section className="content-card student-list-card">
-                  <div className="list-toolbar">
-                    <div>
-                      <p className="card-kicker">QUỸ LƯƠNG NHÂN SỰ</p>
-                      <h3 style={{ margin: '2px 0' }}>Lịch sử bảng lương các kỳ gần nhất</h3>
-                    </div>
-                  </div>
-                  <div className="table-wrap">
-                    <table className="data-table sa-clean-table">
-                      <thead>
-                        <tr>
-                          <th>Kỳ lương</th>
-                          <th>Số nhân sự tính lương</th>
-                          <th>Tổng thực lĩnh (Net Salary)</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {report.finance.payrollHistory.length === 0 ? (
-                          <tr>
-                            <td colSpan={3} style={{ textAlign: 'center', color: '#64748b' }}>
-                              Chưa phát sinh bảng lương nào.
-                            </td>
-                          </tr>
-                        ) : (
-                          report.finance.payrollHistory.map((pr) => (
-                            <tr key={`${pr._id.month}-${pr._id.year}`}>
-                              <td><strong>Tháng {String(pr._id.month).padStart(2, '0')}/{pr._id.year}</strong></td>
-                              <td>{pr.staffCount} nhân sự</td>
-                              <td><strong>{formatCurrency(pr.totalNetSalary)}</strong></td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-              </div>
-            )}
-
-            {activeTab === 'safety' && (
-              <div>
-                <div className="superadmin-two-col">
-                  <section className="content-card student-list-card">
-                    <div className="list-toolbar">
-                      <div>
-                        <p className="card-kicker">AN TOÀN VỆ SINH THỰC PHẨM</p>
-                        <h3 style={{ margin: '2px 0' }}>Nhật ký lưu mẫu thức ăn 24h gần nhất</h3>
-                      </div>
-                    </div>
-                    <div className="table-wrap">
-                      <table className="data-table sa-clean-table">
-                        <thead>
-                          <tr>
-                            <th>Mã mẫu</th>
-                            <th>Món lưu</th>
-                            <th>Nhiệt độ</th>
-                            <th>Trạng thái</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {report.kitchenAndFeedback.recentFoodSamples.length === 0 ? (
-                            <tr>
-                              <td colSpan={4} style={{ textAlign: 'center', color: '#64748b' }}>
-                                Chưa có bản ghi lưu mẫu thức ăn.
-                              </td>
-                            </tr>
-                          ) : (
-                            report.kitchenAndFeedback.recentFoodSamples.map((smp) => (
-                              <tr key={smp._id}>
-                                <td><strong>{smp.sampleCode}</strong></td>
-                                <td>{smp.dishName}</td>
-                                <td>{smp.storageTemperature}°C</td>
-                                <td>
-                                  <span
-                                    className={`student-status ${
-                                      ['sent_to_lab', 'investigating'].includes(smp.status) ? 'withdrawn' : 'enrolled'
-                                    }`}
-                                  >
-                                    {SAMPLE_STATUS_LABELS[smp.status] || smp.status}
-                                  </span>
-                                </td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </section>
-
-                  <section className="content-card student-list-card">
-                    <div className="list-toolbar">
-                      <div>
-                        <p className="card-kicker">PHÂN BỔ TÀI KHOẢN THEO VAI TRÒ</p>
-                        <h3 style={{ margin: '2px 0' }}>Hoạt động đăng nhập theo từng bộ phận</h3>
-                      </div>
-                    </div>
-                    <div className="table-wrap">
-                      <table className="data-table sa-clean-table">
-                        <thead>
-                          <tr>
-                            <th>Vai trò</th>
-                            <th>Đang hoạt động / Tổng</th>
-                            <th>Hoạt động gần nhất</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {report.accountsByRole.length === 0 ? (
-                            <tr>
-                              <td colSpan={3} style={{ textAlign: 'center', color: '#64748b' }}>
-                                Chưa có tài khoản người dùng.
-                              </td>
-                            </tr>
-                          ) : (
-                            report.accountsByRole.map((r) => (
-                              <tr key={r._id}>
-                                <td><strong>{ROLE_LABELS[r._id] || r._id}</strong></td>
-                                <td><strong>{r.active}</strong> / {r.total}</td>
-                                <td>{formatDateTime(r.lastLogin)}</td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </section>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
                 </div>
-
-                <section className="content-card student-list-card">
-                  <div className="list-toolbar">
-                    <div>
-                      <p className="card-kicker">TIẾP NHẬN Ý KIẾN PHỤ HUYNH</p>
-                      <h3 style={{ margin: '2px 0' }}>Phản hồi & Kiến nghị gần nhất từ Phụ huynh</h3>
-                    </div>
-                  </div>
-                  <div className="table-wrap">
-                    <table className="data-table sa-clean-table">
-                      <thead>
-                        <tr>
-                          <th>Phụ huynh / Học sinh</th>
-                          <th>Lớp</th>
-                          <th>Tiêu đề phản hồi</th>
-                          <th>Thời gian gửi</th>
-                          <th>Trạng thái</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {report.kitchenAndFeedback.openFeedbacks.length === 0 ? (
-                          <tr>
-                            <td colSpan={5} style={{ textAlign: 'center', color: '#64748b' }}>
-                              Không có phản hồi phụ huynh tồn đọng.
-                            </td>
-                          </tr>
-                        ) : (
-                          report.kitchenAndFeedback.openFeedbacks.map((fb) => (
-                            <tr key={fb._id}>
-                              <td>
-                                <strong>{fb.parentName}</strong>
-                                <small style={{ display: 'block', color: '#64748b' }}>Bé: {fb.studentName}</small>
-                              </td>
-                              <td>{fb.className || '—'}</td>
-                              <td>{fb.subject}</td>
-                              <td>{formatDateTime(fb.createdAt)}</td>
-                              <td>
-                                <span
-                                  className={`student-status ${
-                                    ['responded', 'closed'].includes(fb.status) ? 'enrolled' : 'temporarily_absent'
-                                  }`}
-                                >
-                                  {fb.status === 'pending'
-                                    ? 'Chờ phản hồi'
-                                    : fb.status === 'in_progress'
-                                      ? 'Đang xử lý'
-                                      : 'Đã giải quyết'}
-                                </span>
-                              </td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-              </div>
+              </section>
             )}
           </>
         ) : null}
@@ -745,4 +526,3 @@ export default function SuperAdminSchoolReportModal({
     document.body
   );
 }
-

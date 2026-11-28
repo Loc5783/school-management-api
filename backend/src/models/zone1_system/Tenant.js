@@ -88,6 +88,15 @@ const TenantSchema = new mongoose.Schema({
     maxStudents: { type: Number, min: 10, max: 20000, default: 800 },
     maxStaff: { type: Number, min: 5, max: 5000, default: 200 }
   },
+  // Chính sách giá bản quyền SaaS thỏa thuận riêng cho từng trường (nếu ghi đè bảng giá chuẩn hệ thống)
+  saasBilling: {
+    useCustomBasePrice: { type: Boolean, default: false },
+    customBasePricePerStudentYear: { type: Number, min: 0, max: 50000000, default: null },
+    useCustomMinStudents: { type: Boolean, default: false },
+    customMinBillableStudents: { type: Number, min: 0, max: 5000, default: null },
+    discountPercent: { type: Number, min: 0, max: 100, default: 0 },
+    billingNote: { type: String, trim: true, maxlength: 300, default: '' }
+  },
   config: {
     type: mongoose.Schema.Types.Mixed,
     default: {}

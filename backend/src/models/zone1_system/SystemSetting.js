@@ -139,6 +139,36 @@ const SystemSettingSchema = new mongoose.Schema(
         default: true
       }
     },
+    // Cấu hình Bảng giá Bản quyền Phần mềm SaaS (Thu theo Học sinh/năm + Các Gói Add-on bán thêm)
+    saasPricing: {
+      basePricePerStudentYear: {
+        type: Number,
+        min: 0,
+        max: 50000000,
+        default: 120000
+      },
+      minBillableStudentsPerSchool: {
+        type: Number,
+        min: 0,
+        max: 5000,
+        default: 30
+      },
+      coreModules: {
+        type: [String],
+        default: ['classrooms', 'students', 'attendance', 'accounts', 'notifications', 'reports']
+      },
+      addonCatalog: [
+        {
+          moduleKey: { type: String, required: true, trim: true },
+          pricingMode: {
+            type: String,
+            enum: ['per_student_year', 'flat_school_year'],
+            default: 'per_student_year'
+          },
+          price: { type: Number, min: 0, max: 500000000, default: 0 }
+        }
+      ]
+    },
     // Cặp khóa ký số Ed25519 & Khóa phong bì cho Cầu nối Mạng Nội Bộ (127.0.0.1:18686) — tuyệt đối không trả ra API công khai
     connectorBridgeSecurity: {
       keyId: { type: String, default: '' },
