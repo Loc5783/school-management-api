@@ -20,14 +20,21 @@ const {
 describe('Hikvision ISAPI Client Unit Tests', () => {
 
   describe('SSRF & IP Safety Guards', () => {
-    test('strictly forbids device 192.168.1.22 under all conditions', () => {
-      expect(() => validateDeviceHost('192.168.1.22')).toThrow(HikvisionError);
-      expect(() => validateDeviceHost('192.168.1.22', { allowLoopbackInTest: true })).toThrow(HikvisionError);
+    test('allows all private LAN devices by default (including 192.168.1.22 & 192.168.1.8) and honors HIKVISION_EXCLUDED_IPS when configured', () => {
+      expect(validateDeviceHost('192.168.1.22')).toBe('192.168.1.22');
+      expect(validateDeviceHost('192.168.1.8')).toBe('192.168.1.8');
+
+      process.env.HIKVISION_EXCLUDED_IPS = '192.168.99.250';
       try {
-        validateDeviceHost('192.168.1.22');
-      } catch (err) {
-        expect(err.code).toBe('FORBIDDEN_DEVICE_IP');
-        expect(err.statusCode).toBe(403);
+        expect(() => validateDeviceHost('192.168.99.250')).toThrow(HikvisionError);
+        try {
+          validateDeviceHost('192.168.99.250');
+        } catch (err) {
+          expect(err.code).toBe('FORBIDDEN_DEVICE_IP');
+          expect(err.statusCode).toBe(403);
+        }
+      } finally {
+        delete process.env.HIKVISION_EXCLUDED_IPS;
       }
     });
 

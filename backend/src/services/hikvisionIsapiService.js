@@ -16,13 +16,22 @@ const https = require('https');
 const crypto = require('crypto');
 const os = require('os');
 const net = require('net');
+const dgram = require('dgram');
 
 // Strict SSRF IP Validation: Only allow standard private LAN subnets
 const PRIVATE_IPV4_REGEX = /^(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})$/;
 const PRIVATE_SUBNET_PREFIX_REGEX = /^(10\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}|192\.168\.\d{1,3})$/;
 
-// CRITICAL SAFETY GUARD: Specifically forbid device 192.168.1.22
-const FORBIDDEN_IPS = Object.freeze(['192.168.1.22']);
+// Danh sách IP loại trừ tùy chọn theo biến môi trường (mặc định rỗng để quét và kết nối được 100% máy chấm công trong mạng trường)
+const FORBIDDEN_IPS = Object.freeze([]);
+function getForbiddenIps() {
+  const raw = String(process.env.HIKVISION_EXCLUDED_IPS || '').trim();
+  if (!raw) return FORBIDDEN_IPS;
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 const MAX_HIKVISION_FACE_BYTES = 200 * 1024; // 200KB hardware limit
 
 // Bộ nhớ đệm Digest Nonce ngắn hạn (90s) theo endpoint giúp giảm 50% số gói tin khứ hồi khi đồng bộ hàng loạt
@@ -96,9 +105,9 @@ function validateDeviceHost(host, options = {}) {
   }
   const cleanHost = host.trim().replace(/^https?:\/\//i, '').split(':')[0].split('/')[0];
 
-  if (FORBIDDEN_IPS.includes(cleanHost)) {
+  if (getForbiddenIps().includes(cleanHost)) {
     throw new HikvisionError(
-      `Truy cập IP ${cleanHost} bị cấm tuyệt đối theo chính sách an toàn của dự án`,
+      `Truy cập IP ${cleanHost} đang nằm trong danh sách loại trừ cấu hình riêng`,
       'FORBIDDEN_DEVICE_IP',
       403
     );
@@ -1388,8 +1397,80 @@ function checkTcpPortFast(ip, port = 80, timeoutMs = 300) {
   });
 }
 
+function probeHikvisionSadpLan(waitMs = 900) {
+  return new Promise((resolve) => {
+    const byHost = new Map();
+    if (process.env.NODE_ENV === 'test') {
+      return resolve(byHost);
+    }
+    const sockets = [];
+    const bindTargets = new Set(['0.0.0.0']);
+    const interfaces = os.networkInterfaces();
+    for (const [ifaceName, ifaceList] of Object.entries(interfaces)) {
+      if (/(wsl|docker|vethernet|hyper-v|vbox|vmware|virbr|br-|veth)/i.test(ifaceName)) continue;
+      for (const iface of ifaceList || []) {
+        if (iface.family === 'IPv4' && !iface.internal && PRIVATE_IPV4_REGEX.test(iface.address)) {
+          bindTargets.add(iface.address);
+        }
+      }
+    }
+
+    const extractTag = (xml, tag) => {
+      const m = xml.match(new RegExp(`<${tag}>([^<]*)</${tag}>`, 'i'));
+      return m ? m[1].trim() : '';
+    };
+
+    const onMsg = (msg, rinfo) => {
+      const xml = Buffer.isBuffer(msg) ? msg.toString('utf8') : String(msg || '');
+      if (!xml.includes('ProbeMatch')) return;
+      const ipv4 = extractTag(xml, 'IPv4Address') || rinfo?.address || '';
+      if (!PRIVATE_IPV4_REGEX.test(ipv4)) return;
+      const httpPortRaw = Number(extractTag(xml, 'HttpPort'));
+      const port = Number.isInteger(httpPortRaw) && httpPortRaw >= 1 && httpPortRaw <= 65535 ? httpPortRaw : 80;
+      byHost.set(ipv4, {
+        host: ipv4,
+        port,
+        transportScheme: port === 443 ? 'https' : 'http',
+        model: extractTag(xml, 'DeviceDescription') || 'Hikvision Khuôn mặt',
+        serialNumber: extractTag(xml, 'DeviceSN') || '',
+        macAddress: extractTag(xml, 'MAC') || ''
+      });
+    };
+
+    for (const bindIp of bindTargets) {
+      try {
+        const sock = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+        sockets.push(sock);
+        sock.on('error', () => {});
+        sock.on('message', onMsg);
+        sock.bind(0, bindIp === '0.0.0.0' ? undefined : bindIp, () => {
+          try {
+            sock.setBroadcast(true);
+            if (bindIp !== '0.0.0.0') sock.setMulticastInterface(bindIp);
+          } catch { /* ignore */ }
+          const sendProbe = () => {
+            const uuid = crypto.randomUUID ? crypto.randomUUID().toUpperCase() : crypto.randomBytes(16).toString('hex').toUpperCase();
+            const buf = Buffer.from(`<?xml version="1.0" encoding="utf-8"?><Probe><Uuid>${uuid}</Uuid><Types>inquiry</Types></Probe>`, 'utf8');
+            try { sock.send(buf, 0, buf.length, 37020, '239.255.255.250'); } catch { /* ignore */ }
+            try { sock.send(buf, 0, buf.length, 37020, '255.255.255.255'); } catch { /* ignore */ }
+          };
+          sendProbe();
+          setTimeout(sendProbe, 250);
+        });
+      } catch { /* ignore */ }
+    }
+
+    setTimeout(() => {
+      for (const s of sockets) {
+        try { s.close(); } catch { /* ignore */ }
+      }
+      resolve(byHost);
+    }, waitMs);
+  });
+}
+
 async function probeHikvisionEndpoint(ip, port = 80) {
-  if (FORBIDDEN_IPS.includes(ip)) return null;
+  if (getForbiddenIps().includes(ip)) return null;
   try {
     const protocol = port === 443 ? 'https:' : 'http:';
     const res = await rawHttpRequest({
@@ -1398,9 +1479,18 @@ async function probeHikvisionEndpoint(ip, port = 80) {
       port,
       method: 'GET',
       path: '/ISAPI/System/deviceInfo',
-      timeout: 1000,
+      timeout: 1500,
       allowSelfSigned: true
     });
+
+    if (
+      protocol === 'http:' &&
+      [301, 302, 307, 308].includes(res.statusCode) &&
+      String(res.headers?.location || '').toLowerCase().startsWith('https://')
+    ) {
+      return probeHikvisionEndpoint(ip, 443);
+    }
+
     const wwwAuth = String(res.headers?.['www-authenticate'] || '');
     const serverHeader = String(res.headers?.['server'] || '');
     const bodyStr = String(res.data || '');
@@ -1409,18 +1499,26 @@ async function probeHikvisionEndpoint(ip, port = 80) {
       (res.statusCode === 401 && wwwAuth.toLowerCase().includes('digest')) ||
       serverHeader.toLowerCase().includes('hikvision') ||
       serverHeader.toLowerCase().includes('dnvrs') ||
-      serverHeader.toLowerCase().includes('webs') ||
+      serverHeader.toLowerCase().includes('app-webs') ||
+      bodyStr.includes('http://www.isapi.org') ||
       bodyStr.includes('Hikvision') ||
       bodyStr.includes('DeviceInfo');
 
     if (!isHikvision) return null;
 
     const realmMatch = wwwAuth.match(/realm="([^"]+)"/i);
+    const rawRealm = String(realmMatch?.[1] || '').trim();
+    const cleanRealm =
+      rawRealm && !/^(hikvision|digest|device|ip camera|login|web|webs)$/i.test(rawRealm) && !/^DS-[0-9A-F]{6,10}$/i.test(rawRealm)
+        ? rawRealm
+        : '';
+
     return {
       host: ip,
       port,
       transportScheme: port === 443 ? 'https' : 'http',
-      deviceHint: realmMatch?.[1] || serverHeader || 'Hikvision ISAPI Terminal'
+      deviceHint: cleanRealm || serverHeader || 'Hikvision ISAPI Terminal',
+      realmModel: cleanRealm
     };
   } catch {
     return null;
@@ -1459,9 +1557,9 @@ function resolveLanScanCandidateIps(subnetPrefix, existingDevices = []) {
       scannedLabels.push(`${p}.${start} - ${p}.${end}`);
       for (let i = start; i <= end; i += 1) candidates.add(`${p}.${i}`);
     } else if (singleIpMatch) {
-      if (FORBIDDEN_IPS.includes(singleIpMatch)) {
+      if (getForbiddenIps().includes(singleIpMatch)) {
         throw new HikvisionError(
-          `Truy cập IP ${singleIpMatch} bị cấm tuyệt đối theo chính sách an toàn của dự án`,
+          `Truy cập IP ${singleIpMatch} đang nằm trong danh sách loại trừ cấu hình riêng`,
           'FORBIDDEN_DEVICE_IP',
           403
         );
@@ -1510,7 +1608,7 @@ function resolveLanScanCandidateIps(subnetPrefix, existingDevices = []) {
     }
   }
 
-  for (const forbidden of FORBIDDEN_IPS) {
+  for (const forbidden of getForbiddenIps()) {
     candidates.delete(forbidden);
   }
 
@@ -1521,8 +1619,8 @@ function resolveLanScanCandidateIps(subnetPrefix, existingDevices = []) {
 }
 
 /**
- * Quét tự động các máy chấm công Hikvision trong mạng LAN nội bộ (cổng 80, 443, 8080),
- * hỗ trợ xác thực thử nếu truyền kèm tài khoản/mật khẩu để đọc luôn Model, Serial & Dung lượng 500 slot.
+ * Quét tự động TẤT CẢ máy chấm công Hikvision trong mạng LAN nội bộ bằng công nghệ Quét Kép
+ * (SADP Multicast UDP 37020 + ARP Priority + TCP/ISAPI cổng 80, 443, 8080).
  */
 async function discoverHikvisionDevicesOnLan({
   subnetPrefix = null,
@@ -1530,50 +1628,67 @@ async function discoverHikvisionDevicesOnLan({
   probeUsername = '',
   probePassword = ''
 } = {}) {
+  const forbiddenSet = new Set(getForbiddenIps());
+  const hasExplicitFilter = Boolean(subnetPrefix && String(subnetPrefix).trim());
   const { candidateIps, scannedSubnets } = resolveLanScanCandidateIps(subnetPrefix, existingDevices);
+  const candidateSet = new Set(candidateIps);
 
-  // Đọc bảng ARP của hệ điều hành trước để kiểm tra ưu tiên các thiết bị đang hoạt động trong mạng LAN
-  const arpIps = await new Promise((resolve) => {
-    const { execFile } = require('child_process');
-    execFile('arp', ['-a'], { timeout: 1200, windowsHide: true }, (err, stdout) => {
-      if (err || !stdout) return resolve(new Set());
-      const hits = new Set();
-      const matches = String(stdout).match(/\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})\b/g);
-      for (const ip of matches || []) {
-        if (ip && !ip.endsWith('.255') && !ip.endsWith('.0') && !FORBIDDEN_IPS.includes(ip)) {
-          hits.add(ip);
+  // Chạy song song SADP Multicast + đọc bảng ARP hệ điều hành
+  const [sadpMap, arpIps] = await Promise.all([
+    probeHikvisionSadpLan(900),
+    new Promise((resolve) => {
+      if (process.env.NODE_ENV === 'test') return resolve(new Set());
+      const { execFile } = require('child_process');
+      execFile('arp', ['-a'], { timeout: 1200, windowsHide: true }, (err, stdout) => {
+        if (err || !stdout) return resolve(new Set());
+        const hits = new Set();
+        const matches = String(stdout).match(/\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})\b/g);
+        for (const ip of matches || []) {
+          if (ip && !ip.endsWith('.255') && !ip.endsWith('.0') && !forbiddenSet.has(ip)) {
+            hits.add(ip);
+          }
         }
-      }
-      resolve(hits);
-    });
-  });
+        resolve(hits);
+      });
+    })
+  ]);
 
+  for (const [sadpHost] of sadpMap.entries()) {
+    if (!forbiddenSet.has(sadpHost) && (!hasExplicitFilter || candidateSet.has(sadpHost))) {
+      candidateSet.add(sadpHost);
+    }
+  }
+
+  const allCandidates = Array.from(candidateSet);
   const orderedIps = [
-    ...candidateIps.filter((ip) => arpIps.has(ip)),
-    ...candidateIps.filter((ip) => !arpIps.has(ip))
+    ...allCandidates.filter((ip) => sadpMap.has(ip) || arpIps.has(ip)),
+    ...allCandidates.filter((ip) => !sadpMap.has(ip) && !arpIps.has(ip))
   ];
 
-  // Giới hạn tối đa 16 luồng kiểm tra đồng thời, kiểm tra cổng 80 trước tiên với timeout 650ms
+  // Giới hạn 14 IP song song × 3 cổng (~42 socket) kiểm tra nhanh cổng SADP / 80 / 443 / 8080
   const openTargets = [];
   let cursor = 0;
-  const workerCount = Math.min(16, Math.max(1, orderedIps.length));
+  const workerCount = Math.min(14, Math.max(1, orderedIps.length));
   async function scanWorker() {
     while (true) {
       const idx = cursor;
       cursor += 1;
       if (idx >= orderedIps.length) break;
       const ip = orderedIps[idx];
-      const isKnownLive = arpIps.has(ip);
-      if (await checkTcpPortFast(ip, 80, isKnownLive ? 950 : 650)) {
-        openTargets.push({ ip, port: 80 });
-        continue;
+      const sadpHit = sadpMap.get(ip);
+      const isKnownLive = Boolean(sadpHit) || arpIps.has(ip);
+      const ports = [];
+      if (sadpHit?.port && ![80, 443, 8080].includes(sadpHit.port)) {
+        ports.push(sadpHit.port);
       }
-      if (await checkTcpPortFast(ip, 443, isKnownLive ? 650 : 420)) {
-        openTargets.push({ ip, port: 443 });
-        continue;
-      }
-      if (await checkTcpPortFast(ip, 8080, isKnownLive ? 650 : 420)) {
-        openTargets.push({ ip, port: 8080 });
+      ports.push(80, 443, 8080);
+
+      const timeoutMs = isKnownLive ? 900 : 320;
+      const checks = await Promise.all(
+        ports.map(async (p) => ((await checkTcpPortFast(ip, p, timeoutMs)) ? p : null))
+      );
+      for (const openPort of checks.filter(Boolean)) {
+        openTargets.push({ ip, port: openPort });
       }
     }
   }
@@ -1590,15 +1705,48 @@ async function discoverHikvisionDevicesOnLan({
     }
   }
 
-  const validHits = probed.filter(Boolean);
+  const mergedByHost = new Map();
+  for (const [host, sadpItem] of sadpMap.entries()) {
+    if (forbiddenSet.has(host)) continue;
+    if (hasExplicitFilter && !candidateSet.has(host)) continue;
+    mergedByHost.set(host, {
+      host,
+      port: sadpItem.port || 80,
+      transportScheme: sadpItem.transportScheme || 'http',
+      deviceHint: sadpItem.model || 'Hikvision Khuôn mặt',
+      model: sadpItem.model || 'Hikvision Khuôn mặt',
+      serialNumber: sadpItem.serialNumber || '',
+      macAddress: sadpItem.macAddress || ''
+    });
+  }
+
+  for (const item of probed.filter(Boolean)) {
+    const prev = mergedByHost.get(item.host);
+    mergedByHost.set(item.host, {
+      ...prev,
+      ...item,
+      model: prev?.model || item.realmModel || 'Hikvision Khuôn mặt',
+      serialNumber: prev?.serialNumber || '',
+      macAddress: prev?.macAddress || ''
+    });
+  }
+
+  const validHits = Array.from(mergedByHost.values()).sort((a, b) => {
+    const pa = String(a.host).split('.').map(Number);
+    const pb = String(b.host).split('.').map(Number);
+    for (let i = 0; i < 4; i += 1) {
+      if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+    }
+    return 0;
+  });
 
   const discoveredDevices = await Promise.all(
     validHits.map(async (item) => {
       const matched = savedByHost.get(item.host);
       const enriched = {
         ...item,
-        model: matched?.model || 'DS-K1T320MX',
-        serialNumber: matched?.serialNumber || '',
+        model: matched?.model || item.model || 'Hikvision Khuôn mặt',
+        serialNumber: matched?.serialNumber || item.serialNumber || '',
         currentStoredUsers: null,
         maxUserCapacity: 500,
         authVerified: false,

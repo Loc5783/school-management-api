@@ -638,13 +638,18 @@ describe('Multi-Campus Hikvision ISAPI 500-Slot & Biometric Face Sync Suite', ()
     expect(okDel.status).toBe(200);
   });
 
-  test('5. LAN Auto-Discovery supports single IP, CIDR, range & strictly blocks forbidden/public IPs', async () => {
-    const blockedRes = await request(app)
-      .post('/api/v1/timekeeping/devices/discover-lan')
-      .set('Authorization', `Bearer ${tokenAdminA}`)
-      .send({ subnetPrefix: '192.168.1.22' });
-    expect(blockedRes.status).toBe(403);
-    expect(blockedRes.body.code).toBe('FORBIDDEN_DEVICE_IP');
+  test('5. LAN Auto-Discovery supports single IP, CIDR, range & strictly blocks configured excluded/public IPs', async () => {
+    process.env.HIKVISION_EXCLUDED_IPS = '192.168.99.250';
+    try {
+      const blockedRes = await request(app)
+        .post('/api/v1/timekeeping/devices/discover-lan')
+        .set('Authorization', `Bearer ${tokenAdminA}`)
+        .send({ subnetPrefix: '192.168.99.250' });
+      expect(blockedRes.status).toBe(403);
+      expect(blockedRes.body.code).toBe('FORBIDDEN_DEVICE_IP');
+    } finally {
+      delete process.env.HIKVISION_EXCLUDED_IPS;
+    }
 
     const publicRes = await request(app)
       .post('/api/v1/timekeeping/devices/discover-lan')

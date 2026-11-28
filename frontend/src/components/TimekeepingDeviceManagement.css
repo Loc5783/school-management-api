@@ -1337,23 +1337,346 @@
   max-width: 340px;
 }
 
-/* ─── DẢI CẦU NỐI MẠNG NỘI BỘ 127.0.0.1:18686 & LUỒNG TRỰC TIẾP ─── */
+/* ─── DẢI CẦU NỐI MẠNG NỘI BỘ 127.0.0.1:18686, TAB CHUYỂN MỤC & HIỆU ỨNG TRỰC QUAN ─── */
+@keyframes hikSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes hikRadarWave {
+  0% {
+    transform: scale(0.82);
+    opacity: 0.75;
+  }
+  100% {
+    transform: scale(1.95);
+    opacity: 0;
+  }
+}
+
+@keyframes hikShimmerSlide {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes hikFadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.hik-spin {
+  animation: hikSpin 0.95s linear infinite;
+}
+
+.hik-fade-in {
+  animation: hikFadeInUp 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Thanh điều hướng 3 phân khu chức năng giúp trang gọn gàng, không phải cuộn dài */
+.hik-workspace-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 14px;
+  background: #ffffff;
+  border: 1px solid #dbe4f0;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.035);
+  overflow-x: auto;
+}
+
+.hik-workspace-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 10px;
+  border: 0;
+  background: transparent;
+  color: #475569;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.16s ease;
+}
+
+.hik-workspace-tab:hover {
+  color: #1d4ed8;
+  background: #f1f5f9;
+}
+
+.hik-workspace-tab.active {
+  color: #ffffff;
+  background: linear-gradient(115deg, #2563eb, #3b82f6);
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.22);
+}
+
+.hik-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.hik-workspace-tab.active .hik-tab-badge {
+  background: rgba(255, 255, 255, 0.24);
+  color: #ffffff;
+}
+
+/* Thanh công cụ cụm thiết bị sắp xếp phân nhóm rõ ràng */
+.hik-cluster-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.hik-toolbar-groups {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.hik-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.hik-toolbar-divider {
+  width: 1px;
+  height: 26px;
+  background: #cbd5e1;
+  margin: 0 2px;
+}
+
+@media (max-width: 760px) {
+  .hik-toolbar-divider {
+    display: none;
+  }
+}
+
+.hik-btn-primary {
+  background: linear-gradient(115deg, #2563eb, #1d4ed8);
+  border-color: #1d4ed8;
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
+}
+
+.hik-btn-primary:hover:not(:disabled) {
+  background: linear-gradient(115deg, #1d4ed8, #1e40af);
+}
+
+.hik-btn-secondary {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  color: #1e293b;
+}
+
+.hik-btn-secondary:hover:not(:disabled) {
+  border-color: #93c5fd;
+  color: #1d4ed8;
+  background: #f8fbff;
+}
+
+/* Hộp Hiệu Ứng Đang Quét Radar Mạng LAN Thời Gian Thực */
+.hik-radar-scanning-box {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 20px 22px;
+  border-radius: 14px;
+  background: #ffffff;
+  border: 1px solid #bfdbfe;
+  box-shadow: 0 6px 20px rgba(37, 99, 235, 0.06);
+}
+
+.hik-radar-orb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #eff6ff;
+  color: #2563eb;
+  flex-shrink: 0;
+}
+
+.hik-radar-orb::before,
+.hik-radar-orb::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(37, 99, 235, 0.45);
+  animation: hikRadarWave 1.8s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
+.hik-radar-orb::after {
+  animation-delay: 0.9s;
+}
+
+.hik-scan-progress-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.hik-scan-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.hik-scan-progress-head strong {
+  font-size: 14px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.hik-scan-progress-pct {
+  font-size: 12.5px;
+  font-weight: 800;
+  color: #2563eb;
+}
+
+.hik-scan-progress-track {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.hik-scan-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #2563eb, #60a5fa, #2563eb);
+  background-size: 200% 100%;
+  animation: hikShimmerSlide 1.6s linear infinite;
+  transition: width 0.28s ease;
+}
+
+.hik-scan-progress-sub {
+  margin: 0;
+  font-size: 12.5px;
+  color: #64748b;
+}
+
+/* Thanh tiến trình chạy trên đỉnh Thẻ Thiết bị khi đang Kéo / Đẩy / Đồng bộ */
+.hik-device-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.hik-card-busy-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3.5px;
+  background: linear-gradient(90deg, #2563eb, #38bdf8, #2563eb);
+  background-size: 200% 100%;
+  animation: hikShimmerSlide 1.3s linear infinite;
+}
+
+/* Phân chia 2 tầng nút trên Thẻ Máy chấm công: 3 nút chính + thanh tiện ích phụ gọn gàng */
+.hik-device-primary-actions {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr 1fr;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid #eef2f7;
+}
+
+@media (max-width: 620px) {
+  .hik-device-primary-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+.hik-device-utility-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-top: 8px;
+}
+
+.hik-utility-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 11.8px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.hik-utility-chip:hover:not(:disabled) {
+  border-color: #cbd5e1;
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.hik-utility-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .hik-connector-banner {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
   flex-wrap: wrap;
-  padding: 14px 18px;
-  border-radius: 16px;
+  padding: 12px 18px;
+  border-radius: 14px;
   font-size: 13px;
   line-height: 1.5;
 }
 
 .hik-connector-banner.online {
-  background: linear-gradient(115deg, #ecfdf5, #f0fdf4);
-  border: 1px solid #86efac;
-  color: #14532d;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  color: #1e293b;
 }
 
 .hik-connector-banner.offline {

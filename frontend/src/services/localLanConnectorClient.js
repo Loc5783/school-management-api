@@ -19,6 +19,17 @@ import {
 } from '../api/timekeeping';
 
 export const LOCAL_CONNECTOR_BASE_URL = 'http://127.0.0.1:18686';
+export const RECOMMENDED_CONNECTOR_VERSION = '2.2.0';
+
+function isSemverOlderThan(currentVer, targetVer) {
+  const cur = String(currentVer || '0.0.0').split('.').map((n) => Number(n) || 0);
+  const tgt = String(targetVer || '0.0.0').split('.').map((n) => Number(n) || 0);
+  for (let i = 0; i < 3; i += 1) {
+    if ((cur[i] || 0) < (tgt[i] || 0)) return true;
+    if ((cur[i] || 0) > (tgt[i] || 0)) return false;
+  }
+  return false;
+}
 
 let cachedGrant = null;
 
@@ -47,16 +58,18 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
 export async function probeLocalConnectorHealth() {
   try {
     const res = await fetchWithTimeout(`${LOCAL_CONNECTOR_BASE_URL}/health`, { method: 'GET' }, 1800);
-    if (!res.ok) return { online: false };
+    if (!res.ok) return { online: false, version: '', needsUpdate: false, lanIps: [] };
     const json = await res.json();
+    const version = json?.version || '2.0.0';
     return {
       online: Boolean(json?.success),
-      version: json?.version || '2.0.0',
+      version,
+      needsUpdate: Boolean(json?.success) && isSemverOlderThan(version, RECOMMENDED_CONNECTOR_VERSION),
       lanIps: Array.isArray(json?.lanIps) ? json.lanIps : [],
       message: json?.message || 'Bộ kết nối nội bộ đang sẵn sàng.'
     };
   } catch {
-    return { online: false, lanIps: [] };
+    return { online: false, version: '', needsUpdate: false, lanIps: [] };
   }
 }
 
@@ -138,8 +151,12 @@ async function callLocalConnectorPost(endpointPath, bodyPayload = {}, timeoutMs 
 export async function discoverLanViaLocalConnector({
   subnetPrefix = '',
   probeUsername = 'admin',
-  probePassword = ''
+  probePassword = '',
+  onProgress = null
 } = {}) {
+  if (typeof onProgress === 'function') {
+    onProgress(8, 'Đang kiểm tra kết nối cầu nối mạng nội bộ trên máy tính...');
+  }
   const health = await probeLocalConnectorHealth();
   const cleanInput = String(subnetPrefix || '').trim();
   const isLegacyV20 = health.online && String(health.version || '2.0.0') === '2.0.0';
@@ -175,9 +192,15 @@ export async function discoverLanViaLocalConnector({
         const end = Math.min(254, start + 9);
         windows.push(`${pref}.${start}-${end}`);
       }
-      // Chạy tối đa 2 cụm nhỏ song song (tối đa ~20 kết nối) để nhanh và không bao giờ trễ gói SYN
       for (let w = 0; w < windows.length; w += 2) {
         const pair = windows.slice(w, w + 2);
+        if (typeof onProgress === 'function') {
+          const pct = Math.min(92, Math.round(12 + ((w + 2) / windows.length) * 78));
+          onProgress(
+            pct,
+            `Đang rà quét dải mạng ${pair[0]}${mergedDevices.length > 0 ? ` · Đã phát hiện ${mergedDevices.length} máy` : ''}...`
+          );
+        }
         const results = await Promise.all(
           pair.map((rangeStr) =>
             callLocalConnectorPost(
@@ -199,6 +222,10 @@ export async function discoverLanViaLocalConnector({
       }
     }
   } else {
+    if (typeof onProgress === 'function') {
+      const targetHint = cleanInput || (health.lanIps?.[0] ? `${health.lanIps[0].split('.').slice(0, 3).join('.')}.1 - 254` : 'mạng nội bộ');
+      onProgress(28, `Đang dò tìm máy chấm công trực tuyến trên dải ${targetHint}...`);
+    }
     const localData = await callLocalConnectorPost(
       '/lan/discover',
       { subnetPrefix: cleanInput, probeUsername, probePassword },
@@ -208,10 +235,16 @@ export async function discoverLanViaLocalConnector({
     mergedDevices = localData?.discoveredDevices || [];
   }
 
+  if (typeof onProgress === 'function') {
+    onProgress(95, 'Đang đối chiếu trạng thái khóa bảo mật theo phân hiệu...');
+  }
   const enrichRes = await enrichConnectorScan({
     scannedSubnets: mergedSubnets,
     discoveredDevices: mergedDevices
   });
+  if (typeof onProgress === 'function') {
+    onProgress(100, 'Hoàn tất quét mạng nội bộ!');
+  }
   return {
     data: enrichRes.data?.data || { scannedSubnets: mergedSubnets, discoveredDevices: mergedDevices },
     message: enrichRes.data?.message || 'Đã quét xong mạng nội bộ tại trường!'

@@ -430,18 +430,23 @@ describe('SaaS Hikvision Multi-Tenant A/B Integration Test Suite', () => {
       expect(res.body.message).toContain('API Key');
     });
 
-    test('Registration with forbidden device 192.168.1.22 is strictly rejected with 403', async () => {
-      const res = await request(app)
-        .post('/api/v1/timekeeping/devices')
-        .set('Authorization', `Bearer ${tokenAdminA}`)
-        .send({
-          deviceCode: 'FORBIDDEN-01',
-          name: 'Máy Cấm',
-          host: '192.168.1.22'
-        });
+    test('Registration with configured HIKVISION_EXCLUDED_IPS is rejected with 403 while 192.168.1.22 is allowed', async () => {
+      process.env.HIKVISION_EXCLUDED_IPS = '192.168.99.250';
+      try {
+        const res = await request(app)
+          .post('/api/v1/timekeeping/devices')
+          .set('Authorization', `Bearer ${tokenAdminA}`)
+          .send({
+            deviceCode: 'FORBIDDEN-01',
+            name: 'Máy Loại Trừ',
+            host: '192.168.99.250'
+          });
 
-      expect(res.status).toBe(403);
-      expect(res.body.code).toBe('FORBIDDEN_DEVICE_IP');
+        expect(res.status).toBe(403);
+        expect(res.body.code).toBe('FORBIDDEN_DEVICE_IP');
+      } finally {
+        delete process.env.HIKVISION_EXCLUDED_IPS;
+      }
     });
 
     test('Registration with public IP (SSRF guard) is strictly rejected with 403', async () => {

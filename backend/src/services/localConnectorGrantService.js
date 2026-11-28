@@ -265,7 +265,7 @@ async function generateDownloadableConnectorZipBuffer() {
 
   const configJson = JSON.stringify(
     {
-      version: '2.0.0',
+      version: '2.2.0',
       keyId: cryptoBundle.keyId,
       publicKeyPem: cryptoBundle.publicKeyPem,
       envelopeSecretHex: cryptoBundle.envelopeSecretHex,
@@ -278,10 +278,11 @@ async function generateDownloadableConnectorZipBuffer() {
   const startAndAutoInstallBat = [
     '@echo off',
     'chcp 65001 >nul',
-    'title Bo Ket Noi May Cham Cong Noi Bo - Hoa Nang',
+    'title Bo Ket Noi May Cham Cong Noi Bo - Hoa Nang (v2.2.0)',
     'cd /d "%~dp0"',
     'echo ================================================================',
     'echo   BO KET NOI MAY CHAM CONG NOI BO HOA NANG (127.0.0.1:18686)',
+    'echo   Phien ban: v2.2.0 - Quet Kep SADP + TCP Toan Mang Noi Bo',
     'echo ================================================================',
     'where node >nul 2>nul',
     'if %errorlevel% neq 0 (',
@@ -289,16 +290,19 @@ async function generateDownloadableConnectorZipBuffer() {
     '  pause',
     '  exit /b 1',
     ')',
+    'echo [1/3] Dang dong phien ban Bo ket noi cu (neu dang chay ngam)...',
+    'for /f "tokens=5" %%a in (\'netstat -aon ^| findstr "127.0.0.1:18686"\') do taskkill /F /PID %%a >nul 2>nul',
+    'timeout /t 1 >nul',
     'set "STARTUP_VBS=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\HoaNangLanConnector.vbs"',
     'echo Set WshShell = CreateObject("WScript.Shell") > "%STARTUP_VBS%"',
     'echo WshShell.CurrentDirectory = "%~dp0" >> "%STARTUP_VBS%"',
     'echo WshShell.Run "node ""%~dp0connector-server.js""", 0, False >> "%STARTUP_VBS%"',
-    'echo [OK] Da cai tu dong khoi dong cung Windows!',
-    'echo [OK] Dang bat Bo ket noi ngam tai cong 127.0.0.1:18686...',
+    'echo [2/3] Da cai tu dong khoi dong cung Windows!',
+    'echo [3/3] Dang bat Bo ket noi v2.2.0 ngam tai cong 127.0.0.1:18686...',
     'wscript.exe "%STARTUP_VBS%"',
     'timeout /t 2 >nul',
     'echo.',
-    'echo HOAN TAT! Bay gio ban hay quay lai trinh duyet Web (trang May cham cong) va bam Quet / Dong bo nhe!',
+    'echo HOAN TAT! Bay gio ban hay quay lai trinh duyet Web (trang May cham cong) va bam Quet tim may trong mang nhe!',
     'pause'
   ].join('\r\n');
 
