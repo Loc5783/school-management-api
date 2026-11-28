@@ -740,6 +740,7 @@ describe('Local LAN Connector (127.0.0.1), Dynamic Domain Ed25519, Campus Serial
   test('4. Phân quyền mở khóa Serial (chỉ Kỹ thuật Nhà cung cấp), Dịch tiếng Việt 100% & Luồng thời gian thực cách ly theo trường', async () => {
     // Kiểm tra bộ dịch tiếng Việt tự nhiên — tuyệt đối không để lọt lỗi kỹ thuật thô
     const rawTechCases = [
+      new Error("ENOENT: no such file or directory, open '/local-lan-connector/connector-server.js'"),
       new Error('connect ETIMEDOUT 192.168.1.200:80'),
       Object.assign(new Error('Digest 401 Unauthorized'), { code: 'DEVICE_AUTH_FAILED' }),
       Object.assign(new Error('CORS Network Error Failed to fetch http://127.0.0.1:18686'), { code: 'CONNECTOR_NOT_RUNNING' }),
@@ -752,7 +753,7 @@ describe('Local LAN Connector (127.0.0.1), Dynamic Domain Ed25519, Campus Serial
       const fullText = formatFriendlyVietnameseHardwareNotice(errCase);
       expect(fullText.length).toBeGreaterThan(20);
       expect(vi.nextStepHint.length).toBeGreaterThan(10);
-      expect(fullText).not.toMatch(/CORS|Digest\s*401|ETIMEDOUT|ECONNREFUSED|subnet|regex|ISAPI|Failed to fetch/i);
+      expect(fullText).not.toMatch(/ENOENT|no such file|CORS|Digest\s*401|ETIMEDOUT|ECONNREFUSED|subnet|regex|ISAPI|Failed to fetch/i);
     }
 
     // Webhook điểm danh trực tiếp tại cổng Phân hiệu A:

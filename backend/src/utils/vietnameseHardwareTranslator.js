@@ -18,10 +18,18 @@ const TECHNICAL_JARGON_PATTERNS = [
   /\bENETUNREACH\b/gi,
   /\bECONNRESET\b/gi,
   /\bEPIPE\b/gi,
+  /\bENOENT\b:?/gi,
+  /\bEACCES\b:?/gi,
+  /\bEPERM\b:?/gi,
+  /\bEISDIR\b:?/gi,
+  /\bEADDRINUSE\b:?/gi,
+  /no such file or directory,?\s*(open\s*'[^']*')?/gi,
   /\bERR_[A-Z0-9_]+\b/gi,
   /\bHTTP\s*\d{3}\b/gi,
   /\bstatus\s*code\s*\d{3}\b/gi,
   /\bSSRF_BLOCKED\b/gi,
+  /\bISAPI\b/gi,
+  /\bAES-256-GCM\b/gi,
   /\bregex\b/gi,
   /\bsubnet\b/gi,
   /\bJSON\.parse\b/gi,
@@ -92,6 +100,21 @@ function translateHardwareErrorToVietnamese(errOrInput, context = {}) {
     : context.host
       ? `máy chấm công tại địa chỉ ${context.host}`
       : 'máy chấm công';
+
+  if (
+    code === 'CONNECTOR_PACKAGE_UNAVAILABLE' ||
+    code === 'ENOENT' ||
+    lower.includes('enoent') ||
+    lower.includes('no such file or directory')
+  ) {
+    return {
+      category: 'PACKAGE_UNAVAILABLE',
+      friendlyMessage:
+        'Tệp cài đặt Bộ kết nối nội bộ đang được chuẩn bị trên máy chủ.',
+      nextStepHint:
+        'Bạn vui lòng bấm Làm mới trang (F5) rồi nhấn tải lại "Bộ kết nối 1 chạm" nhé.'
+    };
+  }
 
   // 1. Chưa bật hoặc trình duyệt chặn Cầu nối nội bộ 127.0.0.1:18686
   if (

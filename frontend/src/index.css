@@ -2958,24 +2958,542 @@ input:-webkit-autofill:active {
 
 /* ==========================================================================
    10. Khoảng thoáng chuẩn dưới Topbar Sticky & Đáy màn hình (/campuses?tab=settings)
+       + Chuẩn hóa Input / Form toàn hệ thống (không đổ bóng lồng nhau, rõ nét, dễ nhập)
        + Chuyển nhanh Phân hiệu Kỹ thuật Nhà cung cấp & Toast Tiếng Việt Thời Gian Thực
    ========================================================================== */
 .page-content {
   padding-top: 28px !important;
-  padding-bottom: 72px !important;
+  padding-bottom: 88px !important;
 }
 
 .campus-settings-workspace,
 .classroom-page {
-  margin-top: 6px;
-  padding-bottom: 44px;
+  margin-top: 4px;
+  padding-bottom: 48px;
 }
 
 @media (max-width: 768px) {
   .page-content {
-    padding-top: 20px !important;
-    padding-bottom: 56px !important;
+    padding-top: 18px !important;
+    padding-bottom: 64px !important;
   }
+}
+
+/* Triệt tiêu lỗi đổ bóng Modal 65px khi .student-form đặt bên trong trang hoặc lồng trong .content-card */
+.content-card .student-form,
+form.student-form:not(.modal-card):not(.hr-modal):not(.account-modal-card),
+section.content-card.student-form,
+article.content-card.student-form {
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.05) !important;
+}
+
+.content-card > .student-form,
+.account-modal-card .student-form {
+  box-shadow: none !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+.modal-backdrop > .student-form,
+.modal-backdrop > .content-card.student-form {
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.24) !important;
+}
+
+/* Chuẩn hóa độ tương phản, chiều cao & cảm giác gõ của toàn bộ ô nhập liệu (.student-form, .classroom-form) */
+.student-form-grid {
+  gap: 18px 20px;
+}
+
+.student-form label,
+.classroom-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #1e293b;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.student-form label > input:not([type='checkbox']):not([type='radio']),
+.student-form label > select,
+.student-form label > textarea,
+.classroom-form input:not([type='checkbox']):not([type='radio']),
+.classroom-form select {
+  margin-top: 0 !important;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1.5px solid #cbd5e1 !important;
+  border-radius: 11px !important;
+  background: #ffffff !important;
+  color: #0f172a !important;
+  font-size: 13.5px !important;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03) !important;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease;
+}
+
+.student-form label > textarea {
+  min-height: 84px;
+  padding: 11px 14px;
+  line-height: 1.55;
+  font-weight: 500;
+}
+
+.student-form input::placeholder,
+.student-form textarea::placeholder,
+.classroom-form input::placeholder {
+  color: #94a3b8;
+  font-weight: 400;
+}
+
+.student-form label > input:not([type='checkbox']):not([type='radio']):hover:not(:disabled),
+.student-form label > select:hover:not(:disabled),
+.student-form label > textarea:hover:not(:disabled),
+.classroom-form input:hover:not(:disabled),
+.classroom-form select:hover:not(:disabled) {
+  border-color: #94a3b8 !important;
+}
+
+.student-form label > input:not([type='checkbox']):not([type='radio']):focus,
+.student-form label > select:focus,
+.student-form label > textarea:focus,
+.classroom-form input:focus,
+.classroom-form select:focus {
+  outline: none;
+  border-color: #2563eb !important;
+  background: #ffffff !important;
+  box-shadow: 0 0 0 3.5px rgba(37, 99, 235, 0.14) !important;
+}
+
+.student-form label > input:disabled,
+.student-form label > select:disabled,
+.student-form label > textarea:disabled {
+  background: #f1f5f9 !important;
+  color: #64748b !important;
+  cursor: not-allowed;
+}
+
+.student-form label > small {
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+/* Trang Cài đặt Tài khoản cá nhân (/staff-settings) gọn gàng, không kéo giãn 1400px */
+.staff-settings-card {
+  max-width: 640px;
+  overflow: visible;
+}
+
+.staff-settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 0 24px 26px !important;
+}
+
+.staff-settings-form h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.staff-settings-form > p {
+  margin: -8px 0 4px;
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+/* ==========================================================================
+   11. Bố cục Cài đặt Vận hành Phân hiệu (/campuses?tab=settings) chuẩn cân đối
+   ========================================================================== */
+.hn-campus-settings-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 330px;
+  gap: 22px;
+  align-items: start;
+  max-width: 1340px;
+}
+
+@media (max-width: 1140px) {
+  .hn-campus-settings-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.hn-campus-settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.hn-form-section-card {
+  background: #ffffff;
+  border: 1px solid #dbe4f0;
+  border-radius: 18px;
+  padding: 22px 24px 24px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.045);
+}
+
+.hn-section-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  padding-bottom: 16px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.hn-section-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  flex-shrink: 0;
+}
+
+.hn-section-icon.blue {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.hn-section-icon.amber {
+  background: #fef3c7;
+  color: #d97706;
+}
+
+.hn-section-icon.green {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.hn-section-head h3 {
+  margin: 0 0 3px;
+  font-size: 16px;
+  font-weight: 800;
+  color: #0f172a;
+  letter-spacing: -0.01em;
+}
+
+.hn-section-head p {
+  margin: 0;
+  font-size: 12.8px;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.hn-fields-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.hn-grid-contact-top {
+  display: grid;
+  grid-template-columns: 185px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.hn-grid-contact-bottom {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.85fr) minmax(0, 1.15fr);
+  gap: 16px;
+}
+
+.hn-grid-time-4 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.hn-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+@media (max-width: 920px) {
+  .hn-grid-contact-top,
+  .hn-grid-contact-bottom,
+  .hn-grid-time-4,
+  .hn-grid-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .hn-form-section-card {
+    padding: 18px 16px;
+  }
+  .hn-grid-contact-top,
+  .hn-grid-contact-bottom,
+  .hn-grid-time-4,
+  .hn-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.hn-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hn-field-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e293b;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.hn-field-req {
+  color: #dc2626;
+  font-weight: 800;
+}
+
+.hn-field input:not([type='checkbox']),
+.hn-field select,
+.hn-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1.5px solid #cbd5e1 !important;
+  border-radius: 11px !important;
+  background: #ffffff !important;
+  color: #0f172a !important;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 13.5px !important;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03) !important;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.hn-field textarea {
+  min-height: 76px;
+  padding: 10px 14px;
+  resize: vertical;
+  line-height: 1.55;
+  font-weight: 500;
+}
+
+.hn-field input::placeholder,
+.hn-field textarea::placeholder {
+  color: #94a3b8;
+  font-weight: 400;
+}
+
+.hn-field input:hover:not(:disabled),
+.hn-field select:hover:not(:disabled),
+.hn-field textarea:hover:not(:disabled) {
+  border-color: #94a3b8 !important;
+}
+
+.hn-field input:focus,
+.hn-field select:focus,
+.hn-field textarea:focus {
+  outline: none;
+  border-color: #2563eb !important;
+  box-shadow: 0 0 0 3.5px rgba(37, 99, 235, 0.14) !important;
+}
+
+.hn-field-hint {
+  font-size: 11.8px;
+  color: #64748b;
+  line-height: 1.4;
+}
+
+.hn-input-suffix-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.hn-input-suffix-wrap input {
+  padding-right: 54px !important;
+}
+
+.hn-input-suffix-tag {
+  position: absolute;
+  right: 10px;
+  padding: 3px 8px;
+  border-radius: 7px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 11.5px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+/* Thẻ Công tắc Bật/Tắt (Switch Card) hiện đại thay cho checkbox thô */
+.hn-switch-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 15px 16px;
+  border-radius: 14px;
+  border: 1.5px solid #e2e8f0;
+  background: #f8fafc;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background-color 0.16s ease;
+}
+
+.hn-switch-card.is-on {
+  border-color: #bfdbfe;
+  background: #f8fbff;
+}
+
+.hn-switch-card:hover {
+  border-color: #93c5fd;
+}
+
+.hn-switch-copy strong {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 3px;
+}
+
+.hn-switch-copy span {
+  display: block;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.hn-switch-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.hn-switch-pill {
+  position: relative;
+  flex-shrink: 0;
+  width: 44px;
+  height: 25px;
+  margin-top: 2px;
+  border-radius: 999px;
+  background: #cbd5e1;
+  transition: background-color 0.2s ease;
+}
+
+.hn-switch-pill::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 2px 5px rgba(15, 23, 42, 0.2);
+  transition: transform 0.2s ease;
+}
+
+.hn-switch-card.is-on .hn-switch-pill {
+  background: #2563eb;
+}
+
+.hn-switch-card.is-on .hn-switch-pill::after {
+  transform: translateX(19px);
+}
+
+/* Thanh Lưu cài đặt cuối biểu mẫu thoáng đãng, không bao giờ chạm sát đáy màn hình */
+.hn-settings-save-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 16px 22px;
+  margin-bottom: 18px;
+  border-radius: 16px;
+  background: #ffffff;
+  border: 1px solid #dbe4f0;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+}
+
+.hn-save-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
+}
+
+.hn-save-status.dirty {
+  color: #b45309;
+}
+
+.hn-save-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #10b981;
+}
+
+.hn-save-status.dirty .hn-save-dot {
+  background: #f59e0b;
+}
+
+/* Cột tóm tắt trực quan bên phải trang Cài đặt */
+.hn-settings-summary-aside {
+  position: sticky;
+  top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.hn-summary-card {
+  background: linear-gradient(160deg, #ffffff 0%, #f8fbff 100%);
+  border: 1px solid #dbeafe;
+  border-radius: 18px;
+  padding: 20px;
+  box-shadow: 0 8px 24px rgba(30, 58, 138, 0.05);
+}
+
+.hn-summary-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.hn-summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  font-size: 12.5px;
+}
+
+.hn-summary-row span {
+  color: #64748b;
+  font-weight: 600;
+}
+
+.hn-summary-row strong {
+  color: #0f172a;
+  font-weight: 800;
+  text-align: right;
 }
 
 .vendor-campus-switcher {

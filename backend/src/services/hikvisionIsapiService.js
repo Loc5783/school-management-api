@@ -1481,9 +1481,14 @@ function resolveLanScanCandidateIps(subnetPrefix, existingDevices = []) {
   } else {
     const prefixes = new Set();
     const interfaces = os.networkInterfaces();
-    for (const ifaceList of Object.values(interfaces)) {
+    for (const [ifaceName, ifaceList] of Object.entries(interfaces)) {
+      if (/^(docker|br-|veth|virbr|cni|flannel|cali)/i.test(ifaceName)) continue;
       for (const iface of ifaceList || []) {
         if (iface.family === 'IPv4' && !iface.internal && iface.address && PRIVATE_IPV4_REGEX.test(iface.address)) {
+          // Bỏ qua mạng cầu nối ảo nội bộ của Docker Container (172.16.0.0/12) để không báo nhầm dải 172.20.0.x cho người dùng
+          if (process.env.RUNNING_IN_DOCKER === 'true' && /^172\.(1[6-9]|2\d|3[01])\./.test(iface.address)) {
+            continue;
+          }
           const parts = iface.address.split('.');
           prefixes.add(`${parts[0]}.${parts[1]}.${parts[2]}`);
         }

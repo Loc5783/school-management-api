@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import AppShell from '../components/AppShell';
 import Icon from '../components/Icon';
@@ -44,12 +44,25 @@ const MODULE_LABELS = {
 };
 
 /**
- * Trang Cài đặt Hệ thống & Hồ sơ Phân hiệu dành cho Admin Phân hiệu Trường (`role === 'admin'`),
- * tuân thủ chặt chẽ phân cấp:
- * Nhà cung cấp phần mềm -> Admin Phân hiệu Trường (hết cấp Admin) -> Các tài khoản chức năng (Giám đốc, Giáo viên, Đầu bếp, Kế toán, Nhân sự, Bảo vệ, Phụ huynh).
+ * Cộng số phút cho phép trễ vào giờ mở cửa đón trẻ để hiển thị mốc giờ tính đi muộn trực quan.
+ */
+function computeLateThresholdPreview(checkInTime, graceMinutes) {
+  const match = String(checkInTime || '07:00').match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return checkInTime || '07:15';
+  const baseMins = Number(match[1]) * 60 + Number(match[2]);
+  const added = Math.max(0, Math.min(120, Number(graceMinutes) || 0));
+  const total = (baseMins + added) % (24 * 60);
+  const hh = String(Math.floor(total / 60)).padStart(2, '0');
+  const mm = String(total % 60).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+/**
+ * Trang Quản trị Cài đặt Vận hành & Hồ sơ Phân hiệu dành cho Admin Phân hiệu Trường (`role === 'admin'`).
  *
- * - Admin Phân hiệu chỉ xem và chỉnh sửa cấu hình vận hành của đúng phân hiệu mình được giao.
- * - Mọi đường dẫn Webhook lấy động theo `window.location.origin` (không cố định tên miền).
+ * Bố cục tách bạch rõ 2 chế độ:
+ * - `/campuses?tab=settings`: Đưa ngay biểu mẫu 3 khối gọn gàng + cột Tóm tắt trực quan lên đầu màn hình (không bị đẩy trôi xuống đáy).
+ * - `/campuses`: Hiển thị 4 thẻ chỉ số tổng quan, lối tắt điều hành, hồ sơ phân hiệu, đường dẫn nhận điểm danh động và gói phần mềm.
  */
 export default function SchoolCampusManagement() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -58,7 +71,6 @@ export default function SchoolCampusManagement() {
   const isAdmin = userRole === 'admin';
   const isVendorSupport = Boolean(storedUser.isVendorSupport || localStorage.getItem('superadmin_token'));
 
-  // Mặc định nếu vào /campuses?tab=settings thì mở ngay Tab Cài đặt Vận hành; /campuses mở Tab Tổng quan & Hồ sơ Phân hiệu
   const activeTab = searchParams.get('tab') === 'settings' ? 'settings' : 'overview';
   const switchTab = (nextTab) => {
     const next = new URLSearchParams(searchParams);
@@ -76,6 +88,7 @@ export default function SchoolCampusManagement() {
   const [copiedWebhook, setCopiedWebhook] = useState(false);
 
   const [settingsForm, setSettingsForm] = useState(DEFAULT_SCHOOL_SETTINGS);
+  const [savedSnapshot, setSavedSnapshot] = useState(DEFAULT_SCHOOL_SETTINGS);
   const [savingSettings, setSavingSettings] = useState(false);
 
   const load = useCallback(async () => {
@@ -93,7 +106,7 @@ export default function SchoolCampusManagement() {
       setPrimaryCampus(mainCampus);
 
       const ss = loadedSchool?.schoolSettings || {};
-      setSettingsForm({
+      const hydrated = {
         contactEmail: loadedSchool?.contactEmail || '',
         schoolYear: ss.schoolYear || loadedStandards?.defaultSchoolYear || '2026-2027',
         hotline: ss.hotline || mainCampus?.phone || '',
@@ -107,7 +120,9 @@ export default function SchoolCampusManagement() {
         requirePickupQrVerification: ss.requirePickupQrVerification !== false,
         allowParentOnlineLeave: ss.allowParentOnlineLeave !== false,
         internalAnnouncementFooter: ss.internalAnnouncementFooter || ''
-      });
+      };
+      setSettingsForm(hydrated);
+      setSavedSnapshot(hydrated);
     } catch (err) {
       setNotice({
         type: 'error',
@@ -124,6 +139,21 @@ export default function SchoolCampusManagement() {
     }, 0);
     return () => window.clearTimeout(timer);
   }, [load]);
+
+  const hasUnsavedChanges = useMemo(
+    () => JSON.stringify(settingsForm) !== JSON.stringify(savedSnapshot),
+    [settingsForm, savedSnapshot]
+  );
+
+  const lateThresholdPreview = useMemo(
+    () => computeLateThresholdPreview(settingsForm.standardCheckInTime, settingsForm.lateGraceMinutes),
+    [settingsForm.standardCheckInTime, settingsForm.lateGraceMinutes]
+  );
+
+  const handleResetChanges = () => {
+    setSettingsForm(savedSnapshot);
+    setNotice(null);
+  };
 
   const handleSaveCampusSettings = async (e) => {
     e.preventDefault();
@@ -147,7 +177,6 @@ export default function SchoolCampusManagement() {
         }
       });
 
-      // Đồng bộ luôn thông tin giờ mở/đóng cửa, số điện thoại và người phụ trách vào cơ sở của phân hiệu
       if (primaryCampus?.code) {
         await updateCampus(primaryCampus.code, {
           name: primaryCampus.name || school?.name || 'Cơ sở chính',
@@ -167,6 +196,7 @@ export default function SchoolCampusManagement() {
         text: 'Đã lưu thành công toàn bộ cài đặt vận hành cho phân hiệu trường của bạn!'
       });
       await load();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err) {
       setNotice({
         type: 'error',
@@ -199,11 +229,17 @@ export default function SchoolCampusManagement() {
 
   return (
     <AppShell
-      title={isAdmin ? 'Quản trị Cài đặt Phân hiệu Trường' : 'Thông tin Phân hiệu Trường'}
+      title={
+        activeTab === 'settings'
+          ? 'Cài đặt Vận hành Phân hiệu'
+          : isAdmin
+            ? 'Hồ sơ Phân hiệu & Gói Phần mềm'
+            : 'Thông tin Phân hiệu Trường'
+      }
       subtitle={
-        isAdmin
-          ? 'Thiết lập giờ đón trả trẻ, quy tắc vận hành phân hiệu, cấp tài khoản chức năng (Giám đốc, Giáo viên, Đầu bếp, Kế toán, Bảo vệ...) và đồng bộ máy chấm công.'
-          : 'Xem thông tin liên hệ, giờ hoạt động chuẩn và quy mô lớp học của phân hiệu.'
+        activeTab === 'settings'
+          ? 'Thiết lập thông tin liên hệ, khung giờ đón trả trẻ, giờ chốt suất ăn bếp và quy tắc an toàn riêng cho phân hiệu.'
+          : 'Theo dõi quy mô lớp học, thông tin đơn vị, đường dẫn nhận điểm danh tự động và các phân hệ được cấp phép.'
       }
       actions={(
         <div className="toolbar-buttons">
@@ -237,8 +273,8 @@ export default function SchoolCampusManagement() {
             }}
           >
             <div>
-              <strong>🔧 Chế độ Kỹ thuật viên Nhà cung cấp phần mềm:</strong> Bạn đang cấu hình bàn giao cho phân hiệu{' '}
-              <strong>{school?.name || '—'} ({school?.code || '—'})</strong>. Bạn có thể đổi nhanh sang phân hiệu khác ở cột menu bên trái để gán máy chấm công.
+              <strong>🔧 Phiên Kỹ thuật viên Nhà cung cấp:</strong> Đang cấu hình bàn giao cho{' '}
+              <strong>{school?.name || '—'} ({school?.code || '—'})</strong>. Bạn có thể chuyển nhanh sang phân hiệu khác ở thanh menu bên trái.
             </div>
             <Link className="button button-secondary" to="/devices" style={{ minHeight: 36 }}>
               Quét &amp; Gán Máy Chấm Công →
@@ -246,163 +282,7 @@ export default function SchoolCampusManagement() {
           </div>
         )}
 
-        {notice && (
-          <div
-            className={notice.type === 'error' ? 'form-error' : 'timekeeping-notice success'}
-            role="status"
-            style={{ marginBottom: 18 }}
-          >
-            <Icon name={notice.type === 'error' ? 'alertCircle' : 'check'} size={16} />
-            <span>{notice.text}</span>
-          </div>
-        )}
-
-        {/* 4 THẺ CHỈ SỐ RIÊNG CỦA PHÂN HIỆU */}
-        <div className="classroom-summary-grid">
-          <article>
-            <span className="summary-badge blue"><Icon name="shield" size={20} /></span>
-            <div>
-              <small>MÃ PHÂN HIỆU TRƯỜNG</small>
-              <strong>{school?.code || 'HOANANG'}</strong>
-            </div>
-          </article>
-          <article>
-            <span className="summary-badge amber"><Icon name="clock" size={20} /></span>
-            <div>
-              <small>GIỜ ĐÓN – TRẢ TRẺ CHUẨN</small>
-              <strong>{settingsForm.standardCheckInTime} – {settingsForm.standardCheckOutTime}</strong>
-            </div>
-          </article>
-          <article>
-            <span className="summary-badge green"><Icon name="grid" size={20} /></span>
-            <div>
-              <small>SỐ LỚP HỌC ĐANG MỞ</small>
-              <strong>{totalClasses} lớp học</strong>
-            </div>
-          </article>
-          <article>
-            <span className="summary-badge purple"><Icon name="students" size={20} /></span>
-            <div>
-              <small>SĨ SỐ / HẠN MỨC CẤP PHÉP</small>
-              <strong>{totalStudents} / {maxStudentsQuota} bé</strong>
-            </div>
-          </article>
-        </div>
-
-        {/* BẢNG LỐI TẮT CHỨC TRÁCH ĐÚNG CHUẨN CỦA ADMIN PHÂN HIỆU TRƯỜNG */}
-        {isAdmin && (
-          <section
-            className="content-card"
-            style={{
-              padding: '20px 24px',
-              marginBottom: 20,
-              border: '1px solid #bfdbfe',
-              background: 'linear-gradient(135deg, #f8fbff 0%, #eff6ff 100%)'
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-              <div>
-                <p className="card-kicker" style={{ color: '#1d4ed8' }}>TRUNG TÂM QUẢN TRỊ PHÂN HIỆU ({school?.code || 'TRƯỜNG'})</p>
-                <h2 style={{ margin: '4px 0 4px', fontSize: 18, color: '#0f172a' }}>
-                  {school?.name || 'Trường Mầm non Hoa Nắng'}
-                </h2>
-                <p style={{ margin: 0, fontSize: 13, color: '#475569' }}>
-                  Admin phân hiệu quản lý cài đặt hệ thống của trường mình, tạo các tài khoản chức năng (Giám đốc/Hiệu trưởng, Giáo viên, Đầu bếp, Kế toán, Nhân sự, Bảo vệ) và đồng bộ máy chấm công của phân hiệu.
-                </p>
-              </div>
-            </div>
-
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-                gap: 12
-              }}
-            >
-              <Link
-                to="/accounts"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 12,
-                  padding: '13px 15px',
-                  borderRadius: 14,
-                  background: '#ffffff',
-                  border: '1px solid #dbeafe',
-                  boxShadow: '0 2px 8px rgba(30, 58, 138, 0.04)'
-                }}
-              >
-                <span className="quick-icon blue"><Icon name="users" size={18} /></span>
-                <span style={{ minWidth: 0 }}>
-                  <strong style={{ display: 'block', fontSize: 13.5, color: '#0f172a' }}>Cấp Tài khoản Chức năng</strong>
-                  <small style={{ color: '#64748b', fontSize: 12 }}>Tạo Giám đốc, Giáo viên, Đầu bếp, Kế toán...</small>
-                </span>
-              </Link>
-
-              <Link
-                to="/classrooms"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 12,
-                  padding: '13px 15px',
-                  borderRadius: 14,
-                  background: '#ffffff',
-                  border: '1px solid #dbeafe',
-                  boxShadow: '0 2px 8px rgba(30, 58, 138, 0.04)'
-                }}
-              >
-                <span className="quick-icon green"><Icon name="classes" size={18} /></span>
-                <span style={{ minWidth: 0 }}>
-                  <strong style={{ display: 'block', fontSize: 13.5, color: '#0f172a' }}>Khung Lớp học Phân hiệu</strong>
-                  <small style={{ color: '#64748b', fontSize: 12 }}>Mở lớp mới &amp; gán Giáo viên chủ nhiệm</small>
-                </span>
-              </Link>
-
-              <Link
-                to="/devices"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 12,
-                  padding: '13px 15px',
-                  borderRadius: 14,
-                  background: '#ffffff',
-                  border: '1px solid #dbeafe',
-                  boxShadow: '0 2px 8px rgba(30, 58, 138, 0.04)'
-                }}
-              >
-                <span className="quick-icon violet"><Icon name="clock" size={18} /></span>
-                <span style={{ minWidth: 0 }}>
-                  <strong style={{ display: 'block', fontSize: 13.5, color: '#0f172a' }}>Máy chấm công &amp; Khuôn mặt</strong>
-                  <small style={{ color: '#64748b', fontSize: 12 }}>Quét mạng trường, kéo &amp; đẩy khuôn mặt</small>
-                </span>
-              </Link>
-
-              <Link
-                to="/audit-logs"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 12,
-                  padding: '13px 15px',
-                  borderRadius: 14,
-                  background: '#ffffff',
-                  border: '1px solid #dbeafe',
-                  boxShadow: '0 2px 8px rgba(30, 58, 138, 0.04)'
-                }}
-              >
-                <span className="quick-icon amber"><Icon name="fileText" size={18} /></span>
-                <span style={{ minWidth: 0 }}>
-                  <strong style={{ display: 'block', fontSize: 13.5, color: '#0f172a' }}>Nhật ký Hoạt động Trường</strong>
-                  <small style={{ color: '#64748b', fontSize: 12 }}>Tra cứu lịch sử thao tác trong phân hiệu</small>
-                </span>
-              </Link>
-            </div>
-          </section>
-        )}
-
-        {/* THANH CHUYỂN TAB RÕ RÀNG */}
+        {/* THANH CHUYỂN CHẾ ĐỘ NGAY ĐẦU TRANG — KHÔNG ĐẨY BIỂU MẪU TRÔI XUỐNG DƯỚI */}
         <div className="account-tabs" style={{ marginBottom: 20 }}>
           <button
             type="button"
@@ -422,211 +302,464 @@ export default function SchoolCampusManagement() {
           </button>
         </div>
 
+        {notice && (
+          <div
+            className={notice.type === 'error' ? 'form-error' : 'timekeeping-notice success'}
+            role="status"
+            style={{ marginBottom: 18, fontSize: 13 }}
+          >
+            <Icon name={notice.type === 'error' ? 'alertCircle' : 'check'} size={16} />
+            <span>{notice.text}</span>
+          </div>
+        )}
+
         {loading ? (
-          <div className="content-card inline-loader">Đang tải thông tin cấu hình phân hiệu...</div>
+          <div className="content-card inline-loader">
+            <span className="loading-orb" />
+            Đang tải thông tin cấu hình của phân hiệu...
+          </div>
         ) : activeTab === 'settings' ? (
-          /* TAB CÀI ĐẶT VẬN HÀNH PHÂN HIỆU */
-          <div style={{ display: 'grid', gap: 22 }}>
-            <section className="content-card" style={{ padding: '26px 28px' }}>
-              <div style={{ marginBottom: 20, paddingBottom: 14, borderBottom: '1px solid #eef2f7' }}>
-                <p className="card-kicker">THÔNG SỐ VẬN HÀNH RIÊNG CỦA PHÂN HIỆU ({school?.code || '—'})</p>
-                <h2 style={{ margin: '5px 0 6px', fontSize: 19, color: '#0f172a' }}>
-                  Cấu hình giờ đón trả, bếp ăn &amp; liên hệ của {school?.name || 'Phân hiệu'}
-                </h2>
-                <p style={{ margin: 0, fontSize: 13, color: '#64748b', lineHeight: 1.55 }}>
-                  {isAdmin
-                    ? 'Mọi thay đổi dưới đây chỉ áp dụng riêng cho phân hiệu trường của bạn, hoàn toàn độc lập với các trường khác trên hệ thống.'
-                    : 'Thông số vận hành hiện hành của phân hiệu do Quản trị viên trường thiết lập.'}
-                </p>
-              </div>
-
-              <form className="student-form" style={{ padding: 0 }} onSubmit={handleSaveCampusSettings}>
-                <div className="student-form-grid">
-                  <label>
-                    Năm học đang áp dụng (YYYY-YYYY) *
-                    <input
-                      required
-                      disabled={!isAdmin}
-                      placeholder="VD: 2026-2027"
-                      value={settingsForm.schoolYear}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, schoolYear: e.target.value })}
-                    />
-                  </label>
-
-                  <label>
-                    Người phụ trách / Đại diện phân hiệu
-                    <input
-                      disabled={!isAdmin}
-                      maxLength={120}
-                      placeholder="VD: Cô Nguyễn Thị Minh (Hiệu trưởng)"
-                      value={settingsForm.managerName}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, managerName: e.target.value })}
-                    />
-                  </label>
-
-                  <label>
-                    Số điện thoại / Hotline văn phòng phân hiệu
-                    <input
-                      disabled={!isAdmin}
-                      maxLength={30}
-                      placeholder="VD: 0243 888 9999"
-                      value={settingsForm.hotline}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, hotline: e.target.value })}
-                    />
-                  </label>
-
-                  <label>
-                    Email liên hệ chính thức của phân hiệu
-                    <input
-                      type="email"
-                      disabled={!isAdmin}
-                      placeholder="vanphong@ten-truong.edu.vn"
-                      value={settingsForm.contactEmail}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, contactEmail: e.target.value })}
-                    />
-                  </label>
-
-                  <label className="form-wide">
-                    Địa chỉ phân hiệu trường
-                    <input
-                      disabled={!isAdmin}
-                      maxLength={300}
-                      placeholder="Nhập địa chỉ cụ thể của phân hiệu trường"
-                      value={settingsForm.headquartersAddress}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, headquartersAddress: e.target.value })}
-                    />
-                  </label>
-
-                  <label>
-                    Giờ mở cửa đón trẻ buổi sáng *
-                    <input
-                      type="time"
-                      required
-                      disabled={!isAdmin}
-                      value={settingsForm.standardCheckInTime}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, standardCheckInTime: e.target.value })}
-                    />
-                  </label>
-
-                  <label>
-                    Giờ trả trẻ chuẩn buổi chiều *
-                    <input
-                      type="time"
-                      required
-                      disabled={!isAdmin}
-                      value={settingsForm.standardCheckOutTime}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, standardCheckOutTime: e.target.value })}
-                    />
-                  </label>
-
-                  <label>
-                    Số phút cho phép trễ trước khi tính đi muộn (0–120 phút)
-                    <input
-                      type="number"
-                      min={0}
-                      max={120}
-                      disabled={!isAdmin}
-                      value={settingsForm.lateGraceMinutes}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, lateGraceMinutes: e.target.value })}
-                    />
-                  </label>
-
-                  <label>
-                    Giờ chốt báo nghỉ để bếp cắt suất ăn trong ngày *
-                    <input
-                      type="time"
-                      required
-                      disabled={!isAdmin}
-                      value={settingsForm.mealCancelCutoffTime}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, mealCancelCutoffTime: e.target.value })}
-                    />
-                  </label>
-
-                  <label className="form-wide">
-                    Ghi chú cổng đón trả / hướng dẫn nội bộ tại phân hiệu
-                    <input
-                      disabled={!isAdmin}
-                      maxLength={300}
-                      placeholder="VD: Cổng chính mở từ 06:45, phụ huynh đón trẻ xuất trình mã QR tại sảnh tầng 1..."
-                      value={settingsForm.campusNotes}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, campusNotes: e.target.value })}
-                    />
-                  </label>
-
-                  <label className="form-wide">
-                    Dòng ghi chú cuối Phiếu thu học phí &amp; Thông báo gửi phụ huynh
-                    <input
-                      disabled={!isAdmin}
-                      maxLength={300}
-                      placeholder="VD: Mọi thắc mắc kính mời Quý Phụ huynh liên hệ Văn phòng Nhà trường trong giờ hành chính."
-                      value={settingsForm.internalAnnouncementFooter}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, internalAnnouncementFooter: e.target.value })}
-                    />
-                  </label>
-
-                  <div className="form-wide" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14, marginTop: 4 }}>
-                    <label
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 10,
-                        padding: '14px 16px',
-                        borderRadius: 12,
-                        border: '1px solid #cbd5e1',
-                        background: '#f8fafc',
-                        cursor: isAdmin ? 'pointer' : 'default'
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        disabled={!isAdmin}
-                        checked={settingsForm.requirePickupQrVerification}
-                        onChange={(e) => setSettingsForm({ ...settingsForm, requirePickupQrVerification: e.target.checked })}
-                      />
-                      <span style={{ fontSize: 13, color: '#1e293b' }}>
-                        Bắt buộc quét Mã QR / mã xác nhận của người đón khi bàn giao trẻ về nhà
-                      </span>
-                    </label>
-
-                    <label
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 10,
-                        padding: '14px 16px',
-                        borderRadius: 12,
-                        border: '1px solid #cbd5e1',
-                        background: '#f8fafc',
-                        cursor: isAdmin ? 'pointer' : 'default'
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        disabled={!isAdmin}
-                        checked={settingsForm.allowParentOnlineLeave}
-                        onChange={(e) => setSettingsForm({ ...settingsForm, allowParentOnlineLeave: e.target.checked })}
-                      />
-                      <span style={{ fontSize: 13, color: '#1e293b' }}>
-                        Cho phép Phụ huynh gửi đơn xin nghỉ phép cho bé trực tuyến trên ứng dụng
-                      </span>
-                    </label>
+          /* ─── CHẾ ĐỘ 1: BIỂU MẪU CÀI ĐẶT VẬN HÀNH 3 KHỐI CÂN ĐỐI + CỘT TÓM TẮT TRỰC QUAN ─── */
+          <div className="hn-campus-settings-layout">
+            <form
+              className="hn-campus-settings-form"
+              autoComplete="off"
+              onSubmit={handleSaveCampusSettings}
+            >
+              {/* KHỐI 1: THÔNG TIN ĐƠN VỊ & LIÊN HỆ PHÂN HIỆU */}
+              <section className="hn-form-section-card">
+                <div className="hn-section-head">
+                  <span className="hn-section-icon blue">
+                    <Icon name="shield" size={20} />
+                  </span>
+                  <div>
+                    <h3>1. Thông tin Đại diện &amp; Liên hệ của Phân hiệu</h3>
+                    <p>
+                      Hiển thị trên phiếu thông báo, sổ liên lạc điện tử và thông tin liên hệ dành cho phụ huynh của{' '}
+                      <strong>{school?.name || 'phân hiệu'}</strong>.
+                    </p>
                   </div>
                 </div>
 
-                {isAdmin && (
-                  <div className="form-actions" style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid #eef2f7' }}>
+                <div className="hn-fields-stack">
+                  <div className="hn-grid-contact-top">
+                    <div className="hn-field">
+                      <label className="hn-field-label" htmlFor="cfg-school-year">
+                        Năm học áp dụng <span className="hn-field-req">*</span>
+                      </label>
+                      <input
+                        id="cfg-school-year"
+                        required
+                        disabled={!isAdmin}
+                        placeholder="2026-2027"
+                        value={settingsForm.schoolYear}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, schoolYear: e.target.value })}
+                      />
+                    </div>
+
+                    <div className="hn-field">
+                      <label className="hn-field-label" htmlFor="cfg-manager-name">
+                        Người phụ trách / Hiệu trưởng
+                      </label>
+                      <input
+                        id="cfg-manager-name"
+                        disabled={!isAdmin}
+                        maxLength={120}
+                        placeholder="VD: Cô Nguyễn Thị Minh"
+                        value={settingsForm.managerName}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, managerName: e.target.value })}
+                      />
+                    </div>
+
+                    <div className="hn-field">
+                      <label className="hn-field-label" htmlFor="cfg-hotline">
+                        Điện thoại / Hotline văn phòng
+                      </label>
+                      <input
+                        id="cfg-hotline"
+                        disabled={!isAdmin}
+                        maxLength={30}
+                        placeholder="VD: 0243 888 9999"
+                        value={settingsForm.hotline}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, hotline: e.target.value })}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="hn-grid-contact-bottom">
+                    <div className="hn-field">
+                      <label className="hn-field-label" htmlFor="cfg-email">
+                        Email liên hệ chính thức
+                      </label>
+                      <input
+                        id="cfg-email"
+                        type="email"
+                        disabled={!isAdmin}
+                        placeholder="vanphong@ten-truong.edu.vn"
+                        value={settingsForm.contactEmail}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, contactEmail: e.target.value })}
+                      />
+                    </div>
+
+                    <div className="hn-field">
+                      <label className="hn-field-label" htmlFor="cfg-address">
+                        Địa chỉ phân hiệu trường
+                      </label>
+                      <input
+                        id="cfg-address"
+                        disabled={!isAdmin}
+                        maxLength={300}
+                        placeholder="Số nhà, đường/phố, phường/xã, quận/huyện, tỉnh/thành phố"
+                        value={settingsForm.headquartersAddress}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, headquartersAddress: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              {/* KHỐI 2: KHUNG GIỜ ĐÓN TRẢ TRẺ & CHỐT SUẤT ĂN BẾP */}
+              <section className="hn-form-section-card">
+                <div className="hn-section-head">
+                  <span className="hn-section-icon amber">
+                    <Icon name="clock" size={20} />
+                  </span>
+                  <div>
+                    <h3>2. Khung giờ Đón trả trẻ &amp; Chốt suất ăn Bếp</h3>
+                    <p>
+                      Làm mốc tự động phân loại <strong>Đúng giờ / Đi muộn</strong> khi trẻ quét khuôn mặt tại máy chấm công và chốt số lượng khẩu phần nấu trong ngày cho nhà bếp.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="hn-fields-stack">
+                  <div className="hn-grid-time-4">
+                    <div className="hn-field">
+                      <label className="hn-field-label" htmlFor="cfg-checkin">
+                        Giờ mở cửa đón trẻ <span className="hn-field-req">*</span>
+                      </label>
+                      <input
+                        id="cfg-checkin"
+                        type="time"
+                        required
+                        disabled={!isAdmin}
+                        value={settingsForm.standardCheckInTime}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, standardCheckInTime: e.target.value })}
+                      />
+                      <span className="hn-field-hint">Giờ bắt đầu ca đón sáng</span>
+                    </div>
+
+                    <div className="hn-field">
+                      <label className="hn-field-label" htmlFor="cfg-grace">
+                        Cho phép trễ tối đa
+                      </label>
+                      <div className="hn-input-suffix-wrap">
+                        <input
+                          id="cfg-grace"
+                          type="number"
+                          min={0}
+                          max={120}
+                          disabled={!isAdmin}
+                          value={settingsForm.lateGraceMinutes}
+                          onChange={(e) => setSettingsForm({ ...settingsForm, lateGraceMinutes: e.target.value })}
+                        />
+                        <span className="hn-input-suffix-tag">phút</span>
+                      </div>
+                      <span className="hn-field-hint">
+                        Quét sau <strong>{lateThresholdPreview}</strong> tính đi muộn
+                      </span>
+                    </div>
+
+                    <div className="hn-field">
+                      <label className="hn-field-label" htmlFor="cfg-meal-cutoff">
+                        Giờ chốt báo nghỉ bếp <span className="hn-field-req">*</span>
+                      </label>
+                      <input
+                        id="cfg-meal-cutoff"
+                        type="time"
+                        required
+                        disabled={!isAdmin}
+                        value={settingsForm.mealCancelCutoffTime}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, mealCancelCutoffTime: e.target.value })}
+                      />
+                      <span className="hn-field-hint">Báo nghỉ trước giờ này được trừ ăn</span>
+                    </div>
+
+                    <div className="hn-field">
+                      <label className="hn-field-label" htmlFor="cfg-checkout">
+                        Giờ trả trẻ buổi chiều <span className="hn-field-req">*</span>
+                      </label>
+                      <input
+                        id="cfg-checkout"
+                        type="time"
+                        required
+                        disabled={!isAdmin}
+                        value={settingsForm.standardCheckOutTime}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, standardCheckOutTime: e.target.value })}
+                      />
+                      <span className="hn-field-hint">Giờ tan học chuẩn chiều</span>
+                    </div>
+                  </div>
+
+                  <div className="hn-field">
+                    <label className="hn-field-label" htmlFor="cfg-gate-notes">
+                      Hướng dẫn đón trả trẻ tại cổng phân hiệu
+                    </label>
+                    <textarea
+                      id="cfg-gate-notes"
+                      rows={2}
+                      disabled={!isAdmin}
+                      maxLength={300}
+                      placeholder="VD: Cổng chính mở từ 06:45 sáng; phụ huynh đưa đón bé vui lòng quét khuôn mặt hoặc xuất trình mã QR tại sảnh tầng 1..."
+                      value={settingsForm.campusNotes}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, campusNotes: e.target.value })}
+                    />
+                  </div>
+                </div>
+              </section>
+
+              {/* KHỐI 3: QUY TẮC AN TOÀN ĐÓN TRẢ & CHÂN TRANG PHIẾU THU */}
+              <section className="hn-form-section-card">
+                <div className="hn-section-head">
+                  <span className="hn-section-icon green">
+                    <Icon name="check" size={20} />
+                  </span>
+                  <div>
+                    <h3>3. Quy tắc An toàn Đón trả &amp; Ghi chú Phiếu thu</h3>
+                    <p>
+                      Bật/tắt quy trình kiểm tra người đón hộ tại cổng và lời nhắn cuối phiếu thu học phí gửi tới phụ huynh.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="hn-fields-stack">
+                  <div className="hn-grid-2">
+                    <label className={`hn-switch-card ${settingsForm.requirePickupQrVerification ? 'is-on' : ''}`}>
+                      <div className="hn-switch-copy">
+                        <strong>Bắt buộc xác thực Mã QR khi bàn giao trẻ</strong>
+                        <span>
+                          Giáo viên và bảo vệ kiểm tra Mã QR hoặc danh sách người đón đã đăng ký trước khi giao trẻ về nhà.
+                        </span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        className="hn-switch-input"
+                        disabled={!isAdmin}
+                        checked={settingsForm.requirePickupQrVerification}
+                        onChange={(e) =>
+                          setSettingsForm({ ...settingsForm, requirePickupQrVerification: e.target.checked })
+                        }
+                      />
+                      <span className="hn-switch-pill" aria-hidden="true" />
+                    </label>
+
+                    <label className={`hn-switch-card ${settingsForm.allowParentOnlineLeave ? 'is-on' : ''}`}>
+                      <div className="hn-switch-copy">
+                        <strong>Cho phép Phụ huynh gửi đơn xin nghỉ trực tuyến</strong>
+                        <span>
+                          Phụ huynh có thể báo nghỉ cho bé ngay trên ứng dụng Web để giáo viên chủ nhiệm và nhà bếp nắm số lượng kịp thời.
+                        </span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        className="hn-switch-input"
+                        disabled={!isAdmin}
+                        checked={settingsForm.allowParentOnlineLeave}
+                        onChange={(e) =>
+                          setSettingsForm({ ...settingsForm, allowParentOnlineLeave: e.target.checked })
+                        }
+                      />
+                      <span className="hn-switch-pill" aria-hidden="true" />
+                    </label>
+                  </div>
+
+                  <div className="hn-field">
+                    <label className="hn-field-label" htmlFor="cfg-receipt-footer">
+                      Lời nhắn cuối Phiếu thu học phí &amp; Thông báo gửi Phụ huynh
+                    </label>
+                    <textarea
+                      id="cfg-receipt-footer"
+                      rows={2}
+                      disabled={!isAdmin}
+                      maxLength={300}
+                      placeholder="VD: Mọi thắc mắc về học phí và khẩu phần ăn, Quý Phụ huynh vui lòng liên hệ Văn phòng Nhà trường trong giờ hành chính."
+                      value={settingsForm.internalAnnouncementFooter}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, internalAnnouncementFooter: e.target.value })}
+                    />
+                  </div>
+                </div>
+              </section>
+
+              {/* THANH HÀNH ĐỘNG LƯU CÀI ĐẶT RÕ RÀNG, THOÁNG ĐÃNG */}
+              {isAdmin && (
+                <div className="hn-settings-save-bar">
+                  <div className={`hn-save-status ${hasUnsavedChanges ? 'dirty' : ''}`}>
+                    <span className="hn-save-dot" />
+                    <span>
+                      {hasUnsavedChanges
+                        ? 'Bạn có thay đổi mới chưa lưu — hãy bấm Lưu cài đặt để áp dụng cho phân hiệu.'
+                        : 'Toàn bộ thông số đang đồng bộ với cấu hình hiện hành của phân hiệu.'}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                    {hasUnsavedChanges && (
+                      <button
+                        type="button"
+                        className="button button-secondary"
+                        disabled={savingSettings}
+                        onClick={handleResetChanges}
+                      >
+                        Hoàn tác thay đổi
+                      </button>
+                    )}
                     <button type="submit" className="button button-primary" disabled={savingSettings}>
                       <Icon name="check" size={16} />
-                      {savingSettings ? 'Đang lưu cài đặt...' : 'Lưu cài đặt vận hành phân hiệu'}
+                      {savingSettings ? 'Đang lưu cài đặt...' : 'Lưu cài đặt phân hiệu'}
                     </button>
                   </div>
-                )}
-              </form>
-            </section>
+                </div>
+              )}
+            </form>
+
+            {/* CỘT TÓM TẮT TRỰC QUAN BÊN PHẢI */}
+            <aside className="hn-settings-summary-aside">
+              <div className="hn-summary-card">
+                <p className="card-kicker" style={{ color: '#2563eb' }}>TÓM TẮT ĐANG ÁP DỤNG</p>
+                <h3 style={{ margin: '4px 0 4px', fontSize: 16, fontWeight: 800, color: '#0f172a' }}>
+                  {school?.name || 'Phân hiệu hiện tại'}
+                </h3>
+                <p style={{ margin: 0, fontSize: 12.2, color: '#64748b', lineHeight: 1.45 }}>
+                  Bảng xem nhanh các mốc vận hành tự động của phân hiệu <strong>{school?.code || '—'}</strong>.
+                </p>
+
+                <div className="hn-summary-list">
+                  <div className="hn-summary-row">
+                    <span>Mã phân hiệu</span>
+                    <strong>{school?.code || '—'}</strong>
+                  </div>
+                  <div className="hn-summary-row">
+                    <span>Năm học</span>
+                    <strong>{settingsForm.schoolYear || '—'}</strong>
+                  </div>
+                  <div className="hn-summary-row">
+                    <span>Khung giờ đón – trả</span>
+                    <strong>{settingsForm.standardCheckInTime} – {settingsForm.standardCheckOutTime}</strong>
+                  </div>
+                  <div className="hn-summary-row">
+                    <span>Mốc tính đi muộn</span>
+                    <strong style={{ color: '#d97706' }}>Sau {lateThresholdPreview}</strong>
+                  </div>
+                  <div className="hn-summary-row">
+                    <span>Chốt cắt suất bếp</span>
+                    <strong style={{ color: '#2563eb' }}>{settingsForm.mealCancelCutoffTime}</strong>
+                  </div>
+                  <div className="hn-summary-row">
+                    <span>Quét QR đón trẻ</span>
+                    <strong style={{ color: settingsForm.requirePickupQrVerification ? '#15803d' : '#64748b' }}>
+                      {settingsForm.requirePickupQrVerification ? 'Đang bật' : 'Tắt'}
+                    </strong>
+                  </div>
+                </div>
+              </div>
+
+              {isAdmin && (
+                <div className="hn-summary-card" style={{ background: '#ffffff', borderColor: '#e2e8f0' }}>
+                  <p className="card-kicker">LỐI TẮT QUẢN TRỊ PHÂN HIỆU</p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+                    <Link
+                      to="/accounts"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '10px 12px',
+                        borderRadius: 11,
+                        background: '#f8fafc',
+                        border: '1px solid #e2e8f0',
+                        fontSize: 13,
+                        fontWeight: 700,
+                        color: '#0f172a'
+                      }}
+                    >
+                      <span>👥 Cấp Tài khoản Chức năng</span>
+                      <span style={{ color: '#2563eb' }}>→</span>
+                    </Link>
+                    <Link
+                      to="/classrooms"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '10px 12px',
+                        borderRadius: 11,
+                        background: '#f8fafc',
+                        border: '1px solid #e2e8f0',
+                        fontSize: 13,
+                        fontWeight: 700,
+                        color: '#0f172a'
+                      }}
+                    >
+                      <span>🏫 Quản lý Khung Lớp học</span>
+                      <span style={{ color: '#2563eb' }}>→</span>
+                    </Link>
+                    <Link
+                      to="/devices"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '10px 12px',
+                        borderRadius: 11,
+                        background: '#f8fafc',
+                        border: '1px solid #e2e8f0',
+                        fontSize: 13,
+                        fontWeight: 700,
+                        color: '#0f172a'
+                      }}
+                    >
+                      <span>⏱️ Máy chấm công &amp; Khuôn mặt</span>
+                      <span style={{ color: '#2563eb' }}>→</span>
+                    </Link>
+                  </div>
+                </div>
+              )}
+            </aside>
           </div>
         ) : (
-          /* TAB HỒ SƠ PHÂN HIỆU & GÓI PHẦN MỀM ĐƯỢC CẤP PHÉP */
-          <div style={{ display: 'grid', gap: 22 }}>
+          /* ─── CHẾ ĐỘ 2: HỒ SƠ PHÂN HIỆU, CHỈ SỐ TỔNG QUAN & GÓI PHẦN MỀM ─── */
+          <div style={{ display: 'grid', gap: 20 }}>
+            <div className="classroom-summary-grid" style={{ marginBottom: 0 }}>
+              <article>
+                <span className="summary-badge blue"><Icon name="shield" size={20} /></span>
+                <div>
+                  <small>MÃ PHÂN HIỆU TRƯỜNG</small>
+                  <strong>{school?.code || 'HOANANG'}</strong>
+                </div>
+              </article>
+              <article>
+                <span className="summary-badge amber"><Icon name="clock" size={20} /></span>
+                <div>
+                  <small>GIỜ ĐÓN – TRẢ TRẺ CHUẨN</small>
+                  <strong>{settingsForm.standardCheckInTime} – {settingsForm.standardCheckOutTime}</strong>
+                </div>
+              </article>
+              <article>
+                <span className="summary-badge green"><Icon name="grid" size={20} /></span>
+                <div>
+                  <small>SỐ LỚP HỌC ĐANG MỞ</small>
+                  <strong>{totalClasses} lớp học</strong>
+                </div>
+              </article>
+              <article>
+                <span className="summary-badge purple"><Icon name="students" size={20} /></span>
+                <div>
+                  <small>SĨ SỐ / HẠN MỨC CẤP PHÉP</small>
+                  <strong>{totalStudents} / {maxStudentsQuota} bé</strong>
+                </div>
+              </article>
+            </div>
+
             <section className="content-card" style={{ padding: '24px 26px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', marginBottom: 18 }}>
                 <div>
@@ -635,7 +768,7 @@ export default function SchoolCampusManagement() {
                     {school?.name || 'Trường Mầm non'} ({school?.code || '—'})
                   </h2>
                   <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>
-                    Thông tin tóm tắt của phân hiệu hiện tại. Để thay đổi giờ giấc, địa chỉ hoặc quy tắc đón trả trẻ, hãy bấm nút <strong>Chỉnh sửa cài đặt phân hiệu</strong>.
+                    Thông tin hồ sơ và định mức hoạt động của phân hiệu. Bấm <strong>Chỉnh sửa cài đặt phân hiệu</strong> để đổi giờ đón trả, hotline hoặc địa chỉ.
                   </p>
                 </div>
                 {isAdmin && (
@@ -677,7 +810,102 @@ export default function SchoolCampusManagement() {
               </div>
             </section>
 
-            {/* ĐƯỜNG DẪN NHẬN ĐIỂM DANH TỰ ĐỘNG & GÓI TÍNH NĂNG */}
+            {isAdmin && (
+              <section
+                className="content-card"
+                style={{
+                  padding: '20px 24px',
+                  border: '1px solid #bfdbfe',
+                  background: 'linear-gradient(135deg, #f8fbff 0%, #eff6ff 100%)'
+                }}
+              >
+                <div style={{ marginBottom: 14 }}>
+                  <p className="card-kicker" style={{ color: '#1d4ed8' }}>ĐIỀU HÀNH NHANH PHÂN HIỆU ({school?.code || 'TRƯỜNG'})</p>
+                  <h3 style={{ margin: '4px 0 4px', fontSize: 17, color: '#0f172a' }}>
+                    Quản lý tài khoản chức năng, lớp học &amp; thiết bị của phân hiệu
+                  </h3>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+                  <Link
+                    to="/accounts"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 12,
+                      padding: '13px 15px',
+                      borderRadius: 14,
+                      background: '#ffffff',
+                      border: '1px solid #dbeafe'
+                    }}
+                  >
+                    <span className="quick-icon blue"><Icon name="users" size={18} /></span>
+                    <span style={{ minWidth: 0 }}>
+                      <strong style={{ display: 'block', fontSize: 13.5, color: '#0f172a' }}>Cấp Tài khoản Chức năng</strong>
+                      <small style={{ color: '#64748b', fontSize: 12 }}>Tạo Giám đốc, Giáo viên, Đầu bếp, Kế toán...</small>
+                    </span>
+                  </Link>
+
+                  <Link
+                    to="/classrooms"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 12,
+                      padding: '13px 15px',
+                      borderRadius: 14,
+                      background: '#ffffff',
+                      border: '1px solid #dbeafe'
+                    }}
+                  >
+                    <span className="quick-icon green"><Icon name="classes" size={18} /></span>
+                    <span style={{ minWidth: 0 }}>
+                      <strong style={{ display: 'block', fontSize: 13.5, color: '#0f172a' }}>Khung Lớp học Phân hiệu</strong>
+                      <small style={{ color: '#64748b', fontSize: 12 }}>Mở lớp mới &amp; gán Giáo viên chủ nhiệm</small>
+                    </span>
+                  </Link>
+
+                  <Link
+                    to="/devices"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 12,
+                      padding: '13px 15px',
+                      borderRadius: 14,
+                      background: '#ffffff',
+                      border: '1px solid #dbeafe'
+                    }}
+                  >
+                    <span className="quick-icon violet"><Icon name="clock" size={18} /></span>
+                    <span style={{ minWidth: 0 }}>
+                      <strong style={{ display: 'block', fontSize: 13.5, color: '#0f172a' }}>Máy chấm công &amp; Khuôn mặt</strong>
+                      <small style={{ color: '#64748b', fontSize: 12 }}>Quét mạng trường, kéo &amp; đẩy khuôn mặt</small>
+                    </span>
+                  </Link>
+
+                  <Link
+                    to="/audit-logs"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 12,
+                      padding: '13px 15px',
+                      borderRadius: 14,
+                      background: '#ffffff',
+                      border: '1px solid #dbeafe'
+                    }}
+                  >
+                    <span className="quick-icon amber"><Icon name="fileText" size={18} /></span>
+                    <span style={{ minWidth: 0 }}>
+                      <strong style={{ display: 'block', fontSize: 13.5, color: '#0f172a' }}>Nhật ký Hoạt động Trường</strong>
+                      <small style={{ color: '#64748b', fontSize: 12 }}>Tra cứu lịch sử thao tác trong phân hiệu</small>
+                    </span>
+                  </Link>
+                </div>
+              </section>
+            )}
+
             <section className="content-card" style={{ padding: '24px 26px' }}>
               <p className="card-kicker">KẾT NỐI MÁY CHẤM CÔNG &amp; GÓI TÍNH NĂNG ĐÃ CẤP PHÉP</p>
               <h3 style={{ margin: '4px 0 8px', fontSize: 17, color: '#1e3a8a' }}>
@@ -729,7 +957,7 @@ export default function SchoolCampusManagement() {
                       <span
                         key={modKey}
                         style={{
-                          padding: '5px 12px',
+                          padding: '6px 13px',
                           borderRadius: '999px',
                           background: '#eff6ff',
                           border: '1px solid #bfdbfe',

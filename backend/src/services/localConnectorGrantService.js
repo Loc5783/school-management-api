@@ -249,7 +249,18 @@ async function buildEncryptedDeviceAuthForConnector(tenantId, deviceDoc) {
  */
 async function generateDownloadableConnectorZipBuffer() {
   const cryptoBundle = await getOrCreateConnectorBridgeCrypto();
-  const serverSourcePath = path.resolve(__dirname, '../../../local-lan-connector/connector-server.js');
+  const candidatePaths = [
+    path.resolve(__dirname, '../connector/connector-server.js'),
+    path.resolve(__dirname, '../../local-lan-connector/connector-server.js'),
+    path.resolve(__dirname, '../../../local-lan-connector/connector-server.js')
+  ];
+  const serverSourcePath = candidatePaths.find((p) => fs.existsSync(p));
+  if (!serverSourcePath) {
+    const missingErr = new Error('Tệp bộ kết nối nội bộ đang được cập nhật trên máy chủ.');
+    missingErr.code = 'CONNECTOR_PACKAGE_UNAVAILABLE';
+    missingErr.statusCode = 500;
+    throw missingErr;
+  }
   const connectorJsSource = fs.readFileSync(serverSourcePath, 'utf8');
 
   const configJson = JSON.stringify(

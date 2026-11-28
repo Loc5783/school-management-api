@@ -34,6 +34,7 @@ WORKDIR /app
 COPY --chown=node:node --from=backend-deps /build/backend/node_modules ./node_modules
 COPY --chown=node:node backend/package*.json backend/.env.example backend/server.js backend/app.js ./
 COPY --chown=node:node backend/src ./src
+COPY --chown=node:node local-lan-connector ./local-lan-connector
 COPY --chown=node:node backend/docker-entrypoint.sh ./docker-entrypoint.sh
 
 # Nhúng toàn bộ bản build Production của Frontend vào /app/public để Express phục vụ trực tiếp

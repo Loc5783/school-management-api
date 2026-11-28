@@ -1003,17 +1003,24 @@ async function discoverLocalLanDevices({ subnetPrefix = '', probeUsername = 'adm
     }
   } else {
     const prefixes = new Set();
+    const fallbackPrefixes = new Set();
     const nets = os.networkInterfaces();
-    for (const list of Object.values(nets)) {
+    for (const [ifaceName, list] of Object.entries(nets)) {
+      const isVirtual = /(wsl|docker|vethernet|hyper-v|vbox|vmware|virbr|br-|veth|tailscale|zerotier)/i.test(ifaceName);
       for (const iface of list || []) {
         if (iface.family === 'IPv4' && !iface.internal && PRIVATE_IPV4_REGEX.test(iface.address)) {
           const p = iface.address.split('.');
-          prefixes.add(`${p[0]}.${p[1]}.${p[2]}`);
+          const prefix = `${p[0]}.${p[1]}.${p[2]}`;
+          fallbackPrefixes.add(prefix);
+          if (!isVirtual) {
+            prefixes.add(prefix);
+          }
         }
       }
     }
-    if (prefixes.size === 0) prefixes.add('192.168.1');
-    for (const p of prefixes) {
+    const chosenPrefixes = prefixes.size > 0 ? prefixes : fallbackPrefixes;
+    if (chosenPrefixes.size === 0) chosenPrefixes.add('192.168.1');
+    for (const p of chosenPrefixes) {
       scannedSubnets.push(`${p}.1 - ${p}.254`);
       for (let i = 1; i <= 254; i += 1) candidates.add(`${p}.${i}`);
     }
@@ -1114,16 +1121,21 @@ async function discoverLocalLanDevices({ subnetPrefix = '', probeUsername = 'adm
 }
 
 function getLocalMachineLanIps() {
-  const ips = [];
+  const physicalIps = [];
+  const fallbackIps = [];
   const nets = os.networkInterfaces();
-  for (const list of Object.values(nets)) {
+  for (const [ifaceName, list] of Object.entries(nets)) {
+    const isVirtual = /(wsl|docker|vethernet|hyper-v|vbox|vmware|virbr|br-|veth)/i.test(ifaceName);
     for (const iface of list || []) {
       if (iface.family === 'IPv4' && !iface.internal) {
-        ips.push(iface.address);
+        fallbackIps.push(iface.address);
+        if (!isVirtual) {
+          physicalIps.push(iface.address);
+        }
       }
     }
   }
-  return ips;
+  return physicalIps.length > 0 ? physicalIps : fallbackIps;
 }
 
 function readJsonBody(req) {
