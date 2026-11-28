@@ -66,6 +66,7 @@ const handleWebhook = async (req, res) => {
       success: true,
       message: 'Success',
       skippedNoise: result.skippedNoise,
+      crossCampusSerialBlocked: Boolean(result.crossCampusSerialBlocked),
       logId: result.savedId,
       persisted: result.persisted,
       payloadFormat: result.record.payloadFormat,

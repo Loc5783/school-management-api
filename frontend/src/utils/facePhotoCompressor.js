@@ -1,25 +1,49 @@
 /**
  * @fileoverview Bộ nén ảnh khuôn mặt tự động dưới 200KB chuẩn phần cứng Hikvision FDLib
  * ("No larger than 200 KB. JPG/JPEG").
- * - Tự động chuẩn hóa khung chân dung rõ nét (tối đa 720x720 px).
- * - Chuyển đổi sang chuẩn `image/jpeg` nền trắng và giảm dần chất lượng/kích thước
- *   cho tới khi dung lượng <= 185KB (đảm bảo 100% dưới ngưỡng cứng 200KB của Hikvision).
+ * - Chặn sớm tệp rỗng (0 byte), tệp quá lớn (> 25MB) hoặc sai định dạng không phải ảnh.
+ * - Tích hợp timeout giải mã ảnh 12 giây chống treo giao diện khi gặp tệp ảnh hỏng / HEIC không hỗ trợ.
+ * - Tự động chuẩn hóa khung chân dung rõ nét (tối đa 720x720 px) và nén xuống <= 185KB JPG.
  */
 
 const HIKVISION_SAFE_MAX_BYTES = 185 * 1024; // 185 KB (< 200 KB)
+const MAX_RAW_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB
+const IMAGE_DECODE_TIMEOUT_MS = 12000;
 
 function loadImageFromBlob(blob) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(blob);
     const img = new Image();
+    let settled = false;
+
+    const timer = window.setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        URL.revokeObjectURL(url);
+        reject(new Error('Quá thời gian đọc tệp ảnh. Vui lòng chọn ảnh định dạng JPG hoặc PNG chuẩn.'));
+      }
+    }, IMAGE_DECODE_TIMEOUT_MS);
+
     img.onload = () => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
       URL.revokeObjectURL(url);
       resolve(img);
     };
+
     img.onerror = () => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
       URL.revokeObjectURL(url);
-      reject(new Error('Tệp ảnh không hợp lệ hoặc bị hỏng.'));
+      reject(
+        new Error(
+          'Trình duyệt không thể đọc tệp ảnh này (tệp bị hỏng hoặc định dạng HEIC chưa hỗ trợ). Vui lòng chọn ảnh JPG/PNG hoặc chụp trực tiếp.'
+        )
+      );
     };
+
     img.src = url;
   });
 }
@@ -48,6 +72,15 @@ export async function compressFaceImageUnder200KB(inputFile, customFileName = 'h
   if (!inputFile) {
     throw new Error('Không tìm thấy tệp ảnh để xử lý.');
   }
+  if (!inputFile.size || inputFile.size < 64) {
+    throw new Error('Tệp ảnh bị rỗng (0 byte), vui lòng chọn ảnh khác.');
+  }
+  if (inputFile.size > MAX_RAW_UPLOAD_BYTES) {
+    throw new Error('Tệp ảnh gốc vượt quá 25MB, vui lòng chọn ảnh dung lượng nhỏ hơn.');
+  }
+  if (inputFile.type && !String(inputFile.type).toLowerCase().startsWith('image/')) {
+    throw new Error('Tệp đã chọn không phải là hình ảnh hợp lệ (chỉ chấp nhận JPG, PNG, WEBP).');
+  }
 
   const originalSizeKB = Math.max(1, Math.round((inputFile.size / 1024) * 10) / 10);
   const img = await loadImageFromBlob(inputFile);
@@ -60,16 +93,19 @@ export async function compressFaceImageUnder200KB(inputFile, customFileName = 'h
   let finalW = origW;
   let finalH = origH;
 
-  for (let attempt = 0; attempt < 7; attempt += 1) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
     const scale = Math.min(1, maxDimension / Math.max(origW, origH));
-    finalW = Math.max(240, Math.round(origW * scale));
-    finalH = Math.max(240, Math.round(origH * scale));
+    finalW = Math.max(220, Math.round(origW * scale));
+    finalH = Math.max(220, Math.round(origH * scale));
 
     const canvas = document.createElement('canvas');
     canvas.width = finalW;
     canvas.height = finalH;
 
     const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('Trình duyệt không hỗ trợ xử lý khung vẽ ảnh (Canvas 2D).');
+    }
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, finalW, finalH);
     ctx.imageSmoothingEnabled = true;
@@ -81,14 +117,14 @@ export async function compressFaceImageUnder200KB(inputFile, customFileName = 'h
       break;
     }
 
-    quality = Math.max(0.4, quality - 0.12);
+    quality = Math.max(0.36, quality - 0.11);
     if (attempt >= 2) {
-      maxDimension = Math.max(380, Math.round(maxDimension * 0.82));
+      maxDimension = Math.max(320, Math.round(maxDimension * 0.8));
     }
   }
 
-  if (!resultBlob) {
-    throw new Error('Không thể nén ảnh khuôn mặt.');
+  if (!resultBlob || resultBlob.size > 200 * 1024) {
+    throw new Error('Không thể nén ảnh xuống dưới 200KB, vui lòng chọn ảnh chân dung khác rõ nét hơn.');
   }
 
   const baseName = String(customFileName || inputFile.name || 'face')
@@ -111,4 +147,3 @@ export async function compressFaceImageUnder200KB(inputFile, customFileName = 'h
     height: finalH
   };
 }
-

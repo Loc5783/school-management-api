@@ -48,6 +48,25 @@ const TimekeepingDeviceSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  // Thời điểm khóa cứng mã phần cứng serialNumber vào phân hiệu (chống kéo/đẩy nhầm sang trường khác)
+  serialLockedAt: {
+    type: Date,
+    default: null
+  },
+  serialLockedByVendor: {
+    type: Boolean,
+    default: false
+  },
+  // Địa chỉ HTTP Listening Webhook gần nhất đã đẩy thành công xuống máy Hikvision (hỗ trợ đổi Domain 1 chạm)
+  webhookConfiguredUrl: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  webhookConfiguredAt: {
+    type: Date,
+    default: null
+  },
   macAddress: {
     type: String,
     trim: true,
@@ -217,8 +236,8 @@ TimekeepingDeviceSchema.index({ tenantId: 1, deviceCode: 1 }, {
   unique: true
 });
 
-// Tenant-scoped unique serialNumber index when present and non-empty
-TimekeepingDeviceSchema.index({ tenantId: 1, serialNumber: 1 }, {
+// Khóa cứng serialNumber duy nhất trên TOÀN HỆ THỐNG để 1 máy vật lý không bao giờ gắn trùng vào 2 phân hiệu khác nhau
+TimekeepingDeviceSchema.index({ serialNumber: 1 }, {
   unique: true,
   partialFilterExpression: { serialNumber: { $type: 'string', $gt: '' } }
 });

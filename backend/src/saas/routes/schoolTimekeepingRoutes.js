@@ -98,7 +98,13 @@ router.patch('/corrections/:id/reject', roleCheck(approvalRoles), rejectCorrecti
 // 4. Attendance Recalculation
 router.post('/recalculate/:date', roleCheck(approvalRoles), recalculateAttendance);
 
-// 5. Timekeeping Device, 500-Slot Biometric ISAPI Sync & Person Mapping Management Endpoints
+// 5. Timekeeping Device, Local LAN Connector (127.0.0.1:18686), Dynamic Webhook & Live SSE Stream
+router.get('/live-stream', roleCheck(['admin', 'principal', 'teacher', 'guard', 'hr']), deviceCtrl.streamCampusLiveEvents);
+router.get('/live-events', roleCheck(['admin', 'principal', 'teacher', 'guard', 'hr']), deviceCtrl.getCampusRecentLiveEvents);
+router.get('/connector-package', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.downloadConnectorPackage);
+router.post('/connector-grant', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.issueLocalConnectorGrant);
+router.post('/devices/connector-enrich-scan', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.enrichConnectorLanScan);
+
 router.get('/biometric-overview', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.getBiometricOverview);
 router.put('/biometric-faces/:subjectType/:subjectId', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.uploadBiometricFace);
 router.delete('/biometric-faces/:subjectType/:subjectId', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.removeBiometricFace);
@@ -123,6 +129,11 @@ router.post('/devices/:id/push-sync', roleCheck(['admin', 'principal', 'hr']), d
 router.post('/devices/:id/quick-bidirectional-sync', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.quickBidirectionalSync);
 router.post('/devices/:id/prune-inactive', roleCheck(['admin', 'principal']), deviceCtrl.pruneDeviceInactiveSlots);
 router.post('/devices/:id/unlock-door', roleCheck(['admin', 'principal']), deviceCtrl.unlockDeviceDoor);
+router.post('/devices/:id/connector-prepare', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.prepareConnectorAction);
+router.post('/devices/:id/connector-ingest-pull', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.ingestConnectorPull);
+router.post('/devices/:id/connector-complete-push', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.completeConnectorPush);
+router.post('/devices/:id/configure-webhook', roleCheck(['admin', 'principal']), deviceCtrl.configureDeviceWebhook);
+router.post('/devices/:id/unlock-serial', roleCheck(['admin']), deviceCtrl.unlockDeviceSerialByVendor);
 router.post('/devices/:id/sync', roleCheck(['admin', 'principal']), deviceCtrl.triggerDeviceSync);
 router.get('/devices/:id/person-mappings', roleCheck(['admin', 'principal', 'hr']), deviceCtrl.listPersonMappings);
 router.post('/devices/:id/person-mappings', roleCheck(['admin', 'hr']), deviceCtrl.upsertPersonMapping);

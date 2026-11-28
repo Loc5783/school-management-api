@@ -136,7 +136,7 @@ const getSystemSettings = async ({ bypassCache = false } = {}) => {
     return { ...DEFAULT_SYSTEM_SETTINGS };
   }
 
-  let doc = await SystemSetting.findOne({ key: 'GLOBAL_CONFIG' }).lean();
+  let doc = await SystemSetting.findOne({ key: 'GLOBAL_CONFIG' }).select('-connectorBridgeSecurity').lean();
   if (!doc) {
     doc = { ...DEFAULT_SYSTEM_SETTINGS };
   } else {

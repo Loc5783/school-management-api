@@ -22,11 +22,13 @@ const Tenant = require('../../src/models/zone1_system/Tenant');
 const User = require('../../src/models/zone1_system/User');
 const Classroom = require('../../src/models/zone3_school/Classroom');
 const Student = require('../../src/models/zone3_school/Student');
+const StudentAttendance = require('../../src/models/zone3_school/StudentAttendance');
 const Employee = require('../../src/models/zone2_hr/Employee');
 const TimekeepingDevice = require('../../src/models/zone2_hr/TimekeepingDevice');
 const BiometricFaceProfile = require('../../src/models/zone2_hr/BiometricFaceProfile');
 const AttendanceDevicePersonMapping = require('../../src/models/zone2_hr/AttendanceDevicePersonMapping');
 const biometricSyncService = require('../../src/services/hikvisionBiometricSyncService');
+const { sanitizeHikvisionPersonName } = require('../../src/services/hikvisionIsapiService');
 
 // Tạo mẫu ảnh JPEG hợp lệ tối giản (bắt đầu bằng FF D8 FF E0 ... FF D9, < 200KB)
 function createValidTinyJpegBuffer(extraLength = 512) {
@@ -46,6 +48,7 @@ describe('Multi-Campus Hikvision ISAPI 500-Slot & Biometric Face Sync Suite', ()
   const mockHardwareUsers = new Map();
   const mockHardwareFaces = new Map();
   let doorOpenedCount = 0;
+  let dropNextSocketOnce = false;
 
   let tenantA;
   let tenantB;
@@ -65,6 +68,11 @@ describe('Multi-Campus Hikvision ISAPI 500-Slot & Biometric Face Sync Suite', ()
   beforeAll(async () => {
     // Khởi tạo Mock Hikvision DS-K1T320MX ISAPI Server (yêu cầu Digest Auth chuẩn)
     mockHikServer = http.createServer((req, res) => {
+      if (dropNextSocketOnce) {
+        dropNextSocketOnce = false;
+        req.socket.destroy();
+        return;
+      }
       const auth = req.headers.authorization || '';
       if (!auth.startsWith('Digest ')) {
         res.writeHead(401, {
@@ -247,6 +255,7 @@ describe('Multi-Campus Hikvision ISAPI 500-Slot & Biometric Face Sync Suite', ()
       User.syncIndexes(),
       Classroom.syncIndexes(),
       Student.syncIndexes(),
+      StudentAttendance.syncIndexes(),
       Employee.syncIndexes(),
       TimekeepingDevice.syncIndexes(),
       BiometricFaceProfile.syncIndexes(),
@@ -707,6 +716,146 @@ describe('Multi-Campus Hikvision ISAPI 500-Slot & Biometric Face Sync Suite', ()
       subjectId: empCampus2._id
     }).lean();
     expect(savedFaceEmp2).not.toBeNull();
+  });
+
+  test('7. Resilience, Exception Handling & Real-World Hardware Events (XML Webhook, Card RFID, Concurrent Race, ECONNRESET, Device Busy & Input Guards)', async () => {
+    // 7a. Chuẩn hóa tên tiếng Việt có dấu dài + ký tự điều khiển (\r\n\t) không bao giờ vượt 60 bytes UTF-8 hay lỗi ký tự
+    const rawMessyName = 'Nguyễn\r\n Hoàng\t Phương Thảo Trần Ngọc Bảo Châu Minh Khang Phúc Lâm';
+    const cleanName = sanitizeHikvisionPersonName(rawMessyName, 'HS01');
+    expect(cleanName.includes('\r')).toBe(false);
+    expect(cleanName.includes('\n')).toBe(false);
+    expect(Buffer.byteLength(cleanName, 'utf8')).toBeLessThanOrEqual(60);
+    expect(cleanName.includes('\uFFFD')).toBe(false);
+
+    // 7b. Chặn cổng mạng sai (99999), số cửa sai (doorNo = 99) và dữ liệu giả mạo ảnh khuôn mặt (không phải JPEG/PNG)
+    const badPortRes = await request(app)
+      .post('/api/v1/timekeeping/devices')
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({
+        deviceCode: 'HIK-BAD-PORT',
+        name: 'Máy Cổng Sai',
+        host: '192.168.1.99',
+        httpPort: 99999
+      });
+    expect(badPortRes.status).toBe(400);
+    expect(badPortRes.body.code).toBe('INVALID_PORT_RANGE');
+
+    const badDoorRes = await request(app)
+      .post(`/api/v1/timekeeping/devices/${deviceCampus1Id}/unlock-door`)
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({ doorNo: 99 });
+    expect(badDoorRes.status).toBe(400);
+    expect(badDoorRes.body.code).toBe('INVALID_DOOR_NUMBER');
+
+    const fakeImageBuf = Buffer.alloc(500, 0x41); // Toàn chữ 'A', không phải magic bytes JPEG/PNG
+    const fakeFaceRes = await request(app)
+      .put(`/api/v1/timekeeping/biometric-faces/STUDENT/${stuCampus2._id}`)
+      .set('Authorization', `Bearer ${tokenAdminA}`)
+      .send({ imageBase64: `data:image/jpeg;base64,${fakeImageBuf.toString('base64')}` });
+    expect(fakeFaceRes.status).toBe(400);
+    expect(fakeFaceRes.body.code).toBe('UNSUPPORTED_FACE_FORMAT');
+
+    // 7c. Tự động phục hồi khi mạng LAN cổng trường rớt gói đột ngột (ECONNRESET)
+    dropNextSocketOnce = true;
+    const recoveredHealth = await biometricSyncService.checkDeviceCapacityAndHealth(
+      tenantA._id,
+      deviceCampus1Id,
+      { _allowLoopbackForTesting: true }
+    );
+    expect(recoveredHealth.online).toBe(true);
+
+    // 7d. Chống đụng độ khi 2 quản trị viên bấm thao tác đồng thời trên cùng 1 máy chấm công -> Trả 409 DEVICE_BUSY gọn gàng
+    const [op1, op2] = await Promise.allSettled([
+      biometricSyncService.pruneInactiveUsersOnDevice(tenantA._id, deviceCampus1Id, {
+        _allowLoopbackForTesting: true
+      }),
+      biometricSyncService.pruneInactiveUsersOnDevice(tenantA._id, deviceCampus1Id, {
+        _allowLoopbackForTesting: true
+      })
+    ]);
+    const statuses = [op1.status, op2.status].sort();
+    expect(statuses).toEqual(['fulfilled', 'rejected']);
+    const rejectedOp = op1.status === 'rejected' ? op1 : op2;
+    expect(rejectedOp.reason.code).toBe('DEVICE_BUSY');
+    expect(rejectedOp.reason.statusCode).toBe(409);
+
+    // 7e. Gói tin Webhook định dạng XML (<EventNotificationAlert>) kèm quẹt thẻ từ RFID (attendanceCardId, không có employeeNoString)
+    await Student.updateOne(
+      { _id: stuCampus2._id },
+      { $set: { attendanceCardId: 'RFID-CARD-9902' } }
+    );
+
+    const xmlWebhookBody = `<?xml version="1.0" encoding="UTF-8"?>
+<EventNotificationAlert version="2.0">
+  <ipAddress>192.168.2.50</ipAddress>
+  <dateTime>2026-11-28T07:42:00+07:00</dateTime>
+  <eventType>AccessControllerEvent</eventType>
+  <eventState>active</eventState>
+  <AccessControllerEvent>
+    <deviceName>Cong Cau Giay</deviceName>
+    <majorEventType>5</majorEventType>
+    <subEventType>1</subEventType>
+    <cardNo>RFID-CARD-9902</cardNo>
+    <serialNo>88001</serialNo>
+  </AccessControllerEvent>
+</EventNotificationAlert>`;
+
+    const xmlRes = await request(app)
+      .post('/api/v1/timekeeping/webhook/MN-SAOMAI')
+      .set('Content-Type', 'application/xml')
+      .send(xmlWebhookBody);
+    expect(xmlRes.status).toBe(200);
+    expect(xmlRes.body.attendanceResult?.status).toBe('OK');
+    expect(xmlRes.body.attendanceResult?.subjectType).toBe('STUDENT');
+
+    // 7f. Tranh chấp đồng thời (Race condition): Học sinh đi qua 2 camera cổng trường tại cùng 1 mili-giây
+    const raceStudent = await Student.create({
+      tenantId: tenantA._id,
+      studentCode: 'HS-RACE-777',
+      fullName: 'Bé Kiểm Thử Đồng Thời',
+      classroomId: stuCampus1.classroomId,
+      className: 'Lớp Mầm CS1',
+      gender: 'male',
+      status: 'enrolled',
+      birthDate: new Date('2022-03-03')
+    });
+
+    const sameInstant = '2026-11-28T07:50:00.000+07:00';
+    const [gate1Res, gate2Res] = await Promise.all([
+      request(app)
+        .post('/api/v1/timekeeping/webhook/MN-SAOMAI?deviceCode=GATE-CAM-1')
+        .send({
+          eventType: 'AccessControllerEvent',
+          dateTime: sameInstant,
+          AccessControllerEvent: {
+            majorEventType: 5,
+            subEventType: 75,
+            employeeNoString: 'HS-RACE-777',
+            serialNo: 99101
+          }
+        }),
+      request(app)
+        .post('/api/v1/timekeeping/webhook/MN-SAOMAI?deviceCode=GATE-CAM-2')
+        .send({
+          eventType: 'AccessControllerEvent',
+          dateTime: sameInstant,
+          AccessControllerEvent: {
+            majorEventType: 5,
+            subEventType: 75,
+            employeeNoString: 'HS-RACE-777',
+            serialNo: 99102
+          }
+        })
+    ]);
+
+    expect(gate1Res.status).toBe(200);
+    expect(gate2Res.status).toBe(200);
+
+    const raceAttRecords = await StudentAttendance.find({
+      tenantId: tenantA._id,
+      studentId: raceStudent._id
+    }).lean();
+    expect(raceAttRecords.length).toBe(1);
   });
 });
 

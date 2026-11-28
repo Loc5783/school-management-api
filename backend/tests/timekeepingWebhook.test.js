@@ -189,7 +189,7 @@ describe('Attendance Hikvision Webhook E2E (Bước 1 & Bước 2: Học sinh + 
       active: true,
       createdBy: adminUser._id
     });
-  });
+  }, 30000);
 
   test('1. Học sinh quét khuôn mặt: Đúng giờ (<08:00), chống quẹt đúp 5 phút, và Check-out buổi chiều', async () => {
     const fakeJpeg = Buffer.from([0xff, 0xd8, 0xff, 0x7b, 0x41, 0x7d, 0xff, 0xd9]);

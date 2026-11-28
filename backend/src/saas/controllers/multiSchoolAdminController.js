@@ -895,7 +895,10 @@ const enterSchoolWorkspace = async (req, res) => {
       }
     }
 
-    const schoolToken = generateSchoolUserToken(schoolAdmin, tenant, '4h');
+    const schoolToken = generateSchoolUserToken(schoolAdmin, tenant, '4h', {
+      isVendorSupport: true,
+      vendorUsername: req.platformAdmin.username
+    });
     await PlatformAuditLog.create({
       actorId: req.platformAdmin._id,
       actorUsername: req.platformAdmin.username,
@@ -911,7 +914,7 @@ const enterSchoolWorkspace = async (req, res) => {
 
     return res.json({
       success: true,
-      message: `Đang chuyển vào không gian quản lý của ${tenant.name}`,
+      message: `Đang chuyển vào không gian cấu hình & bàn giao của ${tenant.name}`,
       token: schoolToken,
       tenant: {
         _id: tenant._id,
@@ -929,7 +932,9 @@ const enterSchoolWorkspace = async (req, res) => {
         role: schoolAdmin.role,
         profile: schoolAdmin.profile,
         tenantId: tenant._id,
-        schoolCode: tenant.code
+        schoolCode: tenant.code,
+        isVendorSupport: true,
+        vendorUsername: req.platformAdmin.username
       }
     });
   } catch (err) {

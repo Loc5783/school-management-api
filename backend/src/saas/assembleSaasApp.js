@@ -65,8 +65,11 @@ const assembleSaasApp = (options = {}) => {
     app.set('trust proxy', parsedTrustProxy);
   }
 
-  const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173')
-    .split(',')
+  const allowedOrigins = [
+    ...(process.env.CORS_ORIGINS || 'http://localhost:5173').split(','),
+    process.env.PUBLIC_APP_URL || '',
+    process.env.PUBLIC_BASE_URL || ''
+  ]
     .map((origin) => origin.trim())
     .filter(Boolean);
 

@@ -28,15 +28,43 @@ const RawAttendanceEvent = require('../models/zone2_hr/RawAttendanceEvent');
 const BiometricFaceProfile = require('../models/zone2_hr/BiometricFaceProfile');
 const hikvisionIsapiService = require('./hikvisionIsapiService');
 const { buildDeviceConfig, syncDeviceEvents } = require('./hikvisionSyncService');
-const { ingestStudentDeviceAttendance } = require('./attendanceDeviceService');
+const { ingestDeviceEvent, ingestStudentDeviceAttendance } = require('./attendanceDeviceService');
 const { calculateAttendanceForUserDate } = require('./attendanceCalculationService');
 const { createTrustedTenantContext } = require('./tenantFilterService');
 const { getWorkDate, startOfWorkDate, DEFAULT_SCHOOL_TIMEZONE } = require('../utils/dateHelpers');
+const { buildEncryptedDeviceAuthForConnector } = require('./localConnectorGrantService');
+const { publishCampusRealtimeEvent } = require('./realtimeCampusEventHub');
+const { formatFriendlyVietnameseHardwareNotice } = require('../utils/vietnameseHardwareTranslator');
 
 const DEFAULT_CAMPUS_NAME = 'Cơ sở chính';
 const MAX_FACE_BYTES = hikvisionIsapiService.MAX_HIKVISION_FACE_BYTES || 200 * 1024;
+const MAX_BASE64_INPUT_CHARS = 360000; // Chặn sớm O(1) trước khi cấp phát Buffer cho chuỗi Base64 quá lớn
 const DEVICE_PARALLEL_LIMIT = 4;
 const PER_DEVICE_IO_CONCURRENCY = 3;
+const DEVICE_BIOMETRIC_LOCK_TTL_MS = 90 * 1000;
+
+// Khóa chống đụng độ thao tác đồng bộ/kéo/xóa đồng thời trên cùng 1 máy chấm công vật lý
+const activeDeviceBiometricLocks = new Map();
+
+async function withDeviceBiometricLock(deviceId, opName, fn) {
+  const key = String(deviceId || '');
+  const now = Date.now();
+  const lockedUntil = activeDeviceBiometricLocks.get(key);
+  if (lockedUntil && lockedUntil > now) {
+    const busyErr = new Error(
+      `Thiết bị đang bận xử lý tiến trình khác (${opName}). Vui lòng đợi vài giây rồi thử lại.`
+    );
+    busyErr.code = 'DEVICE_BUSY';
+    busyErr.statusCode = 409;
+    throw busyErr;
+  }
+  activeDeviceBiometricLocks.set(key, now + DEVICE_BIOMETRIC_LOCK_TTL_MS);
+  try {
+    return await fn();
+  } finally {
+    activeDeviceBiometricLocks.delete(key);
+  }
+}
 
 const POSITION_LABELS = Object.freeze({
   principal: 'Hiệu trưởng / Giám đốc',
@@ -94,11 +122,71 @@ function createServiceError(message, code, statusCode = 400) {
 }
 
 /**
+ * KHÓA CỨNG MÃ PHẦN CỨNG `deviceSerial` GẮN CHẶT VỚI PHÂN HIỆU (`tenantId` / `campus_id`):
+ * - Nếu `actualSerial` đọc từ máy Hikvision đang thuộc về một `tenantId` khác -> CHẶN CỨNG (`SERIAL_LOCKED_OTHER_CAMPUS`).
+ * - Nếu bản ghi máy hiện tại đã khóa `deviceDoc.serialNumber` mà phần cứng thực tế tại IP đó trả về Serial khác -> CHẶN CỨNG (`HARDWARE_SERIAL_MISMATCH`).
+ * - Nếu bản ghi máy chưa lưu Serial và `actualSerial` chưa thuộc trường nào -> Tự động gắn khóa `serialNumber` + `serialLockedAt` cho phân hiệu này!
+ */
+async function assertDeviceSerialCampusLock(tenantId, deviceDoc, actualSerial = '') {
+  const cleanActual = String(actualSerial || '').trim();
+  if (!cleanActual) return;
+
+  const foreignConflict = await TimekeepingDevice.findOne({
+    serialNumber: cleanActual,
+    tenantId: { $ne: tenantId }
+  })
+    .select('_id tenantId name campus serialNumber')
+    .lean();
+
+  if (foreignConflict) {
+    throw createServiceError(
+      'Chiếc máy chấm công này hiện đang được khóa bảo mật cho một phân hiệu trường khác trên hệ thống. Hệ thống đã tự động dừng lại để không kéo hoặc đẩy nhầm danh sách học sinh. Vui lòng liên hệ Kỹ thuật viên Nhà cung cấp phần mềm nếu bạn cần chuyển máy về phân hiệu của mình.',
+      'SERIAL_LOCKED_OTHER_CAMPUS',
+      409
+    );
+  }
+
+  if (deviceDoc.serialNumber && String(deviceDoc.serialNumber).trim() !== cleanActual) {
+    throw createServiceError(
+      `Chiếc máy chấm công tại địa chỉ ${deviceDoc.host} có mã phần cứng (${cleanActual}) không khớp với máy "${deviceDoc.name}" đã khóa cho phân hiệu của bạn (${deviceDoc.serialNumber}). Hệ thống đã tự động khóa an toàn để bảo vệ dữ liệu học sinh.`,
+      'HARDWARE_SERIAL_MISMATCH',
+      409
+    );
+  }
+
+  if (!deviceDoc.serialNumber) {
+    const sameTenantDup = await TimekeepingDevice.findOne({
+      tenantId,
+      serialNumber: cleanActual,
+      _id: { $ne: deviceDoc._id }
+    })
+      .select('_id name')
+      .lean();
+    if (sameTenantDup) {
+      throw createServiceError(
+        `Chiếc máy chấm công này đã được lưu sẵn trong phân hiệu dưới tên "${sameTenantDup.name}".`,
+        'DUPLICATE_SERIAL_SAME_CAMPUS',
+        409
+      );
+    }
+    deviceDoc.serialNumber = cleanActual;
+    deviceDoc.serialLockedAt = new Date();
+  }
+}
+
+/**
  * Giải mã chuỗi Base64 hoặc Data URL thành Buffer ảnh và kiểm tra chuẩn JPEG/PNG <= 200KB.
  */
 function parseAndValidateFaceImagePayload(rawInput) {
   if (!rawInput || typeof rawInput !== 'string') {
     throw createServiceError('Vui lòng cung cấp dữ liệu ảnh khuôn mặt hợp lệ', 'INVALID_FACE_IMAGE', 400);
+  }
+  if (rawInput.length > MAX_BASE64_INPUT_CHARS) {
+    throw createServiceError(
+      'Dữ liệu ảnh khuôn mặt vượt giới hạn phần cứng 200 KB của máy chấm công Hikvision',
+      'FACE_IMAGE_TOO_LARGE',
+      400
+    );
   }
 
   let cleanBase64 = rawInput.trim();
@@ -416,17 +504,23 @@ async function selectTargetRosterForDeviceCapacity(tenantId, device, unifiedRost
     eligibleActive.push(item);
   }
 
-  let todayShiftUserIds = new Set();
+  let todayShiftEmployeeIds = new Set();
   if (eligibleActive.length > maxCap || mode === 'TODAY_ATTENDANCE_FIRST') {
     const todayStr = getWorkDate(new Date(), device.timezone || DEFAULT_SCHOOL_TIMEZONE);
-    const todayDateObj = startOfWorkDate(todayStr);
-    const shifts = await StaffShift.find({ tenantId, date: todayDateObj })
-      .select('userId employeeId')
+    const todayWeekday = new Date(`${todayStr}T00:00:00.000Z`).getUTCDay();
+    const shifts = await StaffShift.find({
+      tenantId,
+      status: 'active',
+      validFrom: { $lte: todayStr },
+      validUntil: { $gte: todayStr },
+      weekdays: todayWeekday
+    })
+      .select('employeeId')
       .lean()
       .catch(() => []);
 
-    todayShiftUserIds = new Set(
-      shifts.flatMap((s) => [s.userId ? String(s.userId) : null, s.employeeId ? String(s.employeeId) : null]).filter(Boolean)
+    todayShiftEmployeeIds = new Set(
+      shifts.map((s) => (s.employeeId ? String(s.employeeId) : null)).filter(Boolean)
     );
   }
 
@@ -435,10 +529,7 @@ async function selectTargetRosterForDeviceCapacity(tenantId, device, unifiedRost
     if (deviceCampus && deviceCampus !== 'ALL' && item.campus === deviceCampus) score += 500;
     if (item.subjectType === 'EMPLOYEE') {
       score += 120;
-      if (
-        (item.userId && todayShiftUserIds.has(item.userId)) ||
-        (item.employeeRecordId && todayShiftUserIds.has(item.employeeRecordId))
-      ) {
+      if (item.employeeRecordId && todayShiftEmployeeIds.has(item.employeeRecordId)) {
         score += 200;
       }
     } else {
@@ -741,17 +832,10 @@ async function checkDeviceCapacityAndHealth(tenantId, deviceId, overrideOpts = {
     }
     if (info.model) device.model = info.model;
     if (info.macAddress) device.macAddress = info.macAddress;
-    if (info.serialNumber && !device.serialNumber) {
-      const conflict = await TimekeepingDevice.findOne({
-        tenantId,
-        serialNumber: info.serialNumber,
-        _id: { $ne: device._id }
-      }).lean();
-      if (!conflict) {
-        device.serialNumber = info.serialNumber;
-      }
+    if (info.serialNumber) {
+      await assertDeviceSerialCampusLock(tenantId, device, info.serialNumber);
     }
-    device.statusMessage = `Trực tuyến ISAPI • Bộ nhớ: ${device.currentStoredUsers}/${device.maxUserCapacity || 500} người`;
+    device.statusMessage = `Đang kết nối tốt • Bộ nhớ đang lưu ${device.currentStoredUsers}/${device.maxUserCapacity || 500} hồ sơ`;
     await device.save();
 
     return {
@@ -761,11 +845,18 @@ async function checkDeviceCapacityAndHealth(tenantId, deviceId, overrideOpts = {
       currentStoredUsers: device.currentStoredUsers,
       currentStoredFaces: device.currentStoredFaces,
       maxUserCapacity: device.maxUserCapacity || 500,
-      message: `Kết nối ISAPI thành công (${device.campus}): Đang lưu ${device.currentStoredUsers}/${device.maxUserCapacity || 500} hồ sơ trên máy.`
+      message: `Máy "${device.name}" đang kết nối tốt tại ${device.campus}: hiện lưu ${device.currentStoredUsers}/${device.maxUserCapacity || 500} hồ sơ.`
     };
   } catch (err) {
+    if (err.code === 'SERIAL_LOCKED_OTHER_CAMPUS' || err.code === 'HARDWARE_SERIAL_MISMATCH') {
+      throw err;
+    }
     device.status = err.code === 'DEVICE_AUTH_FAILED' ? 'AUTH_FAILED' : 'OFFLINE';
-    device.statusMessage = err.message;
+    device.statusMessage = formatFriendlyVietnameseHardwareNotice(err, {
+      deviceName: device.name,
+      host: device.host,
+      campus: device.campus
+    });
     await device.save();
 
     return {
@@ -774,7 +865,7 @@ async function checkDeviceCapacityAndHealth(tenantId, deviceId, overrideOpts = {
       code: err.code || 'CONNECTION_FAILED',
       currentStoredUsers: device.currentStoredUsers || 0,
       maxUserCapacity: device.maxUserCapacity || 500,
-      message: err.message
+      message: device.statusMessage
     };
   }
 }
@@ -806,6 +897,18 @@ async function pullUsersAndFacesFromDevice(
       'DEVICE_CREDENTIALS_MISSING',
       400
     );
+  }
+
+  return withDeviceBiometricLock(device._id, 'Kéo dữ liệu người dùng & khuôn mặt', async () => {
+  // Kiểm tra khóa cứng Serial phần cứng trước khi kéo dữ liệu từ máy về Web
+  const hwInfo = await hikvisionIsapiService.getDeviceInfo(config).catch((err) => {
+    if (err.code === 'DEVICE_AUTH_FAILED' || err.code === 'DEVICE_OFFLINE' || err.code === 'DEVICE_TIMEOUT') {
+      throw err;
+    }
+    return null;
+  });
+  if (hwInfo?.serialNumber) {
+    await assertDeviceSerialCampusLock(tenantId, device, hwInfo.serialNumber);
   }
 
   const [deviceUsers, bioCtx, deviceMappings] = await Promise.all([
@@ -985,6 +1088,7 @@ async function pullUsersAndFacesFromDevice(
     syncedPeople,
     unmatchedOnDevice
   };
+  });
 }
 
 /**
@@ -1164,6 +1268,7 @@ async function syncSmartToDevices(
   const useDelta = Boolean(fastDelta) && !forceFullSync;
 
   const deviceReports = await runWithConcurrency(devices, DEVICE_PARALLEL_LIMIT, async (device) => {
+    return withDeviceBiometricLock(device._id, 'Đẩy đồng bộ 1 chiều', async () => {
     const config = await buildDeviceConfig(device, overrideOpts);
     if (!config.username || !config.password) {
       return {
@@ -1179,12 +1284,28 @@ async function syncSmartToDevices(
     let existingUsers = [];
     let deviceReachable = true;
     try {
+      const hwInfo = await hikvisionIsapiService.getDeviceInfo(config).catch((infoErr) => {
+        if (infoErr.code === 'DEVICE_AUTH_FAILED' || infoErr.code === 'DEVICE_OFFLINE' || infoErr.code === 'DEVICE_TIMEOUT') {
+          throw infoErr;
+        }
+        return null;
+      });
+      if (hwInfo?.serialNumber) {
+        await assertDeviceSerialCampusLock(tenantId, device, hwInfo.serialNumber);
+      }
       existingUsers = await hikvisionIsapiService.fetchAllDeviceUsersWithFaces(config);
     } catch (err) {
+      if (err.code === 'SERIAL_LOCKED_OTHER_CAMPUS' || err.code === 'HARDWARE_SERIAL_MISMATCH') {
+        throw err;
+      }
       if (err.code === 'DEVICE_AUTH_FAILED' || err.code === 'DEVICE_OFFLINE' || err.code === 'DEVICE_TIMEOUT') {
         deviceReachable = false;
         device.status = err.code === 'DEVICE_AUTH_FAILED' ? 'AUTH_FAILED' : 'OFFLINE';
-        device.statusMessage = err.message;
+        device.statusMessage = formatFriendlyVietnameseHardwareNotice(err, {
+          deviceName: device.name,
+          host: device.host,
+          campus: device.campus
+        });
         await device.save();
         return {
           deviceId: String(device._id),
@@ -1193,7 +1314,7 @@ async function syncSmartToDevices(
           host: device.host,
           success: false,
           status: device.status,
-          message: err.message
+          message: device.statusMessage
         };
       }
       existingUsers = [];
@@ -1237,9 +1358,13 @@ async function syncSmartToDevices(
           Number(existingOnDev.numOfFace) > 0
       );
 
-      // Chế độ Delta Nhanh: Nếu hồ sơ đã nằm sẵn trên máy, trùng tên và không có ảnh mặt mới cần đẩy -> Bỏ qua ghi mạng!
+      // Chế độ Delta Nhanh: Nếu hồ sơ đã nằm sẵn trên máy, trùng tên chuẩn UTF-8 <=60B và không có ảnh mặt mới cần đẩy -> Bỏ qua ghi mạng!
+      const expectedSanitizedName = hikvisionIsapiService.sanitizeHikvisionPersonName(
+        target.fullName,
+        target.personCode
+      );
       const nameUnchanged = Boolean(
-        existingOnDev && String(existingOnDev.name || '').trim() === String(target.fullName || '').trim().slice(0, 64)
+        existingOnDev && String(existingOnDev.name || '').trim() === expectedSanitizedName
       );
       const noFaceUpdateNeeded = !faceDoc || alreadySyncedFaceOnThisDevice;
 
@@ -1342,6 +1467,15 @@ async function syncSmartToDevices(
       maxUserCapacity: device.maxUserCapacity || 500,
       ...summary
     };
+    }).catch((lockOrDevErr) => ({
+      deviceId: String(device._id),
+      deviceName: device.name,
+      campus: device.campus,
+      host: device.host,
+      success: false,
+      code: lockOrDevErr.code || 'SYNC_DEVICE_ERROR',
+      message: lockOrDevErr.message
+    }));
   });
 
   return {
@@ -1645,6 +1779,7 @@ async function pruneInactiveUsersOnDevice(tenantId, deviceId, overrideOpts = {})
     throw createServiceError('Chưa cấu hình mật khẩu quản trị thiết bị ISAPI', 'DEVICE_CREDENTIALS_MISSING', 400);
   }
 
+  return withDeviceBiometricLock(device._id, 'Giải phóng slot nghỉ', async () => {
   const bioCtx = await loadTenantBiometricContext(tenantId);
   const { codesToPrune } = await selectTargetRosterForDeviceCapacity(tenantId, device, bioCtx.unifiedRoster);
 
@@ -1673,6 +1808,7 @@ async function pruneInactiveUsersOnDevice(tenantId, deviceId, overrideOpts = {})
         ? `Đã xóa ${delRes.removedCount} hồ sơ nghỉ việc/thôi học và thu hồi slot trên máy "${device.name}"!`
         : `Bộ nhớ máy "${device.name}" đã sạch, không có hồ sơ nghỉ việc/thôi học nào cần thu hồi.`
   };
+  });
 }
 
 /**
@@ -1711,16 +1847,641 @@ async function unlockDoorOnDevice(tenantId, deviceId, doorNo = 1, overrideOpts =
  * Quét tự động máy chấm công Hikvision trong mạng LAN của phân hiệu (hỗ trợ truyền mật khẩu thử để đọc luôn Model/SN/500-slot).
  */
 async function scanLanDevicesForTenant(tenantId, { subnetPrefix = null, probeUsername = '', probePassword = '' } = {}) {
-  const existingDevices = await TimekeepingDevice.find({ tenantId })
-    .select('_id host name campus model serialNumber httpPort httpsPort')
-    .lean();
+  const [existingDevices, allLockedSerials] = await Promise.all([
+    TimekeepingDevice.find({ tenantId })
+      .select('_id host name campus model serialNumber httpPort httpsPort')
+      .lean(),
+    TimekeepingDevice.find({
+      tenantId: { $ne: tenantId },
+      serialNumber: { $type: 'string', $gt: '' }
+    })
+      .select('serialNumber')
+      .lean()
+  ]);
 
-  return hikvisionIsapiService.discoverHikvisionDevicesOnLan({
+  const foreignSerialSet = new Set(allLockedSerials.map((x) => String(x.serialNumber).trim()));
+
+  const scanRes = await hikvisionIsapiService.discoverHikvisionDevicesOnLan({
     subnetPrefix,
     existingDevices,
     probeUsername,
     probePassword
   });
+
+  return {
+    ...scanRes,
+    discoveredDevices: (scanRes.discoveredDevices || []).map((d) => ({
+      ...d,
+      lockedToOtherCampus: Boolean(d.serialNumber && foreignSerialSet.has(String(d.serialNumber).trim()))
+    }))
+  };
+}
+
+/**
+ * Làm giàu danh sách máy chấm công quét từ `Local LAN Connector (127.0.0.1:18686)` với trạng thái lưu/khóa Serial trên Cloud DB.
+ */
+async function enrichConnectorDiscoveredDevices(tenantId, rawDiscoveredDevices = []) {
+  const [existingDevices, foreignDevices] = await Promise.all([
+    TimekeepingDevice.find({ tenantId }).select('_id host name campus model serialNumber').lean(),
+    TimekeepingDevice.find({
+      tenantId: { $ne: tenantId },
+      serialNumber: { $type: 'string', $gt: '' }
+    })
+      .select('serialNumber')
+      .lean()
+  ]);
+
+  const bySerial = new Map();
+  const byHost = new Map();
+  for (const dev of existingDevices) {
+    if (dev.serialNumber) bySerial.set(String(dev.serialNumber).trim(), dev);
+    if (dev.host) byHost.set(String(dev.host).trim(), dev);
+  }
+  const foreignSerialSet = new Set(foreignDevices.map((x) => String(x.serialNumber).trim()));
+
+  return (Array.isArray(rawDiscoveredDevices) ? rawDiscoveredDevices : []).map((item) => {
+    const cleanSn = String(item.serialNumber || '').trim();
+    const matched = (cleanSn ? bySerial.get(cleanSn) : null) || byHost.get(String(item.host || '').trim()) || null;
+    const lockedToOtherCampus = Boolean(cleanSn && foreignSerialSet.has(cleanSn));
+
+    return {
+      ...item,
+      alreadySaved: Boolean(matched),
+      savedDeviceId: matched ? String(matched._id) : null,
+      savedName: matched?.name || '',
+      savedCampus: matched?.campus || '',
+      lockedToOtherCampus
+    };
+  });
+}
+
+/**
+ * Chuẩn bị gói dữ liệu & phong bì mật khẩu mã hóa `encryptedDeviceAuth` để trình duyệt gửi xuống `Local LAN Connector (127.0.0.1:18686)`.
+ */
+async function prepareConnectorDeviceTask(
+  tenantId,
+  deviceId,
+  { action = '', operation = '', fastDelta = true, forceFullSync = false, subjectType = null, subjectId = null } = {}
+) {
+  const rawAction = String(action || operation || 'INSPECT').trim().toUpperCase();
+  const normalizedAction = rawAction === 'CONFIGURE-WEBHOOK' || rawAction === 'CONFIGURE_WEBHOOK' ? 'WEBHOOK' : rawAction;
+  if (!mongoose.isValidObjectId(deviceId)) {
+    throw createServiceError('Mã định danh máy chấm công không hợp lệ.', 'INVALID_DEVICE_ID', 400);
+  }
+  const device = await TimekeepingDevice.findOne({ _id: deviceId, tenantId });
+  if (!device) {
+    throw createServiceError('Không tìm thấy máy chấm công này trong phân hiệu của bạn.', 'DEVICE_NOT_FOUND', 404);
+  }
+
+  const encryptedDeviceAuth = await buildEncryptedDeviceAuthForConnector(tenantId, device);
+  if (!encryptedDeviceAuth) {
+    throw createServiceError(
+      `Máy "${device.name}" chưa được lưu mật khẩu quản trị. Bạn hãy bấm biểu tượng Sửa trên thẻ máy để nhập mật khẩu thiết bị trước nhé.`,
+      'DEVICE_CREDENTIALS_MISSING',
+      400
+    );
+  }
+
+  const scheme = device.transportScheme || (device.httpsPort === 80 ? 'http' : 'https');
+  const port = scheme === 'http' ? (device.httpPort || 80) : (device.httpsPort || 443);
+
+  const taskPayload = {
+    device: {
+      deviceId: String(device._id),
+      deviceCode: device.deviceCode,
+      name: device.name,
+      campus: device.campus,
+      host: device.host,
+      port,
+      transportScheme: scheme,
+      username: device.authUsernameHint || 'admin'
+    },
+    expectedSerial: device.serialNumber || '',
+    encryptedDeviceAuth
+  };
+
+  if (normalizedAction === 'PUSH' || normalizedAction === 'PUSH_SINGLE') {
+    const bioCtx = await loadTenantBiometricContext(tenantId);
+    let targetsToPush = [];
+
+    if (normalizedAction === 'PUSH_SINGLE' && subjectType && subjectId) {
+      const cleanType = String(subjectType).toUpperCase();
+      const single = bioCtx.unifiedRoster.find(
+        (x) => x.subjectType === cleanType && (x.subjectId === String(subjectId) || x.userId === String(subjectId))
+      );
+      if (!single || !single.personCode) {
+        throw createServiceError(
+          'Hồ sơ này chưa có Mã học sinh / Mã nhân sự để đẩy xuống máy chấm công.',
+          'MISSING_PERSON_CODE',
+          400
+        );
+      }
+      targetsToPush = [single];
+    } else {
+      const { selectedTargets } = await selectTargetRosterForDeviceCapacity(tenantId, device, bioCtx.unifiedRoster);
+      targetsToPush = selectedTargets;
+    }
+
+    taskPayload.fastDelta = Boolean(fastDelta) && !forceFullSync;
+    taskPayload.targets = targetsToPush.map((t) => ({
+      subjectType: t.subjectType,
+      subjectId: t.subjectId,
+      personCode: t.personCode,
+      fullName: t.fullName,
+      imageBase64: t.faceProfileDoc?.imageBase64 || '',
+      alreadySyncedOnDevice: Boolean(
+        t.faceProfileDoc &&
+          Array.isArray(t.faceProfileDoc.syncedDeviceIds) &&
+          t.faceProfileDoc.syncedDeviceIds.some((id) => String(id) === String(device._id))
+      )
+    }));
+  } else if (normalizedAction === 'PRUNE') {
+    const bioCtx = await loadTenantBiometricContext(tenantId);
+    const { codesToPrune } = await selectTargetRosterForDeviceCapacity(tenantId, device, bioCtx.unifiedRoster);
+    taskPayload.personCodes = codesToPrune;
+  } else if (normalizedAction === 'WEBHOOK') {
+    const tenantDoc = await Tenant.findById(tenantId).select('code').lean();
+    taskPayload.schoolCode = tenantDoc?.code || '';
+  }
+
+  return taskPayload;
+}
+
+/**
+ * Tiếp nhận dữ liệu Người dùng + Ảnh mặt (<200KB) + Lượt quẹt chấm công do `Local LAN Connector (127.0.0.1:18686)` kéo từ máy Hikvision về Cloud Web.
+ * Bắt buộc đối chiếu khóa cứng `deviceSerial` với `tenantId` trước khi lưu!
+ */
+async function ingestConnectorPulledPayload(
+  tenantId,
+  deviceId,
+  { deviceInfo = {}, users = [], events = [], overwriteExistingFaces = true, actorId = null } = {}
+) {
+  if (!mongoose.isValidObjectId(deviceId)) {
+    throw createServiceError('Mã máy chấm công không hợp lệ.', 'INVALID_DEVICE_ID', 400);
+  }
+  const device = await TimekeepingDevice.findOne({ _id: deviceId, tenantId });
+  if (!device) {
+    throw createServiceError('Không tìm thấy máy chấm công trong phân hiệu của bạn.', 'DEVICE_NOT_FOUND', 404);
+  }
+
+  // Khóa an toàn tuyệt đối theo deviceSerial gắn với phân hiệu!
+  if (deviceInfo?.serialNumber) {
+    await assertDeviceSerialCampusLock(tenantId, device, deviceInfo.serialNumber);
+  }
+
+  return withDeviceBiometricLock(device._id, 'Lưu dữ liệu kéo từ cầu nối nội bộ', async () => {
+    const [bioCtx, deviceMappings] = await Promise.all([
+      loadTenantBiometricContext(tenantId),
+      AttendanceDevicePersonMapping.find({ tenantId, deviceId: device._id, active: true }).lean()
+    ]);
+
+    const byMappingSubjKey = new Map();
+    const byCode = new Map();
+    const byUsername = new Map();
+    const byCampusAndToneFreeName = new Map();
+    const byToneFreeName = new Map();
+
+    for (const item of bioCtx.unifiedRoster) {
+      if (!item.isActive) continue;
+      byMappingSubjKey.set(`${item.subjectType}:${item.subjectId}`, item);
+      if (item.mappingSubjectId) {
+        byMappingSubjKey.set(`${item.subjectType}:${item.mappingSubjectId}`, item);
+      }
+      if (item.personCode) byCode.set(item.personCode.toUpperCase(), item);
+      if (Array.isArray(item.altCodes)) {
+        for (const alt of item.altCodes) {
+          if (alt && !byCode.has(alt.toUpperCase())) byCode.set(alt.toUpperCase(), item);
+        }
+      }
+      if (item.username) byUsername.set(item.username.toLowerCase(), item);
+      const cleanName = removeVietnameseTones(item.fullName);
+      if (cleanName) {
+        byCampusAndToneFreeName.set(`${item.campus}::${cleanName}`, item);
+        if (!byToneFreeName.has(cleanName)) byToneFreeName.set(cleanName, item);
+      }
+    }
+
+    const byMappedExtId = new Map();
+    for (const m of deviceMappings) {
+      const extKey = String(m.externalPersonId || '').trim().toUpperCase();
+      const targetId = String(m.studentId || m.userId || m.subjectId || '');
+      const rosterMatch = byMappingSubjKey.get(`${m.subjectType}:${targetId}`);
+      if (extKey && rosterMatch) byMappedExtId.set(extKey, rosterMatch);
+    }
+
+    const deviceUsers = Array.isArray(users) ? users : [];
+    let matchedCount = 0;
+    let pulledFaceCount = 0;
+    let totalFacesOnDevice = 0;
+    const syncedPeople = [];
+    const unmatchedOnDevice = [];
+
+    for (const du of deviceUsers) {
+      if (Number(du.numOfFace) > 0 || du.faceDataUrl) {
+        totalFacesOnDevice += 1;
+      }
+      const rawEmpNo = String(du.employeeNo || '').trim();
+      if (!rawEmpNo) continue;
+      const codeUpper = rawEmpNo.toUpperCase();
+      const devNameNoTone = removeVietnameseTones(du.name || '');
+
+      const matched =
+        byMappedExtId.get(codeUpper) ||
+        byCode.get(codeUpper) ||
+        byUsername.get(String(du.name || '').trim().toLowerCase()) ||
+        (devNameNoTone && device.campus && device.campus !== 'ALL'
+          ? byCampusAndToneFreeName.get(`${device.campus}::${devNameNoTone}`)
+          : null) ||
+        (devNameNoTone ? byToneFreeName.get(devNameNoTone) : null) ||
+        null;
+
+      if (!matched) {
+        if (unmatchedOnDevice.length < 30) {
+          unmatchedOnDevice.push({
+            deviceId: String(device._id),
+            deviceName: device.name,
+            employeeNo: rawEmpNo,
+            name: du.name || `Mã số ${rawEmpNo}`,
+            numOfFace: Number(du.numOfFace || 0),
+            hasFace: Boolean(Number(du.numOfFace) > 0 || du.faceDataUrl),
+            faceDataUrl: du.faceDataUrl || ''
+          });
+        }
+        continue;
+      }
+
+      matchedCount += 1;
+      await ensureDevicePersonMapping(tenantId, device._id, matched, actorId, rawEmpNo);
+
+      if (du.faceDataUrl && (overwriteExistingFaces || !matched.hasBiometricFace)) {
+        try {
+          const parsedImg = parseAndValidateFaceImagePayload(du.faceDataUrl);
+          const saved = await BiometricFaceProfile.findOneAndUpdate(
+            {
+              tenantId,
+              subjectType: matched.subjectType,
+              subjectId: new mongoose.Types.ObjectId(matched.subjectId)
+            },
+            {
+              $set: {
+                linkedUserId: matched.userId ? new mongoose.Types.ObjectId(matched.userId) : null,
+                personCode: matched.personCode || codeUpper,
+                fullName: matched.fullName,
+                campus: matched.campus || device.campus || DEFAULT_CAMPUS_NAME,
+                mimeType: parsedImg.mimeType,
+                imageBase64: parsedImg.imageBase64,
+                sizeBytes: parsedImg.sizeBytes,
+                source: 'PULLED_FROM_DEVICE',
+                lastSyncedAt: new Date(),
+                updatedBy: actorId || null
+              },
+              $addToSet: { syncedDeviceIds: device._id }
+            },
+            { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
+          );
+          pulledFaceCount += 1;
+          syncedPeople.push({
+            subjectType: matched.subjectType,
+            subjectId: matched.subjectId,
+            personCode: matched.personCode || codeUpper,
+            fullName: matched.fullName,
+            campus: matched.campus,
+            sizeKB: Math.max(1, Math.round((parsedImg.sizeBytes / 1024) * 10) / 10),
+            faceDataUrl: `data:${saved.mimeType};base64,${saved.imageBase64}`
+          });
+        } catch {
+          // Bỏ qua ảnh lẻ không hợp lệ
+        }
+      }
+    }
+
+    // Ghi nhận các lượt quẹt chấm công/điểm danh kéo từ máy về bảng Điểm danh
+    let eventsIngested = 0;
+    const safeEvents = Array.isArray(events) ? events : [];
+    for (const ev of safeEvents) {
+      const empNo = String(ev.employeeNoString || '').trim();
+      if (!empNo) continue;
+      const occurredAt = ev.time ? new Date(ev.time) : new Date();
+      if (Number.isNaN(occurredAt.getTime())) continue;
+      const extEvId = ev.serialNo != null
+        ? `HIK-${device.serialNumber || device.deviceCode}-${ev.serialNo}`
+        : `HIK-${device.serialNumber || device.deviceCode}-${empNo}-${occurredAt.getTime()}`;
+      try {
+        const out = await ingestDeviceEvent({
+          deviceId: device.deviceCode,
+          deviceObjectId: device._id,
+          externalEventId: extEvId,
+          tenantId,
+          externalPersonId: empNo,
+          employeeName: ev.name || `Mã số ${empNo}`,
+          eventType: 'PUNCH',
+          source: 'FACE',
+          authenticationMethod: 'FACE',
+          occurredAt,
+          calculateImmediately: true,
+          enableMorningLateCheck: true,
+          rawPayload: ev
+        });
+        if (!out.duplicate && !out.unmapped) {
+          eventsIngested += 1;
+        }
+      } catch {
+        // Bỏ qua sự kiện lẻ lỗi
+      }
+    }
+
+    if (deviceInfo?.model) device.model = deviceInfo.model;
+    if (deviceInfo?.macAddress) device.macAddress = deviceInfo.macAddress;
+    if (deviceInfo?.maxUserCapacity) device.maxUserCapacity = deviceInfo.maxUserCapacity;
+    device.status = 'ONLINE';
+    device.lastSeenAt = new Date();
+    device.currentStoredUsers = deviceUsers.length;
+    device.currentStoredFaces = totalFacesOnDevice;
+    device.statusMessage = `Đã kéo thành công ${matchedCount} hồ sơ và ${pulledFaceCount} ảnh khuôn mặt từ máy về phần mềm`;
+    await device.save();
+
+    const friendlySummary = `Đã kéo thành công từ máy "${device.name}": khớp ${matchedCount}/${deviceUsers.length} hồ sơ, lưu ${pulledFaceCount} ảnh khuôn mặt${eventsIngested > 0 ? ` và cập nhật ${eventsIngested} lượt điểm danh mới` : ''}.`;
+
+    publishCampusRealtimeEvent(tenantId, {
+      type: 'DEVICE_PULL_COMPLETED',
+      tone: 'success',
+      title: `Đã kéo dữ liệu từ ${device.name}`,
+      message: friendlySummary,
+      deviceName: device.name
+    });
+
+    return {
+      deviceId: String(device._id),
+      deviceName: device.name,
+      campus: device.campus,
+      host: device.host,
+      totalOnDevice: deviceUsers.length,
+      totalFacesOnDevice,
+      matchedCount,
+      pulledFaceCount,
+      eventsIngested,
+      syncedPeople: syncedPeople.slice(0, 40),
+      unmatchedOnDevice,
+      message: friendlySummary
+    };
+  });
+}
+
+/**
+ * Hoàn tất và lưu trạng thái sau khi `Local LAN Connector (127.0.0.1:18686)` đẩy danh sách khuôn mặt xuống máy Hikvision.
+ */
+async function completeConnectorPushedPayload(
+  tenantId,
+  deviceId,
+  {
+    deviceInfo = {},
+    totalTargets = 0,
+    syncedUsers = 0,
+    syncedFaces = 0,
+    skippedUnchangedCount = 0,
+    faceSyncedPersonCodes = [],
+    failedCount = 0,
+    failedItems = [],
+    actorId = null
+  } = {}
+) {
+  if (!mongoose.isValidObjectId(deviceId)) {
+    throw createServiceError('Mã máy chấm công không hợp lệ.', 'INVALID_DEVICE_ID', 400);
+  }
+  const device = await TimekeepingDevice.findOne({ _id: deviceId, tenantId });
+  if (!device) {
+    throw createServiceError('Không tìm thấy máy chấm công trong phân hiệu của bạn.', 'DEVICE_NOT_FOUND', 404);
+  }
+
+  if (deviceInfo?.serialNumber) {
+    await assertDeviceSerialCampusLock(tenantId, device, deviceInfo.serialNumber);
+  }
+
+  const bioCtx = await loadTenantBiometricContext(tenantId);
+  const cleanFaceCodes = (Array.isArray(faceSyncedPersonCodes) ? faceSyncedPersonCodes : [])
+    .map((c) => String(c || '').trim().toUpperCase())
+    .filter(Boolean);
+
+  if (cleanFaceCodes.length > 0) {
+    await BiometricFaceProfile.updateMany(
+      { tenantId, personCode: { $in: cleanFaceCodes } },
+      {
+        $set: { lastSyncedAt: new Date() },
+        $addToSet: { syncedDeviceIds: device._id }
+      }
+    );
+  }
+
+  // Đảm bảo bảng ánh xạ ID máy được cập nhật đồng bộ
+  const { selectedTargets } = await selectTargetRosterForDeviceCapacity(tenantId, device, bioCtx.unifiedRoster);
+  await runWithConcurrency(selectedTargets, 6, async (t) => {
+    await ensureDevicePersonMapping(tenantId, device._id, t, actorId);
+  });
+
+  if (deviceInfo?.model) device.model = deviceInfo.model;
+  if (deviceInfo?.macAddress) device.macAddress = deviceInfo.macAddress;
+  device.status = 'ONLINE';
+  device.lastSeenAt = new Date();
+  device.currentStoredUsers = Number(deviceInfo?.currentStoredUsers ?? syncedUsers) || syncedUsers;
+  device.currentStoredFaces = Number(deviceInfo?.currentStoredFaces ?? syncedFaces) || syncedFaces;
+
+  const friendlyMsg =
+    failedCount > 0 && failedItems?.[0]?.reason
+      ? `Đã đồng bộ xong ${syncedUsers}/${totalTargets} hồ sơ (${syncedFaces} khuôn mặt) xuống máy "${device.name}". Lưu ý: ${failedItems[0].reason}`
+      : `Đã đồng bộ thành công ${syncedUsers} học sinh & nhân sự (${syncedFaces} ảnh khuôn mặt) xuống máy "${device.name}"!`;
+
+  device.lastSyncSummary = {
+    totalTargets,
+    syncedUsers,
+    syncedFaces,
+    syncedStaffCount: selectedTargets.filter((x) => x.subjectType === 'EMPLOYEE').length,
+    syncedStudentCount: selectedTargets.filter((x) => x.subjectType === 'STUDENT').length,
+    prunedInactiveCount: 0,
+    failedCount,
+    message: friendlyMsg,
+    syncedAt: new Date()
+  };
+  device.statusMessage = friendlyMsg;
+  await device.save();
+
+  publishCampusRealtimeEvent(tenantId, {
+    type: 'DEVICE_PUSH_COMPLETED',
+    tone: failedCount > 0 ? 'warning' : 'success',
+    title: `Đồng bộ khuôn mặt xuống ${device.name}`,
+    message: friendlyMsg,
+    deviceName: device.name
+  });
+
+  return {
+    deviceId: String(device._id),
+    deviceName: device.name,
+    syncedUsers,
+    syncedFaces,
+    skippedUnchangedCount,
+    failedCount,
+    failedItems: Array.isArray(failedItems) ? failedItems : [],
+    message: friendlyMsg
+  };
+}
+
+/**
+ * Cập nhật 1 chạm địa chỉ HTTP Listening Webhook theo Tên miền động hiện tại xuống máy chấm công Hikvision
+ * (hỗ trợ cả khi Connector `127.0.0.1:18686` đã đẩy trực tiếp dưới LAN hoặc Backend đẩy qua LAN).
+ */
+async function configureDeviceWebhookEndpoint(
+  tenantId,
+  deviceId,
+  { publicBaseUrl = '', connectorVerifiedResult = null, overrideOpts = {} } = {}
+) {
+  if (!mongoose.isValidObjectId(deviceId)) {
+    throw createServiceError('Mã máy chấm công không hợp lệ.', 'INVALID_DEVICE_ID', 400);
+  }
+  const [device, tenantDoc] = await Promise.all([
+    TimekeepingDevice.findOne({ _id: deviceId, tenantId }),
+    Tenant.findById(tenantId).select('code name').lean()
+  ]);
+  if (!device) {
+    throw createServiceError('Không tìm thấy máy chấm công trong phân hiệu của bạn.', 'DEVICE_NOT_FOUND', 404);
+  }
+  if (!tenantDoc?.code) {
+    throw createServiceError('Không xác định được mã phân hiệu trường.', 'TENANT_NOT_FOUND', 404);
+  }
+
+  const cleanBase = String(publicBaseUrl || '').replace(/\/+$/, '');
+  const targetWebhookUrl = `${cleanBase}/api/attendance/webhook/${tenantDoc.code}`;
+
+  if (connectorVerifiedResult) {
+    if (connectorVerifiedResult.deviceInfo?.serialNumber) {
+      await assertDeviceSerialCampusLock(tenantId, device, connectorVerifiedResult.deviceInfo.serialNumber);
+    }
+  } else {
+    const config = await buildDeviceConfig(device, overrideOpts);
+    if (!config.username || !config.password) {
+      throw createServiceError(
+        `Máy "${device.name}" chưa được lưu mật khẩu quản trị. Bạn hãy nhập mật khẩu máy trước khi cập nhật địa chỉ nhận dữ liệu nhé.`,
+        'DEVICE_CREDENTIALS_MISSING',
+        400
+      );
+    }
+    const info = await hikvisionIsapiService.getDeviceInfo(config);
+    if (info?.serialNumber) {
+      await assertDeviceSerialCampusLock(tenantId, device, info.serialNumber);
+    }
+    await hikvisionIsapiService.configureDeviceHttpWebhook(config, targetWebhookUrl);
+  }
+
+  device.status = 'ONLINE';
+  device.lastSeenAt = new Date();
+  device.webhookConfiguredUrl = targetWebhookUrl;
+  device.webhookConfiguredAt = new Date();
+  device.statusMessage = `Đã trỏ tự động nhận dữ liệu chấm công về ${targetWebhookUrl}`;
+  await device.save();
+
+  const friendlyMsg = `Đã cập nhật thành công địa chỉ nhận dữ liệu tự động (${targetWebhookUrl}) xuống máy "${device.name}". Từ bây giờ khi trẻ quét mặt, điểm danh sẽ báo ngay lên màn hình!`;
+
+  publishCampusRealtimeEvent(tenantId, {
+    type: 'DEVICE_WEBHOOK_CONFIGURED',
+    tone: 'success',
+    title: `Đã cập nhật tên miền mới cho ${device.name}`,
+    message: friendlyMsg,
+    deviceName: device.name
+  });
+
+  return {
+    deviceId: String(device._id),
+    deviceName: device.name,
+    webhookUrl: targetWebhookUrl,
+    configuredAt: device.webhookConfiguredAt,
+    message: friendlyMsg
+  };
+}
+
+/**
+ * Gỡ khóa `deviceSerial` hoặc chuyển máy chấm công sang phân hiệu khác — CHỈ DÀNH RIÊNG CHO KỸ THUẬT VIÊN NHÀ CUNG CẤP (`isVendorSupport`).
+ */
+async function unlockOrReassignDeviceSerialByVendor(
+  tenantId,
+  deviceId,
+  { newSerialNumber = '', targetSchoolCode = '', targetTenantId = '', isVendorSupport = false } = {}
+) {
+  if (!isVendorSupport) {
+    throw createServiceError(
+      'Mã phần cứng của máy chấm công đã được khóa cố định với phân hiệu trường. Chỉ Kỹ thuật viên Nhà cung cấp phần mềm mới có quyền gỡ khóa hoặc chuyển phân hiệu cho thiết bị.',
+      'SERIAL_UNLOCK_VENDOR_ONLY',
+      403
+    );
+  }
+
+  if (!mongoose.isValidObjectId(deviceId)) {
+    throw createServiceError('Mã máy chấm công không hợp lệ.', 'INVALID_DEVICE_ID', 400);
+  }
+  const device = await TimekeepingDevice.findOne({ _id: deviceId, tenantId });
+  if (!device) {
+    throw createServiceError('Không tìm thấy máy chấm công cần gỡ khóa.', 'DEVICE_NOT_FOUND', 404);
+  }
+
+  const cleanTargetSchoolCode = String(targetSchoolCode || '').trim().toUpperCase();
+  const cleanTargetTenantId = String(targetTenantId || '').trim();
+  if (cleanTargetSchoolCode || (cleanTargetTenantId && mongoose.isValidObjectId(cleanTargetTenantId))) {
+    const targetQuery = cleanTargetSchoolCode
+      ? { code: cleanTargetSchoolCode, status: 'active' }
+      : { _id: cleanTargetTenantId, status: 'active' };
+    const targetTenant = await Tenant.findOne(targetQuery);
+    if (!targetTenant) {
+      throw createServiceError(
+        `Không tìm thấy phân hiệu trường đang hoạt động cần chuyển đến.`,
+        'TARGET_TENANT_NOT_FOUND',
+        404
+      );
+    }
+    const prevName = device.name;
+    // Khi chuyển sang phân hiệu khác: xóa mật khẩu mã hóa theo AAD cũ và bảng ánh xạ của trường cũ để tuyệt đối an toàn
+    await AttendanceDevicePersonMapping.deleteMany({ tenantId: device.tenantId, deviceId: device._id });
+    device.tenantId = targetTenant._id;
+    device.credentialKey = `HIKVISION_${targetTenant.code.replace(/[^A-Z0-9_]/g, '_')}`;
+    device.encryptedAuth = { iv: '', tag: '', cipherText: '' };
+    device.webhookConfiguredUrl = '';
+    device.webhookConfiguredAt = null;
+    device.serialLockedByVendor = true;
+    await device.save();
+
+    return {
+      transferred: true,
+      targetSchoolCode: targetTenant.code,
+      targetSchoolName: targetTenant.name,
+      message: `Đã chuyển giao máy chấm công "${prevName}" sang phân hiệu ${targetTenant.name} (${targetTenant.code}). Hãy nhập lại mật khẩu thiết bị tại phân hiệu mới để đồng bộ.`
+    };
+  }
+
+  const cleanNewSn = String(newSerialNumber || '').trim();
+  if (cleanNewSn) {
+    const conflict = await TimekeepingDevice.findOne({
+      serialNumber: cleanNewSn,
+      _id: { $ne: device._id }
+    }).lean();
+    if (conflict) {
+      throw createServiceError(
+        'Mã phần cứng mới này đang thuộc về một máy chấm công khác trên hệ thống.',
+        'SERIAL_LOCKED_OTHER_CAMPUS',
+        409
+      );
+    }
+    device.serialNumber = cleanNewSn;
+    device.serialLockedAt = new Date();
+    device.serialLockedByVendor = true;
+  } else {
+    device.serialNumber = undefined;
+    device.serialLockedAt = null;
+  }
+
+  await device.save();
+  return {
+    transferred: false,
+    serialNumber: device.serialNumber || '',
+    message: cleanNewSn
+      ? `Đã cập nhật khóa mã phần cứng mới (${cleanNewSn}) cho máy "${device.name}".`
+      : `Đã gỡ khóa mã phần cứng trên máy "${device.name}". Lần đồng bộ tiếp theo hệ thống sẽ tự nhận mã phần cứng của máy mới.`
+  };
 }
 
 module.exports = {
@@ -1737,5 +2498,12 @@ module.exports = {
   pushSinglePersonToCampusDevices,
   pruneInactiveUsersOnDevice,
   unlockDoorOnDevice,
-  scanLanDevicesForTenant
+  scanLanDevicesForTenant,
+  assertDeviceSerialCampusLock,
+  enrichConnectorDiscoveredDevices,
+  prepareConnectorDeviceTask,
+  ingestConnectorPulledPayload,
+  completeConnectorPushedPayload,
+  configureDeviceWebhookEndpoint,
+  unlockOrReassignDeviceSerialByVendor
 };

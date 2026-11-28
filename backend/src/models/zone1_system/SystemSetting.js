@@ -139,6 +139,13 @@ const SystemSettingSchema = new mongoose.Schema(
         default: true
       }
     },
+    // Cặp khóa ký số Ed25519 & Khóa phong bì cho Cầu nối Mạng Nội Bộ (127.0.0.1:18686) — tuyệt đối không trả ra API công khai
+    connectorBridgeSecurity: {
+      keyId: { type: String, default: '' },
+      publicKeyPem: { type: String, default: '' },
+      privateKeyPem: { type: String, default: '' },
+      envelopeSecretHex: { type: String, default: '' }
+    },
     updatedBy: {
       type: String,
       trim: true,
@@ -148,7 +155,13 @@ const SystemSettingSchema = new mongoose.Schema(
   {
     timestamps: true,
     autoIndex: false,
-    autoCreate: false
+    autoCreate: false,
+    toJSON: {
+      transform: function (_doc, ret) {
+        delete ret.connectorBridgeSecurity;
+        return ret;
+      }
+    }
   }
 );
 

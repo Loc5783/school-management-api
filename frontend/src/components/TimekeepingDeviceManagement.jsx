@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import Icon from './Icon';
 import BiometricFaceCameraModal from './BiometricFaceCameraModal';
@@ -28,8 +28,23 @@ import {
   getTimekeepingDeviceSyncLogs,
   getUnmappedDeviceEvents,
   simulateSchoolTimekeepingWebhook,
-  getSchoolWebhookLogs
+  getSchoolWebhookLogs,
+  downloadConnectorPackageZip,
+  configureTimekeepingDeviceWebhook,
+  unlockDeviceSerialByVendor,
+  getCampusLiveEvents
 } from '../api/timekeeping';
+import {
+  probeLocalConnectorHealth,
+  discoverLanViaLocalConnector,
+  checkCapacityViaLocalConnector,
+  pullDeviceUsersViaLocalConnector,
+  pushRosterViaLocalConnector,
+  updateWebhookDomainViaLocalConnector,
+  pruneInactiveViaLocalConnector,
+  unlockDoorViaLocalConnector
+} from '../services/localLanConnectorClient';
+import { toFriendlyVietnameseNotice } from '../utils/vietnameseHardwareTranslator';
 import { getEmployees } from '../api/hr';
 import api from '../api/axiosConfig';
 import { getStoredTenant, getStoredUser } from '../utils/storage';
@@ -68,15 +83,15 @@ function buildAutoDeviceCode(hostStr) {
 
 function getDeviceStatusMeta(status) {
   if (status === 'ONLINE') {
-    return { label: 'Trực tuyến (ISAPI Ready)', cls: 'hik-status-online' };
+    return { label: 'Đang kết nối tốt', cls: 'hik-status-online' };
   }
   if (status === 'AUTH_FAILED') {
-    return { label: 'Sai mật khẩu máy (401)', cls: 'hik-status-auth' };
+    return { label: 'Chưa đúng mật khẩu máy', cls: 'hik-status-auth' };
   }
   if (status === 'OFFLINE' || status === 'ERROR') {
-    return { label: 'Ngoại tuyến / Khác lớp LAN', cls: 'hik-status-offline' };
+    return { label: 'Chưa liên lạc được máy', cls: 'hik-status-offline' };
   }
-  return { label: 'Chưa kiểm tra ISAPI', cls: 'hik-status-unverified' };
+  return { label: 'Chưa kiểm tra kết nối', cls: 'hik-status-unverified' };
 }
 
 export default function TimekeepingDeviceManagement() {
@@ -85,6 +100,20 @@ export default function TimekeepingDeviceManagement() {
   const isAdmin = currentUser.role === 'admin';
   const canManageSync = ['admin', 'principal', 'hr'].includes(currentUser.role);
   const canControlHardware = ['admin', 'principal'].includes(currentUser.role);
+  const [isVendorSupport, setIsVendorSupport] = useState(() =>
+    Boolean(currentUser.isVendorSupport || localStorage.getItem('superadmin_token'))
+  );
+  const [connectorHealth, setConnectorHealth] = useState({
+    online: false,
+    lanIps: [],
+    checking: true
+  });
+  const [downloadingConnector, setDownloadingConnector] = useState(false);
+  const [updatingWebhookAll, setUpdatingWebhookAll] = useState(false);
+  const [liveFeedEvents, setLiveFeedEvents] = useState([]);
+  const [vendorSerialModalDev, setVendorSerialModalDev] = useState(null);
+  const [vendorSerialForm, setVendorSerialForm] = useState({ newSerialNumber: '', targetSchoolCode: '' });
+  const [savingVendorSerial, setSavingVendorSerial] = useState(false);
 
   // Bộ lọc Phân hiệu & Bảng danh sách khuôn mặt
   const [selectedCampus, setSelectedCampus] = useState('ALL');
@@ -112,6 +141,7 @@ export default function TimekeepingDeviceManagement() {
   const [pagination, setPagination] = useState({ page: 1, limit: 50, totalItems: 0, totalPages: 1 });
 
   const [loading, setLoading] = useState(true);
+  const loadSeqRef = useRef(0);
   const [notice, setNotice] = useState('');
   const [noticeType, setNoticeType] = useState('info');
   const [copiedUrl, setCopiedUrl] = useState(false);
@@ -199,6 +229,8 @@ export default function TimekeepingDeviceManagement() {
   }, []);
 
   const loadOverview = useCallback(async () => {
+    const seq = loadSeqRef.current + 1;
+    loadSeqRef.current = seq;
     setLoading(true);
     try {
       const res = await getBiometricOverview({
@@ -209,12 +241,18 @@ export default function TimekeepingDeviceManagement() {
         page: rosterPage,
         limit: 50
       });
+      if (seq !== loadSeqRef.current) return;
       const payload = res.data?.data || {};
       if (Array.isArray(payload.school?.campuses) && payload.school.campuses.length > 0) {
         setCampuses(payload.school.campuses);
       }
       if (payload.webhookMeta) {
         setWebhookMeta(payload.webhookMeta);
+      }
+      if (payload.sessionMeta?.isVendorSupport !== undefined) {
+        setIsVendorSupport(
+          Boolean(payload.sessionMeta.isVendorSupport || localStorage.getItem('superadmin_token'))
+        );
       }
       if (payload.kpi) {
         setKpi(payload.kpi);
@@ -226,9 +264,12 @@ export default function TimekeepingDeviceManagement() {
         setPagination(payload.pagination);
       }
     } catch (err) {
-      showToast(err.response?.data?.message || 'Không thể tải dữ liệu máy chấm công của trường', 'error');
+      if (seq !== loadSeqRef.current) return;
+      showToast(toFriendlyVietnameseNotice(err, 'Chưa tải được danh sách máy chấm công của phân hiệu.'), 'error');
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) {
+        setLoading(false);
+      }
     }
   }, [selectedCampus, subjectFilter, faceStatusFilter, appliedSearch, rosterPage, showToast]);
 
@@ -238,6 +279,81 @@ export default function TimekeepingDeviceManagement() {
     }, 0);
     return () => window.clearTimeout(timer);
   }, [loadOverview]);
+
+  // Tự động kiểm tra trạng thái Cầu nối nội bộ (http://127.0.0.1:18686) trên máy tính tại trường
+  const refreshConnectorHealth = useCallback(async () => {
+    const res = await probeLocalConnectorHealth();
+    setConnectorHealth({
+      online: Boolean(res.online),
+      lanIps: res.lanIps || [],
+      checking: false
+    });
+    return Boolean(res.online);
+  }, []);
+
+  useEffect(() => {
+    const firstTimer = window.setTimeout(() => {
+      void refreshConnectorHealth();
+      getCampusLiveEvents(8)
+        .then((r) => setLiveFeedEvents(r.data?.data || []))
+        .catch(() => {});
+    }, 0);
+    const interval = window.setInterval(() => {
+      void refreshConnectorHealth();
+    }, 12000);
+    return () => {
+      window.clearTimeout(firstTimer);
+      window.clearInterval(interval);
+    };
+  }, [refreshConnectorHealth]);
+
+  // Lắng nghe sự kiện điểm danh & đồng bộ trực tiếp (SSE) của phân hiệu
+  useEffect(() => {
+    const onLiveEvent = (evt) => {
+      const item = evt?.detail;
+      if (!item?.message) return;
+      setLiveFeedEvents((prev) => [item, ...prev.filter((x) => x.id !== item.id)].slice(0, 8));
+    };
+    window.addEventListener('hoanang:campus-live-event', onLiveEvent);
+    return () => window.removeEventListener('hoanang:campus-live-event', onLiveEvent);
+  }, []);
+
+  const handleDownloadConnectorZip = async () => {
+    if (downloadingConnector) return;
+    setDownloadingConnector(true);
+    try {
+      const res = await downloadConnectorPackageZip();
+      const blob = new Blob([res.data], { type: 'application/zip' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'HoaNang-BoKetNoiMayChamCong-1Cham.zip';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      showToast(
+        'Đã tải xong "Bộ kết nối 1 chạm"! Bạn hãy giải nén tệp vừa tải và nhấp đúp vào "1-Bat-Ket-Noi-1-Cham.bat" để máy tính kết nối ngay với máy chấm công nhé.',
+        'success'
+      );
+    } catch (err) {
+      showToast(toFriendlyVietnameseNotice(err, 'Chưa tải được Bộ kết nối nội bộ.'), 'error');
+    } finally {
+      setDownloadingConnector(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!confirmState && !activeModal) return undefined;
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setConfirmState(null);
+        setActiveModal(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [confirmState, activeModal]);
 
   const ensureAuxiliaryListsLoaded = async () => {
     if (employees.length > 0 || students.length > 0) return { employees, students };
@@ -252,25 +368,51 @@ export default function TimekeepingDeviceManagement() {
     return { employees: empList, students: stuList };
   };
 
-  // ─── 1. QUÉT TỰ ĐỘNG TRONG MẠNG LAN & LƯU NHANH 1 CHẠM ───
+  // ─── 1. QUÉT TỰ ĐỘNG TRONG MẠNG LAN QUA CẦU NỐI 127.0.0.1:18686 & LƯU NHANH 1 CHẠM ───
   const handleScanLan = async () => {
     setScanningLan(true);
     try {
-      const res = await discoverLanTimekeepingDevices({
-        subnetPrefix: subnetPrefix.trim() || undefined,
-        probeUsername: 'admin',
-        probePassword: lanProbePassword.trim() || undefined
-      });
-      setLanScanResult(res.data?.data || null);
-      showToast(res.data?.message || 'Đã quét xong mạng LAN!', 'info');
+      const isLocalBridgeReady = await refreshConnectorHealth();
+      if (isLocalBridgeReady) {
+        const bridgeOut = await discoverLanViaLocalConnector({
+          subnetPrefix: subnetPrefix.trim() || '',
+          probeUsername: 'admin',
+          probePassword: lanProbePassword.trim() || ''
+        });
+        setLanScanResult(bridgeOut.data || null);
+        showToast(bridgeOut.message, 'success');
+      } else {
+        const res = await discoverLanTimekeepingDevices({
+          subnetPrefix: subnetPrefix.trim() || undefined,
+          probeUsername: 'admin',
+          probePassword: lanProbePassword.trim() || undefined
+        });
+        const foundList = res.data?.data?.discoveredDevices || [];
+        setLanScanResult(res.data?.data || null);
+        if (foundList.length === 0) {
+          showToast(
+            'Máy tính này chưa bật "Bộ kết nối máy chấm công nội bộ" nên trang Web chưa nhìn thấy máy chấm công trong mạng của trường. Bạn hãy bấm "Tải Bộ Kết Nối 1 Chạm" ở dải màu vàng phía trên rồi thử quét lại nhé!',
+            'info'
+          );
+        } else {
+          showToast(res.data?.message || 'Đã tìm thấy máy chấm công trong mạng trường!', 'success');
+        }
+      }
     } catch (err) {
-      showToast(err.response?.data?.message || 'Lỗi khi quét mạng LAN', 'error');
+      showToast(toFriendlyVietnameseNotice(err, 'Chưa quét được mạng nội bộ của trường.'), 'error');
     } finally {
       setScanningLan(false);
     }
   };
 
   const handleQuickSaveDiscoveredDevice = async (item) => {
+    if (item.lockedToOtherCampus) {
+      showToast(
+        'Chiếc máy chấm công này đang được khóa bảo mật cho một phân hiệu trường khác. Vui lòng liên hệ Kỹ thuật viên Nhà cung cấp phần mềm nếu cần chuyển máy sang phân hiệu của bạn.',
+        'error'
+      );
+      return;
+    }
     if (!lanProbePassword.trim()) {
       handlePickDiscoveredDevice(item);
       return;
@@ -280,7 +422,7 @@ export default function TimekeepingDeviceManagement() {
     try {
       const createRes = await createTimekeepingDevice({
         deviceCode: buildAutoDeviceCode(item.host),
-        name: `Máy chấm công Hikvision (${item.host})`,
+        name: `Máy chấm công (${item.host})`,
         campus: targetCampus,
         location: 'Sảnh đón trẻ',
         model: item.model || 'DS-K1T320MX',
@@ -299,9 +441,15 @@ export default function TimekeepingDeviceManagement() {
 
       const createdDev = createRes.data?.data;
       if (createdDev?._id) {
-        const pullRes = await pullTimekeepingDeviceUsers(createdDev._id, false).catch(() => null);
-        if (pullRes?.data?.data) {
-          setLastPullReport(pullRes.data.data);
+        const bridgeUp = await refreshConnectorHealth();
+        if (bridgeUp) {
+          const pullRes = await pullDeviceUsersViaLocalConnector(createdDev._id, false).catch(() => null);
+          if (pullRes?.data) setLastPullReport(pullRes.data);
+          // Tự động đẩy luôn địa chỉ Webhook theo tên miền hiện tại xuống máy chấm công mới gán!
+          await updateWebhookDomainViaLocalConnector(createdDev._id).catch(() => null);
+        } else {
+          const pullRes = await pullTimekeepingDeviceUsers(createdDev._id, false).catch(() => null);
+          if (pullRes?.data?.data) setLastPullReport(pullRes.data.data);
         }
       }
 
@@ -317,10 +465,13 @@ export default function TimekeepingDeviceManagement() {
             }
           : null
       );
-      showToast(`Đã lưu nhanh máy ${item.host} vào ${targetCampus} và kéo thông tin thành công!`, 'success');
+      showToast(
+        `Đã gắn máy chấm công (${item.host}) vào phân hiệu, khóa bảo mật mã phần cứng và kéo danh sách về phần mềm thành công!`,
+        'success'
+      );
       await loadOverview();
     } catch (err) {
-      showToast(err.response?.data?.message || 'Không thể lưu nhanh thiết bị này', 'error');
+      showToast(toFriendlyVietnameseNotice(err, 'Chưa lưu được máy chấm công này.'), 'error');
     } finally {
       setQuickSavingHost('');
     }
@@ -401,6 +552,11 @@ export default function TimekeepingDeviceManagement() {
       showToast('Địa chỉ IP 192.168.1.22 nằm trong danh sách bảo vệ an toàn của dự án, vui lòng nhập IP máy khác.', 'error');
       return;
     }
+    const portNum = Number(deviceForm.port);
+    if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+      showToast('Cổng kết nối ISAPI phải nằm trong khoảng từ 1 đến 65535.', 'error');
+      return;
+    }
 
     setSavingDevice(true);
     try {
@@ -435,7 +591,7 @@ export default function TimekeepingDeviceManagement() {
       setEditingDeviceId(null);
       await loadOverview();
     } catch (err) {
-      showToast(err.response?.data?.message || 'Lỗi khi lưu cấu hình máy chấm công', 'error');
+      showToast(toFriendlyVietnameseNotice(err, 'Chưa lưu được cấu hình máy chấm công.'), 'error');
     } finally {
       setSavingDevice(false);
     }
@@ -461,18 +617,170 @@ export default function TimekeepingDeviceManagement() {
     });
   };
 
-  // ─── 3. ĐỒNG BỘ NHANH 2 CHIỀU, KÉO NHANH TOÀN CỤM & THAO TÁC PHẦN CỨNG ISAPI ───
+  // ─── 3. ĐỒNG BỘ NHANH 2 CHIỀU, KÉO/ĐẨY QUA CẦU NỐI 127.0.0.1:18686 & CẬP NHẬT TÊN MIỀN WEBHOOK 1 CHẠM ───
+  const handleUpdateWebhookDomain = async (targetDev = null) => {
+    const isBridgeUp = await refreshConnectorHealth();
+    if (targetDev) {
+      setDeviceActionBusy((prev) => ({ ...prev, [targetDev._id]: 'webhook' }));
+      try {
+        let out;
+        if (isBridgeUp) {
+          out = await updateWebhookDomainViaLocalConnector(targetDev._id);
+        } else {
+          const res = await configureTimekeepingDeviceWebhook(targetDev._id, {
+            clientOrigin: window.location.origin
+          });
+          out = res.data;
+        }
+        showToast(
+          out?.message || `Đã cập nhật địa chỉ Web hiện tại xuống máy "${targetDev.name}" thành công!`,
+          'success'
+        );
+        await loadOverview();
+      } catch (err) {
+        showToast(
+          toFriendlyVietnameseNotice(
+            err,
+            'Chưa cập nhật được địa chỉ nhận dữ liệu xuống máy chấm công. Bạn hãy bật Bộ kết nối nội bộ trên máy tính tại trường rồi bấm lại nhé.'
+          ),
+          'error'
+        );
+      } finally {
+        setDeviceActionBusy((prev) => ({ ...prev, [targetDev._id]: null }));
+      }
+      return;
+    }
+
+    if (devices.length === 0) return;
+    setUpdatingWebhookAll(true);
+    try {
+      let okCount = 0;
+      for (const dev of devices) {
+        try {
+          if (isBridgeUp) {
+            await updateWebhookDomainViaLocalConnector(dev._id);
+          } else {
+            await configureTimekeepingDeviceWebhook(dev._id, { clientOrigin: window.location.origin });
+          }
+          okCount += 1;
+        } catch {
+          // tiếp tục các máy còn lại
+        }
+      }
+      if (okCount > 0) {
+        showToast(
+          `Đã cập nhật thành công địa chỉ tên miền hiện tại (${fullWebhookUrl}) xuống ${okCount}/${devices.length} máy chấm công của phân hiệu!`,
+          'success'
+        );
+      } else {
+        showToast(
+          'Chưa liên lạc được với máy chấm công để cập nhật tên miền mới. Bạn hãy bật "Bộ kết nối nội bộ" trên máy tính đặt tại trường rồi bấm lại nhé.',
+          'error'
+        );
+      }
+      await loadOverview();
+    } finally {
+      setUpdatingWebhookAll(false);
+    }
+  };
+
+  const handleVendorSaveSerialUnlock = async (e) => {
+    e.preventDefault();
+    if (!vendorSerialModalDev || savingVendorSerial) return;
+    setSavingVendorSerial(true);
+    try {
+      const res = await unlockDeviceSerialByVendor(vendorSerialModalDev._id, {
+        newSerialNumber: vendorSerialForm.newSerialNumber.trim(),
+        targetSchoolCode: vendorSerialForm.targetSchoolCode.trim().toUpperCase()
+      });
+      showToast(res.data?.message || 'Đã cập nhật khóa phần cứng thiết bị thành công!', 'success');
+      setVendorSerialModalDev(null);
+      await loadOverview();
+    } catch (err) {
+      showToast(toFriendlyVietnameseNotice(err, 'Không thể mở khóa mã phần cứng thiết bị.'), 'error');
+    } finally {
+      setSavingVendorSerial(false);
+    }
+  };
+
   const handleQuickBidirectionalCluster = async (targetDev = null) => {
+    const isBridgeUp = await refreshConnectorHealth();
     if (targetDev) {
       setDeviceActionBusy((prev) => ({ ...prev, [targetDev._id]: 'bisync' }));
       try {
-        const res = await quickBidirectionalSyncSingleDevice(targetDev._id);
+        if (isBridgeUp) {
+          const pullOut = await pullDeviceUsersViaLocalConnector(targetDev._id, false);
+          const pushOut = await pushRosterViaLocalConnector(targetDev._id, { fastDelta: true });
+          if (pullOut?.data) {
+            setLastPullReport(pullOut.data);
+          }
+          showToast(
+            `Đã đồng bộ 2 chiều xong với "${targetDev.name}": kéo về ${pullOut?.data?.pulledFaceCount || 0} ảnh khuôn mặt & đẩy cập nhật ${pushOut?.data?.syncedUsers || 0} hồ sơ xuống máy!`,
+            'success'
+          );
+        } else {
+          const res = await quickBidirectionalSyncSingleDevice(targetDev._id);
+          const pullSummary = res.data?.data?.pullSummary;
+          if (pullSummary) {
+            setLastPullReport({
+              deviceName: targetDev.name,
+              campus: targetDev.campus,
+              host: targetDev.host,
+              totalOnDevice: pullSummary.matchedUsers + (pullSummary.unmatchedOnDevice?.length || 0),
+              totalFacesOnDevice: pullSummary.pulledFaces,
+              matchedCount: pullSummary.matchedUsers,
+              pulledFaceCount: pullSummary.pulledFaces,
+              eventsIngested: pullSummary.eventsIngested,
+              syncedPeople: pullSummary.syncedPeople || [],
+              unmatchedOnDevice: pullSummary.unmatchedOnDevice || []
+            });
+          }
+          showToast(res.data?.message || 'Đã đồng bộ 2 chiều thành công!', 'success');
+        }
+        await loadOverview();
+      } catch (err) {
+        showToast(toFriendlyVietnameseNotice(err, 'Chưa đồng bộ 2 chiều được với máy chấm công.'), 'error');
+      } finally {
+        setDeviceActionBusy((prev) => ({ ...prev, [targetDev._id]: null }));
+      }
+      return;
+    }
+
+    setBiSyncingAll(true);
+    try {
+      if (isBridgeUp) {
+        let pulledFaces = 0;
+        let syncedMachines = 0;
+        let combinedUnmatched = [];
+        for (const dev of devices) {
+          const pOut = await pullDeviceUsersViaLocalConnector(dev._id, false);
+          await pushRosterViaLocalConnector(dev._id, { fastDelta: true });
+          pulledFaces += pOut?.data?.pulledFaceCount || 0;
+          combinedUnmatched = [...combinedUnmatched, ...(pOut?.data?.unmatchedOnDevice || [])];
+          syncedMachines += 1;
+        }
+        setLastPullReport({
+          deviceName: `Cụm ${syncedMachines} máy của phân hiệu`,
+          campus: campuses[0] || 'Phân hiệu hiện tại',
+          host: `${syncedMachines} máy`,
+          matchedCount: kpi.activeWithCodeCount,
+          pulledFaceCount: pulledFaces,
+          unmatchedOnDevice: combinedUnmatched.slice(0, 20)
+        });
+        showToast(
+          `Đã đồng bộ 2 chiều hoàn tất cho ${syncedMachines} máy chấm công trong mạng của trường!`,
+          'success'
+        );
+      } else {
+        const res = await quickBidirectionalSyncDevices({
+          campus: selectedCampus !== 'ALL' ? selectedCampus : undefined
+        });
         const pullSummary = res.data?.data?.pullSummary;
         if (pullSummary) {
           setLastPullReport({
-            deviceName: targetDev.name,
-            campus: targetDev.campus,
-            host: targetDev.host,
+            deviceName: selectedCampus === 'ALL' ? 'Toàn cụm máy của phân hiệu' : `Cụm máy ${selectedCampus}`,
+            campus: selectedCampus === 'ALL' ? 'Phân hiệu hiện tại' : selectedCampus,
+            host: `${pullSummary.pulledDevices}/${pullSummary.totalDevices} máy`,
             totalOnDevice: pullSummary.matchedUsers + (pullSummary.unmatchedOnDevice?.length || 0),
             totalFacesOnDevice: pullSummary.pulledFaces,
             matchedCount: pullSummary.matchedUsers,
@@ -482,40 +790,11 @@ export default function TimekeepingDeviceManagement() {
             unmatchedOnDevice: pullSummary.unmatchedOnDevice || []
           });
         }
-        showToast(res.data?.message || 'Đã đồng bộ nhanh 2 chiều thành công!', 'success');
-        await loadOverview();
-      } catch (err) {
-        showToast(err.response?.data?.message || 'Lỗi đồng bộ nhanh 2 chiều', 'error');
-      } finally {
-        setDeviceActionBusy((prev) => ({ ...prev, [targetDev._id]: null }));
+        showToast(res.data?.message || 'Đã đồng bộ 2 chiều toàn cụm máy!', 'success');
       }
-      return;
-    }
-
-    setBiSyncingAll(true);
-    try {
-      const res = await quickBidirectionalSyncDevices({
-        campus: selectedCampus !== 'ALL' ? selectedCampus : undefined
-      });
-      const pullSummary = res.data?.data?.pullSummary;
-      if (pullSummary) {
-        setLastPullReport({
-          deviceName: selectedCampus === 'ALL' ? 'Toàn cụm máy của trường' : `Cụm máy ${selectedCampus}`,
-          campus: selectedCampus === 'ALL' ? 'Tất cả phân hiệu' : selectedCampus,
-          host: `${pullSummary.pulledDevices}/${pullSummary.totalDevices} máy`,
-          totalOnDevice: pullSummary.matchedUsers + (pullSummary.unmatchedOnDevice?.length || 0),
-          totalFacesOnDevice: pullSummary.pulledFaces,
-          matchedCount: pullSummary.matchedUsers,
-          pulledFaceCount: pullSummary.pulledFaces,
-          eventsIngested: pullSummary.eventsIngested,
-          syncedPeople: pullSummary.syncedPeople || [],
-          unmatchedOnDevice: pullSummary.unmatchedOnDevice || []
-        });
-      }
-      showToast(res.data?.message || 'Đã đồng bộ nhanh 2 chiều toàn cụm máy!', 'success');
       await loadOverview();
     } catch (err) {
-      showToast(err.response?.data?.message || 'Lỗi đồng bộ nhanh 2 chiều toàn cụm', 'error');
+      showToast(toFriendlyVietnameseNotice(err, 'Chưa đồng bộ 2 chiều được toàn cụm máy.'), 'error');
     } finally {
       setBiSyncingAll(false);
     }
@@ -524,30 +803,60 @@ export default function TimekeepingDeviceManagement() {
   const handlePullAllFastFromCluster = async () => {
     setPullingAll(true);
     try {
-      const res = await pullAllTimekeepingDevicesFast({
-        campus: selectedCampus !== 'ALL' ? selectedCampus : undefined,
-        overwriteExistingFaces: false,
-        includeEvents: true
-      });
-      const d = res.data?.data;
-      if (d) {
+      const isBridgeUp = await refreshConnectorHealth();
+      if (isBridgeUp) {
+        let totalFaces = 0;
+        let totalMatched = 0;
+        let totalEvents = 0;
+        const allUnmatched = [];
+        for (const dev of devices) {
+          const out = await pullDeviceUsersViaLocalConnector(dev._id, false);
+          totalFaces += out?.data?.pulledFaceCount || 0;
+          totalMatched += out?.data?.matchedCount || 0;
+          totalEvents += out?.data?.eventsIngested || 0;
+          if (Array.isArray(out?.data?.unmatchedOnDevice)) {
+            allUnmatched.push(...out.data.unmatchedOnDevice);
+          }
+        }
         setLastPullReport({
-          deviceName: selectedCampus === 'ALL' ? 'Toàn cụm máy của trường' : `Cụm máy ${selectedCampus}`,
-          campus: selectedCampus === 'ALL' ? 'Tất cả phân hiệu' : selectedCampus,
-          host: `${d.pulledDevices}/${d.totalDevices} máy`,
-          totalOnDevice: d.totalMatchedUsers + (d.unmatchedOnDevice?.length || 0),
-          totalFacesOnDevice: d.totalPulledFaces,
-          matchedCount: d.totalMatchedUsers,
-          pulledFaceCount: d.totalPulledFaces,
-          eventsIngested: d.totalEventsIngested,
-          syncedPeople: d.syncedPeople || [],
-          unmatchedOnDevice: d.unmatchedOnDevice || []
+          deviceName: `Cụm ${devices.length} máy của phân hiệu`,
+          campus: campuses[0] || 'Phân hiệu',
+          host: `${devices.length} máy`,
+          matchedCount: totalMatched,
+          pulledFaceCount: totalFaces,
+          eventsIngested: totalEvents,
+          unmatchedOnDevice: allUnmatched.slice(0, 25)
         });
+        showToast(
+          `Đã kéo thành công từ ${devices.length} máy chấm công về phần mềm: khớp ${totalMatched} hồ sơ, lưu ${totalFaces} ảnh khuôn mặt!`,
+          'success'
+        );
+      } else {
+        const res = await pullAllTimekeepingDevicesFast({
+          campus: selectedCampus !== 'ALL' ? selectedCampus : undefined,
+          overwriteExistingFaces: false,
+          includeEvents: true
+        });
+        const d = res.data?.data;
+        if (d) {
+          setLastPullReport({
+            deviceName: 'Cụm máy chấm công phân hiệu',
+            campus: selectedCampus === 'ALL' ? 'Phân hiệu hiện tại' : selectedCampus,
+            host: `${d.pulledDevices}/${d.totalDevices} máy`,
+            totalOnDevice: d.totalMatchedUsers + (d.unmatchedOnDevice?.length || 0),
+            totalFacesOnDevice: d.totalPulledFaces,
+            matchedCount: d.totalMatchedUsers,
+            pulledFaceCount: d.totalPulledFaces,
+            eventsIngested: d.totalEventsIngested,
+            syncedPeople: d.syncedPeople || [],
+            unmatchedOnDevice: d.unmatchedOnDevice || []
+          });
+        }
+        showToast(res.data?.message || 'Đã kéo xong dữ liệu từ máy chấm công về phần mềm!', 'success');
       }
-      showToast(res.data?.message || 'Đã kéo nhanh thông tin & lượt chấm công từ cụm máy về Web!', 'success');
       await loadOverview();
     } catch (err) {
-      showToast(err.response?.data?.message || 'Không thể kéo nhanh dữ liệu từ cụm máy', 'error');
+      showToast(toFriendlyVietnameseNotice(err, 'Chưa kéo được dữ liệu từ cụm máy chấm công.'), 'error');
     } finally {
       setPullingAll(false);
     }
@@ -556,14 +865,20 @@ export default function TimekeepingDeviceManagement() {
   const handleCheckCapacity = async (dev) => {
     setDeviceActionBusy((prev) => ({ ...prev, [dev._id]: 'capacity' }));
     try {
-      const res = await checkTimekeepingDeviceCapacity(dev._id);
-      showToast(
-        res.data?.message || 'Đã kiểm tra dung lượng bộ nhớ máy chấm công',
-        res.data?.success ? 'success' : 'info'
-      );
+      const isBridgeUp = await refreshConnectorHealth();
+      if (isBridgeUp) {
+        const out = await checkCapacityViaLocalConnector(dev._id);
+        showToast(out.message, 'success');
+      } else {
+        const res = await checkTimekeepingDeviceCapacity(dev._id);
+        showToast(
+          res.data?.message || 'Đã kiểm tra trạng thái bộ nhớ máy chấm công.',
+          res.data?.success ? 'success' : 'error'
+        );
+      }
       await loadOverview();
     } catch (err) {
-      showToast(err.response?.data?.message || 'Không thể kết nối ISAPI tới thiết bị', 'error');
+      showToast(toFriendlyVietnameseNotice(err, 'Chưa liên lạc được với máy chấm công.'), 'error');
     } finally {
       setDeviceActionBusy((prev) => ({ ...prev, [dev._id]: null }));
     }
@@ -590,25 +905,32 @@ export default function TimekeepingDeviceManagement() {
   const executePullFromDevice = async (deviceId, overwrite) => {
     setDeviceActionBusy((prev) => ({ ...prev, [deviceId]: 'pull' }));
     try {
-      const [userRes, eventRes] = await Promise.all([
-        pullTimekeepingDeviceUsers(deviceId, overwrite),
-        syncTimekeepingDevice(deviceId).catch(() => null)
-      ]);
-      const pullData = userRes.data?.data || {};
-      const ingestedEvents = eventRes?.data?.summary?.ingested || 0;
-      setLastPullReport({
-        ...pullData,
-        eventsIngested: ingestedEvents
-      });
-      showToast(
-        `${userRes.data?.message || 'Đã kéo hồ sơ & ảnh khuôn mặt về Web'}${
-          ingestedEvents > 0 ? ` • Đồng bộ thêm ${ingestedEvents} lượt chấm công mới!` : ''
-        }`,
-        'success'
-      );
+      const isBridgeUp = await refreshConnectorHealth();
+      if (isBridgeUp) {
+        const out = await pullDeviceUsersViaLocalConnector(deviceId, overwrite);
+        setLastPullReport(out?.data || null);
+        showToast(out?.message || 'Đã kéo thành công danh sách hồ sơ & ảnh khuôn mặt từ máy về phần mềm!', 'success');
+      } else {
+        const [userRes, eventRes] = await Promise.all([
+          pullTimekeepingDeviceUsers(deviceId, overwrite),
+          syncTimekeepingDevice(deviceId).catch(() => null)
+        ]);
+        const pullData = userRes.data?.data || {};
+        const ingestedEvents = eventRes?.data?.summary?.ingested || 0;
+        setLastPullReport({
+          ...pullData,
+          eventsIngested: ingestedEvents
+        });
+        showToast(
+          `${userRes.data?.message || 'Đã kéo hồ sơ & ảnh khuôn mặt về phần mềm'}${
+            ingestedEvents > 0 ? ` • Cập nhật thêm ${ingestedEvents} lượt điểm danh mới!` : ''
+          }`,
+          'success'
+        );
+      }
       await loadOverview();
     } catch (err) {
-      showToast(err.response?.data?.message || 'Không thể kéo dữ liệu từ máy chấm công', 'error');
+      showToast(toFriendlyVietnameseNotice(err, 'Chưa kéo được dữ liệu từ máy chấm công.'), 'error');
     } finally {
       setDeviceActionBusy((prev) => ({ ...prev, [deviceId]: null }));
     }
@@ -676,28 +998,56 @@ export default function TimekeepingDeviceManagement() {
   };
 
   const executePushSync = async (devOrNull, forceFull) => {
+    const isBridgeUp = await refreshConnectorHealth();
     if (devOrNull) {
       setDeviceActionBusy((prev) => ({ ...prev, [devOrNull._id]: 'push' }));
       try {
-        const res = await pushSmartSyncToDevice(devOrNull._id, {
-          fastDelta: !forceFull,
-          forceFullSync: Boolean(forceFull)
-        });
-        showToast(res.data?.message || 'Đã đẩy đồng bộ nhanh xuống máy chấm công!', 'success');
+        if (isBridgeUp) {
+          const out = await pushRosterViaLocalConnector(devOrNull._id, {
+            fastDelta: !forceFull,
+            forceFullSync: Boolean(forceFull)
+          });
+          showToast(out?.message || 'Đã đẩy khuôn mặt học sinh & nhân sự xuống máy chấm công thành công!', 'success');
+        } else {
+          const res = await pushSmartSyncToDevice(devOrNull._id, {
+            fastDelta: !forceFull,
+            forceFullSync: Boolean(forceFull)
+          });
+          showToast(res.data?.message || 'Đã đẩy đồng bộ xuống máy chấm công!', 'success');
+        }
         await loadOverview();
+      } catch (err) {
+        showToast(toFriendlyVietnameseNotice(err, 'Chưa đẩy được khuôn mặt xuống máy chấm công.'), 'error');
       } finally {
         setDeviceActionBusy((prev) => ({ ...prev, [devOrNull._id]: null }));
       }
     } else {
       setSyncingAll(true);
       try {
-        const res = await syncAllTimekeepingDevicesSmart({
-          campus: selectedCampus !== 'ALL' ? selectedCampus : undefined,
-          fastDelta: !forceFull,
-          forceFullSync: Boolean(forceFull)
-        });
-        showToast(res.data?.message || 'Đã đẩy đồng bộ nhanh tới toàn bộ cụm máy!', 'success');
+        if (isBridgeUp) {
+          let totalSynced = 0;
+          for (const dev of devices) {
+            await pushRosterViaLocalConnector(dev._id, {
+              fastDelta: !forceFull,
+              forceFullSync: Boolean(forceFull)
+            });
+            totalSynced += 1;
+          }
+          showToast(
+            `Đã đồng bộ thành công danh sách học sinh & ảnh khuôn mặt xuống cả ${totalSynced} máy chấm công của phân hiệu!`,
+            'success'
+          );
+        } else {
+          const res = await syncAllTimekeepingDevicesSmart({
+            campus: selectedCampus !== 'ALL' ? selectedCampus : undefined,
+            fastDelta: !forceFull,
+            forceFullSync: Boolean(forceFull)
+          });
+          showToast(res.data?.message || 'Đã đẩy đồng bộ tới toàn bộ cụm máy!', 'success');
+        }
         await loadOverview();
+      } catch (err) {
+        showToast(toFriendlyVietnameseNotice(err, 'Chưa đồng bộ được xuống cụm máy chấm công.'), 'error');
       } finally {
         setSyncingAll(false);
       }
@@ -707,19 +1057,25 @@ export default function TimekeepingDeviceManagement() {
   const askPruneDevice = (dev) => {
     setConfirmState({
       tone: 'danger',
-      badge: 'THU HỒI BỘ NHỚ 500 SLOT — XÓA HỒ SƠ NGHỈ VIỆC / THÔI HỌC',
-      title: `Giải phóng slot nghỉ việc & thôi học trên "${dev.name}" (${dev.host})?`,
-      description: 'Hệ thống sẽ gửi lệnh ISAPI xóa các mã Nhân sự đã nghỉ việc và Học sinh đã thôi học/ra trường khỏi bộ nhớ phần cứng của chiếc máy này.',
+      badge: 'DỌN BỘ NHỚ MÁY CHẤM CÔNG — XÓA HỒ SƠ ĐÃ NGHỈ',
+      title: `Giải phóng bộ nhớ người đã nghỉ trên "${dev.name}" (${dev.host})?`,
+      description: 'Hệ thống sẽ xóa các mã Nhân sự đã nghỉ việc và Học sinh đã ra trường/thôi học khỏi bộ nhớ của chiếc máy này.',
       bullets: [
-        `Thu hồi ngay ${kpi.reclaimableInactiveCount || 0} slot của hồ sơ đã nghỉ để dành bộ nhớ 500 slot cho năm học mới.`,
-        'Toàn bộ Nhân sự đang làm việc và Học sinh đang theo học được bảo toàn an toàn 100%.'
+        `Giải phóng ${kpi.reclaimableInactiveCount || 0} vị trí của hồ sơ đã nghỉ để dành chỗ cho học sinh mới.`,
+        'Toàn bộ Nhân sự đang làm việc và Học sinh đang theo học được giữ nguyên an toàn 100%.'
       ],
-      confirmLabel: 'Xác nhận Giải phóng slot nghỉ',
+      confirmLabel: 'Xác nhận Dọn bộ nhớ',
       onExecute: async () => {
         setDeviceActionBusy((prev) => ({ ...prev, [dev._id]: 'prune' }));
         try {
-          const res = await pruneTimekeepingDeviceSlots(dev._id);
-          showToast(res.data?.message || 'Đã giải phóng slot nghỉ trên máy chấm công!', 'success');
+          const isBridgeUp = await refreshConnectorHealth();
+          if (isBridgeUp) {
+            const out = await pruneInactiveViaLocalConnector(dev._id);
+            showToast(out.message, 'success');
+          } else {
+            const res = await pruneTimekeepingDeviceSlots(dev._id);
+            showToast(res.data?.message || 'Đã dọn bộ nhớ hồ sơ nghỉ trên máy chấm công!', 'success');
+          }
           await loadOverview();
         } finally {
           setDeviceActionBusy((prev) => ({ ...prev, [dev._id]: null }));
@@ -731,19 +1087,25 @@ export default function TimekeepingDeviceManagement() {
   const askUnlockDoor = (dev) => {
     setConfirmState({
       tone: 'warning',
-      badge: 'AN NINH CỔNG TRƯỜNG — ĐIỀU KHIỂN MỞ CỬA TỪ XA',
-      title: `Mở khóa cửa từ xa tại "${dev.name}" (${dev.campus} — ${dev.location})?`,
-      description: 'Lệnh ISAPI sẽ kích hoạt rơ-le mở chốt cửa vật lý (Door 1) ngay lập tức.',
+      badge: 'ĐIỀU KHIỂN CỔNG TRƯỜNG — MỞ CỬA TỪ XA',
+      title: `Mở chốt cửa từ xa tại "${dev.name}" (${dev.location || 'Sảnh đón trẻ'})?`,
+      description: 'Máy chấm công sẽ nhả khóa điện để mở cửa đón trả trẻ ngay lập tức.',
       bullets: [
-        `Vị trí mở cửa: ${dev.campus} — ${dev.location} (${dev.host}).`,
-        'Vui lòng quan sát camera hoặc xác minh phụ huynh / giáo viên trước cửa đón trả trẻ trước khi mở.'
+        `Vị trí cửa: ${dev.location || 'Cổng trường'} (${dev.host}).`,
+        'Bạn hãy quan sát xác nhận phụ huynh hoặc giáo viên trước cửa trước khi bấm mở nhé.'
       ],
       confirmLabel: 'Xác nhận Mở cửa ngay',
       onExecute: async () => {
         setDeviceActionBusy((prev) => ({ ...prev, [dev._id]: 'door' }));
         try {
-          const res = await unlockTimekeepingDeviceDoor(dev._id, 1);
-          showToast(res.data?.message || 'Đã gửi lệnh mở cửa từ xa thành công!', 'success');
+          const isBridgeUp = await refreshConnectorHealth();
+          if (isBridgeUp) {
+            const out = await unlockDoorViaLocalConnector(dev._id, 1);
+            showToast(out.message, 'success');
+          } else {
+            const res = await unlockTimekeepingDeviceDoor(dev._id, 1);
+            showToast(res.data?.message || 'Đã mở chốt cửa từ xa thành công!', 'success');
+          }
         } finally {
           setDeviceActionBusy((prev) => ({ ...prev, [dev._id]: null }));
         }
@@ -812,11 +1174,34 @@ export default function TimekeepingDeviceManagement() {
     const busyKey = `${person.subjectType}:${person.subjectId}`;
     setPersonActionBusy((prev) => ({ ...prev, [busyKey]: 'push' }));
     try {
-      const res = await pushSingleBiometricPerson(person.subjectType, person.subjectId);
-      showToast(res.data?.message || `Đã đẩy ${person.fullName} xuống máy chấm công!`, 'success');
+      const isBridgeUp = await refreshConnectorHealth();
+      if (isBridgeUp && devices.length > 0) {
+        let pushedCount = 0;
+        let lastMsg = '';
+        for (const dev of devices) {
+          const out = await pushRosterViaLocalConnector(dev._id, {
+            fastDelta: false,
+            forceFullSync: true,
+            subjectType: person.subjectType,
+            subjectId: person.subjectId
+          });
+          pushedCount += 1;
+          lastMsg = out?.message || '';
+        }
+        showToast(
+          lastMsg || `Đã đẩy khuôn mặt của "${person.fullName}" xuống ${pushedCount} máy chấm công của phân hiệu!`,
+          'success'
+        );
+      } else {
+        const res = await pushSingleBiometricPerson(person.subjectType, person.subjectId);
+        showToast(res.data?.message || `Đã đẩy "${person.fullName}" xuống máy chấm công!`, 'success');
+      }
       await loadOverview();
     } catch (err) {
-      showToast(err.response?.data?.message || 'Không thể đẩy hồ sơ xuống máy chấm công', 'error');
+      showToast(
+        toFriendlyVietnameseNotice(err, `Chưa đẩy được khuôn mặt của "${person.fullName}" xuống máy chấm công.`),
+        'error'
+      );
     } finally {
       setPersonActionBusy((prev) => ({ ...prev, [busyKey]: null }));
     }
@@ -975,16 +1360,83 @@ export default function TimekeepingDeviceManagement() {
         </div>
       )}
 
+      {/* ─── DẢI TRẠNG THÁI BỘ KẾT NỐI NỘI BỘ 127.0.0.1:18686 TẠI MÁY TÍNH PHÂN HIỆU ─── */}
+      <section className={`hik-connector-banner ${connectorHealth.online ? 'online' : 'offline'}`}>
+        <div style={{ flex: '1 1 420px', minWidth: 0 }}>
+          {connectorHealth.online ? (
+            <>
+              <div style={{ fontWeight: 800, fontSize: 13.5, marginBottom: 2 }}>
+                🟢 Máy tính này đã kết nối trực tiếp với mạng nội bộ của trường ({connectorHealth.lanIps.join(', ') || 'Sẵn sàng'})
+              </div>
+              <div style={{ fontSize: 12.5 }}>
+                Mọi thao tác <strong>Quét tìm máy</strong>, <strong>Kéo dữ liệu về phần mềm</strong> và <strong>Đẩy ảnh khuôn mặt học sinh</strong> đều được khóa bảo mật đúng với mã phần cứng máy chấm công của phân hiệu <strong>{resolvedSchoolCode || 'hiện tại'}</strong>.
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontWeight: 800, fontSize: 13.5, marginBottom: 3 }}>
+                💡 Để kết nối với máy chấm công lắp trong mạng trường từ xa, hãy bật &ldquo;Bộ kết nối 1 chạm&rdquo; trên máy tính này
+              </div>
+              <div style={{ fontSize: 12.5 }}>
+                Nếu máy tính văn phòng trường mới sử dụng lần đầu, bạn chỉ cần bấm <strong>&ldquo;Tải Bộ Kết Nối 1 Chạm&rdquo;</strong>, giải nén và mở tệp <code>1-Bat-Ket-Noi-1-Cham.bat</code> (tự khởi động cùng Windows và tự nhận diện mọi tên miền mới mà không cần cài lại).
+              </div>
+            </>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button
+            type="button"
+            className="hik-btn hik-btn-neutral hik-btn-sm"
+            onClick={() => refreshConnectorHealth()}
+          >
+            <Icon name="refresh" size={14} />
+            <span>{connectorHealth.checking ? 'Đang kiểm tra...' : 'Kiểm tra lại kết nối'}</span>
+          </button>
+          <button
+            type="button"
+            className={`hik-btn ${connectorHealth.online ? 'hik-btn-outline-indigo' : 'hik-btn-indigo'} hik-btn-sm`}
+            disabled={downloadingConnector}
+            onClick={handleDownloadConnectorZip}
+          >
+            <Icon name="download" size={14} />
+            <span>{downloadingConnector ? 'Đang đóng gói...' : '📥 Tải Bộ Kết Nối 1 Chạm (.zip)'}</span>
+          </button>
+        </div>
+      </section>
+
+      {/* ─── BẢNG HOẠT ĐỘNG ĐIỂM DANH & THIẾT BỊ THỜI GIAN THỰC (100% TIẾNG VIỆT TỰ NHIÊN) ─── */}
+      {liveFeedEvents.length > 0 && (
+        <section className="hik-live-feed-card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <strong style={{ fontSize: 13.5, color: '#1e3a8a' }}>
+              🔔 Thông báo điểm danh &amp; hoạt động máy chấm công trực tiếp tại phân hiệu ({resolvedSchoolCode})
+            </strong>
+            <span style={{ fontSize: 11.5, color: '#64748b', fontWeight: 600 }}>Cập nhật tự động theo thời gian thực</span>
+          </div>
+          <div className="hik-live-feed-list">
+            {liveFeedEvents.slice(0, 4).map((ev) => (
+              <div key={ev.id} className={`hik-live-event-item ${ev.tone || 'info'}`}>
+                <div style={{ minWidth: 0 }}>
+                  <strong style={{ display: 'block', color: '#0f172a', marginBottom: 2 }}>{ev.title}</strong>
+                  <span style={{ color: '#334155' }}>{ev.message}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* ─── KHỐI 1: HEADER QUÉT LAN, ĐỒNG BỘ NHANH 2 CHIỀU, LỌC PHÂN HIỆU & 4 THẺ KPI 500 SLOT ─── */}
       <section className="hik-hero-card">
         <div className="hik-hero-top">
           <div className="hik-hero-title-group">
             <div className="hik-hero-heading-row">
-              <h2>Quét Mạng LAN, Đồng Bộ Nhanh 2 Chiều &amp; Quản Lý Bộ Nhớ 500 Slot/Máy</h2>
-              <span className="hik-pill-discovery">Hikvision ISAPI Fast 2-Way Sync</span>
+              <h2>Quản Lý Máy Chấm Công Khuôn Mặt &amp; Đồng Bộ Hai Chiều Của Phân Hiệu</h2>
+              <span className="hik-pill-discovery">Khóa bảo mật riêng theo Phân hiệu</span>
             </div>
             <p className="hik-hero-subtitle">
-              Quét tự động máy Hikvision trong mạng LAN, kéo nhanh dữ liệu 2 phía (Ảnh khuôn mặt &amp; Lượt chấm công từ Máy ↔ Web) và đẩy nhanh Delta thông minh theo từng Phân hiệu không vượt 500 slot/máy.
+              Tự động tìm máy Hikvision trong mạng của trường, kéo ảnh khuôn mặt &amp; lượt điểm danh từ máy về phần mềm và đẩy danh sách học sinh, giáo viên xuống đúng máy của phân hiệu (tối ưu 500 hồ sơ/máy).
             </p>
           </div>
 
@@ -1059,36 +1511,45 @@ export default function TimekeepingDeviceManagement() {
           </div>
         </div>
 
-        {/* Thanh chuyển nhanh Phân hiệu / Cơ sở trực thuộc trường */}
+        {/* Thanh định danh Phân hiệu đang quản lý (Admin Phân hiệu khóa vào phân hiệu của mình; Kỹ thuật NCC thấy rõ phân hiệu đang bàn giao) */}
         <div className="hik-campus-bar">
           <div className="hik-campus-tabs">
-            <span className="hik-campus-label">Phân hiệu quản lý:</span>
-            <button
-              type="button"
-              className={`hik-campus-chip ${selectedCampus === 'ALL' ? 'active' : ''}`}
-              onClick={() => {
-                setSelectedCampus('ALL');
-                setRosterPage(1);
-              }}
-            >
-              Tất cả phân hiệu ({campuses.length})
-            </button>
-            {campuses.map((cName) => (
-              <button
-                key={cName}
-                type="button"
-                className={`hik-campus-chip ${selectedCampus === cName ? 'active' : ''}`}
-                onClick={() => {
-                  setSelectedCampus(cName);
-                  setRosterPage(1);
-                }}
-              >
-                🏫 {cName}
-              </button>
-            ))}
+            <span className="hik-campus-label">Phạm vi đồng bộ an toàn:</span>
+            {campuses.length > 1 && isVendorSupport ? (
+              <>
+                <button
+                  type="button"
+                  className={`hik-campus-chip ${selectedCampus === 'ALL' ? 'active' : ''}`}
+                  onClick={() => {
+                    setSelectedCampus('ALL');
+                    setRosterPage(1);
+                  }}
+                >
+                  Tất cả cơ sở ({campuses.length})
+                </button>
+                {campuses.map((cName) => (
+                  <button
+                    key={cName}
+                    type="button"
+                    className={`hik-campus-chip ${selectedCampus === cName ? 'active' : ''}`}
+                    onClick={() => {
+                      setSelectedCampus(cName);
+                      setRosterPage(1);
+                    }}
+                  >
+                    🏫 {cName}
+                  </button>
+                ))}
+              </>
+            ) : (
+              <span className="hik-campus-chip active" style={{ cursor: 'default' }}>
+                🏫 {storedTenant?.name || campuses[0] || 'Phân hiệu hiện tại'}
+              </span>
+            )}
           </div>
-          <span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>
-            Mã trường: <strong style={{ color: '#0f172a' }}>{resolvedSchoolCode || '—'}</strong>
+          <span style={{ fontSize: 12, color: '#475569', fontWeight: 700 }}>
+            Mã phân hiệu khóa phần cứng: <strong style={{ color: '#0f172a' }}>{resolvedSchoolCode || '—'}</strong>
+            {isVendorSupport ? ' • 🔧 Phiên Kỹ thuật Nhà cung cấp' : ''}
           </span>
         </div>
 
@@ -1158,9 +1619,13 @@ export default function TimekeepingDeviceManagement() {
                           : ''}
                       </div>
                     </div>
-                    {item.alreadySaved ? (
+                    {item.lockedToOtherCampus ? (
+                      <span className="hik-status-pill hik-status-offline" title="Thiết bị này đã khóa cho phân hiệu khác để chống kéo/đẩy nhầm">
+                        🔒 Thuộc phân hiệu khác
+                      </span>
+                    ) : item.alreadySaved ? (
                       <span className="hik-status-pill hik-status-online">
-                        Đã lưu ({item.savedCampus || item.savedName})
+                        Đã gắn với phân hiệu ({item.savedName || item.savedCampus})
                       </span>
                     ) : isAdmin ? (
                       <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
@@ -1171,7 +1636,7 @@ export default function TimekeepingDeviceManagement() {
                             disabled={quickSavingHost === item.host}
                             onClick={() => handleQuickSaveDiscoveredDevice(item)}
                           >
-                            {quickSavingHost === item.host ? 'Đang lưu...' : '⚡ Lưu Nhanh & Kéo DL'}
+                            {quickSavingHost === item.host ? 'Đang gắn máy...' : '⚡ Gắn Máy & Kéo Khuôn Mặt'}
                           </button>
                         )}
                         <button
@@ -1179,7 +1644,7 @@ export default function TimekeepingDeviceManagement() {
                           className="hik-btn hik-btn-indigo hik-btn-sm"
                           onClick={() => handlePickDiscoveredDevice(item)}
                         >
-                          Chọn &amp; Gắn Phân Hiệu
+                          Chọn &amp; Nhập mật khẩu
                         </button>
                       </div>
                     ) : null}
@@ -1497,17 +1962,25 @@ export default function TimekeepingDeviceManagement() {
                           {st.label}
                         </span>
                         <span className="hik-endpoint-pill">
-                          {scheme}://{dev.host}:{displayPort}
+                          {dev.host}:{displayPort}
                         </span>
-                        <span className="hik-campus-pill">
-                          🏫 {dev.campus === 'ALL' ? 'Tất cả phân hiệu' : (dev.campus || 'Cơ sở chính')}
-                        </span>
+                        {dev.serialNumber ? (
+                          <span className="hik-serial-lock-pill" title="Đã khóa cứng mã phần cứng với phân hiệu này để không bao giờ kéo/đẩy nhầm sang trường khác">
+                            🔒 Đã khóa với phân hiệu ({dev.serialNumber.slice(-10)})
+                          </span>
+                        ) : (
+                          <span className="hik-serial-lock-pill pending">
+                            🔓 Tự khóa mã máy ở lần đồng bộ đầu
+                          </span>
+                        )}
                       </div>
                       <h3 className="hik-device-title">{dev.name}</h3>
                       <p className="hik-device-meta">
-                        Vị trí: <strong>{dev.location || 'Sảnh đón trẻ'}</strong> • Model:{' '}
-                        <strong>{dev.model || 'DS-K1T320MX'}</strong>
-                        {dev.serialNumber ? ` • SN: ${dev.serialNumber}` : ''}
+                        Vị trí: <strong>{dev.location || 'Sảnh đón trẻ'}</strong> • Dòng máy:{' '}
+                        <strong>{dev.model || 'Hikvision Khuôn mặt'}</strong>
+                        {dev.webhookConfiguredUrl === fullWebhookUrl ? (
+                          <span style={{ color: '#059669', fontWeight: 700 }}> • ✓ Đã trỏ đúng tên miền hiện tại</span>
+                        ) : null}
                       </p>
                     </div>
 
@@ -1685,6 +2158,41 @@ export default function TimekeepingDeviceManagement() {
                     </button>
                   )}
 
+                  {canControlHardware && (
+                    <button
+                      type="button"
+                      className="hik-btn hik-btn-outline-indigo hik-btn-sm"
+                      disabled={Boolean(busyState)}
+                      onClick={() => handleUpdateWebhookDomain(dev)}
+                      title="Cập nhật 1 chạm địa chỉ tên miền Web hiện tại xuống máy chấm công để nhận thông báo điểm danh tức thì"
+                    >
+                      <Icon name="link" size={14} />
+                      <span>
+                        {busyState === 'webhook'
+                          ? 'Đang cập nhật tên miền...'
+                          : '🌐 Cập nhật địa chỉ Web xuống máy'}
+                      </span>
+                    </button>
+                  )}
+
+                  {isVendorSupport && isAdmin && (
+                    <button
+                      type="button"
+                      className="hik-btn hik-btn-soft-amber hik-btn-sm"
+                      onClick={() => {
+                        setVendorSerialModalDev(dev);
+                        setVendorSerialForm({
+                          newSerialNumber: dev.serialNumber || '',
+                          targetSchoolCode: ''
+                        });
+                      }}
+                      title="Chỉ dành cho Kỹ thuật viên Nhà cung cấp: Gỡ khóa mã phần cứng hoặc chuyển máy sang phân hiệu khác"
+                    >
+                      <Icon name="shield" size={14} />
+                      <span>🔧 Gỡ khóa / Chuyển Phân hiệu</span>
+                    </button>
+                  )}
+
                   {dev.unmappedCount > 0 && (
                     <button
                       type="button"
@@ -1811,28 +2319,44 @@ export default function TimekeepingDeviceManagement() {
         </section>
       )}
 
-      {/* ─── KHỐI 3: DẢI WEBHOOK TỰ ĐỘNG ĐUÔI MÃ TRƯỜNG ─── */}
+      {/* ─── KHỐI 3: DẢI ĐỊA CHỈ NHẬN ĐIỂM DANH TỰ ĐỘNG (ĐỘNG THEO TÊN MIỀN HIỆN TẠI + NÚT CẬP NHẬT 1 CHẠM) ─── */}
       <section className="hik-webhook-strip">
         <div style={{ flex: '1 1 380px', minWidth: 0 }}>
           <div style={{ fontSize: 11, fontWeight: 800, color: '#1d4ed8', textTransform: 'uppercase', marginBottom: 3 }}>
-            Đường dẫn HTTP Listening / Webhook nhận sự kiện tự động từ mọi phân hiệu ({resolvedSchoolCode})
+            Địa chỉ nhận điểm danh khuôn mặt tự động theo tên miền hiện tại ({resolvedSchoolCode})
           </div>
           <div className="hik-webhook-url-box">
             <Icon name="link" size={15} />
-            <code>POST {fullWebhookUrl}</code>
+            <code>{fullWebhookUrl}</code>
             <button type="button" className="hik-btn hik-btn-neutral hik-btn-sm" onClick={handleCopyWebhookUrl}>
-              <Icon name="copy" size={13} /> {copiedUrl ? 'Đã sao chép!' : 'Sao chép URL'}
+              <Icon name="copy" size={13} /> {copiedUrl ? 'Đã sao chép!' : 'Sao chép địa chỉ'}
             </button>
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {canControlHardware && devices.length > 0 && (
+            <button
+              type="button"
+              className="hik-btn hik-btn-indigo hik-btn-sm"
+              disabled={updatingWebhookAll}
+              onClick={() => handleUpdateWebhookDomain(null)}
+              title="Khi nhà trường đổi sang tên miền mới, chỉ cần bấm nút này để đẩy địa chỉ mới xuống toàn bộ máy chấm công!"
+            >
+              <Icon name="refresh" size={14} />
+              <span>
+                {updatingWebhookAll
+                  ? 'Đang cập nhật xuống máy...'
+                  : '🌐 1 Chạm Cập Nhật Tên Miền Mới Xuống Máy'}
+              </span>
+            </button>
+          )}
           {canControlHardware && (
             <button type="button" className="hik-btn hik-btn-outline-indigo hik-btn-sm" onClick={openWebhookSimulator}>
-              <Icon name="send" size={14} /> Gửi thử chấm công / điểm danh
+              <Icon name="send" size={14} /> Thử nghiệm quét mặt điểm danh
             </button>
           )}
           <button type="button" className="hik-btn hik-btn-neutral hik-btn-sm" onClick={openWebhookLogs}>
-            <Icon name="fileText" size={14} /> Nhật ký Webhook
+            <Icon name="fileText" size={14} /> Lịch sử nhận điểm danh
           </button>
         </div>
       </section>
@@ -2534,6 +3058,65 @@ export default function TimekeepingDeviceManagement() {
                 </div>
               )}
             </div>
+          </div>,
+          document.body
+        )}
+      {/* ─── MODAL KỸ THUẬT NHÀ CUNG CẤP: GỠ KHÓA MÃ PHẦN CỨNG / CHUYỂN PHÂN HIỆU ─── */}
+      {vendorSerialModalDev &&
+        isVendorSupport &&
+        createPortal(
+          <div className="account-modal-backdrop" onClick={() => setVendorSerialModalDev(null)} role="presentation">
+            <form
+              className="account-modal-card student-form"
+              style={{ width: 'min(580px, 96vw)' }}
+              onClick={(e) => e.stopPropagation()}
+              onSubmit={handleVendorSaveSerialUnlock}
+            >
+              <div className="account-modal-header">
+                <div>
+                  <p className="card-kicker">CHỈ DÀNH CHO KỸ THUẬT VIÊN NHÀ CUNG CẤP PHẦN MỀM</p>
+                  <h2>Gỡ khóa phần cứng / Chuyển phân hiệu: {vendorSerialModalDev.name}</h2>
+                </div>
+                <button
+                  type="button"
+                  className="button button-secondary modal-close-btn"
+                  onClick={() => setVendorSerialModalDev(null)}
+                >
+                  <Icon name="close" size={18} />
+                </button>
+              </div>
+
+              <div className="student-form-grid">
+                <label className="form-wide">
+                  Mã phần cứng máy chấm công (Để trống nếu muốn gỡ khóa để nhận máy mới thay thế)
+                  <input
+                    placeholder="Để trống = gỡ khóa Serial cũ để máy tự nhận Serial mới"
+                    value={vendorSerialForm.newSerialNumber}
+                    onChange={(e) => setVendorSerialForm({ ...vendorSerialForm, newSerialNumber: e.target.value })}
+                  />
+                </label>
+
+                <label className="form-wide">
+                  Hoặc chuyển giao thiết bị này sang Mã phân hiệu trường khác (Tùy chọn)
+                  <input
+                    placeholder="VD: HOANANG-B (Để trống nếu giữ nguyên tại phân hiệu hiện tại)"
+                    value={vendorSerialForm.targetSchoolCode}
+                    onChange={(e) =>
+                      setVendorSerialForm({ ...vendorSerialForm, targetSchoolCode: e.target.value.toUpperCase() })
+                    }
+                  />
+                </label>
+              </div>
+
+              <div className="account-modal-actions">
+                <button type="button" className="button button-secondary" onClick={() => setVendorSerialModalDev(null)}>
+                  Hủy
+                </button>
+                <button type="submit" className="button button-primary" disabled={savingVendorSerial}>
+                  {savingVendorSerial ? 'Đang xử lý...' : 'Xác nhận Cập nhật Khóa Phần Cứng'}
+                </button>
+              </div>
+            </form>
           </div>,
           document.body
         )}

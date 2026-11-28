@@ -82,7 +82,7 @@ function validateTokenClaims(decoded, expectedPurpose) {
   return true;
 }
 
-const generateSchoolUserToken = (user, tenant, expiresIn = '8h') => {
+const generateSchoolUserToken = (user, tenant, expiresIn = '8h', extraClaims = {}) => {
   const jti = crypto.randomUUID();
   return jwt.sign(
     {
@@ -94,6 +94,7 @@ const generateSchoolUserToken = (user, tenant, expiresIn = '8h') => {
       authVersion: Number.isInteger(user.authVersion) ? user.authVersion : 0,
       tenantAuthVersion: Number.isInteger(tenant.authVersion) ? tenant.authVersion : 0,
       purpose: 'SCHOOL_USER_ACCESS',
+      ...(extraClaims.isVendorSupport ? { isVendorSupport: true, vendorUsername: String(extraClaims.vendorUsername || '') } : {}),
       jti
     },
     getSigningSecret(),

@@ -45,6 +45,30 @@ const {
 const DUPLICATE_PUNCH_COOLDOWN_MS = Number(process.env.ATTENDANCE_PUNCH_COOLDOWN_MS || 5 * 60 * 1000); // 5 phút
 const STUDENT_MORNING_LATE_CUTOFF = '08:00';
 
+// Hàng đợi tuần tự nhẹ theo từng cá nhân (FIFO per person) để chống xung đột giao dịch MongoDB (WriteConflict 112 / E11000)
+// khi học sinh/nhân viên đi qua 2 camera cổng trường hoặc máy bắn 2 gói tin cách nhau vài mili-giây
+const personPunchChains = new Map();
+
+async function runSerializedPerPerson(lockKey, taskFn) {
+  if (!lockKey) return taskFn();
+  const prev = personPunchChains.get(lockKey) || Promise.resolve();
+  let releaseNext;
+  const currentChain = new Promise((resolve) => {
+    releaseNext = resolve;
+  });
+  personPunchChains.set(lockKey, prev.then(() => currentChain));
+
+  await prev;
+  try {
+    return await taskFn();
+  } finally {
+    releaseNext();
+    if (personPunchChains.get(lockKey) === currentChain) {
+      personPunchChains.delete(lockKey);
+    }
+  }
+}
+
 /**
  * Chuẩn hóa mã học sinh viết liền trên máy chấm công (VD: `HS2026000001`) sang định dạng chuẩn DB (`HS-2026-000001`).
  *
@@ -146,7 +170,11 @@ const resolvePersonIdentity = async ({ tenantId, externalPersonId, deviceObjectI
   const matchedStudent = await Student.findOne({
     tenantId,
     status: 'enrolled',
-    studentCode: { $in: studentCodeCandidates }
+    $or: [
+      { studentCode: { $in: studentCodeCandidates } },
+      { attendanceCardId: { $in: codeCandidates } },
+      { faceProfileId: { $in: [...codeCandidates, cleanExternalId] } }
+    ]
   }).select('_id').lean();
 
   if (matchedStudent) {
@@ -244,8 +272,14 @@ const ingestDeviceEvent = async (input) => {
   }
 
   let txResult;
+  const personLockKey =
+    studentId || userId
+      ? `${String(tenantId || 'legacy')}:${subjectType}:${String(studentId || userId)}`
+      : null;
+
   try {
-    txResult = await withTransaction(async (session) => {
+    txResult = await runSerializedPerPerson(personLockKey, () =>
+      withTransaction(async (session) => {
       // Nhánh 1: Sự kiện chưa ánh xạ được người dùng -> Lưu an toàn vào danh sách UNMAPPED để Admin gán trên Web
       if (mappingStatus === 'UNMAPPED' || (!userId && !studentId)) {
         const [event] = await RawAttendanceEvent.create([{
@@ -407,11 +441,19 @@ const ingestDeviceEvent = async (input) => {
       }], { session });
 
       return { event, duplicate: false, subjectType: 'EMPLOYEE', user, resolvedTenantId };
-    });
+      })
+    );
   } catch (error) {
     if (error?.code === 11000) {
       const event = await RawAttendanceEvent.findOne(query);
-      return { event, duplicate: true, subjectType: event?.subjectType || 'UNKNOWN' };
+      if (event) {
+        return {
+          event,
+          duplicate: true,
+          subjectType: event.subjectType || 'UNKNOWN',
+          mappingStatus: event.mappingStatus
+        };
+      }
     }
     throw error;
   }
@@ -513,23 +555,34 @@ async function ingestStudentDeviceAttendance({
     const recordedById = recordAdmin ? recordAdmin._id : student._id;
     const statusLabel = computedMorningStatus === 'late' ? 'Đi muộn (sau 08:00)' : 'Đúng giờ';
 
-    const [created] = await StudentAttendance.create([{
-      tenantId: tenantId || student.tenantId || null,
-      studentId: student._id,
-      studentName: student.fullName,
-      classroomId: student.classroomId,
-      className: student.className || 'Chưa xếp lớp',
-      attendDate,
-      attendanceDateKey,
-      status: computedMorningStatus,
-      checkInTime: occurredAtDate,
-      attendanceMethod,
-      recordedBy: recordedById,
-      recordedByName: 'Máy chấm công Hikvision',
-      note: `Check-in lúc ${formattedTime} (${statusLabel}) qua ${deviceId}`
-    }], { session });
+    try {
+      const [created] = await StudentAttendance.create([{
+        tenantId: tenantId || student.tenantId || null,
+        studentId: student._id,
+        studentName: student.fullName,
+        classroomId: student.classroomId,
+        className: student.className || 'Chưa xếp lớp',
+        attendDate,
+        attendanceDateKey,
+        status: computedMorningStatus,
+        checkInTime: occurredAtDate,
+        attendanceMethod,
+        recordedBy: recordedById,
+        recordedByName: 'Máy chấm công Hikvision',
+        note: `Check-in lúc ${formattedTime} (${statusLabel}) qua ${deviceId}`
+      }], { session });
 
-    return { attendanceAction: 'CHECK_IN', record: created };
+      return { attendanceAction: 'CHECK_IN', record: created };
+    } catch (createErr) {
+      // Bảo vệ chống xung đột E11000 khi học sinh đi qua 2 camera cổng trường tại cùng 1 mili-giây
+      if (createErr?.code === 11000) {
+        const concurrentDoc = await StudentAttendance.findOne(query).session(session);
+        if (concurrentDoc) {
+          return { attendanceAction: 'COOLDOWN_IGNORED', record: concurrentDoc };
+        }
+      }
+      throw createErr;
+    }
   }
 
   // Trường hợp 2: Đã có bản ghi nhưng chưa có checkInTime (ví dụ giáo viên mới tạo khống trước đó)

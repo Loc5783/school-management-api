@@ -73,3 +73,23 @@ export const getTimekeepingDeviceSyncLogs = (deviceId) => api.get(`/timekeeping/
 export const getUnmappedDeviceEvents = (deviceCode) => api.get('/timekeeping/devices-unmapped', { params: deviceCode ? { deviceCode } : {} });
 export const simulateSchoolTimekeepingWebhook = (data) => api.post('/timekeeping/devices/simulate-webhook', data);
 export const getSchoolWebhookLogs = (params = {}) => api.get('/attendance/webhook/logs', { params });
+
+// Cầu nối Mạng Nội Bộ (Local LAN Connector 127.0.0.1:18686), Tên miền động & Thông báo SSE Trực tiếp
+export const downloadConnectorPackageZip = () =>
+  api.get('/timekeeping/connector-package', { responseType: 'blob' });
+export const issueConnectorGrant = (clientOrigin) =>
+  api.post('/timekeeping/connector-grant', { clientOrigin });
+export const enrichConnectorScan = (payload) =>
+  api.post('/timekeeping/devices/connector-enrich-scan', payload);
+export const prepareConnectorDeviceAction = (deviceId, payload = {}) =>
+  api.post(`/timekeeping/devices/${deviceId}/connector-prepare`, payload);
+export const ingestConnectorDevicePull = (deviceId, payload = {}) =>
+  api.post(`/timekeeping/devices/${deviceId}/connector-ingest-pull`, payload);
+export const completeConnectorDevicePush = (deviceId, payload = {}) =>
+  api.post(`/timekeeping/devices/${deviceId}/connector-complete-push`, payload);
+export const configureTimekeepingDeviceWebhook = (deviceId, payload = {}) =>
+  api.post(`/timekeeping/devices/${deviceId}/configure-webhook`, payload);
+export const unlockDeviceSerialByVendor = (deviceId, payload = {}) =>
+  api.post(`/timekeeping/devices/${deviceId}/unlock-serial`, payload);
+export const getCampusLiveEvents = (limit = 15) =>
+  api.get('/timekeeping/live-events', { params: { limit } });

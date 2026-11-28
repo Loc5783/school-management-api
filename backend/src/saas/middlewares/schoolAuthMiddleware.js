@@ -33,7 +33,11 @@ const resolveModuleKeyFromBaseUrl = (baseUrl = '') => {
 
 const schoolAuthMiddleware = async (req, res, next) => {
   try {
-    const authHeader = req.header('Authorization');
+    let authHeader = req.header('Authorization');
+    // Cho phép luồng SSE thời gian thực (/live-stream) truyền JWT qua query streamToken vì trình duyệt EventSource không gắn custom header
+    if ((!authHeader || !authHeader.startsWith('Bearer ')) && req.method === 'GET' && req.path === '/live-stream' && req.query?.streamToken) {
+      authHeader = `Bearer ${String(req.query.streamToken).trim()}`;
+    }
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({
         success: false,
@@ -196,6 +200,8 @@ const schoolAuthMiddleware = async (req, res, next) => {
     req.tenantId = user.tenantId.toString();
     req.tokenJti = decoded.jti;
     req.tokenExp = decoded.exp;
+    req.isVendorSupport = Boolean(decoded.isVendorSupport);
+    req.vendorUsername = decoded.vendorUsername || null;
 
     next();
   } catch (error) {

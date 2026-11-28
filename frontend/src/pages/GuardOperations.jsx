@@ -87,6 +87,7 @@ export default function GuardOperations() {
 
   // Admin-only gate state
   const [gateEvents, setGateEvents] = useState([]);
+  const [liveScanBanner, setLiveScanBanner] = useState(null);
   const [gatePage, setGatePage] = useState(1);
   const [students, setStudents] = useState([]);
   const [search, setSearch] = useState('');
@@ -131,6 +132,27 @@ export default function GuardOperations() {
   useEffect(() => {
     const timer = setInterval(() => { if (document.visibilityState === 'visible') void load(); }, 30000);
     return () => clearInterval(timer);
+  }, [load]);
+
+  // Nhận luồng sự kiện điểm danh khuôn mặt trực tiếp theo thời gian thực tại cổng phân hiệu
+  useEffect(() => {
+    const onLiveEvent = (evt) => {
+      const item = evt?.detail;
+      const isGateScan =
+        item &&
+        (item.type === 'STUDENT_GATE_SCAN' ||
+          item.type === 'EMPLOYEE_GATE_SCAN' ||
+          item.category === 'STUDENT_GATE_SCAN' ||
+          item.subjectType === 'STUDENT' ||
+          item.subjectType === 'EMPLOYEE');
+      if (!isGateScan) return;
+      setLiveScanBanner(item);
+      if (document.visibilityState === 'visible') {
+        void load();
+      }
+    };
+    window.addEventListener('hoanang:campus-live-event', onLiveEvent);
+    return () => window.removeEventListener('hoanang:campus-live-event', onLiveEvent);
   }, [load]);
 
   // Admin-only student search
@@ -283,6 +305,15 @@ export default function GuardOperations() {
   return <AppShell title="Trực cổng trường" subtitle="Kiểm soát khách ra vào, sự cố an ninh, xử lý khẩn cấp và bàn giao ca an toàn." actions={<label className="guard-date-filter">Ngày trực<input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>}>
     {state.error && <div className="form-error guard-notice">{state.error}</div>}
     {state.success && <div className="timekeeping-notice success guard-notice">{state.success}</div>}
+    {liveScanBanner && (
+      <div className="timekeeping-notice success guard-notice" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <div>
+          <strong>🟢 Vừa quét khuôn mặt tại cổng: {liveScanBanner.title}</strong>
+          <div style={{ fontSize: 13.5, marginTop: 2 }}>{liveScanBanner.message}</div>
+        </div>
+        <button type="button" className="button button-secondary" onClick={() => setLiveScanBanner(null)}>Đã rõ</button>
+      </div>
+    )}
     <div className="guard-live-toolbar"><span>{navigator.onLine ? (date === localDate() ? 'Dữ liệu tự cập nhật mỗi 30 giây' : 'Đang xem lịch sử — các thao tác ghi nhận chỉ áp dụng hôm nay') : 'Đang mất mạng — thao tác hợp lệ sẽ được lưu tạm trên thiết bị'}{queueState.error ? <b className="guard-offline-count error">Lỗi hàng đợi: {queueState.error.message}</b> : (queueState.count > 0 && <b className="guard-offline-count">{queueState.count} thao tác chờ đồng bộ</b>)}</span>{queueState.count > 0 && !queueState.error && <button className="button button-secondary" disabled={!navigator.onLine || state.saving} onClick={syncOffline}>Đồng bộ ngay</button>}<button className="button button-secondary" disabled={state.loading || !navigator.onLine} onClick={load}>Làm mới dữ liệu</button></div>
     {emergencyMode && <button type="button" className="guard-global-emergency" onClick={() => setActiveTab('emergency')}><span><Icon name="alertCircle" size={20} /></span><strong>KHẨN CẤP: {emergencyMode.title}</strong><small>{emergencyMode.instructions}</small><b>Mở hướng dẫn xử lý</b></button>}
     <nav className="guard-tabs" aria-label="Nghiệp vụ trực cổng">{tabs.map(([key, label, icon]) => <button type="button" key={key} className={activeTab === key ? 'active' : ''} onClick={() => setActiveTab(key)}><Icon name={icon} size={17} />{label}</button>)}</nav>

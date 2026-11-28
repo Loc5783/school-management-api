@@ -28,6 +28,55 @@ const MAX_HIKVISION_FACE_BYTES = 200 * 1024; // 200KB hardware limit
 // Bộ nhớ đệm Digest Nonce ngắn hạn (90s) theo endpoint giúp giảm 50% số gói tin khứ hồi khi đồng bộ hàng loạt
 const digestChallengeCache = new Map();
 const DIGEST_CACHE_TTL_MS = 90 * 1000;
+const MAX_DIGEST_CACHE_ENTRIES = 200;
+const MAX_ISAPI_RESPONSE_BYTES = 8 * 1024 * 1024; // Chặn cứng 8MB chống tràn RAM khi thiết bị lỗi stream vô hạn
+
+function setDigestCacheBounded(key, value) {
+  if (digestChallengeCache.size >= MAX_DIGEST_CACHE_ENTRIES && !digestChallengeCache.has(key)) {
+    const oldestKey = digestChallengeCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      digestChallengeCache.delete(oldestKey);
+    }
+  }
+  digestChallengeCache.set(key, value);
+}
+
+/**
+ * Chuẩn hóa Họ tên đẩy xuống Hikvision ISAPI:
+ * - Loại bỏ ký tự điều khiển (\r, \n, \t, \0) gây vỡ JSON/XML.
+ * - Cắt an toàn theo ranh giới ký tự sao cho tổng số byte UTF-8 <= 60 bytes
+ *   (Phần cứng Hikvision DS-K1T320MX giới hạn cứng `name` tối đa 63 bytes UTF-8, tên tiếng Việt có dấu dài dễ vượt nếu chỉ cắt theo `.slice(0, 64)`).
+ */
+function sanitizeHikvisionPersonName(rawName, fallbackCode = '') {
+  const cleaned = String(rawName || fallbackCode || '')
+    .replace(/[\u0000-\u001F\u007F]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned) return String(fallbackCode || 'USER').slice(0, 32);
+  if (Buffer.byteLength(cleaned, 'utf8') <= 60) return cleaned;
+
+  let out = '';
+  let usedBytes = 0;
+  for (const ch of cleaned) {
+    const chBytes = Buffer.byteLength(ch, 'utf8');
+    if (usedBytes + chBytes > 60) break;
+    out += ch;
+    usedBytes += chBytes;
+  }
+  return out.trim() || String(fallbackCode || 'USER').slice(0, 32);
+}
+
+/**
+ * Kiểm tra cổng mạng hợp lệ (1 - 65535) để không bao giờ phát sinh RangeError [ERR_SOCKET_BAD_PORT].
+ */
+function normalizeSafePort(portInput, fallbackPort = 80) {
+  const num = Number(portInput);
+  if (Number.isInteger(num) && num >= 1 && num <= 65535) {
+    return num;
+  }
+  return fallbackPort;
+}
 
 class HikvisionError extends Error {
   constructor(message, code, statusCode = 500) {
@@ -177,7 +226,7 @@ function rawHttpRequest({
     const options = {
       protocol,
       hostname: host,
-      port,
+      port: normalizeSafePort(port, isHttps ? 443 : 80),
       method,
       path: reqPath,
       headers: { ...headers },
@@ -203,14 +252,47 @@ function rawHttpRequest({
       options.headers['Content-Length'] = payloadBuffer.length;
     }
 
+    let settled = false;
+    const safeResolve = (val) => {
+      if (!settled) {
+        settled = true;
+        resolve(val);
+      }
+    };
+    const safeReject = (err) => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    };
+
     const req = client.request(options, (res) => {
       const chunks = [];
+      let totalBytes = 0;
       res.on('data', (chunk) => {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        totalBytes += buf.length;
+        if (totalBytes > MAX_ISAPI_RESPONSE_BYTES) {
+          req.destroy();
+          safeReject(
+            new HikvisionError(
+              'Phản hồi từ thiết bị vượt ngưỡng an toàn 8MB, đã ngắt kết nối bảo vệ bộ nhớ',
+              'DEVICE_RESPONSE_TOO_LARGE',
+              502
+            )
+          );
+          return;
+        }
+        chunks.push(buf);
+      });
+      res.on('error', (streamErr) => {
+        safeReject(
+          new HikvisionError(`Lỗi luồng dữ liệu từ thiết bị: ${streamErr.message}`, 'DEVICE_STREAM_ERROR', 502)
+        );
       });
       res.on('end', () => {
         const fullBuffer = Buffer.concat(chunks);
-        resolve({
+        safeResolve({
           statusCode: res.statusCode,
           headers: res.headers,
           data: responseType === 'buffer' ? fullBuffer : fullBuffer.toString('utf8'),
@@ -221,14 +303,23 @@ function rawHttpRequest({
 
     req.on('timeout', () => {
       req.destroy();
-      reject(new HikvisionError(`Hết thời gian kết nối tới thiết bị (${timeout}ms)`, 'DEVICE_TIMEOUT', 504));
+      safeReject(new HikvisionError(`Hết thời gian kết nối tới thiết bị (${timeout}ms)`, 'DEVICE_TIMEOUT', 504));
     });
 
     req.on('error', (err) => {
-      if (err.code === 'ECONNREFUSED' || err.code === 'EHOSTUNREACH' || err.code === 'ENETUNREACH') {
-        reject(new HikvisionError(`Không thể kết nối tới thiết bị (${err.code}): Thiết bị offline`, 'DEVICE_OFFLINE', 503));
+      if (
+        err.code === 'ECONNREFUSED' ||
+        err.code === 'EHOSTUNREACH' ||
+        err.code === 'ENETUNREACH' ||
+        err.code === 'ETIMEDOUT'
+      ) {
+        safeReject(new HikvisionError(`Không thể kết nối tới thiết bị (${err.code}): Thiết bị offline`, 'DEVICE_OFFLINE', 503));
+      } else if (err.code === 'ECONNRESET' || err.code === 'EPIPE') {
+        const resetErr = new HikvisionError(`Thiết bị ngắt kết nối đột ngột (${err.code})`, 'DEVICE_CONN_RESET', 502);
+        resetErr.isTransientSocketReset = true;
+        safeReject(resetErr);
       } else {
-        reject(new HikvisionError(`Lỗi kết nối thiết bị: ${err.message}`, 'DEVICE_CONNECTION_ERROR', 502));
+        safeReject(new HikvisionError(`Lỗi kết nối thiết bị: ${err.message}`, 'DEVICE_CONNECTION_ERROR', 502));
       }
     });
 
@@ -398,7 +489,7 @@ async function executeSingleIsapiAttempt(deviceConfig, { method = 'GET', path: r
       throw new HikvisionError('Xác thực thiết bị thất bại (Sai username hoặc password)', 'DEVICE_AUTH_FAILED', response.statusCode);
     }
 
-    digestChallengeCache.set(cacheKey, {
+    setDigestCacheBounded(cacheKey, {
       challenge,
       nc: 1,
       updatedAt: Date.now()
@@ -449,15 +540,27 @@ async function executeSingleIsapiAttempt(deviceConfig, { method = 'GET', path: r
 }
 
 /**
- * Sends a request with 2-step Digest Authentication and optional HTTP <-> HTTPS fallback when configured.
+ * Sends a request with 2-step Digest Authentication, 1x transient socket-reset retry, and optional HTTP <-> HTTPS fallback.
  */
 async function sendIsapiRequest(deviceConfig, reqOptions) {
   try {
     return await executeSingleIsapiAttempt(deviceConfig, reqOptions);
   } catch (primaryErr) {
+    // Tự động thử lại 1 lần sau 200ms nếu mạng Wi-Fi/Switch cổng trường bị ngắt socket tức thời (ECONNRESET / EPIPE)
+    if (primaryErr.isTransientSocketReset) {
+      await new Promise((r) => setTimeout(r, 200));
+      try {
+        return await executeSingleIsapiAttempt(deviceConfig, reqOptions);
+      } catch (retryErr) {
+        primaryErr = retryErr;
+      }
+    }
+
     if (
       deviceConfig.allowProtocolFallback &&
-      (primaryErr.code === 'DEVICE_OFFLINE' || primaryErr.code === 'DEVICE_CONNECTION_ERROR')
+      (primaryErr.code === 'DEVICE_OFFLINE' ||
+        primaryErr.code === 'DEVICE_CONNECTION_ERROR' ||
+        primaryErr.code === 'DEVICE_CONN_RESET')
     ) {
       const currentIsHttps = deviceConfig.httpsPort !== 80 && (deviceConfig.useHttps !== false);
       const fallbackConfig = {
@@ -963,12 +1066,12 @@ async function downloadDeviceFaceBuffer(deviceConfig, rawFaceUrl) {
  * - Nếu có `faceBuffer` hợp lệ (<= 200KB): nạp lên thư viện FDLib (`PUT /ISAPI/Intelligent/FDLib/FDSetUp?format=json`).
  */
 async function upsertPersonAndFaceOnDevice(deviceConfig, { personCode, fullName, faceBuffer = null, existingOnDevice = null }) {
-  const cleanCode = String(personCode || '').trim();
+  const cleanCode = String(personCode || '').replace(/[\u0000-\u001F\u007F]+/g, '').trim().slice(0, 32);
   if (!cleanCode) {
     throw new HikvisionError('Thiếu mã chấm công (personCode) khi đồng bộ xuống máy', 'MISSING_PERSON_CODE', 400);
   }
 
-  const cleanName = String(fullName || cleanCode).trim().slice(0, 64);
+  const cleanName = sanitizeHikvisionPersonName(fullName, cleanCode);
   let foundExisting = existingOnDevice;
 
   if (!foundExisting) {
@@ -1042,6 +1145,7 @@ async function upsertPersonAndFaceOnDevice(deviceConfig, { personCode, fullName,
   }
 
   let faceSynced = Boolean(foundExisting && Number(foundExisting.numOfFace) > 0);
+  let faceRejectedReason = null;
 
   if (userSynced && Buffer.isBuffer(faceBuffer) && faceBuffer.length > 0 && faceBuffer.length <= MAX_HIKVISION_FACE_BYTES) {
     const boundary = `----HikvisionFaceSyncBoundary${crypto.randomBytes(6).toString('hex')}`;
@@ -1089,7 +1193,8 @@ async function upsertPersonAndFaceOnDevice(deviceConfig, { personCode, fullName,
         });
         faceSynced = true;
       } catch {
-        // Giữ nguyên trạng thái faceSynced hiện có nếu FDLib từ chối ảnh
+        // Ảnh thẻ không nhận diện được khuôn mặt trên phần cứng Hikvision -> báo lại để hướng dẫn người dùng chụp lại
+        faceRejectedReason = 'FACE_QUALITY_LOW';
       }
     }
   }
@@ -1097,7 +1202,114 @@ async function upsertPersonAndFaceOnDevice(deviceConfig, { personCode, fullName,
   return {
     success: userSynced,
     faceSynced,
+    faceRejectedReason,
     preservedBiometrics: Boolean(foundExisting)
+  };
+}
+
+/**
+ * Cấu hình 1 chạm địa chỉ HTTP Listening (`HttpHostNotification`) xuống máy chấm công Hikvision
+ * để khi nhà trường / nhà cung cấp đổi Tên miền (Domain) mới, máy chấm công tự đẩy sự kiện về đúng tên miền mới.
+ */
+async function configureDeviceHttpWebhook(deviceConfig, webhookUrl) {
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(String(webhookUrl || '').trim());
+  } catch {
+    throw new HikvisionError('Địa chỉ nhận sự kiện tự động (Webhook) không hợp lệ', 'INVALID_WEBHOOK_URL', 400);
+  }
+
+  const isHttps = parsedUrl.protocol === 'https:';
+  const hostname = parsedUrl.hostname;
+  const portNo = parsedUrl.port ? Number(parsedUrl.port) : (isHttps ? 443 : 80);
+  const urlPath = `${parsedUrl.pathname}${parsedUrl.search || ''}`;
+  const isIpHost = /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname);
+  const protocolType = isHttps ? 'HTTPS' : 'HTTP';
+
+  const xmlBody = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<HttpHostNotification version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">',
+    '<id>1</id>',
+    `<url>${urlPath.replace(/&/g, '&amp;')}</url>`,
+    `<protocolType>${protocolType}</protocolType>`,
+    '<parameterFormatType>json</parameterFormatType>',
+    `<addressingFormatType>${isIpHost ? 'ipaddress' : 'hostname'}</addressingFormatType>`,
+    isIpHost ? `<ipAddress>${hostname}</ipAddress>` : `<hostName>${hostname}</hostName>`,
+    `<portNo>${portNo}</portNo>`,
+    '<httpAuthenticationMethod>none</httpAuthenticationMethod>',
+    '</HttpHostNotification>'
+  ].join('');
+
+  const jsonBody = {
+    HttpHostNotification: {
+      id: '1',
+      url: urlPath,
+      protocolType,
+      parameterFormatType: 'json',
+      addressingFormatType: isIpHost ? 'ipaddress' : 'hostname',
+      ...(isIpHost ? { ipAddress: hostname } : { hostName: hostname }),
+      portNo,
+      httpAuthenticationMethod: 'none'
+    }
+  };
+
+  const candidateCalls = [
+    {
+      method: 'PUT',
+      path: '/ISAPI/Event/triggers/notifications/httpHosts/1',
+      body: xmlBody,
+      headers: { 'Content-Type': 'application/xml; charset=UTF-8' }
+    },
+    {
+      method: 'PUT',
+      path: '/ISAPI/Event/notification/httpHosts/1',
+      body: xmlBody,
+      headers: { 'Content-Type': 'application/xml; charset=UTF-8' }
+    },
+    {
+      method: 'PUT',
+      path: '/ISAPI/Event/triggers/notifications/httpHosts/1?format=json',
+      body: jsonBody
+    },
+    {
+      method: 'PUT',
+      path: '/ISAPI/Event/notification/httpHosts/1?format=json',
+      body: jsonBody
+    },
+    {
+      method: 'PUT',
+      path: '/ISAPI/Event/triggers/notifications/httpHosts',
+      body: `<HttpHostNotificationList version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">${xmlBody.replace(/^<\?xml[^>]*\?>/, '')}</HttpHostNotificationList>`,
+      headers: { 'Content-Type': 'application/xml; charset=UTF-8' }
+    }
+  ];
+
+  let configured = false;
+  let lastErr = null;
+  for (const call of candidateCalls) {
+    try {
+      await sendIsapiRequest(deviceConfig, call);
+      configured = true;
+      break;
+    } catch (err) {
+      lastErr = err;
+      if (err.code === 'DEVICE_AUTH_FAILED' || err.code === 'DEVICE_OFFLINE' || err.code === 'DEVICE_TIMEOUT') {
+        throw err;
+      }
+    }
+  }
+
+  if (!configured && lastErr) {
+    throw lastErr;
+  }
+
+  return {
+    success: true,
+    webhookUrl: parsedUrl.toString(),
+    protocolType,
+    hostName: hostname,
+    portNo,
+    urlPath
   };
 }
 
@@ -1421,7 +1633,10 @@ module.exports = {
   fetchAllDeviceUsersWithFaces,
   downloadDeviceFaceBuffer,
   upsertPersonAndFaceOnDevice,
+  configureDeviceHttpWebhook,
   deletePersonsFromDevice,
   remoteUnlockDoor,
-  discoverHikvisionDevicesOnLan
+  discoverHikvisionDevicesOnLan,
+  sanitizeHikvisionPersonName,
+  normalizeSafePort
 };

@@ -55,7 +55,9 @@ const isSameHostOrigin = (origin, req) => {
     const requestHost = req.header('x-forwarded-host') || req.header('host');
     if (!requestHost) return false;
     const primaryHost = String(requestHost).split(',')[0].trim().toLowerCase();
-    return parsedOrigin.host.toLowerCase() === primaryHost;
+    if (parsedOrigin.host.toLowerCase() === primaryHost) return true;
+    const primaryHostname = primaryHost.split(':')[0];
+    return Boolean(primaryHostname && parsedOrigin.hostname.toLowerCase() === primaryHostname);
   } catch {
     return false;
   }

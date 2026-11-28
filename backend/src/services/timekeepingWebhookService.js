@@ -20,6 +20,9 @@ const TimekeepingWebhookLog = require('../models/zone2_hr/TimekeepingWebhookLog'
 const TimekeepingDevice = require('../models/zone2_hr/TimekeepingDevice');
 const Tenant = require('../models/zone1_system/Tenant');
 const { ingestDeviceEvent } = require('./attendanceDeviceService');
+const { parseXml } = require('./hikvisionIsapiService');
+const { publishCampusRealtimeEvent } = require('./realtimeCampusEventHub');
+const { buildNaturalRealtimeAttendanceMessage } = require('../utils/vietnameseHardwareTranslator');
 
 const MULTIPART_JSON_SCAN_LIMIT_BYTES = 65536;
 const MAX_RAW_PREVIEW_LENGTH = 32768;
@@ -172,7 +175,15 @@ const normalizeIncomingWebhook = (req) => {
 
     const headSliceLength = Math.min(totalBytes, MULTIPART_JSON_SCAN_LIMIT_BYTES);
     const rawHead = req.body.toString('utf8', 0, headSliceLength);
-    const parsedPayload = extractJsonFromMultipart(rawHead);
+    let parsedPayload = extractJsonFromMultipart(rawHead);
+
+    // Fallback hỗ trợ các dòng firmware Hikvision gửi cảnh báo dạng XML (<EventNotificationAlert>) thay vì JSON
+    if (!parsedPayload && (rawHead.includes('<EventNotificationAlert') || rawHead.includes('<AccessControllerEvent'))) {
+      const xmlObj = parseXml(rawHead);
+      if (xmlObj && typeof xmlObj === 'object' && Object.keys(xmlObj).length > 0) {
+        parsedPayload = xmlObj;
+      }
+    }
 
     const filesMeta = [];
     if (isMultipart) {
@@ -221,9 +232,15 @@ const normalizeIncomingWebhook = (req) => {
   }
 
   if (typeof req.body === 'string' && req.body.trim()) {
-    const parsed = extractJsonFromMultipart(req.body);
+    let parsed = extractJsonFromMultipart(req.body);
+    if (!parsed && (req.body.includes('<EventNotificationAlert') || req.body.includes('<AccessControllerEvent'))) {
+      const xmlObj = parseXml(req.body);
+      if (xmlObj && typeof xmlObj === 'object' && Object.keys(xmlObj).length > 0) {
+        parsed = xmlObj;
+      }
+    }
     return {
-      payloadFormat: parsed ? 'JSON' : (req.body.trim().startsWith('<') ? 'XML' : 'PLAIN_TEXT'),
+      payloadFormat: parsed && !req.body.trim().startsWith('<') ? 'JSON' : (req.body.trim().startsWith('<') ? 'XML' : 'PLAIN_TEXT'),
       parsedPayload: parsed,
       rawBodyPreview: truncatePreview(req.body),
       filesMeta: []
@@ -266,6 +283,7 @@ const extractHikvisionSummary = (parsedPayload, filesMeta = [], fallbackIp = '')
     ?? eventInfo.studentCode
     ?? eventInfo.employeeCode
     ?? eventInfo.externalPersonId
+    ?? (eventInfo.cardNo ? String(eventInfo.cardNo).trim() : null)
     ?? null;
   const employeeNoString = rawEmployeeNo !== null && String(rawEmployeeNo).trim() !== ''
     ? String(rawEmployeeNo).trim()
@@ -336,6 +354,25 @@ const resolveTenantAndDevice = async ({ rawSchoolCode, rawDeviceCode, summary })
 
   let deviceDoc = null;
   if (tenantDoc) {
+    // Khóa an toàn theo deviceSerial: nếu gói tin gửi kèm Serial của máy đã khóa cho PHÂN HIỆU KHÁC -> chặn cứng!
+    if (summary.shortSerialNumber) {
+      const foreignLockedDevice = await TimekeepingDevice.findOne({
+        serialNumber: summary.shortSerialNumber,
+        tenantId: { $ne: tenantDoc._id }
+      })
+        .select('_id tenantId serialNumber name')
+        .lean();
+      if (foreignLockedDevice) {
+        return {
+          tenantId: tenantDoc._id,
+          schoolCode: tenantDoc.code,
+          deviceDoc: null,
+          deviceCode: 'BLOCKED-FOREIGN-SERIAL',
+          crossCampusSerialBlocked: true
+        };
+      }
+    }
+
     // Tìm máy chấm công thuộc trường này (khớp deviceCode, serialNumber hoặc IP, hoặc lấy máy HIKVISION đầu tiên của trường)
     const deviceConditions = [];
     if (rawDeviceCode) deviceConditions.push({ deviceCode: String(rawDeviceCode).trim().toUpperCase() });
@@ -427,11 +464,28 @@ const captureIncomingWebhook = async (req) => {
   // Bước 3: Xác định Trường học (tenantId) & Thiết bị (deviceCode)
   const rawSchoolCode = req.params?.schoolCode || req.query?.schoolCode || req.header('X-School-Code') || null;
   const rawDeviceCode = req.query?.deviceCode || req.header('X-Device-Code') || null;
-  const { tenantId, schoolCode, deviceDoc, deviceCode } = await resolveTenantAndDevice({
+  const { tenantId, schoolCode, deviceDoc, deviceCode, crossCampusSerialBlocked } = await resolveTenantAndDevice({
     rawSchoolCode,
     rawDeviceCode,
     summary: rawSummary
   });
+
+  if (crossCampusSerialBlocked) {
+    return {
+      savedId: null,
+      persisted: false,
+      skippedNoise: false,
+      crossCampusSerialBlocked: true,
+      attendanceResult: { status: 'BLOCKED_CROSS_CAMPUS_SERIAL' },
+      record: {
+        tenantId,
+        schoolCode,
+        deviceCode,
+        processingStatus: 'IGNORED',
+        processingNote: 'Đã chặn an toàn: Máy chấm công gửi sự kiện này đang thuộc về một phân hiệu trường khác.'
+      }
+    };
+  }
 
   // Bước 4: Xử lý nghiệp vụ Check-in / Check-out Học sinh & Nhân viên nếu là lần quẹt hợp lệ
   let attendanceResult = null;
@@ -469,16 +523,45 @@ const captureIncomingWebhook = async (req) => {
 
         if (ingestOut.duplicate) {
           processingStatus = 'PROCESSED';
-          processingNote = `Sự kiện trùng lặp đã được xử lý trước đó (${externalEventId})`;
+          processingNote = 'Lượt quét này vừa được hệ thống ghi nhận cách đây ít giây nên tự động giữ nguyên.';
           attendanceResult = { status: 'DUPLICATE', subjectType: ingestOut.subjectType };
         } else if (ingestOut.unmapped) {
           processingStatus = 'RECEIVED_RAW';
-          processingNote = `Mã máy "${rawSummary.employeeNoString}" (${rawSummary.personName || 'N/A'}) chưa được ánh xạ Học sinh/Nhân viên — đã đưa vào danh sách Chưa ánh xạ`;
+          const naturalUnmapped = buildNaturalRealtimeAttendanceMessage({
+            subjectType: 'UNMAPPED',
+            externalPersonId: rawSummary.employeeNoString,
+            fullName: rawSummary.personName,
+            verifyMode: rawSummary.currentVerifyMode,
+            occurredAt: validOccurredAt,
+            deviceName: deviceDoc?.name || ''
+          });
+          processingNote = naturalUnmapped.message;
           attendanceResult = { status: 'UNMAPPED', externalPersonId: rawSummary.employeeNoString };
+          publishCampusRealtimeEvent(tenantId, {
+            type: 'ATTENDANCE_UNMAPPED_SCAN',
+            tone: naturalUnmapped.tone,
+            title: naturalUnmapped.title,
+            message: naturalUnmapped.message,
+            subjectType: 'UNMAPPED',
+            personCode: rawSummary.employeeNoString,
+            fullName: rawSummary.personName || '',
+            deviceName: deviceDoc?.name || '',
+            occurredAt: validOccurredAt
+          });
         } else if (ingestOut.subjectType === 'STUDENT') {
           processingStatus = 'PROCESSED';
-          const stStatus = ingestOut.attendanceRecord?.status === 'late' ? 'Đi muộn' : 'Đúng giờ';
-          processingNote = `Học sinh "${ingestOut.student.fullName}" -> ${ingestOut.attendanceAction} (${stStatus})`;
+          const isLate = ingestOut.attendanceRecord?.status === 'late';
+          const naturalStudent = buildNaturalRealtimeAttendanceMessage({
+            subjectType: 'STUDENT',
+            fullName: ingestOut.student.fullName,
+            className: ingestOut.student.className || '',
+            attendanceAction: ingestOut.attendanceAction,
+            isLate,
+            verifyMode: rawSummary.currentVerifyMode,
+            occurredAt: validOccurredAt,
+            deviceName: deviceDoc?.name || ''
+          });
+          processingNote = naturalStudent.message;
           attendanceResult = {
             status: 'OK',
             subjectType: 'STUDENT',
@@ -489,13 +572,31 @@ const captureIncomingWebhook = async (req) => {
             checkInTime: ingestOut.attendanceRecord?.checkInTime,
             checkOutTime: ingestOut.attendanceRecord?.checkOutTime
           };
+          publishCampusRealtimeEvent(tenantId, {
+            type: 'STUDENT_GATE_SCAN',
+            tone: naturalStudent.tone,
+            title: naturalStudent.title,
+            message: naturalStudent.message,
+            subjectType: 'STUDENT',
+            personCode: ingestOut.student.studentCode || rawSummary.employeeNoString,
+            fullName: ingestOut.student.fullName,
+            className: ingestOut.student.className || '',
+            deviceName: deviceDoc?.name || '',
+            occurredAt: validOccurredAt
+          });
         } else {
           processingStatus = 'PROCESSED';
-          const lateNote = ingestOut.attendanceRecord?.isLate
-            ? `Đi muộn ${ingestOut.attendanceRecord.lateMinutes} phút`
-            : 'Đúng giờ';
           const empFullName = ingestOut.user.profile?.fullName || ingestOut.user.username;
-          processingNote = `Nhân viên "${empFullName}" -> ${ingestOut.attendanceAction} (${lateNote})`;
+          const naturalStaff = buildNaturalRealtimeAttendanceMessage({
+            subjectType: 'EMPLOYEE',
+            fullName: empFullName,
+            attendanceAction: ingestOut.attendanceAction,
+            isLate: Boolean(ingestOut.attendanceRecord?.isLate),
+            verifyMode: rawSummary.currentVerifyMode,
+            occurredAt: validOccurredAt,
+            deviceName: deviceDoc?.name || ''
+          });
+          processingNote = naturalStaff.message;
           attendanceResult = {
             status: 'OK',
             subjectType: 'EMPLOYEE',
@@ -507,6 +608,17 @@ const captureIncomingWebhook = async (req) => {
             checkInTime: ingestOut.attendanceRecord?.checkInTime,
             checkOutTime: ingestOut.attendanceRecord?.checkOutTime
           };
+          publishCampusRealtimeEvent(tenantId, {
+            type: 'EMPLOYEE_GATE_SCAN',
+            tone: naturalStaff.tone,
+            title: naturalStaff.title,
+            message: naturalStaff.message,
+            subjectType: 'EMPLOYEE',
+            personCode: rawSummary.employeeNoString,
+            fullName: empFullName,
+            deviceName: deviceDoc?.name || '',
+            occurredAt: validOccurredAt
+          });
         }
       } catch (ingestErr) {
         processingStatus = 'FAILED';

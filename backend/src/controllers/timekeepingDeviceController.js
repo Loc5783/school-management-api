@@ -18,6 +18,16 @@ const { calculateAttendanceForUserDate } = require('../services/attendanceCalcul
 const { createTrustedTenantContext } = require('../services/tenantFilterService');
 const { getWorkDate, DEFAULT_SCHOOL_TIMEZONE } = require('../utils/dateHelpers');
 const { encryptDeviceCredentials } = require('../utils/deviceCredentialCrypto');
+const {
+  resolveDynamicPublicBaseUrl,
+  issueConnectorGrantForTenant,
+  generateDownloadableConnectorZipBuffer
+} = require('../services/localConnectorGrantService');
+const {
+  attachCampusSseStream,
+  getRecentCampusRealtimeEvents
+} = require('../services/realtimeCampusEventHub');
+const { formatFriendlyVietnameseHardwareNotice } = require('../utils/vietnameseHardwareTranslator');
 
 /**
  * Enforces authenticated tenant context.
@@ -32,6 +42,17 @@ function assertTenantContext(req) {
     throw err;
   }
   return tenantId;
+}
+
+function assertValidPort(portValue, label = 'Cổng mạng') {
+  if (portValue === undefined || portValue === null || portValue === '') return;
+  const num = Number(portValue);
+  if (!Number.isInteger(num) || num < 1 || num > 65535) {
+    const err = new Error(`${label} phải là số nguyên hợp lệ từ 1 đến 65535`);
+    err.code = 'INVALID_PORT_RANGE';
+    err.statusCode = 400;
+    throw err;
+  }
 }
 
 /**
@@ -163,6 +184,26 @@ async function createDevice(req, res) {
       });
     }
 
+    const cleanDeviceCode = String(deviceCode).trim().toUpperCase();
+    if (!/^[A-Z0-9_-]{1,40}$/.test(cleanDeviceCode)) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_DEVICE_CODE',
+        message: 'Mã thiết bị chỉ được chứa chữ cái không dấu, chữ số, gạch ngang/dưới (tối đa 40 ký tự)'
+      });
+    }
+    if (String(name).trim().length > 120) {
+      return res.status(400).json({
+        success: false,
+        code: 'DEVICE_NAME_TOO_LONG',
+        message: 'Tên thiết bị không được vượt quá 120 ký tự'
+      });
+    }
+
+    assertValidPort(httpPort, 'Cổng HTTP');
+    assertValidPort(httpsPort, 'Cổng HTTPS');
+    assertValidPort(sdkPort, 'Cổng SDK');
+
     // SSRF & Safety validation
     validateDeviceHost(host);
 
@@ -183,19 +224,34 @@ async function createDevice(req, res) {
       });
     }
 
-    // Check serialNumber uniqueness within tenant if provided
+    // Check serialNumber uniqueness within tenant AND global cross-campus hardware lock
+    let normalizedSerial;
     if (serialNumber && String(serialNumber).trim()) {
       const cleanSerial = String(serialNumber).trim();
-      const existingSerial = await TimekeepingDevice.findOne({
+      const existingSerialSameTenant = await TimekeepingDevice.findOne({
         tenantId,
         serialNumber: cleanSerial
       });
-      if (existingSerial) {
+      if (existingSerialSameTenant) {
         return res.status(409).json({
           success: false,
-          message: `Số serial "${cleanSerial}" đã tồn tại trong trường này`
+          code: 'DUPLICATE_SERIAL_SAME_CAMPUS',
+          message: `Số serial "${cleanSerial}" đã tồn tại trong phân hiệu trường này`
         });
       }
+
+      const existingSerialOtherCampus = await TimekeepingDevice.findOne({
+        serialNumber: cleanSerial,
+        tenantId: { $ne: tenantId }
+      }).lean();
+      if (existingSerialOtherCampus) {
+        return res.status(409).json({
+          success: false,
+          code: 'SERIAL_LOCKED_OTHER_CAMPUS',
+          message: `Thiết bị có mã phần cứng (số serial "${cleanSerial}") hiện đang được khóa bảo mật cho một phân hiệu trường khác. Để bảo vệ dữ liệu học sinh không bị kéo hoặc đẩy nhầm trường, chỉ Kỹ thuật viên Nhà cung cấp phần mềm mới có thể gỡ khóa chuyển phân hiệu cho thiết bị này.`
+        });
+      }
+      normalizedSerial = cleanSerial;
     }
 
     // Hash apiKey if provided
@@ -230,7 +286,13 @@ async function createDevice(req, res) {
       location: String(location || 'Sảnh đón trẻ').trim(),
       vendor,
       model: String(model).trim(),
-      serialNumber: serialNumber ? String(serialNumber).trim() : undefined,
+      serialNumber: normalizedSerial,
+      ...(normalizedSerial
+        ? {
+            serialLockedAt: new Date(),
+            serialLockedByVendor: Boolean(req.isVendorSupport)
+          }
+        : {}),
       host: host.trim(),
       httpPort: Number(httpPort) || 80,
       httpsPort: Number(httpsPort) || 443,
@@ -272,7 +334,7 @@ async function createDevice(req, res) {
     return res.status(err.statusCode || 500).json({
       success: false,
       code: err.code,
-      message: err.message || 'Lỗi tạo thiết bị'
+      message: formatFriendlyVietnameseHardwareNotice(err, { host: req.body?.host, deviceName: req.body?.name })
     });
   }
 }
@@ -369,24 +431,58 @@ async function updateDevice(req, res) {
     if (model) device.model = String(model).trim();
     if (serialNumber !== undefined) {
       const cleanSerial = String(serialNumber).trim();
+      // Admin trường không được tự ý đổi hoặc xóa mã phần cứng đã khóa — chỉ Kỹ thuật Nhà cung cấp mới được gỡ/đổi khóa
+      if (device.serialNumber && cleanSerial !== device.serialNumber && !req.isVendorSupport) {
+        return res.status(403).json({
+          success: false,
+          code: 'SERIAL_UNLOCK_VENDOR_ONLY',
+          message:
+            'Mã phần cứng của máy chấm công đã được khóa cố định với phân hiệu trường để bảo vệ dữ liệu. Vui lòng liên hệ Kỹ thuật viên Nhà cung cấp phần mềm nếu bạn cần thay thế thiết bị.'
+        });
+      }
       if (cleanSerial) {
-        const serialConflict = await TimekeepingDevice.findOne({
+        const serialConflictSame = await TimekeepingDevice.findOne({
           tenantId,
           serialNumber: cleanSerial,
           _id: { $ne: device._id }
         });
-        if (serialConflict) {
+        if (serialConflictSame) {
           return res.status(409).json({
             success: false,
-            message: `Số serial "${cleanSerial}" đã tồn tại trong trường này`
+            code: 'DUPLICATE_SERIAL_SAME_CAMPUS',
+            message: `Số serial "${cleanSerial}" đã tồn tại trong phân hiệu trường này`
+          });
+        }
+        const serialConflictForeign = await TimekeepingDevice.findOne({
+          serialNumber: cleanSerial,
+          tenantId: { $ne: tenantId },
+          _id: { $ne: device._id }
+        }).lean();
+        if (serialConflictForeign) {
+          return res.status(409).json({
+            success: false,
+            code: 'SERIAL_LOCKED_OTHER_CAMPUS',
+            message: `Thiết bị có số serial "${cleanSerial}" hiện đang được khóa bảo mật cho một phân hiệu trường khác. Chỉ Kỹ thuật viên Nhà cung cấp phần mềm mới có quyền chuyển phân hiệu cho thiết bị này.`
           });
         }
       }
       device.serialNumber = cleanSerial || undefined;
+      if (cleanSerial && !device.serialLockedAt) {
+        device.serialLockedAt = new Date();
+      }
     }
-    if (httpPort !== undefined) device.httpPort = Number(httpPort);
-    if (httpsPort !== undefined) device.httpsPort = Number(httpsPort);
-    if (sdkPort !== undefined) device.sdkPort = Number(sdkPort);
+    if (httpPort !== undefined) {
+      assertValidPort(httpPort, 'Cổng HTTP');
+      device.httpPort = Number(httpPort);
+    }
+    if (httpsPort !== undefined) {
+      assertValidPort(httpsPort, 'Cổng HTTPS');
+      device.httpsPort = Number(httpsPort);
+    }
+    if (sdkPort !== undefined) {
+      assertValidPort(sdkPort, 'Cổng SDK');
+      device.sdkPort = Number(sdkPort);
+    }
     if (transportScheme === 'http' || transportScheme === 'https') {
       device.transportScheme = transportScheme;
     }
@@ -438,7 +534,7 @@ async function updateDevice(req, res) {
     return res.status(err.statusCode || 500).json({
       success: false,
       code: err.code,
-      message: err.message || 'Lỗi cập nhật thiết bị'
+      message: formatFriendlyVietnameseHardwareNotice(err, { host: req.body?.host || device?.host, deviceName: req.body?.name || device?.name })
     });
   }
 }
@@ -857,12 +953,24 @@ async function getBiometricOverview(req, res) {
   try {
     const tenantId = assertTenantContext(req);
     const data = await biometricSyncService.getBiometricOverview(tenantId, req.query || {}, sanitizeDevice);
+    const dynamicOrigin = resolveDynamicPublicBaseUrl(req, req.header('Origin') || '');
+    if (data?.webhookMeta) {
+      data.webhookMeta.publicBaseUrl = dynamicOrigin;
+      data.webhookMeta.fullWebhookUrl = data.webhookMeta.schoolCode
+        ? `${dynamicOrigin}/api/attendance/webhook/${data.webhookMeta.schoolCode}`
+        : `${dynamicOrigin}/api/attendance/webhook`;
+    }
+    data.sessionMeta = {
+      isVendorSupport: Boolean(req.isVendorSupport),
+      vendorUsername: req.vendorUsername || null,
+      connectorLocalUrl: 'http://127.0.0.1:18686'
+    };
     return res.json({ success: true, data });
   } catch (err) {
     return res.status(err.statusCode || 500).json({
       success: false,
       code: err.code || 'BIOMETRIC_OVERVIEW_FAILED',
-      message: err.message || 'Lỗi tải tổng quan máy chấm công & danh sách khuôn mặt'
+      message: formatFriendlyVietnameseHardwareNotice(err)
     });
   }
 }
@@ -880,14 +988,14 @@ async function discoverLanDevices(req, res) {
       data: result,
       message:
         result.discoveredDevices.length > 0
-          ? `Đã phát hiện ${result.discoveredDevices.length} thiết bị Hikvision trong mạng LAN!`
-          : `Đã quét dải mạng ${result.scannedSubnets.join(', ')} nhưng chưa phát hiện thiết bị mới.`
+          ? `Tuyệt vời! Đã tìm thấy ${result.discoveredDevices.length} máy chấm công Hikvision trong mạng của trường.`
+          : 'Đã quét xong mạng nội bộ nhưng chưa thấy máy chấm công mới. Bạn hãy kiểm tra máy chấm công đã cắm điện và nối cùng mạng với máy tính chưa nhé.'
     });
   } catch (err) {
     return res.status(err.statusCode || 400).json({
       success: false,
       code: err.code || 'LAN_DISCOVERY_FAILED',
-      message: err.message || 'Không thể quét mạng LAN'
+      message: formatFriendlyVietnameseHardwareNotice(err)
     });
   }
 }
@@ -905,7 +1013,7 @@ async function checkDeviceCapacity(req, res) {
     return res.status(err.statusCode || 500).json({
       success: false,
       code: err.code || 'CAPACITY_CHECK_FAILED',
-      message: err.message || 'Lỗi kiểm tra dung lượng bộ nhớ máy chấm công'
+      message: formatFriendlyVietnameseHardwareNotice(err)
     });
   }
 }
@@ -924,13 +1032,13 @@ async function pullUsersFromDevice(req, res) {
     return res.json({
       success: true,
       data: result,
-      message: `Đã kéo từ máy "${result.deviceName}": khớp ${result.matchedCount}/${result.totalOnDevice} hồ sơ, lưu thành công ${result.pulledFaceCount} ảnh khuôn mặt (<200KB) về Web!`
+      message: `Đã kéo thành công từ máy "${result.deviceName}": khớp ${result.matchedCount}/${result.totalOnDevice} hồ sơ và lưu ${result.pulledFaceCount} ảnh khuôn mặt về phần mềm!`
     });
   } catch (err) {
     return res.status(err.statusCode || 400).json({
       success: false,
       code: err.code || 'PULL_DEVICE_USERS_FAILED',
-      message: err.message || 'Lỗi kéo dữ liệu người dùng & khuôn mặt từ máy chấm công'
+      message: formatFriendlyVietnameseHardwareNotice(err)
     });
   }
 }
@@ -948,13 +1056,13 @@ async function pushSmartSyncToDevice(req, res) {
     return res.json({
       success: Boolean(first.success),
       data: report,
-      message: first.message || 'Đã đồng bộ 1 chiều an toàn xuống máy chấm công!'
+      message: first.message || 'Đã đồng bộ danh sách học sinh & nhân sự xuống máy chấm công thành công!'
     });
   } catch (err) {
     return res.status(err.statusCode || 400).json({
       success: false,
       code: err.code || 'PUSH_SYNC_FAILED',
-      message: err.message || 'Lỗi đồng bộ dữ liệu xuống máy chấm công'
+      message: formatFriendlyVietnameseHardwareNotice(err)
     });
   }
 }
@@ -972,13 +1080,13 @@ async function syncAllDevicesSmart(req, res) {
     return res.json({
       success: true,
       data: report,
-      message: `Đã đẩy đồng bộ nhanh (tối đa 500 slot/máy) tới ${report.syncedDevices}/${report.totalDevices} máy chấm công!`
+      message: `Đã đồng bộ thành công danh sách khuôn mặt xuống ${report.syncedDevices}/${report.totalDevices} máy chấm công của phân hiệu!`
     });
   } catch (err) {
     return res.status(err.statusCode || 400).json({
       success: false,
       code: err.code || 'SYNC_ALL_FAILED',
-      message: err.message || 'Lỗi đồng bộ toàn cụm máy chấm công'
+      message: formatFriendlyVietnameseHardwareNotice(err)
     });
   }
 }
@@ -996,13 +1104,13 @@ async function pullAllDevicesFast(req, res) {
     return res.json({
       success: report.pulledDevices > 0,
       data: report,
-      message: `Đã kéo nhanh từ ${report.pulledDevices}/${report.totalDevices} máy về Web: ${report.totalMatchedUsers} hồ sơ khớp, ${report.totalPulledFaces} ảnh mặt, ${report.totalEventsIngested} lượt chấm công/điểm danh mới!`
+      message: `Đã kéo xong dữ liệu từ ${report.pulledDevices}/${report.totalDevices} máy chấm công về phần mềm: khớp ${report.totalMatchedUsers} hồ sơ, ${report.totalPulledFaces} ảnh khuôn mặt và ${report.totalEventsIngested} lượt điểm danh mới!`
     });
   } catch (err) {
     return res.status(err.statusCode || 400).json({
       success: false,
       code: err.code || 'PULL_ALL_FAILED',
-      message: err.message || 'Lỗi kéo nhanh dữ liệu từ cụm máy chấm công về Web'
+      message: formatFriendlyVietnameseHardwareNotice(err)
     });
   }
 }
@@ -1020,13 +1128,13 @@ async function quickBidirectionalSync(req, res) {
     return res.json({
       success: true,
       data: report,
-      message: `Đồng bộ nhanh 2 chiều hoàn tất trong ${sec}s! Kéo về: ${report.pullSummary.eventsIngested} lượt chấm công & ${report.pullSummary.pulledFaces} ảnh mặt • Đẩy xuống: ${report.pushSummary.syncedDevices}/${report.pushSummary.totalDevices} máy.`
+      message: `Đã đồng bộ hai chiều hoàn tất trong ${sec} giây! Vừa kéo về ${report.pullSummary.eventsIngested} lượt điểm danh & ${report.pullSummary.pulledFaces} ảnh khuôn mặt, đồng thời đẩy cập nhật xuống ${report.pushSummary.syncedDevices}/${report.pushSummary.totalDevices} máy chấm công.`
     });
   } catch (err) {
     return res.status(err.statusCode || 400).json({
       success: false,
       code: err.code || 'BIDIRECTIONAL_SYNC_FAILED',
-      message: err.message || 'Lỗi đồng bộ nhanh 2 chiều với máy chấm công'
+      message: formatFriendlyVietnameseHardwareNotice(err)
     });
   }
 }
@@ -1044,13 +1152,13 @@ async function linkPulledDeviceUser(req, res) {
     return res.json({
       success: true,
       data: result,
-      message: `Đã ghép mã máy "${result.externalPersonId}" -> "${result.fullName}" (${result.personCode})${result.faceSaved ? ' và lưu luôn ảnh khuôn mặt <200KB' : ''}!`
+      message: `Đã ghép thành công mã số "${result.externalPersonId}" trên máy chấm công với hồ sơ "${result.fullName}" (${result.personCode})${result.faceSaved ? ' và lưu luôn ảnh khuôn mặt' : ''}!`
     });
   } catch (err) {
     return res.status(err.statusCode || 400).json({
       success: false,
       code: err.code || 'LINK_PULLED_USER_FAILED',
-      message: err.message || 'Không thể ghép hồ sơ từ máy chấm công'
+      message: formatFriendlyVietnameseHardwareNotice(err)
     });
   }
 }
@@ -1068,7 +1176,7 @@ async function pruneDeviceInactiveSlots(req, res) {
     return res.status(err.statusCode || 400).json({
       success: false,
       code: err.code || 'PRUNE_SLOTS_FAILED',
-      message: err.message || 'Lỗi giải phóng slot nghỉ việc/thôi học trên máy'
+      message: formatFriendlyVietnameseHardwareNotice(err)
     });
   }
 }
@@ -1076,14 +1184,21 @@ async function pruneDeviceInactiveSlots(req, res) {
 async function unlockDeviceDoor(req, res) {
   try {
     const tenantId = assertTenantContext(req);
-    const doorNo = Number(req.body?.doorNo) || 1;
-    const result = await biometricSyncService.unlockDoorOnDevice(tenantId, req.params.id, doorNo);
+    const rawDoor = req.body?.doorNo !== undefined ? Number(req.body.doorNo) : 1;
+    if (!Number.isInteger(rawDoor) || rawDoor < 1 || rawDoor > 8) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_DOOR_NUMBER',
+        message: 'Số thứ tự cửa cần mở phải từ 1 đến 8.'
+      });
+    }
+    const result = await biometricSyncService.unlockDoorOnDevice(tenantId, req.params.id, rawDoor);
     return res.json(result);
   } catch (err) {
     return res.status(err.statusCode || 400).json({
       success: false,
       code: err.code || 'UNLOCK_DOOR_FAILED',
-      message: err.message || 'Thiết bị không phản hồi lệnh mở khóa cửa từ xa'
+      message: formatFriendlyVietnameseHardwareNotice(err)
     });
   }
 }
@@ -1106,13 +1221,13 @@ async function uploadBiometricFace(req, res) {
     return res.json({
       success: true,
       data: saved,
-      message: `Đã lưu ảnh quét mặt chuẩn Hikvision (${saved.sizeKB} KB < 200 KB) cho ${saved.fullName}!`
+      message: `Đã lưu ảnh chân dung điểm danh rõ nét (${saved.sizeKB} KB) cho "${saved.fullName}". Bạn có thể bấm "Đẩy xuống máy chấm công" ngay!`
     });
   } catch (err) {
     return res.status(err.statusCode || 400).json({
       success: false,
       code: err.code || 'UPLOAD_FACE_FAILED',
-      message: err.message || 'Lỗi lưu ảnh khuôn mặt chấm công'
+      message: formatFriendlyVietnameseHardwareNotice(err)
     });
   }
 }
@@ -1124,13 +1239,13 @@ async function removeBiometricFace(req, res) {
     await biometricSyncService.deleteBiometricFacePhoto({ tenantId, subjectType, subjectId });
     return res.json({
       success: true,
-      message: 'Đã xóa ảnh khuôn mặt chấm công trên Web'
+      message: 'Đã xóa ảnh khuôn mặt chấm công của hồ sơ này trên phần mềm.'
     });
   } catch (err) {
     return res.status(err.statusCode || 400).json({
       success: false,
       code: err.code || 'DELETE_FACE_FAILED',
-      message: err.message || 'Lỗi xóa ảnh khuôn mặt chấm công'
+      message: formatFriendlyVietnameseHardwareNotice(err)
     });
   }
 }
@@ -1151,14 +1266,272 @@ async function pushSingleBiometricPerson(req, res) {
       data: result,
       message:
         result.syncedDevices > 0
-          ? `Đã đẩy hồ sơ "${result.fullName}" (${result.personCode}) xuống ${result.syncedDevices}/${result.totalDevices} máy chấm công tại ${result.campus}!`
-          : `Không thể đẩy hồ sơ xuống máy chấm công (${result.results[0]?.message || 'Thiết bị ngoại tuyến'})`
+          ? `Đã đồng bộ thành công khuôn mặt của "${result.fullName}" xuống ${result.syncedDevices}/${result.totalDevices} máy chấm công!`
+          : formatFriendlyVietnameseHardwareNotice(result.results[0]?.message || 'DEVICE_OFFLINE', { personName: result.fullName })
     });
   } catch (err) {
     return res.status(err.statusCode || 400).json({
       success: false,
       code: err.code || 'PUSH_SINGLE_PERSON_FAILED',
-      message: err.message || 'Không thể đẩy hồ sơ xuống máy chấm công'
+      message: formatFriendlyVietnameseHardwareNotice(err)
+    });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CẦU NỐI MẠNG NỘI BỘ 127.0.0.1:18686, ĐỔI TÊN MIỀN WEBHOOK 1 CHẠM & SSE TRỰC TIẾP
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Tải xuống bộ cài đặt 1 chạm `HoaNang-BoKetNoiMayChamCong-1Cham.zip` cho máy tính Windows đặt tại trường.
+ */
+async function downloadConnectorPackage(req, res) {
+  try {
+    assertTenantContext(req);
+    const zipBuffer = await generateDownloadableConnectorZipBuffer();
+    res.status(200);
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="HoaNang-BoKetNoiMayChamCong-1Cham.zip"'
+    );
+    res.setHeader('Content-Length', zipBuffer.length);
+    return res.end(zipBuffer);
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      message: formatFriendlyVietnameseHardwareNotice(err)
+    });
+  }
+}
+
+/**
+ * Ký cấp `grantToken` (Ed25519) động theo tên miền hiện tại để trình duyệt giao tiếp an toàn với `http://127.0.0.1:18686`.
+ */
+async function issueLocalConnectorGrant(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const tenantDoc = req.tenant || (await Tenant.findById(tenantId).select('code name').lean());
+    const schoolCode = tenantDoc?.code || '';
+    const allowedOrigin = resolveDynamicPublicBaseUrl(req, req.body?.clientOrigin || req.header('Origin') || '');
+
+    const grantData = await issueConnectorGrantForTenant({
+      tenantId,
+      schoolCode,
+      schoolName: tenantDoc?.name || '',
+      allowedOrigin,
+      isVendorSupport: Boolean(req.isVendorSupport)
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        ...grantData,
+        publicBaseUrl: allowedOrigin,
+        webhookUrl: schoolCode
+          ? `${allowedOrigin}/api/attendance/webhook/${schoolCode}`
+          : `${allowedOrigin}/api/attendance/webhook`
+      }
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: formatFriendlyVietnameseHardwareNotice(err)
+    });
+  }
+}
+
+/**
+ * Đối chiếu danh sách thiết bị vừa quét từ `Local LAN Connector (127.0.0.1:18686)` với CSDL phân hiệu.
+ */
+async function enrichConnectorLanScan(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const rawList = Array.isArray(req.body?.discoveredDevices)
+      ? req.body.discoveredDevices
+      : Array.isArray(req.body?.devices)
+        ? req.body.devices
+        : [];
+    const enriched = await biometricSyncService.enrichConnectorDiscoveredDevices(tenantId, rawList);
+    return res.json({
+      success: true,
+      data: {
+        scannedSubnets: req.body?.scannedSubnets || ['Mạng nội bộ tại trường'],
+        discoveredDevices: enriched
+      },
+      message:
+        enriched.length > 0
+          ? `Đã tìm thấy ${enriched.length} máy chấm công Hikvision ngay trong mạng nội bộ của trường!`
+          : 'Đã quét mạng nội bộ trên máy tính này nhưng chưa thấy máy chấm công Hikvision nào đang bật.'
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      message: formatFriendlyVietnameseHardwareNotice(err)
+    });
+  }
+}
+
+/**
+ * Chuẩn bị gói lệnh & phong bì mật khẩu mã hóa `encryptedDeviceAuth` gửi xuống `127.0.0.1:18686`.
+ */
+async function prepareConnectorAction(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const taskPayload = await biometricSyncService.prepareConnectorDeviceTask(
+      tenantId,
+      req.params.id,
+      req.body || {}
+    );
+    const dynamicOrigin = resolveDynamicPublicBaseUrl(req, req.body?.clientOrigin || req.header('Origin') || '');
+    const tenantDoc = await Tenant.findById(tenantId).select('code name').lean();
+    const schoolCode = tenantDoc?.code || (await resolveTenantCode(req, tenantId));
+    const grantInfo = await issueConnectorGrantForTenant({
+      tenantId,
+      schoolCode,
+      schoolName: tenantDoc?.name || '',
+      allowedOrigin: dynamicOrigin,
+      isVendorSupport: Boolean(req.isVendorSupport)
+    });
+    taskPayload.grantToken = grantInfo.grantToken;
+    taskPayload.webhookUrl = schoolCode
+      ? `${dynamicOrigin}/api/attendance/webhook/${schoolCode}`
+      : `${dynamicOrigin}/api/attendance/webhook`;
+
+    return res.json({ success: true, data: taskPayload });
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      code: err.code,
+      message: formatFriendlyVietnameseHardwareNotice(err)
+    });
+  }
+}
+
+/**
+ * Lưu dữ liệu Người dùng + Ảnh mặt + Lượt quẹt vừa kéo từ `127.0.0.1:18686` vào đúng phân hiệu (`tenantId`).
+ */
+async function ingestConnectorPull(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const result = await biometricSyncService.ingestConnectorPulledPayload(tenantId, req.params.id, {
+      ...(req.body || {}),
+      actorId: req.user?._id
+    });
+    return res.json({
+      success: true,
+      data: result,
+      message: result.message
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      code: err.code,
+      message: formatFriendlyVietnameseHardwareNotice(err)
+    });
+  }
+}
+
+/**
+ * Cập nhật kết quả sau khi `127.0.0.1:18686` đẩy xong danh sách khuôn mặt từ Web xuống máy chấm công.
+ */
+async function completeConnectorPush(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const result = await biometricSyncService.completeConnectorPushedPayload(tenantId, req.params.id, {
+      ...(req.body || {}),
+      actorId: req.user?._id
+    });
+    return res.json({
+      success: true,
+      data: result,
+      message: result.message
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      code: err.code,
+      message: formatFriendlyVietnameseHardwareNotice(err)
+    });
+  }
+}
+
+/**
+ * Nút 1 chạm cập nhật địa chỉ HTTP Listening Webhook theo Tên miền động hiện tại xuống máy Hikvision.
+ */
+async function configureDeviceWebhook(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const publicBaseUrl = resolveDynamicPublicBaseUrl(req, req.body?.clientOrigin || req.header('Origin') || '');
+    const result = await biometricSyncService.configureDeviceWebhookEndpoint(tenantId, req.params.id, {
+      publicBaseUrl,
+      connectorVerifiedResult: req.body?.connectorVerifiedResult || req.body?.connectorAppliedResult || null
+    });
+    return res.json({
+      success: true,
+      data: result,
+      message: result.message
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      code: err.code,
+      message: formatFriendlyVietnameseHardwareNotice(err)
+    });
+  }
+}
+
+/**
+ * Chỉ dành cho Kỹ thuật viên Nhà cung cấp phần mềm (`req.isVendorSupport === true`):
+ * Gỡ khóa `deviceSerial` hoặc chuyển máy chấm công sang phân hiệu trường khác.
+ */
+async function unlockDeviceSerialByVendor(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const result = await biometricSyncService.unlockOrReassignDeviceSerialByVendor(tenantId, req.params.id, {
+      newSerialNumber: req.body?.newSerialNumber || '',
+      targetSchoolCode: req.body?.targetSchoolCode || '',
+      targetTenantId: req.body?.targetTenantId || '',
+      isVendorSupport: Boolean(req.isVendorSupport)
+    });
+    return res.json({
+      success: true,
+      data: result,
+      message: result.message
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 403).json({
+      success: false,
+      code: err.code,
+      message: formatFriendlyVietnameseHardwareNotice(err)
+    });
+  }
+}
+
+/**
+ * Luồng SSE thời gian thực cô lập tuyệt đối theo `tenantId` để báo tiếng Việt ngay khi học sinh/nhân sự quét mặt.
+ */
+function streamCampusLiveEvents(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    attachCampusSseStream(req, res, tenantId);
+  } catch (err) {
+    res.status(err.statusCode || 403).json({
+      success: false,
+      message: 'Phiên kết nối thông báo trực tiếp chưa hợp lệ.'
+    });
+  }
+}
+
+function getCampusRecentLiveEvents(req, res) {
+  try {
+    const tenantId = assertTenantContext(req);
+    const items = getRecentCampusRealtimeEvents(tenantId, req.query?.limit || 15);
+    return res.json({ success: true, data: items });
+  } catch (err) {
+    return res.status(err.statusCode || 403).json({
+      success: false,
+      message: 'Không thể tải danh sách sự kiện trực tiếp.'
     });
   }
 }
@@ -1192,5 +1565,15 @@ module.exports = {
   unlockDeviceDoor,
   uploadBiometricFace,
   removeBiometricFace,
-  pushSingleBiometricPerson
+  pushSingleBiometricPerson,
+  downloadConnectorPackage,
+  issueLocalConnectorGrant,
+  enrichConnectorLanScan,
+  prepareConnectorAction,
+  ingestConnectorPull,
+  completeConnectorPush,
+  configureDeviceWebhook,
+  unlockDeviceSerialByVendor,
+  streamCampusLiveEvents,
+  getCampusRecentLiveEvents
 };

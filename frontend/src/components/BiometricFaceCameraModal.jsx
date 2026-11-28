@@ -14,6 +14,7 @@ export default function BiometricFaceCameraModal({
 }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const mountedRef = useRef(true);
 
   const [facingMode, setFacingMode] = useState('user');
   const [cameraError, setCameraError] = useState('');
@@ -56,35 +57,50 @@ export default function BiometricFaceCameraModal({
           },
           audio: false
         });
+        // Nếu người dùng đã đóng Modal trong lúc chờ cấp quyền Camera -> Tắt ngay toàn bộ track để đèn Webcam không bị sáng kẹt!
+        if (!mountedRef.current) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
         streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           await videoRef.current.play().catch(() => {});
         }
       } catch (err) {
+        if (!mountedRef.current) return;
         setCameraError(
-          `Không thể mở trực tiếp luồng Camera (${err?.message || 'Chưa cấp quyền Camera'}). Hãy bấm nút "Chọn Ảnh / Camera Điện Thoại" bên dưới.`
+          `Không thể mở trực tiếp luồng Camera (${err?.message || 'Chưa cấp quyền Camera'}). Hãy bấm nút "Chọn Ảnh / Camera ĐT" bên dưới.`
         );
       } finally {
-        setStartingCamera(false);
+        if (mountedRef.current) {
+          setStartingCamera(false);
+        }
       }
     },
     [stopCameraStream]
   );
 
   useEffect(() => {
-    let active = true;
+    mountedRef.current = true;
     const timer = window.setTimeout(() => {
-      if (active) {
+      if (mountedRef.current) {
         void startCameraStream('user');
       }
     }, 0);
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape' && !saving) {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
     return () => {
-      active = false;
+      mountedRef.current = false;
       window.clearTimeout(timer);
+      window.removeEventListener('keydown', onKeyDown);
       stopCameraStream();
     };
-  }, [startCameraStream, stopCameraStream]);
+  }, [startCameraStream, stopCameraStream, onClose, saving]);
 
   const handleSwitchCamera = () => {
     const nextMode = facingMode === 'user' ? 'environment' : 'user';

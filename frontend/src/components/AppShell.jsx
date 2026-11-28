@@ -5,7 +5,8 @@ import Icon from './Icon';
 import AppErrorBoundary from './ErrorBoundary';
 import api from '../api/axiosConfig';
 import { getUnreadChat } from '../api/chat';
-import { getPublicSystemMeta } from '../api/multiSchool';
+import { enterSchoolWorkspace, getPublicSystemMeta, getSuperAdminSchools } from '../api/multiSchool';
+import { playGentleAttendanceChime } from '../utils/vietnameseHardwareTranslator';
 
 const ROUTE_MODULE_MAP = {
   '/attendance': 'attendance',
@@ -110,34 +111,34 @@ const ADMIN_SIDEBAR_STORAGE_KEY = 'admin_sidebar_open_groups';
 const adminNavSections = [
   {
     id: 'admin-campus-system',
-    label: 'CẤU HÌNH TRƯỜNG & PHÂN HIỆU',
+    label: 'CÀI ĐẶT PHÂN HIỆU TRƯỜNG',
     icon: 'settings',
     theme: 'system',
     items: [
-      { to: '/campuses', label: 'Phân hiệu & Cơ sở trường', icon: 'classes' },
-      { to: '/campuses?tab=settings', label: 'Cài đặt Hệ thống Trường', icon: 'settings' },
-      { to: '/classrooms', label: 'Cấu trúc Lớp theo Phân hiệu', icon: 'grid' },
+      { to: '/campuses?tab=settings', label: 'Cài đặt Vận hành Phân hiệu', icon: 'settings' },
+      { to: '/campuses', label: 'Hồ sơ Phân hiệu & Gói Phần mềm', icon: 'classes' },
+      { to: '/classrooms', label: 'Quản lý Khung Lớp học', icon: 'grid' },
     ],
   },
   {
     id: 'admin-accounts-rbac',
-    label: 'TÀI KHOẢN & PHÂN QUYỀN',
+    label: 'TÀI KHOẢN CHỨC NĂNG',
     icon: 'shield',
     theme: 'hr',
     items: [
-      { to: '/accounts', label: 'Tài khoản Nhân sự Trường', icon: 'users' },
+      { to: '/accounts', label: 'Cấp Tài khoản Nhân sự (GĐ, GV, Bếp...)', icon: 'users' },
       { to: '/accounts?tab=parents', label: 'Duyệt Tài khoản Phụ huynh', icon: 'shield' },
       { to: '/accounts?tab=profile-requests', label: 'Duyệt Cập nhật Hồ sơ', icon: 'card' },
     ],
   },
   {
     id: 'admin-devices-logs',
-    label: 'THIẾT BỊ, WEBHOOK & NHẬT KÝ',
+    label: 'MÁY CHẤM CÔNG & NHẬT KÝ',
     icon: 'clock',
     theme: 'ops',
     items: [
-      { to: '/devices', label: 'Máy chấm công & Webhook', icon: 'clock' },
-      { to: '/audit-logs', label: 'Nhật ký Hệ thống Trường', icon: 'fileText' },
+      { to: '/devices', label: 'Máy chấm công & Cầu nối nội bộ', icon: 'clock' },
+      { to: '/audit-logs', label: 'Nhật ký Hoạt động Phân hiệu', icon: 'fileText' },
     ],
   },
   {
@@ -147,7 +148,7 @@ const adminNavSections = [
     theme: 'personal',
     items: [
       { to: '/internal-notices', label: 'Thông báo Nội bộ Trường', icon: 'bell' },
-      { to: '/staff-settings', label: 'Bảo mật Tài khoản Admin', icon: 'settings' },
+      { to: '/staff-settings', label: 'Đổi mật khẩu Admin Trường', icon: 'settings' },
     ],
   },
 ];
@@ -898,6 +899,108 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
   const isAccountant = user?.role === 'accountant';
   const isGuard = user?.role === 'guard';
   const isParent = user?.role === 'parent';
+
+  // Trạng thái chuyển nhanh Phân hiệu dành cho Kỹ thuật viên Nhà cung cấp & Luồng thông báo tiếng Việt thời gian thực (SSE)
+  const [vendorSchools, setVendorSchools] = useState([]);
+  const [switchingSchoolId, setSwitchingSchoolId] = useState('');
+  const [liveToasts, setLiveToasts] = useState([]);
+  const [liveSoundEnabled, setLiveSoundEnabled] = useState(() => localStorage.getItem('hn_live_sound') !== 'off');
+  const liveSoundRef = useRef(liveSoundEnabled);
+
+  useEffect(() => {
+    liveSoundRef.current = liveSoundEnabled;
+  }, [liveSoundEnabled]);
+
+  const toggleLiveSound = () => {
+    setLiveSoundEnabled((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('hn_live_sound', next ? 'on' : 'off');
+      } catch { /* ignore */ }
+      return next;
+    });
+  };
+
+  // Tự động cuộn mượt về đầu khung nội dung khi đổi trang hoặc đổi ?tab=settings
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }, [location.pathname, location.search]);
+
+  // Nếu là phiên Kỹ thuật viên Nhà cung cấp đang vào hỗ trợ bàn giao -> tải danh sách tất cả phân hiệu để chuyển 1 chạm
+  useEffect(() => {
+    const superToken = localStorage.getItem('superadmin_token');
+    if (!superToken) return undefined;
+    let cancelled = false;
+    getSuperAdminSchools()
+      .then((res) => {
+        if (cancelled) return;
+        const list = res.data?.data?.schools || [];
+        setVendorSchools(list.filter((s) => s.status === 'active'));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [tenant?._id]);
+
+  // Luồng SSE thời gian thực cô lập đúng phân hiệu: hiện Toast tiếng Việt thân thiện khi trẻ/nhân sự quét mặt
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    const canReceiveLiveGate = ['admin', 'principal', 'teacher', 'guard', 'hr'].includes(user?.role);
+    if (!token || !tenant?._id || !canReceiveLiveGate || typeof window.EventSource === 'undefined') {
+      return undefined;
+    }
+
+    const streamUrl = `/api/v1/timekeeping/live-stream?streamToken=${encodeURIComponent(token)}`;
+    const es = new window.EventSource(streamUrl);
+
+    const handleCampusEvent = (evt) => {
+      try {
+        const parsed = JSON.parse(evt.data || '{}');
+        if (!parsed?.message) return;
+        window.dispatchEvent(new CustomEvent('hoanang:campus-live-event', { detail: parsed }));
+
+        setLiveToasts((prev) => [parsed, ...prev.filter((x) => x.id !== parsed.id)].slice(0, 3));
+        if (liveSoundRef.current) {
+          playGentleAttendanceChime();
+        }
+        window.setTimeout(() => {
+          setLiveToasts((prev) => prev.filter((x) => x.id !== parsed.id));
+        }, 8500);
+      } catch {
+        // ignore malformed event
+      }
+    };
+
+    es.addEventListener('campus_event', handleCampusEvent);
+    return () => {
+      es.removeEventListener('campus_event', handleCampusEvent);
+      es.close();
+    };
+  }, [tenant?._id, user?.role]);
+
+  const handleVendorSwitchSchool = async (nextSchoolId) => {
+    if (!nextSchoolId || String(nextSchoolId) === String(tenant?._id) || switchingSchoolId) return;
+    setSwitchingSchoolId(nextSchoolId);
+    try {
+      const res = await enterSchoolWorkspace(nextSchoolId);
+      const { token: nextToken, tenant: nextTenant, user: nextUser } = res.data || {};
+      if (nextToken && nextUser) {
+        localStorage.setItem('token', nextToken);
+        localStorage.setItem('user', JSON.stringify(nextUser));
+        if (nextTenant) {
+          localStorage.setItem('tenant', JSON.stringify(nextTenant));
+        }
+        setUser(nextUser);
+        setTenant(nextTenant || null);
+        window.location.reload();
+      }
+    } catch {
+      // ignore switch error
+    } finally {
+      setSwitchingSchoolId('');
+    }
+  };
   const currentLocationKey = `${location.pathname}${location.search}`;
   const [prevLocationKey, setPrevLocationKey] = useState(currentLocationKey);
 
@@ -1122,16 +1225,19 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
 
   const displayName = user?.profile?.fullName || user?.username || 'Quản trị viên';
   const isAdmin = user?.role === 'admin';
-  const roleLabel = {
-    admin: 'Quản trị Hệ thống Trường',
-    principal: 'Ban Giám đốc / Hiệu trưởng',
-    teacher: 'Giáo viên đứng lớp',
-    accountant: 'Kế toán học phí',
-    chef: 'Đầu bếp / Dinh dưỡng',
-    hr: 'Nhân sự & Tiền lương',
-    parent: 'Phụ huynh học sinh',
-    guard: 'Bảo vệ & An ninh'
-  }[user?.role] || 'Tài khoản trường';
+  const isVendorSupportSession = Boolean(user?.isVendorSupport || localStorage.getItem('superadmin_token'));
+  const roleLabel = isVendorSupportSession && isAdmin
+    ? 'Kỹ thuật viên Nhà cung cấp'
+    : ({
+        admin: 'Quản trị Phân hiệu Trường',
+        principal: 'Ban Giám đốc / Hiệu trưởng',
+        teacher: 'Giáo viên đứng lớp',
+        accountant: 'Kế toán học phí',
+        chef: 'Đầu bếp / Dinh dưỡng',
+        hr: 'Nhân sự & Tiền lương',
+        parent: 'Phụ huynh học sinh',
+        guard: 'Bảo vệ & An ninh'
+      }[user?.role] || 'Tài khoản trường');
   const totalUnread = unreadCount + chatUnread.total;
   const homePath =
     user?.role === 'admin'
@@ -1414,9 +1520,26 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
               </div>
             )}
             {hasSuperAdminReturn && (
-              <button type="button" className="superadmin-switch-btn" onClick={returnToMultiSchoolConsole}>
-                <Icon name="shield" size={14} /> Về Quản trị Tổng Đa Trường
-              </button>
+              <div className="vendor-campus-switcher">
+                <button type="button" className="superadmin-switch-btn" onClick={returnToMultiSchoolConsole}>
+                  <Icon name="shield" size={14} /> Về Trung tâm Nhà cung cấp
+                </button>
+                {vendorSchools.length > 1 && (
+                  <select
+                    aria-label="Chọn phân hiệu để cấu hình bàn giao"
+                    className="vendor-campus-select"
+                    disabled={Boolean(switchingSchoolId)}
+                    value={String(tenant?._id || '')}
+                    onChange={(e) => handleVendorSwitchSchool(e.target.value)}
+                  >
+                    {vendorSchools.map((s) => (
+                      <option key={s._id} value={s._id}>
+                        🔧 Phân hiệu: {s.code} — {s.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
             )}
             <nav className="sidebar-nav" aria-label="Điều hướng chính di động">
               {renderNavigation(true)}
@@ -1459,9 +1582,26 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
           </div>
         )}
         {hasSuperAdminReturn && (
-          <button type="button" className="superadmin-switch-btn" onClick={returnToMultiSchoolConsole}>
-            <Icon name="shield" size={14} /> Về Quản trị Tổng Đa Trường
-          </button>
+          <div className="vendor-campus-switcher">
+            <button type="button" className="superadmin-switch-btn" onClick={returnToMultiSchoolConsole}>
+              <Icon name="shield" size={14} /> Về Trung tâm Nhà cung cấp
+            </button>
+            {vendorSchools.length > 1 && (
+              <select
+                aria-label="Chọn phân hiệu để cấu hình bàn giao"
+                className="vendor-campus-select"
+                disabled={Boolean(switchingSchoolId)}
+                value={String(tenant?._id || '')}
+                onChange={(e) => handleVendorSwitchSchool(e.target.value)}
+              >
+                {vendorSchools.map((s) => (
+                  <option key={s._id} value={s._id}>
+                    🔧 Phân hiệu: {s.code} — {s.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
         )}
         <nav ref={navRef} className="sidebar-nav" aria-label="Điều hướng chính">
           {renderNavigation()}
@@ -1644,6 +1784,38 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
             </AppErrorBoundary>
           )}
         </div>
+
+        {/* HỘP THÔNG BÁO TIẾNG VIỆT THỜI GIAN THỰC KHI TRẺ / NHÂN SỰ QUÉT MẶT TẠI CỔNG */}
+        {liveToasts.length > 0 && (
+          <div className="hn-live-toast-stack" role="region" aria-label="Thông báo điểm danh trực tiếp">
+            {liveToasts.map((toast) => (
+              <div key={toast.id} className={`hn-live-toast hn-live-toast-${toast.tone || 'success'}`}>
+                <div className="hn-live-toast-head">
+                  <strong>{toast.title || 'Điểm danh trực tiếp tại cổng'}</strong>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <button
+                      type="button"
+                      className="hn-live-sound-btn"
+                      onClick={toggleLiveSound}
+                      title={liveSoundEnabled ? 'Đang bật chuông báo nhẹ (Bấm để tắt tiếng)' : 'Đang tắt tiếng chuông (Bấm để bật)'}
+                    >
+                      {liveSoundEnabled ? '🔊 Chuông' : '🔇 Tắt tiếng'}
+                    </button>
+                    <button
+                      type="button"
+                      className="hn-live-close-btn"
+                      onClick={() => setLiveToasts((prev) => prev.filter((x) => x.id !== toast.id))}
+                      aria-label="Đóng thông báo"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+                <p>{toast.message}</p>
+              </div>
+            ))}
+          </div>
+        )}
       </main>
     </div>
   );
