@@ -369,37 +369,38 @@
 
 /* ─── KẾT QUẢ QUÉT LAN ─── */
 .hik-lan-panel {
-  padding: 14px 16px;
-  border-radius: 14px;
-  background: #eef2ff;
-  border: 1px solid #c7d2fe;
+  padding: 18px 20px;
+  border-radius: 16px;
+  background: #f8fafc;
+  border: 1.5px solid #cbd5e1;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
 .hik-lan-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 14px;
   flex-wrap: wrap;
 }
 
 .hik-lan-header h4 {
-  margin: 0 0 2px;
-  font-size: 13.5px;
+  margin: 0 0 4px;
+  font-size: 14.5px;
   font-weight: 800;
-  color: #1e1b4b;
+  color: #0f172a;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .hik-lan-header p {
   margin: 0;
-  font-size: 11.5px;
-  color: #4338ca;
+  font-size: 12.8px;
+  color: #475569;
+  line-height: 1.5;
 }
 
 .hik-lan-controls {
@@ -418,7 +419,7 @@
   color: #0f172a;
   font-size: 13px;
   font-weight: 600;
-  min-width: 235px;
+  min-width: 250px;
 }
 
 .hik-lan-controls input:focus {
@@ -427,21 +428,87 @@
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
 }
 
-.hik-lan-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+/* Danh sách thiết bị tìm thấy dạng thẻ ngang rộng rãi, tuyệt đối không bị ép chữ dọc */
+.hik-lan-list {
+  display: flex;
+  flex-direction: column;
   gap: 10px;
 }
 
 .hik-lan-item {
   background: #ffffff;
-  border: 1px solid #c7d2fe;
-  border-radius: 12px;
-  padding: 11px 13px;
+  border: 1px solid #dbe4f0;
+  border-radius: 14px;
+  padding: 14px 18px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 16px;
+  flex-wrap: wrap;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.03);
+}
+
+.hik-lan-item-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.hik-lan-device-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 11px;
+  background: #eff6ff;
+  color: #2563eb;
+  flex-shrink: 0;
+}
+
+.hik-lan-item-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.hik-lan-item-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 14px;
+  font-weight: 800;
+  color: #0f172a;
+  margin-bottom: 3px;
+}
+
+.hik-lan-item-meta {
+  font-size: 12.5px;
+  color: #64748b;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.hik-lan-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.hik-inline-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #10b981;
+  margin-right: 7px;
+  vertical-align: middle;
+}
+
+.hik-inline-dot.amber {
+  background: #f59e0b;
 }
 
 /* ─── FORM THÊM / SỬA MÁY CHẤM CÔNG ─── */

@@ -272,9 +272,12 @@ export default function SchoolCampusManagement() {
               fontSize: 13
             }}
           >
-            <div>
-              <strong>🔧 Phiên Kỹ thuật viên Nhà cung cấp:</strong> Đang cấu hình bàn giao cho{' '}
-              <strong>{school?.name || '—'} ({school?.code || '—'})</strong>. Bạn có thể chuyển nhanh sang phân hiệu khác ở thanh menu bên trái.
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Icon name="wrench" size={16} />
+              <span>
+                <strong>Phiên Kỹ thuật viên Nhà cung cấp:</strong> Đang cấu hình bàn giao cho{' '}
+                <strong>{school?.name || '—'} ({school?.code || '—'})</strong>. Bạn có thể chuyển nhanh sang phân hiệu khác ở thanh menu bên trái.
+              </span>
             </div>
             <Link className="button button-secondary" to="/devices" style={{ minHeight: 36 }}>
               Quét &amp; Gán Máy Chấm Công →
@@ -682,8 +685,10 @@ export default function SchoolCampusManagement() {
                         color: '#0f172a'
                       }}
                     >
-                      <span>👥 Cấp Tài khoản Chức năng</span>
-                      <span style={{ color: '#2563eb' }}>→</span>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                        <Icon name="users" size={15} /> Cấp Tài khoản Chức năng
+                      </span>
+                      <Icon name="chevronRight" size={15} />
                     </Link>
                     <Link
                       to="/classrooms"
@@ -700,8 +705,10 @@ export default function SchoolCampusManagement() {
                         color: '#0f172a'
                       }}
                     >
-                      <span>🏫 Quản lý Khung Lớp học</span>
-                      <span style={{ color: '#2563eb' }}>→</span>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                        <Icon name="classes" size={15} /> Quản lý Khung Lớp học
+                      </span>
+                      <Icon name="chevronRight" size={15} />
                     </Link>
                     <Link
                       to="/devices"
@@ -718,8 +725,10 @@ export default function SchoolCampusManagement() {
                         color: '#0f172a'
                       }}
                     >
-                      <span>⏱️ Máy chấm công &amp; Khuôn mặt</span>
-                      <span style={{ color: '#2563eb' }}>→</span>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                        <Icon name="clock" size={15} /> Máy chấm công &amp; Khuôn mặt
+                      </span>
+                      <Icon name="chevronRight" size={15} />
                     </Link>
                   </div>
                 </div>

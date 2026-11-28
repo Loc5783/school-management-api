@@ -37,6 +37,7 @@ import {
 import {
   probeLocalConnectorHealth,
   discoverLanViaLocalConnector,
+  verifyDiscoveredDeviceCredentialsViaConnector,
   checkCapacityViaLocalConnector,
   pullDeviceUsersViaLocalConnector,
   pushRosterViaLocalConnector,
@@ -146,12 +147,20 @@ export default function TimekeepingDeviceManagement() {
   const [noticeType, setNoticeType] = useState('info');
   const [copiedUrl, setCopiedUrl] = useState(false);
 
-  // Quét mạng LAN & Lưu nhanh 1 chạm
+  // Quét mạng LAN (Bước 1: Quét tìm thiết bị không bắt nhập mật khẩu; Bước 2: Chọn máy rồi mới nhập mật khẩu kết nối)
   const [scanningLan, setScanningLan] = useState(false);
   const [lanScanResult, setLanScanResult] = useState(null);
   const [subnetPrefix, setSubnetPrefix] = useState('');
-  const [lanProbePassword, setLanProbePassword] = useState('');
-  const [quickSavingHost, setQuickSavingHost] = useState('');
+  const [connectModalTarget, setConnectModalTarget] = useState(null);
+  const [connectForm, setConnectForm] = useState({
+    name: '',
+    location: 'Sảnh đón trẻ',
+    username: 'admin',
+    password: '',
+    showPassword: false
+  });
+  const [connectModalError, setConnectModalError] = useState('');
+  const [connectingDiscovered, setConnectingDiscovered] = useState(false);
 
   // Form Thêm / Sửa máy chấm công
   const [showDeviceForm, setShowDeviceForm] = useState(false);
@@ -328,7 +337,7 @@ export default function TimekeepingDeviceManagement() {
 
   const notifyNeedLocalConnectorOnCloud = useCallback(() => {
     showToast(
-      'Máy tính bạn đang ngồi chưa bật "Bộ kết nối 1 chạm" nên trang Web trên mạng chưa nhìn thấy máy chấm công lắp trong trường. Bạn hãy bấm nút màu xanh "📥 Tải Bộ Kết Nối 1 Chạm (.zip)" ở khung vàng phía trên, giải nén và mở tệp "1-Bat-Ket-Noi-1-Cham.bat" nhé!',
+      'Máy tính bạn đang ngồi chưa bật "Bộ kết nối 1 chạm" nên trang Web trên mạng chưa nhìn thấy máy chấm công lắp trong trường. Bạn hãy bấm nút "Tải Bộ Kết Nối 1 Chạm (.zip)" ở khung phía trên, giải nén và mở tệp "1-Bat-Ket-Noi-1-Cham.bat" nhé!',
       'info'
     );
   }, [showToast]);
@@ -368,16 +377,17 @@ export default function TimekeepingDeviceManagement() {
   };
 
   useEffect(() => {
-    if (!confirmState && !activeModal) return undefined;
+    if (!confirmState && !activeModal && !connectModalTarget) return undefined;
     const onKeyDown = (e) => {
       if (e.key === 'Escape') {
         setConfirmState(null);
         setActiveModal(null);
+        setConnectModalTarget(null);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [confirmState, activeModal]);
+  }, [confirmState, activeModal, connectModalTarget]);
 
   const ensureAuxiliaryListsLoaded = async () => {
     if (employees.length > 0 || students.length > 0) return { employees, students };
@@ -392,11 +402,10 @@ export default function TimekeepingDeviceManagement() {
     return { employees: empList, students: stuList };
   };
 
-  // ─── 1. QUÉT TỰ ĐỘNG TRONG MẠNG LAN QUA CẦU NỐI 127.0.0.1:18686 & LƯU NHANH 1 CHẠM ───
+  // ─── 1. QUÉT TỰ ĐỘNG TRONG MẠNG LAN (BƯỚC 1: QUÉT KHÔNG CẦN MẬT KHẨU -> BƯỚC 2: CHỌN MÁY RỒI NHẬP MẬT KHẨU) ───
   const handleScanLan = async () => {
     setScanningLan(true);
     try {
-      // Lọc bỏ trường hợp trình duyệt tự động điền nhầm tên đăng nhập chữ cái (VD: dovankhoa091) vào ô dải mạng IP
       const rawRange = subnetPrefix.trim();
       const safeRange = rawRange && /^\d/.test(rawRange) ? rawRange : '';
       if (rawRange && !safeRange) {
@@ -406,15 +415,17 @@ export default function TimekeepingDeviceManagement() {
       const isLocalBridgeReady = await refreshConnectorHealth();
       if (isLocalBridgeReady) {
         const bridgeOut = await discoverLanViaLocalConnector({
-          subnetPrefix: safeRange,
-          probeUsername: 'admin',
-          probePassword: lanProbePassword.trim() || ''
+          subnetPrefix: safeRange
         });
         setLanScanResult(bridgeOut.data || null);
-        showToast(bridgeOut.message, 'success');
+        const foundCount = bridgeOut.data?.discoveredDevices?.length || 0;
+        showToast(
+          foundCount > 0
+            ? `Đã tìm thấy ${foundCount} máy chấm công trong mạng của trường! Bạn hãy bấm "Kết nối & Gắn vào phân hiệu" trên thiết bị bên dưới để nhập mật khẩu nhé.`
+            : 'Đã quét mạng nội bộ nhưng chưa thấy máy chấm công nào đang bật. Bạn hãy kiểm tra nguồn điện và dây mạng của máy nhé.',
+          foundCount > 0 ? 'success' : 'info'
+        );
       } else if (isPublicCloudWebOrigin()) {
-        // Khi Web chạy trên tên miền Cloud công cộng mà máy tính tại trường chưa bật Bộ kết nối 127.0.0.1:18686:
-        // Không gọi quét mạng nội bộ của máy chủ Cloud (tránh báo nhầm dải Docker 172.20.0.x), mà hiển thị hướng dẫn 1 chạm rõ ràng!
         setLanScanResult({
           needsLocalConnector: true,
           scannedSubnets: [],
@@ -423,9 +434,7 @@ export default function TimekeepingDeviceManagement() {
         notifyNeedLocalConnectorOnCloud();
       } else {
         const res = await discoverLanTimekeepingDevices({
-          subnetPrefix: safeRange || undefined,
-          probeUsername: 'admin',
-          probePassword: lanProbePassword.trim() || undefined
+          subnetPrefix: safeRange || undefined
         });
         const foundList = res.data?.data?.discoveredDevices || [];
         setLanScanResult(res.data?.data || null);
@@ -435,7 +444,10 @@ export default function TimekeepingDeviceManagement() {
             'info'
           );
         } else {
-          showToast(res.data?.message || 'Đã tìm thấy máy chấm công trong mạng trường!', 'success');
+          showToast(
+            `Đã tìm thấy ${foundList.length} máy chấm công trong mạng trường! Bạn hãy bấm "Kết nối & Gắn vào phân hiệu" trên thiết bị cần dùng để nhập mật khẩu nhé.`,
+            'success'
+          );
         }
       }
     } catch (err) {
@@ -445,7 +457,7 @@ export default function TimekeepingDeviceManagement() {
     }
   };
 
-  const handleQuickSaveDiscoveredDevice = async (item) => {
+  const openConnectDiscoveredModal = (item) => {
     if (item.lockedToOtherCampus) {
       showToast(
         'Chiếc máy chấm công này đang được khóa bảo mật cho một phân hiệu trường khác. Vui lòng liên hệ Kỹ thuật viên Nhà cung cấp phần mềm nếu cần chuyển máy sang phân hiệu của bạn.',
@@ -453,39 +465,75 @@ export default function TimekeepingDeviceManagement() {
       );
       return;
     }
-    if (!lanProbePassword.trim()) {
-      handlePickDiscoveredDevice(item);
+    setConnectModalError('');
+    setConnectModalTarget(item);
+    setConnectForm({
+      name: `Máy chấm công Cổng chính (${item.host})`,
+      location: 'Sảnh đón trẻ',
+      username: 'admin',
+      password: '',
+      showPassword: false
+    });
+  };
+
+  const handleConfirmConnectDiscoveredDevice = async (e) => {
+    e.preventDefault();
+    if (!connectModalTarget || connectingDiscovered) return;
+    if (!connectForm.password.trim()) {
+      setConnectModalError('Bạn vui lòng nhập mật khẩu quản trị của máy chấm công để xác nhận kết nối.');
       return;
     }
+
+    const item = connectModalTarget;
     const targetCampus = selectedCampus !== 'ALL' ? selectedCampus : (campuses[0] || 'Cơ sở chính');
-    setQuickSavingHost(item.host);
+    setConnectingDiscovered(true);
+    setConnectModalError('');
+
     try {
+      const bridgeUp = await refreshConnectorHealth();
+      let verifiedModel = item.model || 'DS-K1T320MX';
+      let verifiedSerial = item.serialNumber || '';
+      let verifiedCapacity = item.maxUserCapacity || 500;
+
+      // Xác thực mật khẩu trực tiếp với máy chấm công ngay trong mạng LAN trước khi lưu
+      if (bridgeUp) {
+        const inspected = await verifyDiscoveredDeviceCredentialsViaConnector({
+          host: item.host,
+          port: item.port || 80,
+          transportScheme: item.transportScheme || 'http',
+          username: connectForm.username.trim() || 'admin',
+          password: connectForm.password
+        });
+        if (inspected?.model) verifiedModel = inspected.model;
+        if (inspected?.serialNumber) verifiedSerial = inspected.serialNumber;
+        if (inspected?.maxUserCapacity) verifiedCapacity = inspected.maxUserCapacity;
+      }
+
+      const cleanDeviceName = connectForm.name.trim() || `Máy chấm công (${item.host})`;
       const createRes = await createTimekeepingDevice({
         deviceCode: buildAutoDeviceCode(item.host),
-        name: `Máy chấm công (${item.host})`,
+        name: cleanDeviceName,
         campus: targetCampus,
-        location: 'Sảnh đón trẻ',
-        model: item.model || 'DS-K1T320MX',
-        serialNumber: item.serialNumber || undefined,
+        location: connectForm.location.trim() || 'Sảnh đón trẻ',
+        model: verifiedModel,
+        serialNumber: verifiedSerial || undefined,
         host: item.host,
         transportScheme: item.transportScheme || 'http',
         httpPort: item.transportScheme === 'http' ? (item.port || 80) : 80,
         httpsPort: item.transportScheme === 'https' ? (item.port || 443) : 443,
-        maxUserCapacity: item.maxUserCapacity || 500,
+        maxUserCapacity: verifiedCapacity,
         syncAllocationMode: 'BY_CAMPUS_PRIORITY',
         syncTargetScope: 'ALL',
         autoSyncOnChange: true,
-        deviceUsername: 'admin',
-        devicePassword: lanProbePassword
+        deviceUsername: connectForm.username.trim() || 'admin',
+        devicePassword: connectForm.password
       });
 
       const createdDev = createRes.data?.data;
       if (createdDev?._id) {
-        const bridgeUp = await refreshConnectorHealth();
         if (bridgeUp) {
           const pullRes = await pullDeviceUsersViaLocalConnector(createdDev._id, false).catch(() => null);
           if (pullRes?.data) setLastPullReport(pullRes.data);
-          // Tự động đẩy luôn địa chỉ Webhook theo tên miền hiện tại xuống máy chấm công mới gán!
           await updateWebhookDomainViaLocalConnector(createdDev._id).catch(() => null);
         } else {
           const pullRes = await pullTimekeepingDeviceUsers(createdDev._id, false).catch(() => null);
@@ -499,45 +547,36 @@ export default function TimekeepingDeviceManagement() {
               ...prev,
               discoveredDevices: (prev.discoveredDevices || []).map((d) =>
                 d.host === item.host
-                  ? { ...d, alreadySaved: true, savedCampus: targetCampus, savedName: `Máy (${item.host})` }
+                  ? {
+                      ...d,
+                      model: verifiedModel,
+                      serialNumber: verifiedSerial,
+                      alreadySaved: true,
+                      savedCampus: targetCampus,
+                      savedName: cleanDeviceName
+                    }
                   : d
               )
             }
           : null
       );
+
+      setConnectModalTarget(null);
       showToast(
-        `Đã gắn máy chấm công (${item.host}) vào phân hiệu, khóa bảo mật mã phần cứng và kéo danh sách về phần mềm thành công!`,
+        `Đã kết nối máy chấm công "${cleanDeviceName}" (${item.host}), khóa bảo mật mã phần cứng với phân hiệu và đồng bộ danh sách về phần mềm thành công!`,
         'success'
       );
       await loadOverview();
     } catch (err) {
-      showToast(toFriendlyVietnameseNotice(err, 'Chưa lưu được máy chấm công này.'), 'error');
+      setConnectModalError(
+        toFriendlyVietnameseNotice(
+          err,
+          'Mật khẩu máy chấm công chưa đúng hoặc thiết bị chưa phản hồi. Bạn vui lòng kiểm tra lại mật khẩu rồi thử lại nhé.'
+        )
+      );
     } finally {
-      setQuickSavingHost('');
+      setConnectingDiscovered(false);
     }
-  };
-
-  const handlePickDiscoveredDevice = (item) => {
-    setEditingDeviceId(null);
-    const defaultCampus = selectedCampus !== 'ALL' ? selectedCampus : (campuses[0] || 'Cơ sở chính');
-    setDeviceForm({
-      deviceCode: buildAutoDeviceCode(item.host),
-      name: `Máy chấm công Hikvision (${item.host})`,
-      campus: defaultCampus,
-      location: 'Sảnh đón trẻ',
-      model: item.model || 'DS-K1T320MX',
-      host: item.host,
-      transportScheme: item.transportScheme || 'http',
-      port: item.port || 80,
-      deviceUsername: 'admin',
-      devicePassword: lanProbePassword || '',
-      maxUserCapacity: item.maxUserCapacity || 500,
-      syncAllocationMode: 'BY_CAMPUS_PRIORITY',
-      syncTargetScope: 'ALL',
-      autoSyncOnChange: true
-    });
-    setShowDeviceForm(true);
-    showToast(`Đã điền IP ${item.host}. Vui lòng chọn Phân hiệu & nhập mật khẩu máy Hikvision rồi bấm Lưu!`, 'info');
   };
 
   // ─── 2. THÊM / CẬP NHẬT / XÓA THIẾT BỊ ───
@@ -1429,8 +1468,11 @@ export default function TimekeepingDeviceManagement() {
         <div style={{ flex: '1 1 420px', minWidth: 0 }}>
           {connectorHealth.online ? (
             <>
-              <div style={{ fontWeight: 800, fontSize: 13.5, marginBottom: 2 }}>
-                🟢 Máy tính này đã kết nối trực tiếp với mạng nội bộ của trường ({connectorHealth.lanIps.join(', ') || 'Sẵn sàng'})
+              <div style={{ fontWeight: 800, fontSize: 13.5, marginBottom: 3, display: 'flex', alignItems: 'center' }}>
+                <span className="hik-inline-dot" />
+                <span>
+                  Máy tính này đã kết nối trực tiếp với mạng nội bộ của trường ({connectorHealth.lanIps.join(', ') || 'Sẵn sàng'})
+                </span>
               </div>
               <div style={{ fontSize: 12.5 }}>
                 Mọi thao tác <strong>Quét tìm máy</strong>, <strong>Kéo dữ liệu về phần mềm</strong> và <strong>Đẩy ảnh khuôn mặt học sinh</strong> đều được khóa bảo mật đúng với mã phần cứng máy chấm công của phân hiệu <strong>{resolvedSchoolCode || 'hiện tại'}</strong>.
@@ -1438,8 +1480,11 @@ export default function TimekeepingDeviceManagement() {
             </>
           ) : (
             <>
-              <div style={{ fontWeight: 800, fontSize: 13.5, marginBottom: 3 }}>
-                💡 Để kết nối với máy chấm công lắp trong mạng trường từ xa, hãy bật &ldquo;Bộ kết nối 1 chạm&rdquo; trên máy tính này
+              <div style={{ fontWeight: 800, fontSize: 13.5, marginBottom: 3, display: 'flex', alignItems: 'center' }}>
+                <span className="hik-inline-dot amber" />
+                <span>
+                  Để kết nối với máy chấm công lắp trong mạng trường từ xa, hãy bật &ldquo;Bộ kết nối 1 chạm&rdquo; trên máy tính này
+                </span>
               </div>
               <div style={{ fontSize: 12.5 }}>
                 Nếu máy tính văn phòng trường mới sử dụng lần đầu, bạn chỉ cần bấm <strong>&ldquo;Tải Bộ Kết Nối 1 Chạm&rdquo;</strong>, giải nén và mở tệp <code>1-Bat-Ket-Noi-1-Cham.bat</code> (tự khởi động cùng Windows và tự nhận diện mọi tên miền mới mà không cần cài lại).
@@ -1464,7 +1509,7 @@ export default function TimekeepingDeviceManagement() {
             onClick={handleDownloadConnectorZip}
           >
             <Icon name="download" size={14} />
-            <span>{downloadingConnector ? 'Đang đóng gói...' : '📥 Tải Bộ Kết Nối 1 Chạm (.zip)'}</span>
+            <span>{downloadingConnector ? 'Đang đóng gói...' : 'Tải Bộ Kết Nối 1 Chạm (.zip)'}</span>
           </button>
         </div>
       </section>
@@ -1473,8 +1518,9 @@ export default function TimekeepingDeviceManagement() {
       {liveFeedEvents.length > 0 && (
         <section className="hik-live-feed-card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-            <strong style={{ fontSize: 13.5, color: '#1e3a8a' }}>
-              🔔 Thông báo điểm danh &amp; hoạt động máy chấm công trực tiếp tại phân hiệu ({resolvedSchoolCode})
+            <strong style={{ fontSize: 13.5, color: '#1e3a8a', display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+              <Icon name="bell" size={15} />
+              <span>Thông báo điểm danh &amp; hoạt động máy chấm công trực tiếp tại phân hiệu ({resolvedSchoolCode})</span>
             </strong>
             <span style={{ fontSize: 11.5, color: '#64748b', fontWeight: 600 }}>Cập nhật tự động theo thời gian thực</span>
           </div>
@@ -1513,7 +1559,7 @@ export default function TimekeepingDeviceManagement() {
                 onClick={handleScanLan}
               >
                 <Icon name="radar" size={15} />
-                <span>{scanningLan ? 'Đang quét LAN...' : 'Quét Máy Trong Mạng LAN'}</span>
+                <span>{scanningLan ? 'Đang quét mạng...' : 'Quét Máy Trong Mạng LAN'}</span>
               </button>
             )}
 
@@ -1553,7 +1599,7 @@ export default function TimekeepingDeviceManagement() {
                 className="hik-btn hik-btn-indigo"
                 disabled={syncingAll || biSyncingAll || devices.length === 0}
                 onClick={() => askPushSync(null)}
-                title="Đẩy nhanh Delta hồ sơ mới & ảnh mặt <200KB từ Web xuống tất cả máy chấm công"
+                title="Đẩy nhanh hồ sơ mới & ảnh mặt từ Web xuống tất cả máy chấm công"
               >
                 <Icon name="upload" size={15} />
                 <span>{syncingAll ? 'Đang đẩy xuống máy...' : 'Đẩy Nhanh Xuống Tất Cả Máy'}</span>
@@ -1566,16 +1612,16 @@ export default function TimekeepingDeviceManagement() {
                 className="hik-btn hik-btn-emerald"
                 disabled={biSyncingAll || syncingAll || pullingAll || devices.length === 0}
                 onClick={() => handleQuickBidirectionalCluster(null)}
-                title="Đồng bộ nhanh 2 phía chỉ với 1 chạm: Kéo lượt quẹt & ảnh mặt từ máy về Web -> Đẩy hồ sơ & ảnh mặt mới từ Web xuống máy"
+                title="Đồng bộ nhanh 2 phía: Kéo lượt quẹt & ảnh mặt từ máy về Web, sau đó đẩy hồ sơ mới từ Web xuống máy"
               >
                 <Icon name="refresh" size={15} />
-                <span>{biSyncingAll ? 'Đang đồng bộ 2 phía...' : '⚡ Đồng Bộ Nhanh 2 Chiều'}</span>
+                <span>{biSyncingAll ? 'Đang đồng bộ 2 phía...' : 'Đồng Bộ Nhanh 2 Chiều'}</span>
               </button>
             )}
           </div>
         </div>
 
-        {/* Thanh định danh Phân hiệu đang quản lý (Admin Phân hiệu khóa vào phân hiệu của mình; Kỹ thuật NCC thấy rõ phân hiệu đang bàn giao) */}
+        {/* Thanh định danh Phân hiệu đang quản lý */}
         <div className="hik-campus-bar">
           <div className="hik-campus-tabs">
             <span className="hik-campus-label">Phạm vi đồng bộ an toàn:</span>
@@ -1601,67 +1647,53 @@ export default function TimekeepingDeviceManagement() {
                       setRosterPage(1);
                     }}
                   >
-                    🏫 {cName}
+                    {cName}
                   </button>
                 ))}
               </>
             ) : (
-              <span className="hik-campus-chip active" style={{ cursor: 'default' }}>
-                🏫 {storedTenant?.name || campuses[0] || 'Phân hiệu hiện tại'}
+              <span className="hik-campus-chip active" style={{ cursor: 'default', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <Icon name="building" size={13} />
+                <span>{storedTenant?.name || campuses[0] || 'Phân hiệu hiện tại'}</span>
               </span>
             )}
           </div>
           <span style={{ fontSize: 12, color: '#475569', fontWeight: 700 }}>
             Mã phân hiệu khóa phần cứng: <strong style={{ color: '#0f172a' }}>{resolvedSchoolCode || '—'}</strong>
-            {isVendorSupport ? ' • 🔧 Phiên Kỹ thuật Nhà cung cấp' : ''}
+            {isVendorSupport ? ' • Phiên Kỹ thuật Nhà cung cấp' : ''}
           </span>
         </div>
 
-        {/* Kết quả quét mạng LAN tự động & Lưu nhanh 1 chạm */}
+        {/* Kết quả quét mạng LAN tự động (Bước 1: Chỉ hiển thị danh sách máy tìm thấy — KHÔNG bắt nhập mật khẩu ở đây) */}
         {lanScanResult && (
           <div className="hik-lan-panel">
             <div className="hik-lan-header">
               <div>
                 <h4>
-                  <Icon name="radar" size={16} />
-                  {lanScanResult.needsLocalConnector
-                    ? 'Cần bật "Bộ kết nối 1 chạm" trên máy tính này để quét mạng nội bộ của trường'
-                    : `Kết quả tìm máy chấm công tại trường (${lanScanResult.scannedSubnets?.join(', ') || 'Mạng nội bộ'}) — Tìm thấy ${
-                        lanScanResult.discoveredDevices?.length || 0
-                      } máy`}
+                  <Icon name="radar" size={17} />
+                  <span>
+                    {lanScanResult.needsLocalConnector
+                      ? 'Cần bật "Bộ kết nối 1 chạm" trên máy tính này để quét mạng nội bộ của trường'
+                      : `Thiết bị tìm thấy trong mạng trường (${lanScanResult.scannedSubnets?.join(', ') || 'Mạng nội bộ'}) — ${
+                          lanScanResult.discoveredDevices?.length || 0
+                        } máy`}
+                  </span>
                 </h4>
                 <p>
-                  {lanScanResult.needsLocalConnector ? (
-                    <>
-                      Vì trang Web đang mở qua tên miền Internet, bạn hãy bật <strong>Bộ kết nối 1 chạm</strong> trên máy tính đặt tại trường để trình duyệt nhìn thấy ngay máy chấm công trong mạng Wi-Fi/dây mạng của phân hiệu.
-                    </>
-                  ) : (
-                    <>
-                      Nhập sẵn <strong>Mật khẩu máy chấm công</strong> bên phải để đọc luôn dung lượng bộ nhớ và bấm <strong>&ldquo;⚡ Gắn Máy &amp; Kéo Khuôn Mặt&rdquo;</strong> chỉ với 1 chạm!
-                    </>
-                  )}
+                  {lanScanResult.needsLocalConnector
+                    ? 'Vì trang Web đang mở qua tên miền Internet, bạn hãy bật Bộ kết nối 1 chạm trên máy tính đặt tại trường để nhìn thấy máy chấm công trong mạng của phân hiệu.'
+                    : 'Chọn máy chấm công tìm thấy bên dưới và bấm "Kết nối & Gắn vào phân hiệu" để nhập mật khẩu xác nhận.'}
                 </p>
               </div>
               <div className="hik-lan-controls">
-                {/* Input ẩn chống Chrome tự động điền nhầm tài khoản đăng nhập Web vào ô địa chỉ mạng */}
-                <input type="text" name="prevent_autofill_username" autoComplete="username" tabIndex={-1} aria-hidden="true" style={{ position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none' }} />
-                <input type="password" name="prevent_autofill_password" autoComplete="current-password" tabIndex={-1} aria-hidden="true" style={{ position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none' }} />
                 <input
                   type="text"
-                  name="hn_campus_lan_ip_range"
+                  name="hn_campus_lan_ip_filter"
                   autoComplete="off"
                   spellCheck={false}
                   value={subnetPrefix}
                   onChange={(e) => setSubnetPrefix(e.target.value)}
-                  placeholder="Địa chỉ mạng (VD: 192.168.1 hoặc 192.168.1.8)"
-                />
-                <input
-                  type="password"
-                  name="hn_campus_hik_probe_secret"
-                  autoComplete="new-password"
-                  value={lanProbePassword}
-                  onChange={(e) => setLanProbePassword(e.target.value)}
-                  placeholder="Mật khẩu máy chấm công (Gắn 1 chạm)"
+                  placeholder="Tùy chọn dải mạng / IP (VD: 192.168.1)"
                 />
                 <button
                   type="button"
@@ -1669,7 +1701,8 @@ export default function TimekeepingDeviceManagement() {
                   disabled={scanningLan}
                   onClick={handleScanLan}
                 >
-                  {scanningLan ? 'Đang quét...' : 'Quét lại'}
+                  <Icon name="refresh" size={13} />
+                  <span>{scanningLan ? 'Đang quét...' : 'Quét lại'}</span>
                 </button>
                 <button
                   type="button"
@@ -1683,12 +1716,12 @@ export default function TimekeepingDeviceManagement() {
             </div>
 
             {lanScanResult.needsLocalConnector ? (
-              <div style={{ background: '#ffffff', padding: '14px 16px', borderRadius: 12, fontSize: 13, color: '#1e293b', display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12, border: '1px solid #fde68a' }}>
+              <div style={{ background: '#ffffff', padding: '14px 18px', borderRadius: 12, fontSize: 13, color: '#1e293b', display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12, border: '1px solid #fde68a' }}>
                 <div style={{ flex: '1 1 380px', lineHeight: 1.55 }}>
-                  <strong>Hướng dẫn kết nối 2 bước siêu nhanh (chỉ làm 1 lần duy nhất):</strong>
+                  <strong>Hướng dẫn kết nối 2 bước nhanh chóng (chỉ thực hiện 1 lần đầu):</strong>
                   <div style={{ marginTop: 4, color: '#475569' }}>
-                    <strong>Bước 1:</strong> Bấm nút <strong>&ldquo;📥 Tải Bộ Kết Nối 1 Chạm (.zip)&rdquo;</strong> bên phải rồi giải nén ra máy tính.<br />
-                    <strong>Bước 2:</strong> Mở tệp <code>1-Bat-Ket-Noi-1-Cham.bat</code>, sau đó bấm <strong>&ldquo;🔄 Đã bật xong — Quét ngay&rdquo;</strong>.
+                    <strong>Bước 1:</strong> Bấm nút <strong>&ldquo;Tải Bộ Kết Nối 1 Chạm (.zip)&rdquo;</strong> bên phải rồi giải nén ra máy tính.<br />
+                    <strong>Bước 2:</strong> Mở tệp <code>1-Bat-Ket-Noi-1-Cham.bat</code>, sau đó bấm <strong>&ldquo;Đã bật xong — Quét ngay&rdquo;</strong>.
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -1699,7 +1732,7 @@ export default function TimekeepingDeviceManagement() {
                     onClick={handleDownloadConnectorZip}
                   >
                     <Icon name="download" size={14} />
-                    <span>{downloadingConnector ? 'Đang tải...' : '📥 Tải Bộ Kết Nối 1 Chạm (.zip)'}</span>
+                    <span>{downloadingConnector ? 'Đang tải...' : 'Tải Bộ Kết Nối 1 Chạm (.zip)'}</span>
                   </button>
                   <button
                     type="button"
@@ -1708,59 +1741,61 @@ export default function TimekeepingDeviceManagement() {
                     onClick={handleScanLan}
                   >
                     <Icon name="refresh" size={14} />
-                    <span>🔄 Đã bật xong — Quét ngay</span>
+                    <span>Đã bật xong — Quét ngay</span>
                   </button>
                 </div>
               </div>
             ) : lanScanResult.discoveredDevices?.length === 0 ? (
-              <div style={{ background: '#ffffff', padding: '12px 14px', borderRadius: 10, fontSize: 12.5, color: '#475569', lineHeight: 1.5 }}>
-                Chưa tìm thấy máy chấm công nào đang bật trong dải mạng này. Bạn hãy kiểm tra xem máy chấm công ở cổng đã cắm điện và dùng chung mạng Wi-Fi/dây mạng với máy tính này chưa, hoặc nhập thẳng địa chỉ của máy (ví dụ: <code>192.168.1.8</code>) vào ô bên trên rồi bấm <strong>Quét lại</strong> nhé.
+              <div style={{ background: '#ffffff', padding: '14px 16px', borderRadius: 12, fontSize: 13, color: '#475569', lineHeight: 1.55, border: '1px solid #e2e8f0' }}>
+                Chưa tìm thấy máy chấm công nào đang bật trong dải mạng này. Bạn hãy kiểm tra xem máy chấm công ở cổng đã cắm điện và dùng chung mạng Wi-Fi/dây mạng với máy tính này chưa, hoặc nhập địa chỉ của máy (ví dụ: <code>192.168.1.8</code>) vào ô bên trên rồi bấm <strong>Quét lại</strong>.
               </div>
             ) : (
-              <div className="hik-lan-grid">
+              <div className="hik-lan-list">
                 {lanScanResult.discoveredDevices.map((item) => (
                   <div key={`${item.host}:${item.port}`} className="hik-lan-item">
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontWeight: 800, fontSize: 13, color: '#0f172a' }}>
-                        Máy chấm công tại địa chỉ {item.host}
-                      </div>
-                      <div style={{ fontSize: 11, color: '#64748b' }}>
-                        {item.model || 'Thiết bị khuôn mặt Hikvision'}
-                        {item.serialNumber ? ` • Mã phần cứng: ${item.serialNumber}` : ''}
-                        {item.currentStoredUsers !== null && item.currentStoredUsers !== undefined
-                          ? ` • Đang lưu ${item.currentStoredUsers}/${item.maxUserCapacity || 500} hồ sơ`
-                          : ''}
+                    <div className="hik-lan-item-main">
+                      <span className="hik-lan-device-icon">
+                        <Icon name="server" size={20} />
+                      </span>
+                      <div className="hik-lan-item-copy">
+                        <div className="hik-lan-item-title">
+                          <span>Máy chấm công Hikvision — {item.host}</span>
+                          {!item.lockedToOtherCampus && !item.alreadySaved && (
+                            <span className="hik-status-pill hik-status-online" style={{ fontSize: 11 }}>
+                              Đang bật trong mạng LAN
+                            </span>
+                          )}
+                        </div>
+                        <div className="hik-lan-item-meta">
+                          Dòng máy: <strong>{item.model || 'DS-K1T320MX'}</strong> · Cổng kết nối: {item.port || 80}
+                          {item.serialNumber ? ` · Mã phần cứng: ${item.serialNumber}` : ''}
+                          {item.currentStoredUsers !== null && item.currentStoredUsers !== undefined
+                            ? ` · Đang lưu ${item.currentStoredUsers}/${item.maxUserCapacity || 500} hồ sơ`
+                            : ''}
+                        </div>
                       </div>
                     </div>
-                    {item.lockedToOtherCampus ? (
-                      <span className="hik-status-pill hik-status-offline" title="Thiết bị này đã khóa cho phân hiệu khác để chống kéo/đẩy nhầm">
-                        🔒 Thuộc phân hiệu khác
-                      </span>
-                    ) : item.alreadySaved ? (
-                      <span className="hik-status-pill hik-status-online">
-                        Đã gắn với phân hiệu ({item.savedName || item.savedCampus})
-                      </span>
-                    ) : isAdmin ? (
-                      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                        {lanProbePassword.trim() && (
-                          <button
-                            type="button"
-                            className="hik-btn hik-btn-emerald hik-btn-sm"
-                            disabled={quickSavingHost === item.host}
-                            onClick={() => handleQuickSaveDiscoveredDevice(item)}
-                          >
-                            {quickSavingHost === item.host ? 'Đang gắn máy...' : '⚡ Gắn Máy & Kéo Khuôn Mặt'}
-                          </button>
-                        )}
+
+                    <div className="hik-lan-item-actions">
+                      {item.lockedToOtherCampus ? (
+                        <span className="hik-status-pill hik-status-offline" title="Thiết bị này đã khóa cho phân hiệu khác để chống kéo/đẩy nhầm">
+                          <Icon name="lock" size={12} /> Thuộc phân hiệu khác
+                        </span>
+                      ) : item.alreadySaved ? (
+                        <span className="hik-status-pill hik-status-online">
+                          <Icon name="check" size={12} /> Đã gắn với phân hiệu ({item.savedName || item.savedCampus})
+                        </span>
+                      ) : isAdmin ? (
                         <button
                           type="button"
-                          className="hik-btn hik-btn-indigo hik-btn-sm"
-                          onClick={() => handlePickDiscoveredDevice(item)}
+                          className="hik-btn hik-btn-indigo"
+                          onClick={() => openConnectDiscoveredModal(item)}
                         >
-                          Chọn &amp; Nhập mật khẩu
+                          <Icon name="link" size={15} />
+                          <span>Kết nối &amp; Gắn vào phân hiệu</span>
                         </button>
-                      </div>
-                    ) : null}
+                      ) : null}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -2083,11 +2118,11 @@ export default function TimekeepingDeviceManagement() {
                         </span>
                         {dev.serialNumber ? (
                           <span className="hik-serial-lock-pill" title="Đã khóa cứng mã phần cứng với phân hiệu này để không bao giờ kéo/đẩy nhầm sang trường khác">
-                            🔒 Đã khóa với phân hiệu ({dev.serialNumber.slice(-10)})
+                            <Icon name="lock" size={11} /> Đã khóa với phân hiệu ({dev.serialNumber.slice(-10)})
                           </span>
                         ) : (
                           <span className="hik-serial-lock-pill pending">
-                            🔓 Tự khóa mã máy ở lần đồng bộ đầu
+                            <Icon name="unlock" size={11} /> Tự khóa mã máy ở lần đồng bộ đầu
                           </span>
                         )}
                       </div>
@@ -2231,7 +2266,7 @@ export default function TimekeepingDeviceManagement() {
                     >
                       <Icon name="refresh" size={14} />
                       <span>
-                        {busyState === 'bisync' ? 'Đang chạy 2 chiều...' : '⚡ Đồng bộ 2 chiều'}
+                        {busyState === 'bisync' ? 'Đang chạy 2 chiều...' : 'Đồng bộ 2 chiều'}
                       </span>
                     </button>
                   )}
@@ -2283,11 +2318,11 @@ export default function TimekeepingDeviceManagement() {
                       onClick={() => handleUpdateWebhookDomain(dev)}
                       title="Cập nhật 1 chạm địa chỉ tên miền Web hiện tại xuống máy chấm công để nhận thông báo điểm danh tức thì"
                     >
-                      <Icon name="link" size={14} />
+                      <Icon name="globe" size={14} />
                       <span>
                         {busyState === 'webhook'
                           ? 'Đang cập nhật tên miền...'
-                          : '🌐 Cập nhật địa chỉ Web xuống máy'}
+                          : 'Cập nhật địa chỉ Web xuống máy'}
                       </span>
                     </button>
                   )}
@@ -2305,8 +2340,8 @@ export default function TimekeepingDeviceManagement() {
                       }}
                       title="Chỉ dành cho Kỹ thuật viên Nhà cung cấp: Gỡ khóa mã phần cứng hoặc chuyển máy sang phân hiệu khác"
                     >
-                      <Icon name="shield" size={14} />
-                      <span>🔧 Gỡ khóa / Chuyển Phân hiệu</span>
+                      <Icon name="wrench" size={14} />
+                      <span>Gỡ khóa / Chuyển Phân hiệu</span>
                     </button>
                   )}
 
@@ -2370,7 +2405,7 @@ export default function TimekeepingDeviceManagement() {
             lastPullReport.unmatchedOnDevice.length > 0 && (
               <div className="hik-unmatched-box">
                 <div style={{ fontSize: 12.5, fontWeight: 800, color: '#92400e' }}>
-                  ⚡ Phát hiện {lastPullReport.unmatchedOnDevice.length} hồ sơ đăng ký trực tiếp trên máy chưa khớp Mã Web — Ghép nhanh 1 chạm để lưu luôn Ảnh khuôn mặt &amp; Điểm danh:
+                  Phát hiện {lastPullReport.unmatchedOnDevice.length} hồ sơ đăng ký trực tiếp trên máy chưa khớp Mã Web — Ghép nhanh để lưu luôn Ảnh khuôn mặt &amp; Điểm danh:
                 </div>
 
                 {lastPullReport.unmatchedOnDevice.map((u) => {
@@ -2459,11 +2494,11 @@ export default function TimekeepingDeviceManagement() {
               onClick={() => handleUpdateWebhookDomain(null)}
               title="Khi nhà trường đổi sang tên miền mới, chỉ cần bấm nút này để đẩy địa chỉ mới xuống toàn bộ máy chấm công!"
             >
-              <Icon name="refresh" size={14} />
+              <Icon name="globe" size={14} />
               <span>
                 {updatingWebhookAll
                   ? 'Đang cập nhật xuống máy...'
-                  : '🌐 1 Chạm Cập Nhật Tên Miền Mới Xuống Máy'}
+                  : '1 Chạm Cập Nhật Tên Miền Mới Xuống Máy'}
               </span>
             </button>
           )}
@@ -2583,8 +2618,8 @@ export default function TimekeepingDeviceManagement() {
                           <div>
                             <p className="hik-person-name">{item.fullName}</p>
                             <p className="hik-person-sub">
-                              {item.subjectType === 'STUDENT' ? '🎒 Học sinh' : '👩‍🏫 Nhân sự'} •{' '}
-                              <strong>{item.roleOrClassLabel}</strong> • 🏫 {item.campus}
+                              {item.subjectType === 'STUDENT' ? 'Học sinh' : 'Nhân sự'} •{' '}
+                              <strong>{item.roleOrClassLabel}</strong> • {item.campus}
                             </p>
                           </div>
                         </div>
@@ -3178,6 +3213,148 @@ export default function TimekeepingDeviceManagement() {
           </div>,
           document.body
         )}
+      {/* ─── BƯỚC 2: MODAL NHẬP MẬT KHẨU KẾT NỐI & GẮN MÁY VỪA TÌM THẤY TRONG LAN ─── */}
+      {connectModalTarget &&
+        createPortal(
+          <div
+            className="account-modal-backdrop"
+            onClick={() => !connectingDiscovered && setConnectModalTarget(null)}
+            role="presentation"
+          >
+            <form
+              className="account-modal-card student-form"
+              style={{ width: 'min(540px, 95vw)' }}
+              autoComplete="off"
+              onClick={(e) => e.stopPropagation()}
+              onSubmit={handleConfirmConnectDiscoveredDevice}
+            >
+              <div className="account-modal-header">
+                <div>
+                  <p className="card-kicker">BƯỚC 2 · XÁC NHẬN MẬT KHẨU THIẾT BỊ</p>
+                  <h2>Kết nối Máy Chấm Công ({connectModalTarget.host})</h2>
+                </div>
+                <button
+                  type="button"
+                  className="button button-secondary modal-close-btn"
+                  disabled={connectingDiscovered}
+                  onClick={() => setConnectModalTarget(null)}
+                >
+                  <Icon name="close" size={18} />
+                </button>
+              </div>
+
+              <div
+                style={{
+                  padding: '11px 14px',
+                  marginBottom: 16,
+                  borderRadius: 11,
+                  background: '#f8fafc',
+                  border: '1px solid #dbeafe',
+                  fontSize: 13,
+                  color: '#334155',
+                  lineHeight: 1.5
+                }}
+              >
+                Đã tìm thấy thiết bị <strong>{connectModalTarget.model || 'DS-K1T320MX'}</strong> tại địa chỉ{' '}
+                <strong>{connectModalTarget.host}</strong>. Nhập mật khẩu quản trị của máy chấm công để hệ thống khóa bảo mật thiết bị vào phân hiệu <strong>{resolvedSchoolCode}</strong> và tự động kéo dữ liệu về phần mềm.
+              </div>
+
+              {connectModalError && (
+                <div className="form-error" style={{ marginBottom: 14, fontSize: 13 }}>
+                  {connectModalError}
+                </div>
+              )}
+
+              {/* Chặn trình duyệt tự động chèn tài khoản Web */}
+              <input type="text" name="fake_user_autofill" autoComplete="username" tabIndex={-1} aria-hidden="true" style={{ position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none' }} />
+              <input type="password" name="fake_pass_autofill" autoComplete="current-password" tabIndex={-1} aria-hidden="true" style={{ position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none' }} />
+
+              <div className="student-form-grid">
+                <label className="form-wide">
+                  Tên gọi máy chấm công tại phân hiệu *
+                  <input
+                    required
+                    disabled={connectingDiscovered}
+                    value={connectForm.name}
+                    onChange={(e) => setConnectForm({ ...connectForm, name: e.target.value })}
+                    placeholder="VD: Máy chấm công Cổng chính"
+                  />
+                </label>
+
+                <label>
+                  Vị trí lắp đặt
+                  <input
+                    disabled={connectingDiscovered}
+                    value={connectForm.location}
+                    onChange={(e) => setConnectForm({ ...connectForm, location: e.target.value })}
+                    placeholder="VD: Sảnh đón trẻ"
+                  />
+                </label>
+
+                <label>
+                  Tài khoản quản trị máy *
+                  <input
+                    required
+                    name="hn_connect_dev_user"
+                    autoComplete="off"
+                    disabled={connectingDiscovered}
+                    value={connectForm.username}
+                    onChange={(e) => setConnectForm({ ...connectForm, username: e.target.value })}
+                    placeholder="admin"
+                  />
+                </label>
+
+                <label className="form-wide">
+                  Mật khẩu máy chấm công *
+                  <div className="password-field-group">
+                    <input
+                      type={connectForm.showPassword ? 'text' : 'password'}
+                      name="hn_connect_dev_secret"
+                      autoComplete="new-password"
+                      autoFocus
+                      required
+                      disabled={connectingDiscovered}
+                      value={connectForm.password}
+                      onChange={(e) => setConnectForm({ ...connectForm, password: e.target.value })}
+                      placeholder="Nhập mật khẩu quản trị của máy Hikvision"
+                    />
+                    <button
+                      type="button"
+                      className="password-field-btn"
+                      onClick={() =>
+                        setConnectForm((prev) => ({ ...prev, showPassword: !prev.showPassword }))
+                      }
+                    >
+                      <Icon name={connectForm.showPassword ? 'eyeOff' : 'eye'} size={15} />
+                      <span>{connectForm.showPassword ? 'Ẩn' : 'Hiện'}</span>
+                    </button>
+                  </div>
+                </label>
+              </div>
+
+              <div className="account-modal-actions" style={{ marginTop: 20 }}>
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  disabled={connectingDiscovered}
+                  onClick={() => setConnectModalTarget(null)}
+                >
+                  Hủy
+                </button>
+                <button type="submit" className="button button-primary" disabled={connectingDiscovered}>
+                  <Icon name="check" size={16} />
+                  <span>
+                    {connectingDiscovered
+                      ? 'Đang xác thực & kéo dữ liệu...'
+                      : 'Xác nhận kết nối & Kéo dữ liệu'}
+                  </span>
+                </button>
+              </div>
+            </form>
+          </div>,
+          document.body
+        )}
+
       {/* ─── MODAL KỸ THUẬT NHÀ CUNG CẤP: GỠ KHÓA MÃ PHẦN CỨNG / CHUYỂN PHÂN HIỆU ─── */}
       {vendorSerialModalDev &&
         isVendorSupport &&

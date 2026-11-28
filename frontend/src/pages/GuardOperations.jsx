@@ -307,9 +307,12 @@ export default function GuardOperations() {
     {state.success && <div className="timekeeping-notice success guard-notice">{state.success}</div>}
     {liveScanBanner && (
       <div className="timekeeping-notice success guard-notice" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-        <div>
-          <strong>🟢 Vừa quét khuôn mặt tại cổng: {liveScanBanner.title}</strong>
-          <div style={{ fontSize: 13.5, marginTop: 2 }}>{liveScanBanner.message}</div>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+          <Icon name="checkCircle" size={18} />
+          <div>
+            <strong>Vừa quét khuôn mặt tại cổng: {liveScanBanner.title}</strong>
+            <div style={{ fontSize: 13.5, marginTop: 2 }}>{liveScanBanner.message}</div>
+          </div>
         </div>
         <button type="button" className="button button-secondary" onClick={() => setLiveScanBanner(null)}>Đã rõ</button>
       </div>

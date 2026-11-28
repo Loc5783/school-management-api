@@ -1534,7 +1534,7 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
                   >
                     {vendorSchools.map((s) => (
                       <option key={s._id} value={s._id}>
-                        🔧 Phân hiệu: {s.code} — {s.name}
+                        Phân hiệu: {s.code} — {s.name}
                       </option>
                     ))}
                   </select>
@@ -1596,7 +1596,7 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
               >
                 {vendorSchools.map((s) => (
                   <option key={s._id} value={s._id}>
-                    🔧 Phân hiệu: {s.code} — {s.name}
+                    Phân hiệu: {s.code} — {s.name}
                   </option>
                 ))}
               </select>
@@ -1714,7 +1714,7 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
                   {notifications.length ? (
                     notifications.map((item) => (
                       <button key={item._id} className={`${item.isRead ? '' : 'unread'} ${item.metadata?.priority === 'high' ? 'priority' : ''}`.trim()} onClick={() => openNotification(item)}>
-                        <strong>{item.metadata?.priority === 'high' ? '⚠ ' : ''}{item.title}</strong>
+                        <strong>{item.metadata?.priority === 'high' ? '[Quan trọng] ' : ''}{item.title}</strong>
                         <small>{item.message}</small>
                       </button>
                     ))
@@ -1796,10 +1796,12 @@ function ShellFrame({ title, subtitle, actions, children, isPersistentLayout = f
                     <button
                       type="button"
                       className="hn-live-sound-btn"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
                       onClick={toggleLiveSound}
                       title={liveSoundEnabled ? 'Đang bật chuông báo nhẹ (Bấm để tắt tiếng)' : 'Đang tắt tiếng chuông (Bấm để bật)'}
                     >
-                      {liveSoundEnabled ? '🔊 Chuông' : '🔇 Tắt tiếng'}
+                      <Icon name={liveSoundEnabled ? 'volume2' : 'volumeX'} size={13} />
+                      <span>{liveSoundEnabled ? 'Chuông' : 'Tắt tiếng'}</span>
                     </button>
                     <button
                       type="button"

@@ -131,25 +131,117 @@ async function callLocalConnectorPost(endpointPath, bodyPayload = {}, timeoutMs 
 
 /**
  * Quét tìm máy chấm công Hikvision ngay trên mạng LAN của máy tính tại Phân hiệu qua `127.0.0.1:18686`.
+ * - Quét hoàn toàn KHÔNG cần nhập mật khẩu trước.
+ * - Tương thích ngược thông minh: Nếu máy tính đang chạy bản Connector cũ `2.0.0` (chưa cập nhật lên `2.1.0`),
+ *   tự động chia dải mạng thành từng cụm nhỏ 10 địa chỉ để không làm nghẽn kết nối TCP trên Windows!
  */
 export async function discoverLanViaLocalConnector({
   subnetPrefix = '',
   probeUsername = 'admin',
   probePassword = ''
 } = {}) {
-  const localData = await callLocalConnectorPost(
-    '/lan/discover',
-    { subnetPrefix, probeUsername, probePassword },
-    35000
-  );
+  const health = await probeLocalConnectorHealth();
+  const cleanInput = String(subnetPrefix || '').trim();
+  const isLegacyV20 = health.online && String(health.version || '2.0.0') === '2.0.0';
+
+  let mergedSubnets = [];
+  let mergedDevices = [];
+
+  const isSingleIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(cleanInput);
+  const isExplicitRange = /-/.test(cleanInput);
+
+  if (isLegacyV20 && !isSingleIp && !isExplicitRange) {
+    // Chia nhỏ thành từng chặng 10 IP cho bản Connector 2.0.0 đang chạy nền để bắt 100% thiết bị Hikvision trên Windows
+    const basePrefixes = [];
+    const cleanedPrefix = cleanInput.replace(/\.\d+\/\d+$/, '').replace(/\.\*$/, '').replace(/\.$/, '');
+    if (/^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(cleanedPrefix)) {
+      basePrefixes.push(cleanedPrefix);
+    } else {
+      for (const ip of health.lanIps || []) {
+        if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip)) {
+          const p = ip.split('.');
+          const pref = `${p[0]}.${p[1]}.${p[2]}`;
+          if (!basePrefixes.includes(pref)) basePrefixes.push(pref);
+        }
+      }
+      if (basePrefixes.length === 0) basePrefixes.push('192.168.1');
+    }
+
+    const seenHosts = new Set();
+    for (const pref of basePrefixes) {
+      mergedSubnets.push(`${pref}.1 - ${pref}.254`);
+      const windows = [];
+      for (let start = 1; start <= 254; start += 10) {
+        const end = Math.min(254, start + 9);
+        windows.push(`${pref}.${start}-${end}`);
+      }
+      // Chạy tối đa 2 cụm nhỏ song song (tối đa ~20 kết nối) để nhanh và không bao giờ trễ gói SYN
+      for (let w = 0; w < windows.length; w += 2) {
+        const pair = windows.slice(w, w + 2);
+        const results = await Promise.all(
+          pair.map((rangeStr) =>
+            callLocalConnectorPost(
+              '/lan/discover',
+              { subnetPrefix: rangeStr, probeUsername, probePassword },
+              12000
+            ).catch(() => null)
+          )
+        );
+        for (const r of results) {
+          for (const d of r?.discoveredDevices || []) {
+            const key = `${d.host}:${d.port}`;
+            if (!seenHosts.has(key)) {
+              seenHosts.add(key);
+              mergedDevices.push(d);
+            }
+          }
+        }
+      }
+    }
+  } else {
+    const localData = await callLocalConnectorPost(
+      '/lan/discover',
+      { subnetPrefix: cleanInput, probeUsername, probePassword },
+      45000
+    );
+    mergedSubnets = localData?.scannedSubnets || [];
+    mergedDevices = localData?.discoveredDevices || [];
+  }
+
   const enrichRes = await enrichConnectorScan({
-    scannedSubnets: localData?.scannedSubnets || [],
-    discoveredDevices: localData?.discoveredDevices || []
+    scannedSubnets: mergedSubnets,
+    discoveredDevices: mergedDevices
   });
   return {
-    data: enrichRes.data?.data || localData,
+    data: enrichRes.data?.data || { scannedSubnets: mergedSubnets, discoveredDevices: mergedDevices },
     message: enrichRes.data?.message || 'Đã quét xong mạng nội bộ tại trường!'
   };
+}
+
+/**
+ * Xác thực mật khẩu quản trị và đọc trực tiếp Model, Serial phần cứng, Dung lượng bộ nhớ từ máy vừa tìm thấy trong LAN
+ * (gọi ở Bước 2 sau khi người dùng chọn máy và nhập mật khẩu).
+ */
+export async function verifyDiscoveredDeviceCredentialsViaConnector({
+  host,
+  port = 80,
+  transportScheme = 'http',
+  username = 'admin',
+  password = ''
+}) {
+  return callLocalConnectorPost(
+    '/device/inspect',
+    {
+      device: {
+        host,
+        port,
+        transportScheme,
+        username: String(username || 'admin').trim() || 'admin',
+        password: String(password || '')
+      }
+    },
+    12000
+  );
 }
 
 /**

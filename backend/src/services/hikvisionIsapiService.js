@@ -1532,27 +1532,52 @@ async function discoverHikvisionDevicesOnLan({
 } = {}) {
   const { candidateIps, scannedSubnets } = resolveLanScanCandidateIps(subnetPrefix, existingDevices);
 
+  // Đọc bảng ARP của hệ điều hành trước để kiểm tra ưu tiên các thiết bị đang hoạt động trong mạng LAN
+  const arpIps = await new Promise((resolve) => {
+    const { execFile } = require('child_process');
+    execFile('arp', ['-a'], { timeout: 1200, windowsHide: true }, (err, stdout) => {
+      if (err || !stdout) return resolve(new Set());
+      const hits = new Set();
+      const matches = String(stdout).match(/\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})\b/g);
+      for (const ip of matches || []) {
+        if (ip && !ip.endsWith('.255') && !ip.endsWith('.0') && !FORBIDDEN_IPS.includes(ip)) {
+          hits.add(ip);
+        }
+      }
+      resolve(hits);
+    });
+  });
+
+  const orderedIps = [
+    ...candidateIps.filter((ip) => arpIps.has(ip)),
+    ...candidateIps.filter((ip) => !arpIps.has(ip))
+  ];
+
+  // Giới hạn tối đa 16 luồng kiểm tra đồng thời, kiểm tra cổng 80 trước tiên với timeout 650ms
   const openTargets = [];
-  const batchSize = 64;
-  for (let i = 0; i < candidateIps.length; i += batchSize) {
-    const slice = candidateIps.slice(i, i + batchSize);
-    const batchRes = await Promise.all(
-      slice.map(async (ip) => {
-        const [open80, open443, open8080] = await Promise.all([
-          checkTcpPortFast(ip, 80, 260),
-          checkTcpPortFast(ip, 443, 260),
-          checkTcpPortFast(ip, 8080, 260)
-        ]);
-        if (open80) return { ip, port: 80 };
-        if (open443) return { ip, port: 443 };
-        if (open8080) return { ip, port: 8080 };
-        return null;
-      })
-    );
-    for (const item of batchRes) {
-      if (item) openTargets.push(item);
+  let cursor = 0;
+  const workerCount = Math.min(16, Math.max(1, orderedIps.length));
+  async function scanWorker() {
+    while (true) {
+      const idx = cursor;
+      cursor += 1;
+      if (idx >= orderedIps.length) break;
+      const ip = orderedIps[idx];
+      const isKnownLive = arpIps.has(ip);
+      if (await checkTcpPortFast(ip, 80, isKnownLive ? 950 : 650)) {
+        openTargets.push({ ip, port: 80 });
+        continue;
+      }
+      if (await checkTcpPortFast(ip, 443, isKnownLive ? 650 : 420)) {
+        openTargets.push({ ip, port: 443 });
+        continue;
+      }
+      if (await checkTcpPortFast(ip, 8080, isKnownLive ? 650 : 420)) {
+        openTargets.push({ ip, port: 8080 });
+      }
     }
   }
+  await Promise.all(Array.from({ length: workerCount }, () => scanWorker()));
 
   const probed = await Promise.all(
     openTargets.map(({ ip, port }) => probeHikvisionEndpoint(ip, port))

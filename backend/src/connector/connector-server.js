@@ -29,10 +29,11 @@ const os = require('os');
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
+const { execFile } = require('child_process');
 
 const DEFAULT_CONNECTOR_PORT = Number(process.env.HOANANG_CONNECTOR_PORT || 18686);
 const DEFAULT_CONNECTOR_HOST = '127.0.0.1';
-const CONNECTOR_VERSION = '2.0.0';
+const CONNECTOR_VERSION = '2.1.0';
 const MAX_HIKVISION_FACE_BYTES = 200 * 1024;
 const MAX_ISAPI_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_LOCAL_REQUEST_BYTES = 25 * 1024 * 1024;
@@ -1028,37 +1029,76 @@ async function discoverLocalLanDevices({ subnetPrefix = '', probeUsername = 'adm
 
   for (const f of FORBIDDEN_IPS) candidates.delete(f);
 
-  const checkPort = (ip, port) =>
+  // Ưu tiên hàng đầu các IP đang hoạt động trong bảng ARP của máy tính (Windows/Linux/macOS)
+  // giúp tìm thấy ngay máy chấm công đang bật mà không bị nghẽn hàng đợi SYN của hệ điều hành
+  const arpKnownIps = await new Promise((resolve) => {
+    execFile('arp', ['-a'], { timeout: 1200, windowsHide: true }, (err, stdout) => {
+      if (err || !stdout) return resolve(new Set());
+      const hits = new Set();
+      const matches = String(stdout).match(/\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})\b/g);
+      for (const ip of matches || []) {
+        if (ip && !ip.endsWith('.255') && !ip.endsWith('.0') && !FORBIDDEN_IPS.includes(ip)) {
+          hits.add(ip);
+        }
+      }
+      resolve(hits);
+    });
+  });
+
+  const prioritizedIps = [];
+  for (const ip of candidates) {
+    if (arpKnownIps.has(ip)) prioritizedIps.push(ip);
+  }
+  for (const ip of candidates) {
+    if (!arpKnownIps.has(ip)) prioritizedIps.push(ip);
+  }
+
+  const checkPort = (ip, port, timeoutMs = 700) =>
     new Promise((resolve) => {
       const sock = new net.Socket();
       let done = false;
-      const fin = (ok) => { if (!done) { done = true; sock.destroy(); resolve(ok); } };
-      sock.setTimeout(250);
+      const fin = (ok) => {
+        if (!done) {
+          done = true;
+          sock.destroy();
+          resolve(ok);
+        }
+      };
+      sock.setTimeout(timeoutMs);
       sock.once('connect', () => fin(true));
       sock.once('timeout', () => fin(false));
       sock.once('error', () => fin(false));
       sock.connect(port, ip);
     });
 
-  const allIps = Array.from(candidates);
+  // Giới hạn tối đa 16 luồng kiểm tra đồng thời (kiểm tra cổng 80 trước tiên)
+  // để tuyệt đối không chạm ngưỡng giới hạn kết nối TCP bán mở trên Windows!
   const openEndpoints = [];
-  for (let i = 0; i < allIps.length; i += 64) {
-    const slice = allIps.slice(i, i + 64);
-    const found = await Promise.all(
-      slice.map(async (ip) => {
-        const [p80, p443, p8080] = await Promise.all([
-          checkPort(ip, 80),
-          checkPort(ip, 443),
-          checkPort(ip, 8080)
-        ]);
-        if (p80) return { ip, port: 80 };
-        if (p443) return { ip, port: 443 };
-        if (p8080) return { ip, port: 8080 };
-        return null;
-      })
-    );
-    for (const x of found) if (x) openEndpoints.push(x);
+  let cursor = 0;
+  const workerCount = Math.min(16, Math.max(1, prioritizedIps.length));
+  async function tcpScanWorker() {
+    while (true) {
+      const idx = cursor;
+      cursor += 1;
+      if (idx >= prioritizedIps.length) break;
+      const ip = prioritizedIps[idx];
+      const isArpLive = arpKnownIps.has(ip);
+      const port80Timeout = isArpLive ? 1000 : 650;
+
+      if (await checkPort(ip, 80, port80Timeout)) {
+        openEndpoints.push({ ip, port: 80 });
+        continue;
+      }
+      if (await checkPort(ip, 443, isArpLive ? 700 : 420)) {
+        openEndpoints.push({ ip, port: 443 });
+        continue;
+      }
+      if (await checkPort(ip, 8080, isArpLive ? 700 : 420)) {
+        openEndpoints.push({ ip, port: 8080 });
+      }
+    }
   }
+  await Promise.all(Array.from({ length: workerCount }, () => tcpScanWorker()));
 
   const discoveredDevices = [];
   await Promise.all(
@@ -1071,21 +1111,30 @@ async function discoverLocalLanDevices({ subnetPrefix = '', probeUsername = 'adm
           port,
           method: 'GET',
           path: '/ISAPI/System/deviceInfo',
-          timeout: 1100
+          timeout: 1800
         });
         const wwwAuth = String(probe.headers?.['www-authenticate'] || '');
         const serverHdr = String(probe.headers?.server || '');
+        const bodyText = String(probe.data || '');
         const isHik =
           (probe.statusCode === 401 && wwwAuth.toLowerCase().includes('digest')) ||
-          /hikvision|dnvrs|webs/i.test(serverHdr) ||
-          String(probe.data || '').includes('DeviceInfo');
+          /hikvision|dnvrs|webs|app-webs/i.test(serverHdr) ||
+          bodyText.includes('DeviceInfo') ||
+          bodyText.includes('Hikvision');
         if (!isHik) return;
+
+        // Trích xuất tên dòng máy trực tiếp từ Digest Realm mà KHÔNG cần mật khẩu (VD: realm="DS-K1T320MX")
+        const realmMatch = wwwAuth.match(/realm="([^"]+)"/i);
+        const realmModel =
+          realmMatch?.[1] && !/^(hikvision|digest|device|ip camera|login)$/i.test(realmMatch[1].trim())
+            ? realmMatch[1].trim()
+            : 'DS-K1T320MX';
 
         const item = {
           host: ip,
           port,
           transportScheme: port === 443 ? 'https' : 'http',
-          model: 'DS-K1T320MX',
+          model: realmModel,
           serialNumber: '',
           macAddress: '',
           currentStoredUsers: null,
@@ -1101,7 +1150,7 @@ async function discoverLocalLanDevices({ subnetPrefix = '', probeUsername = 'adm
               transportScheme: item.transportScheme,
               username: probeUsername || 'admin',
               password: String(probePassword),
-              timeoutMs: 2500
+              timeoutMs: 3000
             });
             item.model = inspected.model || item.model;
             item.serialNumber = inspected.serialNumber || '';
